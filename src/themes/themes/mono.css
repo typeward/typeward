@@ -1,0 +1,60 @@
+/* Mono — high-contrast monochrome on light surface.
+ * Surface treatment mirrors Paper (opaque white cards, slate strokes,
+ * two-layer drops). Differentiated only by accent + ambient. */
+
+[data-theme="mono"] {
+  --color-bg-base: #faf9f6;
+
+  --color-fg-1: #0b0e14;
+  --color-fg-2: #475569;
+  --color-fg-3: #64748b;
+  --color-fg-4: #94a3b8;
+
+  --color-glass-fill: rgb(255 255 255 / 0.78);
+  --color-glass-fill-2: rgb(255 255 255 / 0.88);
+  --color-glass-stroke: rgb(15 23 42 / 0.08);
+  --color-glass-stroke-strong: rgb(15 23 42 / 0.14);
+  --color-glass-inset-fill: rgb(15 23 42 / 0.04);
+  --color-glass-inset-stroke: rgb(15 23 42 / 0.08);
+
+  /* Inverted control tokens — dark tint on light bg. */
+  --color-control-fill: rgb(15 23 42 / 0.05);
+  --color-control-fill-hover: rgb(15 23 42 / 0.12);
+  --color-control-stroke: rgb(15 23 42 / 0.12);
+  --color-overlay-dim: rgb(15 23 42 / 0.025);
+  --color-overlay-deep: rgb(15 23 42 / 0.05);
+  --color-popover-bg: rgb(255 255 255 / 0.98);
+  --color-topbar-bg: rgb(255 255 255 / 0.78);
+  --color-selection-bg: rgb(15 23 42 / 0.10);
+  --color-card-bg: rgb(255 255 255 / 0.88);
+  --color-card-bg-soft: rgb(255 255 255 / 0.65);
+
+  /* Monochrome-leaning format accents — keep the theme identity. */
+  --format-latex: #0b0e14;
+  --format-typst: #475569;
+  --format-markdown: #64748b;
+  --format-rmarkdown: #1f2937;
+
+  --color-accent-1: #0b0e14;
+  --color-accent-2: #475569;
+
+  --color-warn: #b45309;
+  --color-err: #be123c;
+  --color-ok: #047857;
+
+  --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.6);
+  --shadow-glass-drop:
+    0 10px 30px rgb(15 23 42 / 0.06),
+    0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-glass-inset-inner: inset 0 1px 2px rgb(15 23 42 / 0.04);
+
+  /* Ambient: muted neutral grays — keep the monochrome identity. */
+  --blob-1: #cbd5e1;
+  --blob-2: #e2e8f0;
+  --blob-3: #94a3b8;
+  --blob-4: #f1f5f9;
+  --blob-1-op: 0.40;
+  --blob-2-op: 0.32;
+  --blob-3-op: 0.22;
+  --blob-4-op: 0.25;
+}

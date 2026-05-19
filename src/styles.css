@@ -1,0 +1,22 @@
+@import "tailwindcss";
+@import "./themes/tokens.css";
+@import "./themes/density.css";
+@import "./themes/motion.css";
+@import "./themes/themes/obsidian.css";
+@import "./themes/themes/graphite.css";
+@import "./themes/themes/paper.css";
+@import "./themes/themes/catppuccin.css";
+@import "./themes/themes/dracula.css";
+@import "./themes/themes/gruvbox.css";
+@import "./themes/themes/mono.css";
+@import "./themes/themes/nord.css";
+@import "./themes/themes/solarized-light.css";
+@import "./themes/themes/tokyo-night.css";
+@import "./themes/accents.css";
+@import "./themes/utilities.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}

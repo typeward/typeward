@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Typeward</title>
+    <style>
+      /* Painted before any external CSS loads — avoids a white flash while the
+       * bundle is being fetched/parsed. Values mirror the Aurora token defaults. */
+      html, body, #root {
+        margin: 0;
+        height: 100%;
+        background: #0a0b0f;
+        color: #e6e8ec;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 500 14px/1 -apple-system, "Segoe UI", Roboto, sans-serif;
+        letter-spacing: 0.04em;
+        color: #6b7280;
+        pointer-events: none;
+      }
+      #boot-splash::after {
+        content: "";
+        width: 16px;
+        height: 16px;
+        margin-left: 10px;
+        border: 2px solid rgba(255, 255, 255, 0.08);
+        border-top-color: #9ca3af;
+        border-radius: 50%;
+        animation: boot-spin 0.9s linear infinite;
+      }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="boot-splash">Typeward</div>
+    </div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>

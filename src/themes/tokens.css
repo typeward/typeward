@@ -1,0 +1,159 @@
+/*
+ * Default theme tokens (Aurora). Other themes override these via
+ * :root[data-theme="..."] selectors in src/themes/themes/*.css.
+ *
+ * The @theme block makes these tokens available as Tailwind utilities
+ * (e.g. bg-base, text-fg-1, border-glass-stroke). The same tokens are also
+ * usable as raw CSS variables (var(--color-bg-base), etc.) so theme overrides
+ * work for both Tailwind utility classes and hand-rolled CSS in design ports.
+ *
+ * Token vocabulary mirrors the design files (Editor.html top section).
+ */
+
+@theme {
+  /* Surfaces */
+  --color-bg-base: #0a0b0f;
+
+  /* Foreground levels */
+  --color-fg-1: #e6e8ec;
+  --color-fg-2: #9ca3af;
+  --color-fg-3: #6b7280;
+  --color-fg-4: #4b5563;
+
+  /* Glass surfaces (used by .glass, .glass-soft, .glass-inset utilities) */
+  --color-glass-fill: rgb(255 255 255 / 0.035);
+  --color-glass-fill-2: rgb(255 255 255 / 0.06);
+  --color-glass-stroke: rgb(255 255 255 / 0.07);
+  --color-glass-stroke-strong: rgb(255 255 255 / 0.12);
+
+  /*
+   * Control / surface tokens used by hand-rolled inline styles. On dark
+   * themes these are bright-on-dark tints (`rgba(255,255,255,0.04)`); light
+   * theme files invert them to dark-on-light tints so the subtle "raised"
+   * UI affordance works regardless of the underlying bg.
+   *
+   * - control-fill: button/card body tint
+   * - control-fill-hover: hover state of the above
+   * - control-stroke: 1px outline used with control-fill
+   * - overlay-dim: faint inner darkening (PDF viewport, LogsView, AiView)
+   * - overlay-deep: a bit more darkening (cell output gutters)
+   * - popover-bg: near-opaque backdrop used by dropdown menus / palette
+   */
+  --color-control-fill: rgb(255 255 255 / 0.04);
+  --color-control-fill-hover: rgb(255 255 255 / 0.06);
+  --color-control-stroke: rgb(255 255 255 / 0.06);
+  --color-overlay-dim: rgb(0 0 0 / 0.18);
+  --color-overlay-deep: rgb(0 0 0 / 0.25);
+  --color-popover-bg: rgb(15 17 22 / 0.95);
+
+  /*
+   * .glass-inset surface — the inset/sunken affordance used by composer
+   * inputs and similar "lowered" surfaces. Light themes invert this to a
+   * faint dark wash on the light bg rather than the dark default.
+   */
+  --color-glass-inset-fill: rgb(0 0 0 / 0.2);
+  --color-glass-inset-stroke: rgb(255 255 255 / 0.04);
+  --shadow-glass-inset-inner: inset 0 1px 2px rgb(0 0 0 / 0.25);
+
+  /*
+   * EditorTopBar override — gives the chrome a slightly heavier surface
+   * than default .glass so navigation reads as a distinct strip. Light
+   * themes set this to the same value as --color-glass-fill so the bar
+   * stays an opaque-leaning white card rather than a dark wash.
+   */
+  --color-topbar-bg: rgb(10 11 15 / 0.55);
+
+  /*
+   * Solid-ish raised card surface used by ProjectCard, NewProjectTile,
+   * ProjectRow, etc. Dark themes use a dark wash so cards stand out
+   * against the violet/cyan ambient; light themes use opaque white so
+   * cards stand out against the cream bg.
+   */
+  --color-card-bg: rgb(13 15 20 / 0.55);
+  --color-card-bg-soft: rgb(13 15 20 / 0.35);
+
+  /*
+   * Per-format accent tints used on Projects cards/rows. Light themes
+   * override with deeper variants so labels stay readable on light bgs.
+   */
+  --format-latex: #a78bfa;
+  --format-typst: #67e8f9;
+  --format-markdown: #9ca3af;
+  --format-rmarkdown: #fbbf24;
+
+  /*
+   * Subtle accent-tinted background used to mark "active" / "selected"
+   * rows where a faint white/slate tint isn't enough on its own to read
+   * as selected. Hooks into the active accent so it re-tints per accent
+   * palette as well.
+   */
+  --color-selection-bg: rgb(139 92 246 / 0.10);
+
+  /* Accent (overridden by data-accent="...") */
+  --color-accent-1: #8b5cf6; /* violet */
+  --color-accent-2: #22d3ee; /* cyan */
+
+  /* Status */
+  --color-ok: #10b981;
+  --color-warn: #f59e0b;
+  --color-err: #f43f5e;
+
+  /*
+   * Shadow tokens — surface-aware. Aurora/Obsidian/Graphite are dark, so
+   * insets are bright-on-dark and drops are deep blacks. Paper overrides
+   * both in its theme file because dark drops on light paper look wrong.
+   */
+  --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  --shadow-glass-drop: 0 8px 32px rgb(0 0 0 / 0.32);
+
+  /* Fonts */
+  --font-sans:
+    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+/*
+ * Ambient backdrop blob colors + opacities. Themes override these via
+ * [data-theme="..."] blocks in src/themes/themes/*.css so the four radial
+ * blobs behind glass surfaces re-tint to match the active theme.
+ *
+ * The defaults below are Aurora's signature violet/cyan/blue mix.
+ */
+:root {
+  --blob-1: #4c1d95;
+  --blob-2: #155e75;
+  --blob-3: #1e3a8a;
+  --blob-4: #6d28d9;
+  --blob-1-op: 0.55;
+  --blob-2-op: 0.42;
+  --blob-3-op: 0.40;
+  --blob-4-op: 0.22;
+}
+
+/*
+ * Base body styles tied to tokens. Re-applied automatically when tokens swap.
+ */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg-base);
+  color: var(--color-fg-1);
+}
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+  letter-spacing: -0.005em;
+  /*
+   * `-webkit-font-smoothing: antialiased` would force grayscale AA, which
+   * only looks "right" at 2x device-pixel ratios. At Windows 100% scale
+   * it reads as soft because it bypasses ClearType subpixel rendering.
+   * Leave it off so DirectWrite picks the appropriate path per surface.
+   *
+   * `text-rendering: optimizeLegibility` similarly skips DirectWrite's
+   * default glyph cache and on Windows can produce subtly fuzzy small
+   * text. Default `auto` lets the OS pick.
+   */
+}

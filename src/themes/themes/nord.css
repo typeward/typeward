@@ -1,0 +1,28 @@
+/* Nord — cool blue. Values from design_files/themes/Typeward Nord.html. */
+
+[data-theme="nord"] {
+  --color-bg-base: #2e3440;
+
+  --color-fg-1: #eceff4;
+  --color-fg-2: #d8dee9;
+  --color-fg-3: #81a1c1;
+  --color-fg-4: #4c566a;
+
+  --color-glass-fill: rgb(236 239 244 / 0.04);
+  --color-glass-fill-2: rgb(236 239 244 / 0.07);
+  --color-glass-stroke: rgb(236 239 244 / 0.09);
+  --color-glass-stroke-strong: rgb(236 239 244 / 0.16);
+
+  --color-accent-1: #88c0d0;
+  --color-accent-2: #5e81ac;
+
+  /* Ambient: Nord frosts — cool blue/teal with a hint of aurora violet. */
+  --blob-1: #5e81ac;
+  --blob-2: #88c0d0;
+  --blob-3: #81a1c1;
+  --blob-4: #b48ead;
+  --blob-1-op: 0.35;
+  --blob-2-op: 0.25;
+  --blob-3-op: 0.28;
+  --blob-4-op: 0.20;
+}

@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Typeward — Projects</title>
+<meta name="viewport" content="width=1440, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg-base: #0A0B0F;
+    --fg-1: #E6E8EC;
+    --fg-2: #9CA3AF;
+    --fg-3: #6B7280;
+    --fg-4: #4B5563;
+    --glass-stroke: rgba(255,255,255,0.07);
+    --glass-stroke-strong: rgba(255,255,255,0.12);
+    --glass-fill: rgba(255,255,255,0.035);
+    --glass-fill-2: rgba(255,255,255,0.06);
+    --accent-violet: #8B5CF6;
+    --accent-cyan: #22D3EE;
+    --warn: #F59E0B;
+    --err: #F43F5E;
+    --ok: #10B981;
+  }
+  html, body, #root {
+    background: var(--bg-base);
+    color: var(--fg-1);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    margin: 0;
+    height: 100%;
+  }
+  body {
+    font-feature-settings: 'cv02','cv03','cv04','ss01';
+    letter-spacing: -0.005em;
+    overflow: hidden;
+  }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-feature-settings: 'calt','liga'; }
+  .glass {
+    background: var(--glass-fill);
+    backdrop-filter: blur(24px) saturate(140%);
+    -webkit-backdrop-filter: blur(24px) saturate(140%);
+    border: 1px solid var(--glass-stroke);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.05),
+      0 8px 32px rgba(0,0,0,0.32);
+  }
+  .glass-soft {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid var(--glass-stroke);
+  }
+  .glass-inset {
+    background: rgba(0,0,0,0.20);
+    border: 1px solid rgba(255,255,255,0.04);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+  }
+  .accent-grad {
+    background: linear-gradient(135deg, #8B5CF6 0%, #22D3EE 100%);
+  }
+  .accent-text {
+    background: linear-gradient(135deg, #A78BFA 0%, #67E8F9 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .ambient {
+    position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0;
+  }
+  .blob {
+    position: absolute; border-radius: 50%; filter: blur(120px); opacity: 0.55;
+  }
+  .blob-1 { width: 720px; height: 720px; left: -180px; top: -240px; background: radial-gradient(circle, #4C1D95 0%, transparent 65%); }
+  .blob-2 { width: 760px; height: 760px; right: -220px; top: -120px; background: radial-gradient(circle, #155E75 0%, transparent 65%); opacity: 0.42; }
+  .blob-3 { width: 600px; height: 600px; left: 38%; bottom: -260px; background: radial-gradient(circle, #1E3A8A 0%, transparent 65%); opacity: 0.40; }
+  .blob-4 { width: 420px; height: 420px; right: 22%; top: 38%; background: radial-gradient(circle, #6D28D9 0%, transparent 70%); opacity: 0.22; }
+
+  .grain::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.5; mix-blend-mode: overlay;
+  }
+
+  .label-xs { font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; font-weight: 500; }
+
+  .scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  .scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  .scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); border: 2px solid transparent; background-clip: padding-box; }
+
+  .lift { transition: filter 150ms ease-out, background 150ms ease-out, border-color 150ms ease-out, transform 150ms ease-out, box-shadow 200ms ease-out; }
+  .lift:hover { filter: brightness(1.18); }
+
+  @keyframes pulse-dot { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.45; transform: scale(0.85); } }
+  .pulse { animation: pulse-dot 2s ease-in-out infinite; }
+
+  @keyframes blink { 0%,49% {opacity:1} 50%,100% {opacity:0} }
+  .caret { display: inline-block; width: 9px; height: 19px; background: linear-gradient(180deg,#A78BFA,#67E8F9); margin-left:2px; vertical-align: text-top; animation: blink 1.05s steps(1) infinite; border-radius: 1.5px; }
+
+  .glow-violet { box-shadow: 0 0 0 1px rgba(139,92,246,0.4), 0 8px 28px rgba(139,92,246,0.28), 0 0 60px rgba(34,211,238,0.18); }
+
+  .avatar-ring { box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 3.5px rgba(34,211,238,0.5); }
+  .avatar-ring-2 { box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 3.5px rgba(139,92,246,0.5); }
+  .avatar-ring-3 { box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 3.5px rgba(245,158,11,0.5); }
+  .avatar-ring-4 { box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 3.5px rgba(16,185,129,0.5); }
+
+  /* Project card thumbnail */
+  .thumb {
+    background:
+      linear-gradient(180deg, #FBFAF6 0%, #F4F2EC 100%);
+    color: #1F2937;
+  }
+  .thumb-dark {
+    background: linear-gradient(180deg, rgba(15,17,22,0.85), rgba(15,17,22,0.95));
+  }
+
+  /* Card hover gradient outline */
+  .card-shell {
+    position: relative;
+    transition: transform 200ms cubic-bezier(.2,.8,.2,1), box-shadow 200ms;
+  }
+  .card-shell::after {
+    content:''; position:absolute; inset:0; border-radius: inherit; pointer-events:none;
+    background: linear-gradient(135deg, rgba(139,92,246,0.0), rgba(34,211,238,0.0));
+    opacity: 0; transition: opacity 220ms;
+  }
+  .card-shell:hover::after { opacity: 1; }
+  .card-shell:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.06),
+      0 18px 50px rgba(0,0,0,0.45),
+      0 0 0 1px rgba(139,92,246,0.18);
+  }
+
+  /* Sparkline */
+  .spark path { stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Active sidebar item gradient bar */
+  .side-active::before {
+    content:''; position:absolute; left:0; top:8px; bottom:8px; width:2px; border-radius: 2px;
+    background: linear-gradient(180deg,#8B5CF6,#22D3EE);
+  }
+
+  .no-emoji { font-variant-emoji: text; }
+
+  /* Drag and drop hint pulse */
+  @keyframes border-flow {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+  }
+  .composer-glow {
+    background: linear-gradient(90deg, rgba(139,92,246,0.0), rgba(139,92,246,0.35), rgba(34,211,238,0.35), rgba(139,92,246,0.0));
+    background-size: 200% 100%;
+    animation: border-flow 3.6s linear infinite;
+  }
+
+  /* PDF mini page sketch */
+  .doc-line { background: rgba(31,41,55,0.55); border-radius: 0.5px; }
+  .doc-line.dim { background: rgba(31,41,55,0.30); }
+  .doc-line.darker { background: rgba(17,24,39,0.85); }
+
+  /* Equation glyphs in thumbs */
+  .glyph-eq {
+    font-family: 'Cambria','Times New Roman', serif;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+// ----------- Inline SVG icons -----------
+const ICONS = {
+  "search": "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-5-5",
+  "plus": "M12 5v14 M5 12h14",
+  "settings": "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z",
+  "folder": "M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z",
+  "folder-open": "M4 18l2-8h15l-2 8a2 2 0 0 1-2 1.5H6a2 2 0 0 1-2-1.5z M4 18V7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v2",
+  "file-text": "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z M14 3v6h6 M8 13h8 M8 17h6",
+  "users": "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M22 21v-2a4 4 0 0 0-3-3.9 M16 3.1a4 4 0 0 1 0 7.8",
+  "star": "M12 2l3 7 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z",
+  "clock": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z M12 6v6l4 2",
+  "archive": "M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z M5 10v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9 M10 14h4",
+  "trash": "M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6",
+  "tag": "M20.6 13.6l-7 7a2 2 0 0 1-3 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 3z M7 7h.01",
+  "grid": "M3 5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M13 5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2z M3 15a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M13 15a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2z",
+  "list": "M3 6h18 M3 12h18 M3 18h18",
+  "more-horizontal": "M5 12h.01 M12 12h.01 M19 12h.01",
+  "chevron-down": "M6 9l6 6 6-6",
+  "chevron-right": "M9 18l6-6-6-6",
+  "chevrons-up-down": "M7 15l5 5 5-5 M7 9l5-5 5 5",
+  "git-branch": "M6 3v12 M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 9a9 9 0 0 1-9 9",
+  "globe": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z M2 12h20 M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z",
+  "lock": "M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z M7 11V7a5 5 0 0 1 10 0v4",
+  "upload": "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12",
+  "import": "M12 3v12 M7 10l5 5 5-5 M21 21H3",
+  "sparkles": "M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z M19 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z M5 17l.5 1.5 1.5.5-1.5.5L5 21l-.5-1.5L3 19l1.5-.5z",
+  "book-marked": "M19 21V4a1 1 0 0 0-1-1H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13 M19 21H6a2 2 0 0 1 0-4h13 M10 4v8l2-2 2 2V4",
+  "graduation-cap": "M22 10L12 5 2 10l10 5 10-5z M6 12v5a6 6 0 0 0 12 0v-5 M22 10v6",
+  "beaker": "M9 3h6 M10 3v6L4 19a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-6-10V3 M7 14h10",
+  "pen-tool": "M12 19l7-7 3 3-7 7-3-3z M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z M2 2l7.586 7.586 M11 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  "command": "M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z",
+  "compass": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z M16.2 7.8l-2.9 6.4-6.4 2.9 2.9-6.4z",
+  "circle": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z",
+  "play": "M6 4l14 8-14 8z",
+  "share": "M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8 M16 6l-4-4-4 4 M12 2v13",
+  "copy": "M9 9h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1z M5 15H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1",
+  "bell": "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9 M10 21a2 2 0 0 0 4 0",
+  "x": "M18 6L6 18 M6 6l12 12",
+  "filter": "M22 3H2l8 9.5V19l4 2v-8.5z",
+  "calendar": "M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M16 2v4 M8 2v4 M3 10h18",
+  "send": "M22 2L11 13 M22 2l-7 20-4-9-9-4z",
+  "github": "M9 19c-5 1.5-5-2.5-7-3 m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22",
+  "external-link": "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6 M15 3h6v6 M10 14L21 3",
+};
+const Icon = ({ name, size = 14, stroke = 1.6, className = "", style }) => {
+  const d = ICONS[name] || ICONS["circle"];
+  const paths = d.split(/\s(?=M)/);
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" className={className} style={{display:'inline-block', flexShrink:0, ...(style||{})}} aria-hidden="true">
+      {paths.map((p,i)=>(<path key={i} d={p} />))}
+    </svg>
+  );
+};
+
+// ----------- Top bar -----------
+function TopBar({ onOpenCmd }) {
+  return (
+    <div className="relative h-[52px] flex items-center px-4 border-b border-white/[0.05] glass" style={{background:'rgba(10,11,15,0.55)'}}>
+      {/* traffic lights */}
+      <div className="flex items-center gap-2 pl-1.5 pr-5">
+        <span className="w-3 h-3 rounded-full" style={{background:'#FF5F57', boxShadow:'inset 0 0 0 0.5px rgba(0,0,0,0.25)'}} />
+        <span className="w-3 h-3 rounded-full" style={{background:'#FEBC2E', boxShadow:'inset 0 0 0 0.5px rgba(0,0,0,0.25)'}} />
+        <span className="w-3 h-3 rounded-full" style={{background:'#28C840', boxShadow:'inset 0 0 0 0.5px rgba(0,0,0,0.25)'}} />
+      </div>
+
+      {/* brand */}
+      <div className="flex items-center gap-2.5">
+        <div className="w-7 h-7 rounded-lg accent-grad flex items-center justify-center" style={{boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 14px rgba(139,92,246,0.35)'}}>
+          <span className="text-[14px] font-bold text-white" style={{fontFamily:'Cambria, serif', fontStyle:'italic'}}>τ</span>
+        </div>
+        <div className="leading-none">
+          <div className="text-[13px] font-semibold tracking-tight">Typeward</div>
+          <div className="text-[10px] text-[#6B7280] mono mt-0.5">v0.9.4</div>
+        </div>
+      </div>
+
+      <div className="w-px h-6 bg-white/5 mx-4" />
+
+      {/* workspace switcher */}
+      <button className="lift flex items-center gap-2 px-2.5 h-8 rounded-md hover:bg-white/[0.05]">
+        <div className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-semibold" style={{background:'linear-gradient(135deg,#0EA5E9,#0369A1)'}}>MS</div>
+        <span className="text-[12.5px] font-medium">Marek Sokol</span>
+        <span className="text-[11px] text-[#6B7280] mono px-1.5 py-0.5 rounded" style={{background:'rgba(255,255,255,0.04)'}}>Personal</span>
+        <Icon name="chevrons-up-down" size={11} className="opacity-50" />
+      </button>
+
+      {/* center search */}
+      <div className="flex-1 flex justify-center px-6">
+        <button onClick={onOpenCmd} className="lift glass-soft rounded-lg h-9 px-3 flex items-center gap-2.5 text-[12.5px] text-[#6B7280] hover:text-[#9CA3AF] w-[420px]">
+          <Icon name="search" size={13} style={{opacity:0.6}} />
+          <span>Search projects, papers, collaborators…</span>
+          <span className="ml-auto flex items-center gap-0.5">
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.05)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>⌘</kbd>
+            <kbd className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.05)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>K</kbd>
+          </span>
+        </button>
+      </div>
+
+      {/* right cluster */}
+      <div className="flex items-center gap-2">
+        <button className="lift h-8 px-2.5 rounded-md hover:bg-white/[0.04] flex items-center gap-1.5 text-[11.5px] text-[#9CA3AF]">
+          <Icon name="bell" size={12} style={{opacity:0.7}} />
+          <span className="text-[10.5px] mono px-1 rounded-full" style={{background:'rgba(244,63,94,0.18)', color:'#FCA5A5'}}>3</span>
+        </button>
+        <button className="lift h-8 px-2.5 rounded-md hover:bg-white/[0.04] flex items-center gap-1.5 text-[11.5px] text-[#9CA3AF]">
+          <Icon name="settings" size={12} style={{opacity:0.7}} />
+        </button>
+        <div className="w-px h-5 bg-white/5 mx-1"></div>
+        <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10.5px] font-semibold avatar-ring" style={{background:'linear-gradient(135deg,#0EA5E9,#0369A1)'}}>MS</div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Sidebar -----------
+const SIDE_SECTIONS = [
+  { label: 'Library', items: [
+    { id:'all', label:'All projects', icon:'folder', count:14, active:true },
+    { id:'recent', label:'Recently opened', icon:'clock', count:6 },
+    { id:'starred', label:'Starred', icon:'star', count:4 },
+    { id:'shared', label:'Shared with me', icon:'users', count:3 },
+    { id:'archive', label:'Archive', icon:'archive', count:9 },
+    { id:'trash', label:'Trash', icon:'trash', count:2 },
+  ]},
+  { label: 'Spaces', items: [
+    { id:'sp1', label:'Stochastic Lab', icon:'beaker', count:5, dot:'#8B5CF6' },
+    { id:'sp2', label:'Thesis 2026', icon:'graduation-cap', count:3, dot:'#22D3EE' },
+    { id:'sp3', label:'Conference Drafts', icon:'compass', count:6, dot:'#F59E0B' },
+    { id:'sp4', label:'Reading group', icon:'book-marked', count:11, dot:'#10B981' },
+  ]},
+  { label: 'Tags', items: [
+    { id:'t1', label:'icml-2026', icon:'tag', count:2, tint:'#A78BFA' },
+    { id:'t2', label:'neurips-2025', icon:'tag', count:3, tint:'#67E8F9' },
+    { id:'t3', label:'in-review', icon:'tag', count:1, tint:'#FBBF24' },
+    { id:'t4', label:'archived', icon:'tag', count:5, tint:'#9CA3AF' },
+  ]},
+];
+
+function Sidebar() {
+  return (
+    <div className="glass rounded-xl flex flex-col overflow-hidden h-full" style={{width:240}}>
+      {/* New project */}
+      <div className="p-3 border-b border-white/[0.05]">
+        <button className="lift relative w-full h-9 rounded-lg accent-grad text-white text-[12px] font-semibold flex items-center justify-center gap-2 glow-violet">
+          <Icon name="plus" size={13} stroke={2.4} />
+          <span>New project</span>
+          <span className="ml-1 flex items-center gap-0.5">
+            <kbd className="px-1 py-0.5 rounded mono text-[9.5px]" style={{background:'rgba(0,0,0,0.25)', color:'rgba(255,255,255,0.85)'}}>⌘</kbd>
+            <kbd className="px-1 py-0.5 rounded mono text-[9.5px]" style={{background:'rgba(0,0,0,0.25)', color:'rgba(255,255,255,0.85)'}}>N</kbd>
+          </span>
+        </button>
+        <div className="grid grid-cols-2 gap-1.5 mt-2">
+          <button className="lift glass-soft rounded-md h-7 text-[10.5px] text-[#9CA3AF] hover:bg-white/[0.06] flex items-center justify-center gap-1.5">
+            <Icon name="upload" size={10} style={{opacity:0.7}} />
+            <span>Upload</span>
+          </button>
+          <button className="lift glass-soft rounded-md h-7 text-[10.5px] text-[#9CA3AF] hover:bg-white/[0.06] flex items-center justify-center gap-1.5">
+            <Icon name="github" size={10} style={{opacity:0.7}} />
+            <span>From git</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Sections */}
+      <div className="flex-1 overflow-auto scroll p-2 space-y-3.5">
+        {SIDE_SECTIONS.map(sec=>(
+          <div key={sec.label}>
+            <div className="label-xs text-[#6B7280] px-2 mb-1.5 flex items-center justify-between">
+              <span>{sec.label}</span>
+              {sec.label==='Spaces' && <button className="w-4 h-4 rounded hover:bg-white/[0.06] flex items-center justify-center"><Icon name="plus" size={10} style={{opacity:0.6}} /></button>}
+            </div>
+            {sec.items.map(item=>(
+              <button key={item.id} className={`w-full relative flex items-center gap-2 h-8 px-2 rounded-md text-[12px] lift ${item.active ? 'bg-white/[0.05] text-white side-active' : 'text-[#9CA3AF] hover:bg-white/[0.03]'}`}>
+                {item.dot && <span className="w-1.5 h-1.5 rounded-full" style={{background:item.dot}} />}
+                {!item.dot && <Icon name={item.icon} size={12} style={{opacity: item.active?0.95:0.7, color: item.tint || (item.active?'#E6E8EC':'#9CA3AF')}} />}
+                <span className={item.active ? 'font-medium':''}>{item.label}</span>
+                {item.count!=null && <span className="ml-auto text-[10px] mono text-[#6B7280]">{item.count}</span>}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Storage footer */}
+      <div className="border-t border-white/[0.05] p-3">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="label-xs text-[#6B7280]">Storage</span>
+          <span className="text-[10.5px] mono text-[#9CA3AF]">3.2 / 10 GB</span>
+        </div>
+        <div className="h-1 rounded-full" style={{background:'rgba(255,255,255,0.05)'}}>
+          <div className="h-full rounded-full accent-grad" style={{width:'32%'}} />
+        </div>
+        <button className="lift mt-2 w-full glass-soft rounded-md h-7 flex items-center justify-center gap-1.5 text-[10.5px] text-[#9CA3AF] hover:bg-white/[0.06]">
+          <Icon name="sparkles" size={10} style={{color:'#A78BFA'}} />
+          <span>Upgrade to Pro</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Composer (hero "New project") -----------
+const TEMPLATES = [
+  { id:'icml', label:'ICML', sub:'two-column · 8pt', icon:'graduation-cap', tint:'#A78BFA' },
+  { id:'neurips', label:'NeurIPS', sub:'two-column · 10pt', icon:'beaker', tint:'#67E8F9' },
+  { id:'thesis', label:'Thesis', sub:'monograph · 11pt', icon:'book-marked', tint:'#FBBF24' },
+  { id:'arxiv', label:'arXiv', sub:'single column · 11pt', icon:'globe', tint:'#34D399' },
+  { id:'letter', label:'Letter', sub:'a4 · 12pt', icon:'pen-tool', tint:'#F472B6' },
+  { id:'blank', label:'Blank', sub:'article · 11pt', icon:'file-text', tint:'#9CA3AF' },
+];
+
+function Composer() {
+  const [tpl, setTpl] = useState('icml');
+  return (
+    <div className="relative rounded-2xl overflow-hidden glass" style={{padding:0}}>
+      {/* glowing top edge */}
+      <div className="absolute top-0 left-0 right-0 h-[1px] composer-glow opacity-60" />
+
+      <div className="p-5 flex gap-5">
+        {/* Left: prompt */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-5 h-5 rounded-md accent-grad flex items-center justify-center"><Icon name="sparkles" size={11} stroke={2.2} /></div>
+            <span className="label-xs text-[#A78BFA]">Compose</span>
+            <span className="text-[10.5px] text-[#6B7280] mono">·  describe what you want to write, or pick a template</span>
+          </div>
+          <div className="glass-inset rounded-xl p-3 min-h-[112px] flex flex-col">
+            <div className="flex-1 text-[14.5px] leading-relaxed text-[#E6E8EC]">
+              A short paper on <span className="accent-text font-medium">log-Sobolev convergence rates</span> for non-convex Langevin dynamics, targeting NeurIPS — set up the abstract, theorem environment, and a bibliography seeded with my Zotero library<span className="caret" />
+            </div>
+            <div className="flex items-center gap-1.5 mt-3 -mb-0.5">
+              <button className="lift h-7 px-2.5 rounded-md glass-soft hover:bg-white/[0.06] flex items-center gap-1.5 text-[11px] text-[#9CA3AF]">
+                <Icon name="upload" size={11} style={{opacity:0.7}} />
+                <span>Attach</span>
+              </button>
+              <button className="lift h-7 px-2.5 rounded-md glass-soft hover:bg-white/[0.06] flex items-center gap-1.5 text-[11px] text-[#9CA3AF]">
+                <Icon name="book-marked" size={11} style={{opacity:0.7}} />
+                <span>Zotero</span>
+              </button>
+              <button className="lift h-7 px-2.5 rounded-md glass-soft hover:bg-white/[0.06] flex items-center gap-1.5 text-[11px] text-[#9CA3AF]">
+                <Icon name="github" size={11} style={{opacity:0.7}} />
+                <span>Import repo</span>
+              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <div className="text-[10.5px] mono text-[#6B7280]">142 / 2k</div>
+                <button className="lift h-7 pl-2.5 pr-2 rounded-md accent-grad text-white text-[11.5px] font-semibold flex items-center gap-1.5 glow-violet">
+                  <span>Compose</span>
+                  <Icon name="send" size={10} stroke={2.2} />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Template strip */}
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="label-xs text-[#6B7280]">Or start from</span>
+              <button className="text-[10.5px] text-[#9CA3AF] hover:text-white flex items-center gap-1 mono">browse all templates <Icon name="chevron-right" size={9} style={{opacity:0.6}} /></button>
+            </div>
+            <div className="grid grid-cols-6 gap-2">
+              {TEMPLATES.map(t=>{
+                const active = t.id===tpl;
+                return (
+                  <button key={t.id} onClick={()=>setTpl(t.id)} className={`lift relative rounded-xl px-3 py-3 text-left ${active?'bg-white/[0.05]':'glass-soft hover:bg-white/[0.04]'}`} style={active?{boxShadow:'inset 0 0 0 1px rgba(139,92,246,0.45), 0 6px 18px rgba(139,92,246,0.18)'}:{}}>
+                    <div className="w-7 h-7 rounded-lg flex items-center justify-center mb-2" style={{background: active?'rgba(139,92,246,0.16)':'rgba(255,255,255,0.04)'}}>
+                      <Icon name={t.icon} size={13} style={{color: t.tint}} />
+                    </div>
+                    <div className="text-[11.5px] font-semibold text-[#E6E8EC]">{t.label}</div>
+                    <div className="text-[10px] mono text-[#6B7280] mt-0.5">{t.sub}</div>
+                    {active && <div className="absolute top-2 right-2 w-2 h-2 rounded-full accent-grad" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Right: stats */}
+        <div className="w-[228px] flex-shrink-0 flex flex-col gap-2">
+          <div className="glass-soft rounded-xl p-3">
+            <div className="flex items-center justify-between">
+              <span className="label-xs text-[#6B7280]">Activity</span>
+              <span className="text-[10px] mono text-[#9CA3AF]">7d</span>
+            </div>
+            <div className="flex items-baseline gap-1.5 mt-1">
+              <span className="text-[24px] font-semibold tracking-tight">4,128</span>
+              <span className="text-[10.5px] mono text-emerald-400">+612</span>
+            </div>
+            <div className="text-[10px] text-[#6B7280] mono">words written this week</div>
+            {/* sparkline */}
+            <svg className="spark mt-2" width="200" height="32" viewBox="0 0 200 32">
+              <defs>
+                <linearGradient id="spk" x1="0" x2="1">
+                  <stop offset="0" stopColor="#8B5CF6" />
+                  <stop offset="1" stopColor="#22D3EE" />
+                </linearGradient>
+                <linearGradient id="spkfill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0" stopColor="#8B5CF6" stopOpacity="0.3" />
+                  <stop offset="1" stopColor="#22D3EE" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              <path d="M0,24 L20,20 L40,22 L60,16 L80,18 L100,12 L120,14 L140,8 L160,10 L180,4 L200,6 L200,32 L0,32 Z" fill="url(#spkfill)" />
+              <path d="M0,24 L20,20 L40,22 L60,16 L80,18 L100,12 L120,14 L140,8 L160,10 L180,4 L200,6" fill="none" stroke="url(#spk)" strokeWidth="1.6" />
+            </svg>
+          </div>
+
+          <div className="glass-soft rounded-xl p-3">
+            <div className="label-xs text-[#6B7280] mb-2">Pinned action</div>
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-11 rounded thumb flex flex-col p-1 gap-0.5 flex-shrink-0">
+                <div className="doc-line darker" style={{height:1.5, width:'70%'}} />
+                <div className="doc-line" style={{height:1, width:'90%'}} />
+                <div className="doc-line" style={{height:1, width:'85%'}} />
+                <div className="doc-line dim" style={{height:1, width:'60%'}} />
+                <div className="doc-line" style={{height:1, width:'80%'}} />
+                <div className="doc-line dim" style={{height:1, width:'45%'}} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[11.5px] text-[#E6E8EC] font-medium truncate">stochastic-flows</div>
+                <div className="text-[10px] mono text-[#6B7280]">resume · ¶27 main.tex</div>
+              </div>
+            </div>
+            <button className="lift mt-2 w-full h-7 rounded-md text-[11px] font-semibold flex items-center justify-center gap-1.5 accent-grad text-white">
+              <Icon name="play" size={10} stroke={2.2} />
+              <span>Open editor</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Project Card -----------
+const PROJECTS = [
+  {
+    id:1,
+    title:'On the Asymptotic Behavior of Stochastic Gradient Flows',
+    space:'Stochastic Lab', spaceTint:'#8B5CF6',
+    template:'ICML',
+    tags:['icml-2026','in-progress'],
+    pages: 11, words: 8412, refs: 42,
+    branch:'main',
+    status:'active', // active | review | submitted | drafting
+    starred: true,
+    collaborators: [
+      {i:'MS', g:'linear-gradient(135deg,#0EA5E9,#0369A1)'},
+      {i:'AK', g:'linear-gradient(135deg,#8B5CF6,#5B21B6)'},
+      {i:'JT', g:'linear-gradient(135deg,#F59E0B,#B45309)'},
+    ],
+    activityDays:[2,3,1,4,2,5,3,4,6,3,2,5,7,4],
+    updatedAgo:'2m', updatedDate:'today, 14:02',
+    commentsOpen: 3,
+    primary: true,
+    deadline: { label:'ICML rebuttal', daysLeft: 18 },
+    accent: 'violet',
+    href: 'Typeward.html',
+  },
+  {
+    id:2,
+    title:'Variance Reduction Methods for Sampled-Path Estimators',
+    space:'Stochastic Lab', spaceTint:'#8B5CF6',
+    template:'NeurIPS',
+    tags:['neurips-2025','review'],
+    pages: 9, words: 7104, refs: 36,
+    branch:'main',
+    status:'review',
+    starred:false,
+    collaborators: [
+      {i:'AK', g:'linear-gradient(135deg,#8B5CF6,#5B21B6)'},
+      {i:'JT', g:'linear-gradient(135deg,#F59E0B,#B45309)'},
+    ],
+    activityDays:[3,4,5,5,4,3,2,1,1,0,2,3,2,1],
+    updatedAgo:'1h',
+    updatedDate:'today, 12:14',
+    commentsOpen: 7,
+    accent: 'cyan',
+    deadline: { label:'reviews due', daysLeft: 4 },
+  },
+  {
+    id:3,
+    title:'PhD Thesis — Convergence in Wasserstein Geometry',
+    space:'Thesis 2026', spaceTint:'#22D3EE',
+    template:'Thesis',
+    tags:['thesis','draft'],
+    pages: 142, words: 41280, refs: 218,
+    branch:'chapter-4',
+    status:'drafting',
+    starred:true,
+    collaborators: [
+      {i:'MS', g:'linear-gradient(135deg,#0EA5E9,#0369A1)'},
+    ],
+    activityDays:[5,6,4,3,5,7,4,3,5,2,3,1,2,4],
+    updatedAgo:'yesterday',
+    updatedDate:'Apr 25, 19:48',
+    commentsOpen: 0,
+    accent: 'amber',
+  },
+  {
+    id:4,
+    title:'A Note on Non-Reversible MCMC Mixing Times',
+    space:'Conference Drafts', spaceTint:'#F59E0B',
+    template:'arXiv',
+    tags:['arxiv','submitted'],
+    pages: 14, words: 9856, refs: 51,
+    branch:'submission',
+    status:'submitted',
+    starred:false,
+    collaborators: [
+      {i:'JT', g:'linear-gradient(135deg,#F59E0B,#B45309)'},
+      {i:'EL', g:'linear-gradient(135deg,#10B981,#065F46)'},
+    ],
+    activityDays:[2,1,1,2,3,2,1,0,0,1,0,0,0,0],
+    updatedAgo:'3d',
+    updatedDate:'Apr 23, 09:30',
+    commentsOpen: 0,
+    accent: 'emerald',
+  },
+  {
+    id:5,
+    title:'Reading notes — Optimal Transport (Villani, ch. 6)',
+    space:'Reading group', spaceTint:'#10B981',
+    template:'Blank',
+    tags:['notes'],
+    pages: 6, words: 3120, refs: 9,
+    branch:'main',
+    status:'drafting',
+    starred:false,
+    collaborators: [
+      {i:'MS', g:'linear-gradient(135deg,#0EA5E9,#0369A1)'},
+      {i:'AK', g:'linear-gradient(135deg,#8B5CF6,#5B21B6)'},
+      {i:'EL', g:'linear-gradient(135deg,#10B981,#065F46)'},
+      {i:'+2', g:'linear-gradient(135deg,#374151,#1F2937)'},
+    ],
+    activityDays:[1,2,1,3,2,2,1,1,2,3,2,1,1,2],
+    updatedAgo:'5d',
+    updatedDate:'Apr 21, 16:02',
+    commentsOpen: 12,
+    accent: 'violet',
+  },
+  {
+    id:6,
+    title:'Letter to the Editor — JMLR submission #4471',
+    space:'Conference Drafts', spaceTint:'#F59E0B',
+    template:'Letter',
+    tags:['jmlr','letter'],
+    pages: 2, words: 1240, refs: 4,
+    branch:'main',
+    status:'submitted',
+    starred:false,
+    collaborators: [
+      {i:'MS', g:'linear-gradient(135deg,#0EA5E9,#0369A1)'},
+    ],
+    activityDays:[0,0,1,0,0,1,0,0,0,0,0,0,0,1],
+    updatedAgo:'2w',
+    updatedDate:'Apr 12, 10:18',
+    commentsOpen: 0,
+    accent: 'cyan',
+  },
+];
+
+const STATUS_PILLS = {
+  active:    { label:'In progress',  color:'#A7F3D0', bg:'rgba(16,185,129,0.10)', dot:'#10B981' },
+  review:    { label:'In review',    color:'#FDE68A', bg:'rgba(245,158,11,0.10)', dot:'#F59E0B' },
+  submitted: { label:'Submitted',    color:'#BAE6FD', bg:'rgba(34,211,238,0.10)', dot:'#22D3EE' },
+  drafting:  { label:'Drafting',     color:'#C4B5FD', bg:'rgba(139,92,246,0.10)', dot:'#8B5CF6' },
+};
+
+function ActivityBars({ days, accent='#A78BFA' }) {
+  const max = Math.max(...days, 1);
+  return (
+    <div className="flex items-end gap-[2px] h-[18px]">
+      {days.map((v,i)=>{
+        const h = Math.max(2, (v/max)*16);
+        return <div key={i} className="rounded-[1px]" style={{width:3, height:h, background: v===0?'rgba(255,255,255,0.06)': accent, opacity: v===0?0.4 : 0.55 + (v/max)*0.45}} />
+      })}
+    </div>
+  );
+}
+
+function ThumbDoc({ project }) {
+  // Generate a small "page sketch" — title block, lines, abstract block, equation, two columns, figure
+  const layout = project.template;
+  const isThesis = layout === 'Thesis';
+  const isLetter = layout === 'Letter';
+  const isTwo = layout === 'ICML' || layout === 'NeurIPS';
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      {/* Page */}
+      <div className="absolute inset-x-4 top-3 bottom-3 rounded-[2px] thumb shadow-lg" style={{padding:'10px 12px'}}>
+        {/* Title cluster */}
+        <div className="text-center">
+          <div className="doc-line darker mx-auto" style={{height:2.5, width:'76%'}} />
+          {!isLetter && <div className="doc-line darker mx-auto mt-1" style={{height:2.5, width:'58%'}} />}
+          <div className="doc-line dim mx-auto mt-1.5" style={{height:1, width:'42%'}} />
+        </div>
+        {/* Body */}
+        {isLetter ? (
+          <div className="mt-2.5 space-y-[3px]">
+            {Array.from({length:14}).map((_,i)=>(
+              <div key={i} className="doc-line" style={{height:0.9, width: `${72 + ((i*13)%26)}%`}} />
+            ))}
+          </div>
+        ) : isTwo ? (
+          <>
+            {/* Abstract */}
+            <div className="mt-2 mx-auto" style={{width:'78%'}}>
+              <div className="doc-line darker mx-auto" style={{height:1, width:'18%'}} />
+              <div className="space-y-[2px] mt-1">
+                {Array.from({length:4}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${88 - i*4}%`}} />))}
+              </div>
+            </div>
+            {/* Two cols */}
+            <div className="mt-2.5 grid grid-cols-2 gap-2">
+              <div className="space-y-[2px]">
+                <div className="doc-line darker" style={{height:1.2, width:'52%'}} />
+                {Array.from({length:5}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${94 - (i*7)}%`}} />))}
+                {/* equation */}
+                <div className="my-1 text-center">
+                  <span className="glyph-eq" style={{fontSize:6, color:'#1E1B4B'}}>W₂² ≤ e<sup>−2ρt</sup></span>
+                </div>
+                {Array.from({length:3}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${88 - (i*5)}%`}} />))}
+              </div>
+              <div className="space-y-[2px]">
+                <div className="doc-line darker" style={{height:1.2, width:'46%'}} />
+                {Array.from({length:3}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${92 - (i*6)}%`}} />))}
+                {/* figure box */}
+                <div className="my-1 rounded-[1px]" style={{height:18, background:'linear-gradient(135deg, rgba(139,92,246,0.14), rgba(34,211,238,0.10))', border:'0.5px solid rgba(139,92,246,0.25)'}}>
+                  <svg viewBox="0 0 60 18" className="w-full h-full">
+                    <path d="M2,15 L8,12 L14,13 L20,8 L26,10 L32,5 L38,7 L44,3 L50,5 L58,2" stroke="#7C3AED" strokeWidth="0.7" fill="none" />
+                  </svg>
+                </div>
+                {Array.from({length:3}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${82 - (i*5)}%`}} />))}
+              </div>
+            </div>
+          </>
+        ) : isThesis ? (
+          <>
+            <div className="mt-3 mx-auto" style={{width:'80%'}}>
+              <div className="doc-line darker mx-auto" style={{height:1.4, width:'30%'}} />
+              <div className="space-y-[2px] mt-2">
+                {Array.from({length:9}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${94 - (i*4)}%`}} />))}
+              </div>
+              <div className="my-2 text-center">
+                <span className="glyph-eq" style={{fontSize:7, color:'#1E1B4B'}}>∫<sub>Ω</sub> ∇f dμ</span>
+              </div>
+              {Array.from({length:5}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${88 - (i*3)}%`}} />))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mt-2 space-y-[2px]">
+              <div className="doc-line darker" style={{height:1.2, width:'40%'}} />
+              {Array.from({length:7}).map((_,i)=>(<div key={i} className="doc-line" style={{height:0.8, width:`${92 - (i*4)}%`}} />))}
+            </div>
+          </>
+        )}
+        {/* footer page nr */}
+        <div className="absolute bottom-1.5 left-0 right-0 text-center">
+          <span className="text-[5px] text-[#9CA3AF] mono">{isThesis ? '37' : '1'}</span>
+        </div>
+      </div>
+
+      {/* Background dim overlay so card content reads clearly when stacked */}
+      <div className="absolute inset-0" style={{background:'linear-gradient(180deg, rgba(10,11,15,0) 50%, rgba(10,11,15,0.55) 100%)'}} />
+    </div>
+  );
+}
+
+function ProjectCard({ project }) {
+  const status = STATUS_PILLS[project.status];
+  const accentColor = project.accent==='cyan'?'#22D3EE': project.accent==='amber'?'#F59E0B': project.accent==='emerald'?'#10B981':'#A78BFA';
+  return (
+    <a href={project.href||'#'} className="card-shell glass rounded-2xl overflow-hidden flex flex-col" style={{height:340, background:'rgba(13,15,20,0.55)'}}>
+      {/* Thumbnail header */}
+      <div className="relative h-[164px] overflow-hidden flex-shrink-0">
+        <ThumbDoc project={project} />
+        {/* top row over thumb */}
+        <div className="absolute top-3 left-3 right-3 flex items-start justify-between z-10">
+          <div className="flex items-center gap-1.5">
+            <span className="px-1.5 py-0.5 rounded text-[10px] mono font-medium" style={{background:'rgba(10,11,15,0.78)', color:'#D1D5DB', border:'1px solid rgba(255,255,255,0.08)', backdropFilter:'blur(8px)'}}>{project.template}</span>
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] mono font-medium" style={{background:status.bg, color:status.color, border:`1px solid ${status.bg}`, backdropFilter:'blur(8px)'}}>
+              <span className="w-1 h-1 rounded-full" style={{background:status.dot}} />
+              {status.label}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button className="w-6 h-6 rounded-md flex items-center justify-center" style={{background:'rgba(10,11,15,0.6)', backdropFilter:'blur(8px)', border:'1px solid rgba(255,255,255,0.06)'}} title="Star">
+              <Icon name="star" size={11} style={{color: project.starred?'#FBBF24':'#9CA3AF', opacity: project.starred?1:0.7, fill: project.starred?'#FBBF24':'transparent'}} />
+            </button>
+            <button className="w-6 h-6 rounded-md flex items-center justify-center" style={{background:'rgba(10,11,15,0.6)', backdropFilter:'blur(8px)', border:'1px solid rgba(255,255,255,0.06)'}}>
+              <Icon name="more-horizontal" size={11} style={{color:'#9CA3AF'}} />
+            </button>
+          </div>
+        </div>
+        {/* deadline ribbon */}
+        {project.deadline && (
+          <div className="absolute bottom-2.5 left-3 right-3 flex items-center gap-1.5 z-10">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] mono" style={{background:'rgba(10,11,15,0.78)', color:'#D1D5DB', border:'1px solid rgba(255,255,255,0.06)', backdropFilter:'blur(8px)'}}>
+              <Icon name="calendar" size={10} style={{opacity:0.7, color: project.deadline.daysLeft<=4?'#FCA5A5':'#9CA3AF'}} />
+              <span>{project.deadline.label}</span>
+              <span className="text-[#6B7280]">·</span>
+              <span style={{color: project.deadline.daysLeft<=4?'#FCA5A5':project.deadline.daysLeft<=14?'#FBBF24':'#9CA3AF'}}>{project.deadline.daysLeft}d</span>
+            </div>
+            {project.commentsOpen>0 && (
+              <div className="ml-auto flex items-center gap-1 px-2 py-1 rounded-md text-[10px] mono" style={{background:'rgba(10,11,15,0.78)', color:'#A78BFA', border:'1px solid rgba(139,92,246,0.18)', backdropFilter:'blur(8px)'}}>
+                <Icon name="users" size={10} style={{opacity:0.85}} />
+                <span>{project.commentsOpen} open</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 flex flex-col p-3.5 min-h-0">
+        {/* Space + branch */}
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="flex items-center gap-1.5 text-[10.5px] mono text-[#9CA3AF]">
+            <span className="w-1.5 h-1.5 rounded-full" style={{background:project.spaceTint}} />
+            {project.space}
+          </span>
+          <span className="text-[#374151]">·</span>
+          <span className="flex items-center gap-1 text-[10.5px] mono text-[#6B7280]">
+            <Icon name="git-branch" size={10} style={{opacity:0.7}} />
+            {project.branch}
+          </span>
+        </div>
+        {/* Title */}
+        <div className="text-[13.5px] font-semibold text-[#E6E8EC] leading-snug" style={{textWrap:'pretty', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden'}}>{project.title}</div>
+
+        {/* Stats row */}
+        <div className="mt-auto pt-3 flex items-center gap-3 border-t border-white/[0.04]" style={{marginTop:12}}>
+          <div className="flex flex-col">
+            <span className="label-xs text-[#6B7280]">Pages</span>
+            <span className="text-[12px] mono font-semibold text-[#E6E8EC] mt-0.5">{project.pages}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="label-xs text-[#6B7280]">Words</span>
+            <span className="text-[12px] mono font-semibold text-[#E6E8EC] mt-0.5">{project.words.toLocaleString()}</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="label-xs text-[#6B7280]">Refs</span>
+            <span className="text-[12px] mono font-semibold text-[#E6E8EC] mt-0.5">{project.refs}</span>
+          </div>
+          <div className="ml-auto flex flex-col items-end">
+            <span className="label-xs text-[#6B7280]">14d</span>
+            <ActivityBars days={project.activityDays} accent={accentColor} />
+          </div>
+        </div>
+
+        {/* Bottom row */}
+        <div className="mt-3 flex items-center justify-between">
+          <div className="flex items-center -space-x-1.5">
+            {project.collaborators.map((c,i)=>(
+              <div key={i} className="w-5 h-5 rounded-full flex items-center justify-center text-[8.5px] font-semibold" style={{background:c.g, boxShadow:'0 0 0 1.5px rgba(13,15,20,0.95)'}}>{c.i}</div>
+            ))}
+          </div>
+          <div className="text-[10.5px] mono text-[#6B7280]">
+            <span className="text-[#9CA3AF]">{project.updatedAgo}</span> · {project.updatedDate}
+          </div>
+        </div>
+      </div>
+    </a>
+  );
+}
+
+// ----------- New Project tile -----------
+function NewProjectTile() {
+  return (
+    <button className="card-shell rounded-2xl overflow-hidden flex flex-col items-center justify-center gap-3 lift" style={{height:340, background:'rgba(13,15,20,0.35)', border:'1.5px dashed rgba(255,255,255,0.08)'}}>
+      <div className="w-14 h-14 rounded-2xl accent-grad flex items-center justify-center glow-violet"><Icon name="plus" size={20} stroke={2.4} /></div>
+      <div className="text-center px-6">
+        <div className="text-[14px] font-semibold text-[#E6E8EC]">New project</div>
+        <div className="text-[11px] text-[#6B7280] mt-1 leading-relaxed">Start from a template, drop a <span className="mono">.tex</span> bundle, or compose with prompt</div>
+      </div>
+      <div className="flex items-center gap-1 mt-1">
+        <kbd className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.05)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>⌘</kbd>
+        <kbd className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.05)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>N</kbd>
+      </div>
+    </button>
+  );
+}
+
+// ----------- Filter / toolbar -----------
+function ProjectsToolbar({ view, setView, sort, setSort }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      {/* tabs */}
+      <div className="flex items-center gap-0.5 glass-soft rounded-lg p-1">
+        {[
+          {id:'all', label:'All', count:14},
+          {id:'mine', label:'Mine', count:9},
+          {id:'shared', label:'Shared', count:3},
+          {id:'starred', label:'Starred', count:4},
+        ].map(t=>(
+          <button key={t.id} className={`h-7 px-2.5 rounded-md text-[11.5px] font-medium flex items-center gap-1.5 lift ${t.id==='all'?'bg-white/[0.07] text-white':'text-[#9CA3AF] hover:bg-white/[0.04]'}`}>
+            <span>{t.label}</span>
+            <span className="text-[10px] mono px-1.5 py-0.5 rounded-full" style={{background: t.id==='all'?'rgba(139,92,246,0.16)':'rgba(255,255,255,0.04)', color: t.id==='all'?'#C4B5FD':'#6B7280'}}>{t.count}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="w-px h-5 bg-white/5" />
+
+      {/* filter chips */}
+      <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+        <Icon name="tag" size={11} style={{opacity:0.7}} />
+        <span>All tags</span>
+        <Icon name="chevron-down" size={10} style={{opacity:0.5}} />
+      </button>
+      <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+        <Icon name="filter" size={11} style={{opacity:0.7}} />
+        <span>Status: any</span>
+        <Icon name="chevron-down" size={10} style={{opacity:0.5}} />
+      </button>
+      <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+        <Icon name="users" size={11} style={{opacity:0.7}} />
+        <span>Anyone</span>
+        <Icon name="chevron-down" size={10} style={{opacity:0.5}} />
+      </button>
+
+      <div className="ml-auto flex items-center gap-1.5">
+        <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+          <span>Sort: <span className="text-[#E6E8EC]">Last edited</span></span>
+          <Icon name="chevron-down" size={10} style={{opacity:0.5}} />
+        </button>
+        <div className="flex items-center gap-0.5 glass-soft rounded-md p-0.5">
+          <button onClick={()=>setView('grid')} className={`w-7 h-7 rounded flex items-center justify-center ${view==='grid'?'bg-white/[0.08] text-white':'text-[#9CA3AF] hover:bg-white/[0.04]'}`}><Icon name="grid" size={12} /></button>
+          <button onClick={()=>setView('list')} className={`w-7 h-7 rounded flex items-center justify-center ${view==='list'?'bg-white/[0.08] text-white':'text-[#9CA3AF] hover:bg-white/[0.04]'}`}><Icon name="list" size={12} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Activity feed (right rail) -----------
+const ACTIVITY = [
+  { who:'AK', g:'linear-gradient(135deg,#8B5CF6,#5B21B6)', what:'left 3 comments on', target:'stochastic-flows', detail:'§ Main Result · Theorem 2.1', time:'2m', type:'comment' },
+  { who:'JT', g:'linear-gradient(135deg,#F59E0B,#B45309)', what:'compiled', target:'variance-reduction', detail:'0 errors · 1 warning', time:'14m', type:'compile' },
+  { who:'EL', g:'linear-gradient(135deg,#10B981,#065F46)', what:'requested review on', target:'mcmc-mixing', detail:'submission branch · 14 pages', time:'1h', type:'review' },
+  { who:'MS', g:'linear-gradient(135deg,#0EA5E9,#0369A1)', what:'pushed 4 commits to', target:'thesis 2026', detail:'chapter-4 · +312 −48', time:'3h', type:'commit' },
+  { who:'AK', g:'linear-gradient(135deg,#8B5CF6,#5B21B6)', what:'shared', target:'reading-notes', detail:'with reading group · view only', time:'yesterday', type:'share' },
+];
+
+function RightRail() {
+  return (
+    <div className="glass rounded-xl flex flex-col overflow-hidden h-full" style={{width:300}}>
+      {/* Today's plan */}
+      <div className="p-4 border-b border-white/[0.05]">
+        <div className="flex items-center justify-between mb-2.5">
+          <span className="label-xs text-[#A78BFA]">Focus · today</span>
+          <span className="text-[10.5px] mono text-[#6B7280]">Sun Apr 26</span>
+        </div>
+        <div className="space-y-2">
+          <div className="glass-soft rounded-lg p-2.5 flex items-start gap-2.5">
+            <div className="w-4 h-4 mt-0.5 rounded border-2 flex-shrink-0" style={{borderColor:'#A78BFA', background:'rgba(139,92,246,0.12)'}} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11.5px] text-[#E6E8EC] font-medium leading-snug">Finish proof of Theorem 2.1 (LSI bound)</div>
+              <div className="text-[10px] mono text-[#6B7280] mt-1 flex items-center gap-1.5">
+                <span>stochastic-flows</span><span>·</span><span style={{color:'#FCA5A5'}}>blocking 2 reviewers</span>
+              </div>
+            </div>
+          </div>
+          <div className="glass-soft rounded-lg p-2.5 flex items-start gap-2.5">
+            <div className="w-4 h-4 mt-0.5 rounded border-2 flex-shrink-0" style={{borderColor:'rgba(255,255,255,0.18)'}} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11.5px] text-[#E6E8EC] leading-snug">Reply to AK on §3 preliminaries</div>
+              <div className="text-[10px] mono text-[#6B7280] mt-1">3 unresolved threads</div>
+            </div>
+          </div>
+          <div className="glass-soft rounded-lg p-2.5 flex items-start gap-2.5">
+            <div className="w-4 h-4 mt-0.5 rounded border-2 flex-shrink-0" style={{borderColor:'rgba(255,255,255,0.18)'}} />
+            <div className="flex-1 min-w-0">
+              <div className="text-[11.5px] text-[#E6E8EC] leading-snug">Re-render figures 2 and 4 (vector PDF)</div>
+              <div className="text-[10px] mono text-[#6B7280] mt-1">figures/ · TikZ → 300dpi</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Activity */}
+      <div className="flex-1 overflow-auto scroll p-4">
+        <div className="flex items-center justify-between mb-3">
+          <span className="label-xs text-[#6B7280]">Activity</span>
+          <button className="text-[10.5px] text-[#9CA3AF] hover:text-white mono">view all</button>
+        </div>
+        <div className="space-y-3.5 relative">
+          {/* timeline rail */}
+          <div className="absolute left-[11px] top-1.5 bottom-1.5 w-px" style={{background:'linear-gradient(180deg, rgba(139,92,246,0.35), rgba(34,211,238,0.18), transparent)'}} />
+          {ACTIVITY.map((a,i)=>(
+            <div key={i} className="relative pl-8">
+              <div className="absolute left-0 top-0 w-[22px] h-[22px] rounded-full flex items-center justify-center text-[9.5px] font-semibold" style={{background:a.g, boxShadow:'0 0 0 2px #0A0B0F'}}>{a.who}</div>
+              <div className="text-[11.5px] text-[#D1D5DB] leading-snug" style={{textWrap:'pretty'}}>
+                <span className="font-medium text-[#E6E8EC]">{a.who==='MS'?'You':a.who}</span> <span className="text-[#9CA3AF]">{a.what}</span> <span className="text-[#A78BFA] font-medium">{a.target}</span>
+              </div>
+              <div className="text-[10px] mono text-[#6B7280] mt-0.5">{a.detail}</div>
+              <div className="text-[10px] mono text-[#4B5563] mt-1">{a.time} ago</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Footer card - tip */}
+      <div className="p-3 border-t border-white/[0.05]">
+        <div className="glass-soft rounded-lg p-2.5 flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0" style={{background:'rgba(139,92,246,0.14)'}}>
+            <Icon name="command" size={12} style={{color:'#C4B5FD'}} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[11px] text-[#E6E8EC] font-medium">Quick switcher</div>
+            <div className="text-[10px] mono text-[#6B7280] mt-0.5">⌘K from anywhere · 142 entries</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Command Palette overlay (lightweight reuse) -----------
+function CommandPalette({ onClose }) {
+  return (
+    <div className="absolute inset-0 z-50 flex items-start justify-center pt-[120px]" style={{background:'radial-gradient(ellipse at center, rgba(10,11,15,0.55) 0%, rgba(10,11,15,0.85) 100%)', backdropFilter:'blur(2px) saturate(120%)'}} onClick={onClose}>
+      <div className="glass rounded-2xl overflow-hidden w-[560px] glow-violet" onClick={e=>e.stopPropagation()} style={{background:'rgba(15,17,22,0.78)'}}>
+        <div className="h-[52px] flex items-center px-4 gap-3 border-b border-white/[0.06]">
+          <Icon name="search" size={14} style={{opacity:0.6}} />
+          <div className="flex-1 text-[14px] text-[#9CA3AF]">Jump to project, paper, or person…</div>
+          <kbd className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.05)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>esc</kbd>
+        </div>
+        <div className="p-2 max-h-[360px] overflow-auto scroll">
+          <div className="label-xs text-[#6B7280] px-2.5 pt-2 pb-1.5">Recent</div>
+          {PROJECTS.slice(0,3).map((p,i)=>(
+            <div key={i} className={`flex items-center gap-3 px-2.5 h-10 rounded-lg ${i===0?'bg-white/[0.04]':'hover:bg-white/[0.03]'}`}>
+              <div className="w-7 h-7 rounded-md thumb flex flex-col p-1 gap-[1px]">
+                <div className="doc-line darker" style={{height:1, width:'70%'}} />
+                <div className="doc-line" style={{height:0.8, width:'90%'}} />
+                <div className="doc-line dim" style={{height:0.8, width:'60%'}} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] text-[#E6E8EC] truncate">{p.title}</div>
+                <div className="text-[10px] mono text-[#6B7280]">{p.space} · {p.template} · {p.updatedAgo}</div>
+              </div>
+              {i===0 && <kbd className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.04)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>↵</kbd>}
+            </div>
+          ))}
+          <div className="label-xs text-[#6B7280] px-2.5 pt-3 pb-1.5">Actions</div>
+          {[
+            {i:'plus', t:'New project', kbd:['⌘','N']},
+            {i:'upload', t:'Upload .tex bundle'},
+            {i:'github', t:'Import from GitHub'},
+            {i:'sparkles', t:'Compose with prompt'},
+          ].map((r,i)=>(
+            <div key={i} className="flex items-center gap-3 px-2.5 h-9 rounded-lg hover:bg-white/[0.03]">
+              <div className="w-7 h-7 rounded-md flex items-center justify-center" style={{background:'rgba(255,255,255,0.04)'}}>
+                <Icon name={r.i} size={12} style={{color:'#9CA3AF'}} />
+              </div>
+              <div className="flex-1 text-[12.5px] text-[#E6E8EC]">{r.t}</div>
+              {r.kbd && <div className="flex items-center gap-0.5">{r.kbd.map((k,j)=>(
+                <kbd key={j} className="px-1.5 py-0.5 rounded text-[10px] mono" style={{background:'rgba(255,255,255,0.04)', color:'#9CA3AF', border:'1px solid rgba(255,255,255,0.06)'}}>{k}</kbd>
+              ))}</div>}
+            </div>
+          ))}
+        </div>
+        <div className="h-[34px] border-t border-white/[0.06] px-3 flex items-center gap-3 text-[10.5px] text-[#6B7280] mono">
+          <span className="flex items-center gap-1"><kbd className="px-1 py-0.5 rounded text-[9.5px]" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.06)'}}>↑↓</kbd>navigate</span>
+          <span className="flex items-center gap-1"><kbd className="px-1 py-0.5 rounded text-[9.5px]" style={{background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.06)'}}>↵</kbd>open</span>
+          <span className="ml-auto flex items-center gap-1.5">
+            <span className="w-3 h-3 rounded accent-grad" />
+            Typeward
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- App -----------
+function App() {
+  const [view, setView] = useState('grid');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(()=>{
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen(o=>!o); }
+      if (e.key === 'Escape') setPaletteOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return ()=>window.removeEventListener('keydown', onKey);
+  },[]);
+
+  return (
+    <div className="relative w-screen h-screen overflow-hidden no-emoji" style={{background:'#0A0B0F'}}>
+      {/* Ambient blobs */}
+      <div className="ambient">
+        <div className="blob blob-1" />
+        <div className="blob blob-2" />
+        <div className="blob blob-3" />
+        <div className="blob blob-4" />
+      </div>
+      <div className="absolute inset-0 grain pointer-events-none" />
+
+      <div className="relative z-10 flex flex-col h-full">
+        <TopBar onOpenCmd={()=>setPaletteOpen(true)} />
+
+        <div className="flex-1 flex gap-2 p-2 min-h-0">
+          <Sidebar />
+
+          {/* Main */}
+          <div className="flex-1 flex flex-col min-w-0 gap-2">
+            {/* Header */}
+            <div className="flex items-end justify-between px-1 pt-1 pb-2">
+              <div>
+                <div className="flex items-center gap-2.5 text-[11px] mono text-[#6B7280]">
+                  <Icon name="folder-open" size={11} style={{opacity:0.6}} />
+                  <span>Library</span>
+                  <span>/</span>
+                  <span className="text-[#9CA3AF]">All projects</span>
+                </div>
+                <h1 className="text-[26px] font-semibold tracking-tight mt-1">Good evening, Marek.</h1>
+                <div className="text-[12.5px] text-[#9CA3AF] mt-0.5">
+                  <span className="text-[#A78BFA] font-medium">14 projects</span> · 3 with open reviews · ICML deadline in <span className="text-[#FBBF24] font-medium">18 days</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+                  <Icon name="import" size={11} style={{opacity:0.7}} />
+                  <span>Import</span>
+                </button>
+                <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+                  <Icon name="external-link" size={11} style={{opacity:0.7}} />
+                  <span>Templates</span>
+                </button>
+                <a href="Typeward.html" className="lift h-8 px-2.5 rounded-md accent-grad text-white text-[11.5px] font-semibold flex items-center gap-1.5 glow-violet">
+                  <Icon name="play" size={11} stroke={2.2} />
+                  <span>Resume editing</span>
+                </a>
+              </div>
+            </div>
+
+            {/* Composer hero */}
+            <Composer />
+
+            {/* Toolbar */}
+            <div className="px-1 pt-2">
+              <ProjectsToolbar view={view} setView={setView} />
+            </div>
+
+            {/* Grid */}
+            <div className="flex-1 overflow-auto scroll px-1 pb-2 mt-1">
+              <div className="grid grid-cols-3 gap-3" style={{gridAutoRows:'min-content'}}>
+                <NewProjectTile />
+                {PROJECTS.map(p=>(
+                  <ProjectCard key={p.id} project={p} />
+                ))}
+              </div>
+              <div className="text-center text-[10.5px] mono text-[#4B5563] py-6">— end of 14 projects —</div>
+            </div>
+          </div>
+
+          {/* Right rail */}
+          <RightRail />
+        </div>
+      </div>
+
+      {paletteOpen && <CommandPalette onClose={()=>setPaletteOpen(false)} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

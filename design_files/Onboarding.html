@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Typeward · First-run setup</title>
+<meta name="viewport" content="width=1440, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  html, body, #root { background:#1a1814; margin:0; height:100%; font-family:'Inter',system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  body { font-feature-settings:'cv02','cv03','cv04','ss01'; letter-spacing:-0.005em; }
+  @keyframes onbpulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.85); } }
+  @keyframes onbblink  { 0%,49% { opacity:1 } 50%,100% { opacity:0 } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="onboarding/design-canvas.jsx"></script>
+<script type="text/babel" src="onboarding/tweaks-panel.jsx"></script>
+<script type="text/babel" src="onboarding/screens.jsx"></script>
+<script type="text/babel" src="onboarding/new-project.jsx"></script>
+<script type="text/babel" data-presets="react">
+const { useState } = React;
+
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "violet-cyan",
+  "tone": "warm",
+  "showWelcome": true,
+  "showFormats": true,
+  "showDetect": true,
+  "showInstall": true,
+  "showNewProject": true
+}/*EDITMODE-END*/;
+
+const ACCENT_PRESETS = {
+  "violet-cyan": { a:'#8B5CF6', b:'#22D3EE', c:'#1E3A8A' },
+  "amber-rose":  { a:'#F59E0B', b:'#F43F5E', c:'#7F1D1D' },
+  "emerald-teal":{ a:'#10B981', b:'#22D3EE', c:'#064E3B' },
+  "indigo-pink": { a:'#6366F1', b:'#EC4899', c:'#3B0764' },
+};
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const accent = ACCENT_PRESETS[t.accent] || ACCENT_PRESETS["violet-cyan"];
+
+  const screens = [
+    { id:'welcome', label:'1 · Welcome',  show: t.showWelcome,
+      A: <WorkshopWelcome accent={accent} />, B: <ConsoleWelcome accent={accent} /> },
+    { id:'formats', label:'2 · Pick formats', show: t.showFormats,
+      A: <WorkshopFormats accent={accent} />, B: <ConsoleFormats accent={accent} /> },
+    { id:'detect',  label:'3 · Detect engines', show: t.showDetect,
+      A: <WorkshopDetect accent={accent} />, B: <ConsoleDetect accent={accent} /> },
+    { id:'install', label:'4 · Install + log', show: t.showInstall,
+      A: <WorkshopInstall accent={accent} />, B: <ConsoleInstall accent={accent} /> },
+  ].filter(s => s.show);
+
+  const npSteps = [
+    { id:'np-format',    label:'1 · Format',    A:<NPWFormat    accent={accent} />, B:<NPCFormat    accent={accent} /> },
+    { id:'np-template',  label:'2 · Template',  A:<NPWTemplate  accent={accent} />, B:<NPCTemplate  accent={accent} /> },
+    { id:'np-details',   label:'3 · Details',   A:<NPWMetadata  accent={accent} />, B:<NPCDetails   accent={accent} /> },
+    { id:'np-deadline',  label:'4 · Deadline',  A:<NPWDeadline  accent={accent} />, B:<NPCDeadline  accent={accent} /> },
+    { id:'np-citations', label:'5 · Citations', A:<NPWCitations accent={accent} />, B:<NPCCitations accent={accent} /> },
+    { id:'np-drafting',  label:'6 · Drafting',  A:<NPWDrafting  accent={accent} />, B:<NPCDrafting  accent={accent} /> },
+    { id:'np-review',    label:'7 · Review',    A:<NPWReview    accent={accent} />, B:<NPCReview    accent={accent} /> },
+  ];
+
+  const W = 880, H = 580;
+  const NPW = 880, NPH = 620;
+
+  return (
+    <>
+      <DesignCanvas>
+        <DCSection id="dirA" title="Direction A · Workshop" subtitle="Warm hero, generous space, friendly copy. Stepper at top, glass card centered.">
+          {screens.map(s=>(
+            <DCArtboard key={s.id} id={`A-${s.id}`} label={s.label} width={W} height={H}>
+              {s.A}
+            </DCArtboard>
+          ))}
+        </DCSection>
+        <DCSection id="dirB" title="Direction B · Console" subtitle="Tighter, mono-heavy, terminal-flavored. Left progress rail, technical detail front-and-center.">
+          {screens.map(s=>(
+            <DCArtboard key={s.id} id={`B-${s.id}`} label={s.label} width={W} height={H}>
+              {s.B}
+            </DCArtboard>
+          ))}
+        </DCSection>
+        {t.showNewProject && (
+          <DCSection id="newprojA" title="New project · Workshop" subtitle="7-step modal flow for creating a project: format → template → metadata → deadline → citations → drafting mode → review.">
+            {npSteps.map(s=>(
+              <DCArtboard key={s.id} id={`NP-A-${s.id}`} label={s.label} width={NPW} height={NPH}>
+                {s.A}
+              </DCArtboard>
+            ))}
+          </DCSection>
+        )}
+        {t.showNewProject && (
+          <DCSection id="newprojB" title="New project · Console" subtitle="Same 7-step flow, dense terminal aesthetic with raw .toml / .lock previews and ASCII calendar.">
+            {npSteps.map(s=>(
+              <DCArtboard key={s.id} id={`NP-B-${s.id}`} label={s.label} width={NPW} height={NPH}>
+                {s.B}
+              </DCArtboard>
+            ))}
+          </DCSection>
+        )}
+      </DesignCanvas>
+
+      <TweaksPanel title="Tweaks">
+        <TweakSection label="Accent" />
+        <TweakSelect
+          label="Palette"
+          value={t.accent}
+          options={[
+            { value:'violet-cyan',  label:'Violet → Cyan (default)' },
+            { value:'amber-rose',   label:'Amber → Rose' },
+            { value:'emerald-teal', label:'Emerald → Teal' },
+            { value:'indigo-pink',  label:'Indigo → Pink' },
+          ]}
+          onChange={v => setTweak('accent', v)}
+        />
+
+        <TweakSection label="Steps shown" />
+        <TweakToggle label="Welcome"        value={t.showWelcome} onChange={v=>setTweak('showWelcome', v)} />
+        <TweakToggle label="Pick formats"   value={t.showFormats} onChange={v=>setTweak('showFormats', v)} />
+        <TweakToggle label="Detect engines" value={t.showDetect}  onChange={v=>setTweak('showDetect',  v)} />
+        <TweakToggle label="Install + log"  value={t.showInstall} onChange={v=>setTweak('showInstall', v)} />
+
+        <TweakSection label="New project flow" />
+        <TweakToggle label="Show 7-step new-project sections" value={t.showNewProject} onChange={v=>setTweak('showNewProject', v)} />
+      </TweaksPanel>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

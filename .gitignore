@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Typeward project sidecar (per-project; only ignored if it appears in dev workspace)
+# .typeward/
+
+# Test coverage
+coverage/
+
+# Tauri sidecar binaries (fetched per-host via npm run fetch:tectonic).
+# Keep .gitkeep so the directory exists for `externalBin` resolution.
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep

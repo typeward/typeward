@@ -1,0 +1,28 @@
+/*
+ * Motion kill-switch. When `<html data-motion="reduced">`, transitions and
+ * animations are reduced to 0.01ms (functional 0, but keeps transitionend +
+ * animationend events firing). The OS-level prefers-reduced-motion media
+ * query forces the same regardless of the in-app toggle.
+ *
+ * Spec: design/motion.md.
+ */
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  transition-duration: 0.01ms !important;
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

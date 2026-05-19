@@ -1,0 +1,265 @@
+//! SyncTeX bridge.
+//!
+//! We invoke the system `synctex` CLI rather than hand-parsing `.synctex.gz`.
+//! Every TeX Live / MiKTeX / MacTeX install ships it, and shelling out
+//! avoids pulling in `synctex-sys` (which requires linking against the
+//! distro's C runtime — painful for Windows builds and irrelevant for
+//! Tectonic users, who don't get SyncTeX features anyway).
+//!
+//! When the CLI isn't on PATH we return `Ok(None)` so the frontend can
+//! quietly disable sync features instead of erroring.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ForwardLocation {
+    pub page: u32,
+    /// PDF point coordinates (1pt = 1/72 inch), origin at top-left.
+    pub x: f64,
+    pub y: f64,
+    pub h: f64,
+    pub v: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InverseLocation {
+    /// Absolute source file path (synctex CLI returns absolutes).
+    pub file: String,
+    pub line: u32,
+}
+
+/// Forward search: source position → PDF location. `source_file` should be
+/// an absolute path; `line` is 1-based.
+///
+/// Returns the FIRST result block (synctex CLI may emit several for a
+/// single query — they typically represent close-by hbox/vbox candidates).
+pub fn forward(
+    pdf_path: &Path,
+    source_file: &Path,
+    line: u32,
+) -> Result<Option<ForwardLocation>, String> {
+    if which::which("synctex").is_err() {
+        return Ok(None);
+    }
+    if !pdf_path.exists() {
+        return Ok(None);
+    }
+
+    // synctex view -i <line>:<col>:<file> -o <pdf>
+    let input = format!("{line}:1:{}", source_file.display());
+    let output = Command::new("synctex")
+        .args(["view", "-i", &input, "-o"])
+        .arg(pdf_path)
+        .output()
+        .map_err(|e| format!("synctex spawn failed: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_forward_result(&text))
+}
+
+/// Inverse search: PDF page+coordinates → source position. `x` and `y`
+/// are in PDF points (top-left origin).
+pub fn inverse(
+    pdf_path: &Path,
+    page: u32,
+    x: f64,
+    y: f64,
+) -> Result<Option<InverseLocation>, String> {
+    if which::which("synctex").is_err() {
+        return Ok(None);
+    }
+    if !pdf_path.exists() {
+        return Ok(None);
+    }
+
+    // synctex edit -o <page>:<x>:<y>:<pdf>
+    let arg = format!("{page}:{x}:{y}:{}", pdf_path.display());
+    let output = Command::new("synctex")
+        .args(["edit", "-o", &arg])
+        .output()
+        .map_err(|e| format!("synctex spawn failed: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(parse_inverse_result(&text))
+}
+
+/// Parse `synctex view` output. Looks for the first SyncTeX result block
+/// and pulls out Page, x, y, h, v.
+fn parse_forward_result(text: &str) -> Option<ForwardLocation> {
+    let mut in_block = false;
+    let mut page: Option<u32> = None;
+    let mut x: Option<f64> = None;
+    let mut y: Option<f64> = None;
+    let mut h: Option<f64> = None;
+    let mut v: Option<f64> = None;
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line == "SyncTeX result begin" {
+            in_block = true;
+            continue;
+        }
+        if line == "SyncTeX result end" {
+            break;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("Page:") {
+            // Take only the first page entry; subsequent rows are alternates.
+            if page.is_none() {
+                page = rest.trim().parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("x:") {
+            if x.is_none() {
+                x = rest.trim().parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("y:") {
+            if y.is_none() {
+                y = rest.trim().parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("h:") {
+            if h.is_none() {
+                h = rest.trim().parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("v:") {
+            if v.is_none() {
+                v = rest.trim().parse().ok();
+            }
+        }
+    }
+
+    Some(ForwardLocation {
+        page: page?,
+        x: x?,
+        y: y?,
+        h: h.unwrap_or(0.0),
+        v: v.unwrap_or(0.0),
+    })
+}
+
+/// Parse `synctex edit` output. Pulls Input (source file) and Line.
+fn parse_inverse_result(text: &str) -> Option<InverseLocation> {
+    let mut in_block = false;
+    let mut file: Option<String> = None;
+    let mut line_no: Option<u32> = None;
+
+    for line in text.lines() {
+        let line = line.trim();
+        if line == "SyncTeX result begin" {
+            in_block = true;
+            continue;
+        }
+        if line == "SyncTeX result end" {
+            break;
+        }
+        if !in_block {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("Input:") {
+            if file.is_none() {
+                file = Some(rest.trim().to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix("Line:") {
+            if line_no.is_none() {
+                line_no = rest.trim().parse().ok();
+            }
+        }
+    }
+
+    Some(InverseLocation {
+        file: file?,
+        line: line_no?,
+    })
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ForwardArgs {
+    #[serde(rename = "projectRoot")]
+    pub project_root: String,
+    /// PDF path, absolute. Frontend has this from the last compile result.
+    #[serde(rename = "pdfPath")]
+    pub pdf_path: String,
+    /// Source file relative to project_root.
+    #[serde(rename = "sourceFile")]
+    pub source_file: String,
+    pub line: u32,
+}
+
+#[tauri::command]
+pub fn synctex_forward(args: ForwardArgs) -> Result<Option<ForwardLocation>, String> {
+    let root = PathBuf::from(&args.project_root);
+    let source = root.join(&args.source_file);
+    let pdf = PathBuf::from(&args.pdf_path);
+    forward(&pdf, &source, args.line)
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct InverseArgs {
+    #[serde(rename = "pdfPath")]
+    pub pdf_path: String,
+    pub page: u32,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[tauri::command]
+pub fn synctex_inverse(args: InverseArgs) -> Result<Option<InverseLocation>, String> {
+    let pdf = PathBuf::from(&args.pdf_path);
+    inverse(&pdf, args.page, args.x, args.y)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_synctex_view_output() {
+        let text = "This is SyncTeX command line utility, version 1.6\nSyncTeX result begin\nOutput:/tmp/main.pdf\nPage:3\nx:69.493\ny:131.964\nh:71.554\nv:135.000\nW:469.957\nH:9.741\nbefore:\noffset:0\nmiddle:\nlength:0\nafter:\nSyncTeX result end\n";
+        let loc = parse_forward_result(text).expect("should parse");
+        assert_eq!(loc.page, 3);
+        assert!((loc.x - 69.493).abs() < 1e-6);
+        assert!((loc.y - 131.964).abs() < 1e-6);
+        assert!((loc.h - 71.554).abs() < 1e-6);
+        assert!((loc.v - 135.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn forward_parser_takes_first_block_only() {
+        // synctex may emit multiple alternates within a single result block;
+        // we want the first Page/x/y triple, not the last.
+        let text = "SyncTeX result begin\nOutput:/tmp/main.pdf\nPage:2\nx:10.0\ny:20.0\nPage:5\nx:99.0\ny:88.0\nSyncTeX result end\n";
+        let loc = parse_forward_result(text).expect("should parse");
+        assert_eq!(loc.page, 2);
+        assert!((loc.x - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn returns_none_when_no_block() {
+        let text = "synctex: nothing found\n";
+        assert!(parse_forward_result(text).is_none());
+    }
+
+    #[test]
+    fn parses_synctex_edit_output() {
+        let text = "SyncTeX result begin\nOutput:/tmp/main.pdf\nInput:/abs/path/main.tex\nLine:42\nColumn:-1\nOffset:0\nContext:\nSyncTeX result end\n";
+        let loc = parse_inverse_result(text).expect("should parse");
+        assert_eq!(loc.file, "/abs/path/main.tex");
+        assert_eq!(loc.line, 42);
+    }
+
+    #[test]
+    fn inverse_missing_input_returns_none() {
+        let text = "SyncTeX result begin\nLine:42\nSyncTeX result end\n";
+        assert!(parse_inverse_result(text).is_none());
+    }
+}

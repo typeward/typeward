@@ -1,0 +1,105 @@
+/*
+ * UI density tokens — Compact / Cozy (default) / Comfortable.
+ *
+ * Anchored on a 12 / 14 / 16 px body. The scale follows a roughly 1.14
+ * modular ratio between steps, mirroring the Material 3 and Apple HIG
+ * conventions. Body sizes are above the 12px accessibility floor in every
+ * mode. Line-height and letter-spacing tokens follow WCAG recommendations
+ * (1.5 for body, 1.2 for display; slightly negative tracking on larger
+ * sizes for visual tightness).
+ *
+ * Cozy lives in the base :root block; the other two override only what
+ * differs. All density-aware vars are namespaced `--ui-*` to keep them
+ * distinct from theme/color tokens.
+ *
+ * Spec: design/density.md.
+ */
+
+:root {
+  /* Type scale (Cozy default) */
+  --ui-font-xs: 11px;       /* mono captions, label-xs hints */
+  --ui-font-sm: 12px;       /* helper text, status hints */
+  --ui-font-base: 14px;     /* body, menu items, buttons, default chrome */
+  --ui-font-lg: 16px;       /* card titles, section h2 */
+  --ui-font-xl: 22px;       /* page heading, screen h1 */
+
+  /* Vertical rhythm */
+  --ui-line-tight: 1.2;     /* headings, display sizes */
+  --ui-line-snug: 1.35;     /* dense UI rows */
+  --ui-line-base: 1.5;      /* body text */
+
+  /* Letter spacing */
+  --ui-track-tight: -0.012em;  /* large/display sizes */
+  --ui-track-base: 0;
+  --ui-track-loose: 0.04em;    /* uppercase labels */
+
+  /* Row heights */
+  --ui-row: 32px;
+  --ui-row-sm: 28px;        /* tabs, inline pills */
+  --ui-row-lg: 40px;        /* top bars, prominent rows */
+
+  /* Padding */
+  --ui-pad-card: 16px;
+  --ui-pad-section: 12px;
+  --ui-pad-inline: 10px;    /* horizontal padding on buttons / inputs */
+
+  /* Gaps */
+  --ui-gap-section: 12px;
+  --ui-gap-inline: 8px;
+
+  /* Radius */
+  --ui-radius-sm: 6px;
+  --ui-radius: 10px;
+  --ui-radius-lg: 14px;
+
+  /* Icon sizes */
+  --ui-icon-chrome: 20px;   /* top-bar chrome icons */
+  --ui-icon-menu: 14px;     /* inline icons next to menu/list items */
+  --ui-icon-sm: 12px;       /* tight inline icons (close, more, chevron) */
+}
+
+:root[data-density="compact"] {
+  --ui-font-xs: 10px;
+  --ui-font-sm: 11px;
+  --ui-font-base: 12px;
+  --ui-font-lg: 14px;
+  --ui-font-xl: 18px;
+
+  --ui-row: 28px;
+  --ui-row-sm: 24px;
+  --ui-row-lg: 36px;
+
+  --ui-pad-card: 12px;
+  --ui-pad-section: 8px;
+  --ui-pad-inline: 8px;
+
+  --ui-gap-section: 8px;
+  --ui-gap-inline: 6px;
+
+  --ui-icon-chrome: 18px;
+  --ui-icon-menu: 12px;
+  --ui-icon-sm: 10px;
+}
+
+:root[data-density="comfortable"] {
+  --ui-font-xs: 12px;
+  --ui-font-sm: 14px;
+  --ui-font-base: 16px;
+  --ui-font-lg: 18px;
+  --ui-font-xl: 26px;
+
+  --ui-row: 40px;
+  --ui-row-sm: 36px;
+  --ui-row-lg: 48px;
+
+  --ui-pad-card: 20px;
+  --ui-pad-section: 16px;
+  --ui-pad-inline: 14px;
+
+  --ui-gap-section: 16px;
+  --ui-gap-inline: 12px;
+
+  --ui-icon-chrome: 24px;
+  --ui-icon-menu: 16px;
+  --ui-icon-sm: 14px;
+}
