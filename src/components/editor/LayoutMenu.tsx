@@ -9,7 +9,6 @@ import {
   setConsolePosition,
   setEditorLayout,
 } from "~/stores/ui-store";
-import { consoleLabel } from "~/stores/editor-store";
 
 /**
  * Two-section popover: pane layout + console position. State persists via
@@ -77,20 +76,20 @@ export const LayoutMenu: Component = () => {
             />
           </Section>
           <div class="my-2 h-px" style={{ background: "var(--color-control-stroke)" }} />
-          <Section label={consoleLabel()}>
+          <Section label="Logs">
             <ConsoleOption
               value="pdf-tab"
               current={consolePosition()}
               onChoose={setConsolePosition}
               label="In preview panel"
-              hint={`${consoleLabel()} become a tab next to the PDF`}
+              hint="Logs become a tab next to the PDF"
             />
             <ConsoleOption
               value="drawer"
               current={consolePosition()}
               onChoose={setConsolePosition}
               label="Bottom drawer"
-              hint={`${consoleLabel()} strip below the editor`}
+              hint="Logs strip below the editor"
             />
           </Section>
         </div>

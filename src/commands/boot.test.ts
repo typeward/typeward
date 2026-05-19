@@ -13,7 +13,6 @@ const REQUIRED_IDS = [
   "core.newProject",
   "core.openSettings",
   "core.save",
-  "notebook.runAll",
 ];
 
 describe("bootCoreCommands", () => {

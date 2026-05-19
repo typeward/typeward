@@ -16,7 +16,6 @@ import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup } f
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { LogsView } from "~/components/editor/LogsDrawer";
-import { consoleLabel } from "~/stores/editor-store";
 import {
   consolePosition,
   previewMode,
@@ -280,7 +279,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
               setPreviewMode(previewMode() === "console" ? "pdf" : "console")
             }
             icon={<Terminal size={16} />}
-            label={consoleLabel()}
+            label="Logs"
           />
         </Show>
 

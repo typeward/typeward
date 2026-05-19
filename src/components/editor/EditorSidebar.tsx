@@ -24,10 +24,9 @@ const ENGINE_LABEL: Record<string, string> = {
 };
 
 /**
- * Shared left sidebar for the editor shells (TextShell, NotebookShell).
- * Owns search + tabs + FileTree + outline + project footer. Identical
- * across shells today; lives in its own file so both shells can mount
- * it without duplicating ~200 lines of layout.
+ * Shared left sidebar for the editor's TextShell.
+ * Owns search + tabs + FileTree + outline + project footer. Lives in its
+ * own file to keep the shell component lean.
  *
  * Selection state (which tab is active, whether the outline is
  * collapsed) is owned by the parent shell — keeps the sidebar reusable

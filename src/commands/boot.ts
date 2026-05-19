@@ -7,8 +7,7 @@ import {
   toggleCommandPalette,
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
-import { activeFile, project } from "~/stores/editor-store";
-import { runAllCells } from "~/stores/notebook-outputs-store";
+import { activeFile } from "~/stores/editor-store";
 import { paletteOpen_ } from "./palette-store";
 
 /**
@@ -71,22 +70,6 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => activeFile()?.dirty === true,
     run: async () => {
       await saveActiveFile();
-    },
-  },
-  // Notebook-only: run every code cell in order, bail on first failure.
-  // Lives in the core set with a when() gate so it auto-shows up whenever
-  // a notebook-experience project is open, regardless of which notebook
-  // adapter is registered.
-  {
-    id: "notebook.runAll",
-    title: "Run all cells",
-    subtitle: "Execute every code cell in order, stopping on first error",
-    shortcut: "Mod+Shift+Enter",
-    group: "Build",
-    scope: "editor",
-    when: () => project()?.experience === "notebook",
-    run: async () => {
-      await runAllCells();
     },
   },
   // Note: compile is intentionally not a core command. Each adapter ships
