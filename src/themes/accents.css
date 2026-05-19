@@ -1,0 +1,20 @@
+/*
+ * Accent palettes. Swapped via [data-accent="..."] on <html>.
+ * The default (--color-accent-1, --color-accent-2 in tokens.css) matches the
+ * Violet-Cyan palette the design files use throughout.
+ */
+
+[data-accent="amber-rose"] {
+  --color-accent-1: #f59e0b;
+  --color-accent-2: #f43f5e;
+}
+
+[data-accent="emerald-teal"] {
+  --color-accent-1: #10b981;
+  --color-accent-2: #14b8a6;
+}
+
+[data-accent="indigo-pink"] {
+  --color-accent-1: #6366f1;
+  --color-accent-2: #ec4899;
+}

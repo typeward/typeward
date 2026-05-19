@@ -1,0 +1,13 @@
+# Cargo build output
+target/
+
+# Tauri-generated schemas/assets
+gen/
+
+# Bundler artifacts
+**/*.rs.bk
+
+# Sidecar binaries — fetched on demand via `npm run fetch:tectonic`.
+# Don't commit them; they're 30MB+ per platform.
+binaries/*
+!binaries/.gitkeep

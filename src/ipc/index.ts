@@ -1,0 +1,311 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  CompileResult,
+  Diagnostic,
+  Project,
+  ProjectFormat,
+} from "~/adapters/types";
+import type { DocumentExperience } from "~/experiences/types";
+
+// ----- TeX engine detection ------------------------------------------------
+
+export interface TexEngine {
+  name: string;
+  path: string | null;
+  version: string | null;
+  installed: boolean;
+}
+
+export interface EngineProbe {
+  engines: TexEngine[];
+  anyLatexAvailable: boolean;
+}
+
+export const detectTex = (): Promise<EngineProbe> => invoke("detect_tex");
+
+// ----- Projects ------------------------------------------------------------
+
+export const listProjects = (root?: string): Promise<Project[]> =>
+  invoke("list_projects", { root });
+
+export const createProject = (params: {
+  name: string;
+  format: ProjectFormat;
+  experience?: DocumentExperience;
+  parent?: string;
+}): Promise<Project> => invoke("create_project", params);
+
+export const openProject = (path: string): Promise<Project> =>
+  invoke("open_project", { path });
+
+// ----- File I/O ------------------------------------------------------------
+
+export const readProjectTextFile = (
+  projectRoot: string,
+  relPath: string,
+): Promise<string> =>
+  invoke("read_project_text_file", { projectRoot, relPath });
+
+/**
+ * Read raw bytes for a project-relative file. busytex pulls figure
+ * assets (`.png`/`.jpg`/`.pdf`) through this so `\includegraphics{...}`
+ * resolves inside its in-memory FS.
+ */
+export const readProjectBinaryFile = async (
+  projectRoot: string,
+  relPath: string,
+): Promise<Uint8Array> => {
+  const bytes = await invoke<number[]>("read_project_binary_file", {
+    projectRoot,
+    relPath,
+  });
+  return Uint8Array.from(bytes);
+};
+
+export const writeProjectTextFile = (
+  projectRoot: string,
+  relPath: string,
+  content: string,
+): Promise<void> =>
+  invoke("write_project_text_file", { projectRoot, relPath, content });
+
+/**
+ * Persist arbitrary binary bytes. Used by the busytex CompileProvider to
+ * write the WASM-emitted PDF into `<project>/.typeward/build/<base>.pdf`
+ * so the file-backed PdfViewer can render it without changes.
+ */
+export const writeProjectBinaryFile = (
+  projectRoot: string,
+  relPath: string,
+  bytes: Uint8Array,
+): Promise<void> =>
+  invoke("write_project_binary_file", {
+    projectRoot,
+    relPath,
+    bytes: Array.from(bytes),
+  });
+
+/**
+ * Reuse the Rust LaTeX log parser from frontend compile paths (busytex).
+ * Keeps diagnostic shape identical across engines without a TS duplicate.
+ */
+export const parseLatexLog = (
+  log: string,
+  entry: string,
+): Promise<Array<Diagnostic & { source: string }>> =>
+  invoke("parse_latex_log_cmd", { log, entry });
+
+// ----- Compile -------------------------------------------------------------
+
+/**
+ * Backend compile result wire shape. Matches the TS `CompileResult` type from
+ * src/adapters/types.ts. Diagnostics carry a `source` field that the typed
+ * adapter shape lacks; we drop it on the way through.
+ */
+interface BackendCompileResult {
+  ok: boolean;
+  outputPath?: string;
+  diagnostics: Array<Diagnostic & { source: string }>;
+  log: string;
+  durationMs: number;
+}
+
+export const compileLatex = async (
+  project: Project,
+  engine?: "system-tex" | "tectonic" | "busytex",
+): Promise<CompileResult> => {
+  const result = await invoke<BackendCompileResult>("compile_latex", {
+    project,
+    engine,
+  });
+  return {
+    ok: result.ok,
+    outputPath: result.outputPath,
+    diagnostics: result.diagnostics,
+    log: result.log,
+    durationMs: result.durationMs,
+  };
+};
+
+export const compileTypst = async (project: Project): Promise<CompileResult> => {
+  const result = await invoke<BackendCompileResult>("compile_typst", { project });
+  return {
+    ok: result.ok,
+    outputPath: result.outputPath,
+    diagnostics: result.diagnostics,
+    log: result.log,
+    durationMs: result.durationMs,
+  };
+};
+
+export const compileMarkdown = async (
+  project: Project,
+): Promise<CompileResult> => {
+  const result = await invoke<BackendCompileResult>("compile_markdown", {
+    project,
+  });
+  return {
+    ok: result.ok,
+    outputPath: result.outputPath,
+    diagnostics: result.diagnostics,
+    log: result.log,
+    durationMs: result.durationMs,
+  };
+};
+
+export const compileRmarkdown = async (
+  project: Project,
+): Promise<CompileResult> => {
+  const result = await invoke<BackendCompileResult>("compile_rmarkdown", {
+    project,
+  });
+  return {
+    ok: result.ok,
+    outputPath: result.outputPath,
+    diagnostics: result.diagnostics,
+    log: result.log,
+    durationMs: result.durationMs,
+  };
+};
+
+// ----- Notebook cell execution --------------------------------------------
+
+export interface CellRunResult {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  durationMs: number;
+}
+
+export const runRChunk = (args: {
+  projectRoot: string;
+  code: string;
+}): Promise<CellRunResult> => invoke("run_r_chunk", { args });
+
+/**
+ * Kill the persistent R kernel for this project, dropping all in-memory
+ * state. Idempotent — no-ops if the kernel was never started.
+ */
+export const stopRKernel = (projectRoot: string): Promise<void> =>
+  invoke("stop_r_kernel", { args: { projectRoot } });
+
+/** `true` if an R kernel is currently spawned for this project. */
+export const rKernelStatus = (projectRoot: string): Promise<boolean> =>
+  invoke("r_kernel_status", { args: { projectRoot } });
+
+// ----- SyncTeX -------------------------------------------------------------
+
+export interface SyncTexForwardLocation {
+  page: number;
+  /** PDF points (1pt = 1/72 inch), top-left origin. */
+  x: number;
+  y: number;
+  h: number;
+  v: number;
+}
+
+export interface SyncTexInverseLocation {
+  /** Absolute source path as returned by `synctex edit`. */
+  file: string;
+  line: number;
+}
+
+export const synctexForward = (args: {
+  projectRoot: string;
+  pdfPath: string;
+  /** Source file relative to projectRoot. */
+  sourceFile: string;
+  line: number;
+}): Promise<SyncTexForwardLocation | null> =>
+  invoke("synctex_forward", { args });
+
+export const synctexInverse = (args: {
+  pdfPath: string;
+  page: number;
+  x: number;
+  y: number;
+}): Promise<SyncTexInverseLocation | null> =>
+  invoke("synctex_inverse", { args });
+
+// ----- Settings ------------------------------------------------------------
+
+export interface AppSettings {
+  theme: string;
+  accent: string;
+  editor: {
+    autoCompile: boolean;
+    vimMode: boolean;
+    spellCheck: boolean;
+    lineWrap: boolean;
+    fontSize: number;
+  };
+  projectsRoot: string;
+  compileEngine: string;
+  onboarded: boolean;
+  ui: UiSettings;
+  workspace: WorkspaceSettings;
+}
+
+export interface UiSettings {
+  density: string; // "compact" | "cozy" | "comfortable"
+  animations: boolean;
+  ambientLights: boolean;
+  customThemesEnabled: boolean;
+  activeCustomTheme: string | null;
+}
+
+export interface WorkspaceSettings {
+  enableSpaces: boolean;
+  enableTags: boolean;
+  notificationsPanelDefault: boolean;
+  defaultView: string; // "cards" | "list"
+  defaultSort: string; // "last-opened" | "created" | "name" | "modified" | "format"
+  widgets: Record<string, boolean>;
+}
+
+export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");
+
+export const saveSettings = (settings: AppSettings): Promise<void> =>
+  invoke("save_settings", { settings });
+
+// ----- Autosave / recovery -------------------------------------------------
+
+export interface Snapshot {
+  relPath: string;
+  content: string;
+  snapshotMtime: number;
+  fileMtime: number | null;
+}
+
+export const writeSnapshot = (
+  projectRoot: string,
+  relPath: string,
+  content: string,
+): Promise<void> => invoke("write_snapshot", { projectRoot, relPath, content });
+
+export const clearSnapshot = (
+  projectRoot: string,
+  relPath: string,
+): Promise<void> => invoke("clear_snapshot", { projectRoot, relPath });
+
+export const listOrphanSnapshots = (projectRoot: string): Promise<Snapshot[]> =>
+  invoke("list_orphan_snapshots", { projectRoot });
+
+// ----- Telemetry -----------------------------------------------------------
+
+export interface TelemetryEvent {
+  at: string;
+  kind: string;
+  summary: string;
+  detail: string | null;
+}
+
+export const recordTelemetry = (
+  kind: string,
+  summary: string,
+  detail?: string,
+): Promise<void> => invoke("record_event", { kind, summary, detail });
+
+export const listRecentTelemetry = (limit?: number): Promise<TelemetryEvent[]> =>
+  invoke("list_recent_events", { limit });
