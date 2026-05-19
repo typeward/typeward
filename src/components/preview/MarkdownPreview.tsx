@@ -42,15 +42,6 @@ function buildMd(baseDir: string): MarkdownIt {
   return md;
 }
 
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "IMG") {
-    const src = node.getAttribute("src");
-    if (src && src.startsWith("file://")) {
-      node.setAttribute("src", src);
-    }
-  }
-});
-
 export const MarkdownPreview: Component<Props> = (props) => {
   const md = createMemo(() => buildMd(props.baseDir));
 
