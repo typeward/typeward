@@ -15,6 +15,7 @@ import {
 import { FormatToolbar } from "~/components/editor/FormatToolbar";
 import { LogsDrawer } from "~/components/editor/LogsDrawer";
 import { PaneSwitcher } from "~/components/layout/PaneSwitcher";
+import { MarkdownPreview } from "~/components/preview/MarkdownPreview";
 import { PdfViewer } from "~/components/pdf/PdfViewer";
 import {
   activeFile,
@@ -25,9 +26,11 @@ import {
   openFiles,
   pdfScrollTarget,
   pdfVersion,
+  project,
   setActiveIndex,
   updateActiveFile,
 } from "~/stores/editor-store";
+import { theme } from "~/themes/theme-store";
 import { cursorCol, cursorLine } from "~/stores/editor-view-store";
 import { editorSettings } from "~/stores/settings-store";
 import {
@@ -70,6 +73,24 @@ export const TextShell: Component<{
 
   const pdfPath = createMemo(() => lastResult()?.outputPath ?? null);
 
+  const previewKind = createMemo<"markdown" | "pdf">(() => {
+    const f = activeFile();
+    return f?.relPath.toLowerCase().endsWith(".md") ? "markdown" : "pdf";
+  });
+
+  const mdBaseDir = createMemo<string>(() => {
+    const f = activeFile();
+    const p = project();
+    if (!f || !p) return p?.rootPath ?? "";
+    const segs = f.relPath.replace(/\\/g, "/").split("/");
+    segs.pop();
+    return [p.rootPath.replace(/\\/g, "/"), ...segs].filter(Boolean).join("/");
+  });
+
+  const mdTheme = createMemo<"dark" | "light">(() =>
+    (["paper", "solarized-light"] as string[]).includes(theme()) ? "light" : "dark"
+  );
+
   const handleSelectFile = (rel: string) => {
     props.onSelectFile(rel);
     // On tablet, picking a file should swap to the editor pane — keeping the
@@ -91,6 +112,9 @@ export const TextShell: Component<{
           onCompile={compile}
           onEditorChange={handleEditorChange}
           pdfPath={pdfPath()}
+          previewKind={previewKind()}
+          mdBaseDir={mdBaseDir()}
+          mdTheme={mdTheme()}
         />
       }
     >
@@ -104,6 +128,9 @@ export const TextShell: Component<{
         onCompile={compile}
         onEditorChange={handleEditorChange}
         pdfPath={pdfPath()}
+        previewKind={previewKind()}
+        mdBaseDir={mdBaseDir()}
+        mdTheme={mdTheme()}
       />
     </Show>
   );
@@ -123,6 +150,9 @@ interface ShellProps {
   onCompile: () => void;
   onEditorChange: (v: string) => void;
   pdfPath: string | null;
+  previewKind: "markdown" | "pdf";
+  mdBaseDir: string;
+  mdTheme: "dark" | "light";
 }
 
 // =================================================================
@@ -145,16 +175,27 @@ const DesktopLayout: Component<ShellProps> = (props) => {
   );
   const previewPane = () => (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-      <PdfViewer
-        path={props.pdfPath}
-        version={pdfVersion()}
-        onCompile={props.onCompile}
-        compiling={compileState() === "compiling"}
-        scrollTarget={pdfScrollTarget()}
-        onPageClick={(page, x, y) => {
-          void syncInverseFromPdfClick(page, x, y);
-        }}
-      />
+      <Switch>
+        <Match when={props.previewKind === "markdown"}>
+          <MarkdownPreview
+            content={() => activeFile()?.content ?? ""}
+            baseDir={props.mdBaseDir}
+            theme={() => props.mdTheme}
+          />
+        </Match>
+        <Match when={props.previewKind === "pdf"}>
+          <PdfViewer
+            path={props.pdfPath}
+            version={pdfVersion()}
+            onCompile={props.onCompile}
+            compiling={compileState() === "compiling"}
+            scrollTarget={pdfScrollTarget()}
+            onPageClick={(page, x, y) => {
+              void syncInverseFromPdfClick(page, x, y);
+            }}
+          />
+        </Match>
+      </Switch>
     </div>
   );
 
@@ -264,16 +305,27 @@ const TabletLayout: Component<ShellProps> = (props) => {
           </Match>
           <Match when={activePane() === "preview"}>
             <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-              <PdfViewer
-                path={props.pdfPath}
-                version={pdfVersion()}
-                onCompile={props.onCompile}
-                compiling={compileState() === "compiling"}
-                scrollTarget={pdfScrollTarget()}
-                onPageClick={(page, x, y) => {
-                  void syncInverseFromPdfClick(page, x, y);
-                }}
-              />
+              <Switch>
+                <Match when={props.previewKind === "markdown"}>
+                  <MarkdownPreview
+                    content={() => activeFile()?.content ?? ""}
+                    baseDir={props.mdBaseDir}
+                    theme={() => props.mdTheme}
+                  />
+                </Match>
+                <Match when={props.previewKind === "pdf"}>
+                  <PdfViewer
+                    path={props.pdfPath}
+                    version={pdfVersion()}
+                    onCompile={props.onCompile}
+                    compiling={compileState() === "compiling"}
+                    scrollTarget={pdfScrollTarget()}
+                    onPageClick={(page, x, y) => {
+                      void syncInverseFromPdfClick(page, x, y);
+                    }}
+                  />
+                </Match>
+              </Switch>
             </div>
           </Match>
         </Switch>
