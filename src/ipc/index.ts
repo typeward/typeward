@@ -168,32 +168,6 @@ export const compileRmarkdown = async (
   };
 };
 
-// ----- Notebook cell execution --------------------------------------------
-
-export interface CellRunResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-  durationMs: number;
-}
-
-export const runRChunk = (args: {
-  projectRoot: string;
-  code: string;
-}): Promise<CellRunResult> => invoke("run_r_chunk", { args });
-
-/**
- * Kill the persistent R kernel for this project, dropping all in-memory
- * state. Idempotent — no-ops if the kernel was never started.
- */
-export const stopRKernel = (projectRoot: string): Promise<void> =>
-  invoke("stop_r_kernel", { args: { projectRoot } });
-
-/** `true` if an R kernel is currently spawned for this project. */
-export const rKernelStatus = (projectRoot: string): Promise<boolean> =>
-  invoke("r_kernel_status", { args: { projectRoot } });
-
 // ----- SyncTeX -------------------------------------------------------------
 
 export interface SyncTexForwardLocation {

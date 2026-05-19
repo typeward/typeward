@@ -114,25 +114,12 @@ function resetTabs(): void {
   setActiveIndex(-1);
 }
 
-/**
- * Format-aware label for the logs/issues panel. Notebook projects keep
- * "Console" (interactive R session output); text-format projects use
- * "Logs" since the panel surfaces compile logs + diagnostics, not a
- * REPL.
- */
-function consoleLabel(): string {
-  const p = project();
-  if (!p) return "Logs";
-  return p.format === "rmarkdown" ? "Console" : "Logs";
-}
-
 export {
   activeFile,
   activeIndex,
   bumpPdfVersion,
   closeFile,
   compileState,
-  consoleLabel,
   gotoSourceIntent,
   lastResult,
   openFile,

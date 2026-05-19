@@ -30,7 +30,6 @@ import { setPreviousRoute } from "~/stores/nav-store";
 import { startSession, stopAllSessions } from "~/stores/lsp-store";
 import { startWatching, stopWatching } from "~/stores/watcher-store";
 import { TextShell } from "./shells/text-shell";
-import { NotebookShell } from "./shells/notebook-shell";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
 import { MarkdownAdapter } from "~/adapters/markdown/MarkdownAdapter";
@@ -229,12 +228,7 @@ const EditorScreen: Component = () => {
               }}
             />
             <div class="flex min-h-0 flex-1 gap-2 p-2">
-              <Show
-                when={project()?.experience === "notebook"}
-                fallback={<TextShell onSelectFile={(rel) => void openFile(rel)} />}
-              >
-                <NotebookShell onSelectFile={(rel) => void openFile(rel)} />
-              </Show>
+              <TextShell onSelectFile={(rel) => void openFile(rel)} />
             </div>
           </div>
           <RecoveryDialog
