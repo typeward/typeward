@@ -458,86 +458,6 @@ pub async fn compile_markdown(project: Project) -> CmdResult<CompileResult> {
     })
 }
 
-// ---------- R Markdown compile -------------------------------------------
-
-/// Render an R Markdown document to PDF via `Rscript -e
-/// 'rmarkdown::render(..., output_format="pdf_document")'`. Requires R and
-/// the `rmarkdown` + `knitr` packages on PATH; pandoc + LaTeX engine are
-/// needed downstream for the actual PDF synthesis. When any of those are
-/// missing R surfaces a clear error in stderr which we capture verbatim.
-#[tauri::command]
-pub async fn compile_rmarkdown(project: Project) -> CmdResult<CompileResult> {
-    let started = Instant::now();
-    let (root, root_file) = checked_project_root_and_file(&project)?;
-    if which::which("Rscript").is_err() {
-        return Err(
-            "Rscript is not on PATH \u{2014} install R (https://cran.r-project.org) and the `rmarkdown` package"
-                .into(),
-        );
-    }
-
-    // Single-quoted R code; the inner file path is also single-quoted in R.
-    let r_code = format!(
-        "rmarkdown::render('{}', output_format = 'pdf_document', quiet = TRUE)",
-        root_file.replace('\'', "\\'")
-    );
-    let mut log = String::new();
-    log.push_str(&format!("$ Rscript -e \"{}\"\n", r_code));
-    let output = Command::new("Rscript")
-        .args(["-e", r_code.as_str()])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("failed to spawn Rscript: {}", e))?;
-    log.push_str(&merge_io(&output.stdout, &output.stderr));
-
-    let pdf_path = root.join(replace_ext(&root_file, "pdf"));
-    let ok = output.status.success() && pdf_path.exists();
-    let diagnostics = parse_r_log(&log, &root_file);
-
-    Ok(CompileResult {
-        ok,
-        output_path: if ok {
-            Some(pdf_path.to_string_lossy().into())
-        } else {
-            None
-        },
-        diagnostics,
-        log,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-/// R / knitr / rmarkdown emit a few canonical line prefixes — `Error in`,
-/// `Error:`, `Warning message:`, `Quitting from lines ...`. We classify
-/// the common ones and leave structured chunk-position parsing for later
-/// (knitr already reports `Quitting from lines X-Y (file.Rmd)` which we
-/// could lift into the diagnostic.line field).
-fn parse_r_log(log: &str, entry: &str) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        let trimmed = line.trim();
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("error") || lower.starts_with("execution halted") {
-            out.push(Diagnostic {
-                severity: "error".into(),
-                message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "rmarkdown".into(),
-            });
-        } else if lower.starts_with("warning") {
-            out.push(Diagnostic {
-                severity: "warning".into(),
-                message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "rmarkdown".into(),
-            });
-        }
-    }
-    out
-}
-
 /// Pandoc emits "Error: ..." and "Error producing PDF" lines on stderr
 /// when something goes wrong; LaTeX-engine errors get embedded inside.
 fn parse_pandoc_log(log: &str, entry: &str) -> Vec<Diagnostic> {
@@ -607,18 +527,6 @@ mod tests {
         assert_eq!(diags[0].severity, "error");
         assert_eq!(diags[1].severity, "warning");
         assert_eq!(diags[0].source, "pandoc");
-    }
-
-    #[test]
-    fn parse_r_log_catches_error_and_execution_halted() {
-        let log = "Error in eval(quote(library(foo)), ...): there is no package called 'foo'\nWarning message:\npackage was built under R version 4.3.1\nExecution halted\n";
-        let diags = parse_r_log(log, "main.Rmd");
-        assert_eq!(diags.len(), 3);
-        assert_eq!(diags[0].severity, "error");
-        assert!(diags[0].message.contains("there is no package"));
-        assert_eq!(diags[1].severity, "warning");
-        assert_eq!(diags[2].severity, "error"); // Execution halted
-        assert_eq!(diags[0].source, "rmarkdown");
     }
 
 }

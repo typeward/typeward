@@ -33,7 +33,6 @@ import { TextShell } from "./shells/text-shell";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
 import { MarkdownAdapter } from "~/adapters/markdown/MarkdownAdapter";
-import { RmarkdownAdapter } from "~/adapters/rmarkdown/RmarkdownAdapter";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
 import {
   registerAdapterCommands,
@@ -47,7 +46,6 @@ const adapterForFormat = (
   if (format === "latex") return LatexAdapter;
   if (format === "markdown") return MarkdownAdapter;
   if (format === "typst") return TypstAdapter;
-  if (format === "rmarkdown") return RmarkdownAdapter;
   return null;
 };
 
@@ -90,8 +88,7 @@ const EditorScreen: Component = () => {
         setProject(p);
         resetTabs();
         // Bind the matching adapter's commands into the registry so the
-        // palette and Mod+Enter work format-specifically. Adapters without
-        // an impl yet (R Markdown only one remaining) are a no-op.
+        // palette and Mod+Enter work format-specifically.
         const adapter = adapterForFormat(p.format);
         if (adapter) {
           registerAdapterCommands(adapter);
@@ -111,12 +108,10 @@ const EditorScreen: Component = () => {
           /* recovery best-effort */
         }
         // Start the matching LSP for the project's primary format. Silently
-        // no-ops if the binary isn't installed. RMD reuses the markdown LSP
-        // (marksman) for basic prose completions — chunk-aware tooling
-        // would need a dedicated server, deferred.
+        // no-ops if the binary isn't installed.
         if (p.format === "latex") void startSession("latex", p, token.isCurrent);
         else if (p.format === "typst") void startSession("typst", p, token.isCurrent);
-        else if (p.format === "markdown" || p.format === "rmarkdown")
+        else if (p.format === "markdown")
           void startSession("markdown", p, token.isCurrent);
         await openFile(p.rootFile, p, token.isCurrent);
       } catch (e) {

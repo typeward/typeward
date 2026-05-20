@@ -3,7 +3,6 @@ mod commands;
 mod detect;
 mod fs_ops;
 mod lsp;
-mod notebook;
 mod project;
 mod settings;
 mod synctex;
@@ -23,7 +22,6 @@ pub fn run() {
         })
         .manage(lsp::LspManager::default())
         .manage(watcher::WatcherManager::default())
-        .manage(notebook::KernelManager::default())
         .invoke_handler(tauri::generate_handler![
             commands::detect_tex,
             commands::list_projects,
@@ -37,12 +35,8 @@ pub fn run() {
             commands::compile_latex,
             commands::compile_typst,
             commands::compile_markdown,
-            commands::compile_rmarkdown,
             synctex::synctex_forward,
             synctex::synctex_inverse,
-            notebook::run_r_chunk,
-            notebook::stop_r_kernel,
-            notebook::r_kernel_status,
             commands::load_settings,
             commands::save_settings,
             lsp::start_lsp,
