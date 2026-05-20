@@ -538,7 +538,7 @@ function languageFor(
   const lower = relPath.toLowerCase();
   if (lower.endsWith(".tex") || lower.endsWith(".bib")) return "latex";
   if (lower.endsWith(".typ")) return "typst";
-  if (lower.endsWith(".md") || lower.endsWith(".rmd")) return "markdown";
+  if (lower.endsWith(".md")) return "markdown";
   return "plain";
 }
 
