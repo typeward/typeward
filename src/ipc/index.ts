@@ -138,21 +138,6 @@ export const compileTypst = async (project: Project): Promise<CompileResult> => 
   };
 };
 
-export const compileMarkdown = async (
-  project: Project,
-): Promise<CompileResult> => {
-  const result = await invoke<BackendCompileResult>("compile_markdown", {
-    project,
-  });
-  return {
-    ok: result.ok,
-    outputPath: result.outputPath,
-    diagnostics: result.diagnostics,
-    log: result.log,
-    durationMs: result.durationMs,
-  };
-};
-
 // ----- SyncTeX -------------------------------------------------------------
 
 export interface SyncTexForwardLocation {

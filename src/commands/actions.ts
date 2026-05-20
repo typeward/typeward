@@ -1,6 +1,5 @@
 import type { EditorAdapter, Project } from "~/adapters/types";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
-import { MarkdownAdapter } from "~/adapters/markdown/MarkdownAdapter";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
@@ -30,7 +29,6 @@ import {
  */
 const adapterFor = (p: Project): EditorAdapter | null => {
   if (p.format === "latex") return LatexAdapter;
-  if (p.format === "markdown") return MarkdownAdapter;
   if (p.format === "typst") return TypstAdapter;
   return null;
 };
