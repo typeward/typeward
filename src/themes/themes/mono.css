@@ -32,8 +32,6 @@
   /* Monochrome-leaning format accents — keep the theme identity. */
   --format-latex: #0b0e14;
   --format-typst: #475569;
-  --format-markdown: #64748b;
-  --format-rmarkdown: #1f2937;
 
   --color-accent-1: #0b0e14;
   --color-accent-2: #475569;

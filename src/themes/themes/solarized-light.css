@@ -33,8 +33,6 @@
   /* Authentic Solarized accents for formats — readable on cream. */
   --format-latex: #6c71c4;   /* violet */
   --format-typst: #268bd2;   /* blue */
-  --format-markdown: #586e75; /* base01 */
-  --format-rmarkdown: #b58900; /* yellow */
 
   --color-accent-1: #b58900;
   --color-accent-2: #268bd2;
