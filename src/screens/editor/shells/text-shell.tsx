@@ -544,9 +544,8 @@ function languageFor(
 
 function languageToLspLanguage(
   lang: "latex" | "markdown" | "typst" | "plain",
-): "latex" | "markdown" | "typst" | null {
+): "latex" | "typst" | null {
   if (lang === "latex") return "latex";
-  if (lang === "markdown") return "markdown";
   if (lang === "typst") return "typst";
   return null;
 }

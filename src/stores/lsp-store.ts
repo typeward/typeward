@@ -3,7 +3,7 @@ import * as lspIpc from "~/lib/lsp/client";
 import { initSession, pathToFileUri, type LspSession } from "~/lib/lsp/cm6";
 import type { Project } from "~/adapters/types";
 
-export type LspLanguage = "latex" | "typst" | "markdown";
+export type LspLanguage = "latex" | "typst";
 
 interface SessionEntry {
   language: LspLanguage;
@@ -38,8 +38,8 @@ async function startSession(
       projectRoot: project.rootPath,
     });
   } catch (e) {
-    // Most common case: the LSP binary (texlab / tinymist / marksman) isn't
-    // installed. Swallow — the editor still works, just without LSP features.
+    // Most common case: the LSP binary (texlab / tinymist) isn't installed.
+    // Swallow — the editor still works, just without LSP features.
     console.warn(`LSP unavailable for ${language}:`, e);
     return null;
   }

@@ -25,7 +25,7 @@ export interface LanguageServerClient {
 }
 
 interface StartArgs {
-  languageId: "latex" | "typst" | "markdown";
+  languageId: "latex" | "typst";
   projectRoot: string;
 }
 
