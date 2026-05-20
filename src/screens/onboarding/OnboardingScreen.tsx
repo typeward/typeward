@@ -7,7 +7,6 @@ import {
   Cpu,
   Download,
   FolderSearch,
-  Hash,
   Loader2,
   Package,
   RefreshCw,
@@ -25,7 +24,7 @@ const STEP_ORDER: StepId[] = ["welcome", "formats", "engines", "install"];
 
 // Format options shown on Step 2.
 interface FormatOption {
-  id: "latex" | "typst" | "markdown" | "rmarkdown";
+  id: "latex" | "typst";
   name: string;
   glyph: string;
   desc: string;
@@ -54,25 +53,7 @@ const FORMATS: FormatOption[] = [
     color: "#67E8F9",
     size: "62 MB",
     engine: "typst CLI · v0.13",
-  },
-  {
-    id: "markdown",
-    name: "Markdown",
-    glyph: "#",
-    desc: "Plain prose · pandoc export to PDF/HTML",
-    color: "#F0ABFC",
-    size: "12 MB",
-    engine: "pandoc · bundled",
     recommended: true,
-  },
-  {
-    id: "rmarkdown",
-    name: "R Markdown",
-    glyph: "R",
-    desc: "Reproducible notebooks with R code chunks",
-    color: "#34D399",
-    size: "needs R",
-    engine: "knitr · requires R on PATH",
   },
 ];
 
@@ -80,7 +61,7 @@ const OnboardingScreen: Component = () => {
   const navigate = useNavigate();
   const [step, setStep] = createSignal<StepId>("welcome");
   const [picked, setPicked] = createSignal<Set<FormatOption["id"]>>(
-    new Set(["latex", "markdown"]),
+    new Set(["latex"]),
   );
   const [probe, setProbe] = createSignal<ipc.EngineProbe | null>(null);
   const [probing, setProbing] = createSignal(false);
@@ -173,7 +154,7 @@ const OnboardingScreen: Component = () => {
                   onInstallAll={async () => {
                     // Phase 1: there's no real binary installer yet. Simulate
                     // the visual flow by progressively marking items installed.
-                    const targets = ["typst", "pandoc"];
+                    const targets = ["typst"];
                     for (const id of targets) {
                       setInstalling((s) => new Set(s).add(id));
                       await new Promise((r) => setTimeout(r, 600));
@@ -361,7 +342,6 @@ const GLYPHS: Array<{ t: string; x: string; y: number; s: number; rot: number; o
 const FORMAT_PILLS = [
   { icon: Sigma, label: "LaTeX" },
   { icon: Package, label: "Typst" },
-  { icon: Hash, label: "Markdown" },
 ];
 
 const WelcomePane: Component = () => (
@@ -727,14 +707,6 @@ const InstallPane: Component<{
       sub: "Phase 1 stub: real binary fetch lands shortly",
       done: props.installed.has("typst"),
       live: props.installing.has("typst"),
-    },
-    {
-      id: "pandoc",
-      name: "Pandoc",
-      size: "12 MB",
-      sub: "Bundled — verifying signature",
-      done: props.installed.has("pandoc"),
-      live: props.installing.has("pandoc"),
     },
   ]);
 
