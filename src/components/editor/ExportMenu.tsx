@@ -37,7 +37,7 @@ export const ExportMenu: Component<{
   const options: ExportOption[] = [
     { id: "pdf", label: "Export PDF", hint: "Copy the compiled PDF", icon: () => <FileDown size={13} /> },
     { id: "pdf-ann", label: "PDF + annotations", hint: "Flatten comments into PDF", icon: () => <FileDown size={13} /> },
-{ id: "docx", label: "Word (.docx)", hint: "Pandoc → Word", icon: () => <FileType2 size={13} /> },
+    { id: "docx", label: "Word (.docx)", hint: "Pandoc → Word", icon: () => <FileType2 size={13} /> },
     { id: "html", label: "HTML", hint: "Pandoc → standalone HTML", icon: () => <MessageSquare size={13} /> },
     { id: "source", label: "Source bundle (.zip)", hint: "Project folder, gitignored excluded", icon: () => <Package size={13} /> },
   ];
