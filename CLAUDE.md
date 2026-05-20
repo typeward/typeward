@@ -1,6 +1,6 @@
 # Typeward — Claude Code project notes
 
-Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, with live `.md` file preview. Targets desktop (Win/Mac/Linux) and tablets (iPadOS, Android tablets — no phones). Local-first; cloud sync and real-time collaboration are future phases. (Jupyter `.ipynb` and Quarto are both out of scope for now.)
+Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, with live `.md` file preview. Targets desktop (Win/Mac/Linux) and tablets (iPadOS, Android tablets — no phones). Local-first; cloud sync and real-time collaboration are future phases. (Jupyter `.ipynb`, Quarto, R Markdown, and Markdown-as-project are out of scope.)
 
 ## Where to look first
 
