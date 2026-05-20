@@ -72,7 +72,6 @@ fn binary_for_language(language_id: &str) -> Result<&'static str, LspError> {
     match language_id {
         "latex" => Ok("texlab"),
         "typst" => Ok("tinymist"),
-        "markdown" => Ok("marksman"),
         other => Err(LspError::UnsupportedLanguage(other.to_string())),
     }
 }
