@@ -402,90 +402,6 @@ fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
     out
 }
 
-// ---------- Markdown compile (pandoc) -------------------------------------
-
-/// Compile Markdown to PDF via pandoc. Pandoc itself delegates PDF
-/// generation to a LaTeX engine (pdflatex by default), so the user needs
-/// at least one of pdflatex/xelatex/lualatex installed for this to
-/// succeed. We surface that constraint clearly in the log when the spawn
-/// fails because of a missing engine.
-#[tauri::command]
-pub async fn compile_markdown(project: Project) -> CmdResult<CompileResult> {
-    let started = Instant::now();
-    let (root, root_file) = checked_project_root_and_file(&project)?;
-    if which::which("pandoc").is_err() {
-        return Err(
-            "pandoc is not on PATH — install it from https://pandoc.org/installing.html".into(),
-        );
-    }
-
-    let output_name = replace_ext(&root_file, "pdf");
-    let mut log = String::new();
-    log.push_str(&format!(
-        "$ pandoc {} -o {}\n",
-        root_file, output_name
-    ));
-    let output = Command::new("pandoc")
-        .args([root_file.as_str(), "-o", output_name.as_str()])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("failed to spawn pandoc: {}", e))?;
-    log.push_str(&merge_io(&output.stdout, &output.stderr));
-
-    let pdf_path = root.join(&output_name);
-    let ok = output.status.success() && pdf_path.exists();
-    let diagnostics = parse_pandoc_log(&log, &root_file);
-
-    if !ok && !log.contains("error") {
-        // Pandoc often fails silently when the LaTeX engine is missing —
-        // make that visible in the log tail so the user has somewhere to
-        // start.
-        log.push_str(
-            "\n[pandoc] compile failed. PDF generation requires a LaTeX engine (pdflatex/xelatex/lualatex). Install one and retry.\n",
-        );
-    }
-
-    Ok(CompileResult {
-        ok,
-        output_path: if ok {
-            Some(pdf_path.to_string_lossy().into())
-        } else {
-            None
-        },
-        diagnostics,
-        log,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-/// Pandoc emits "Error: ..." and "Error producing PDF" lines on stderr
-/// when something goes wrong; LaTeX-engine errors get embedded inside.
-fn parse_pandoc_log(log: &str, entry: &str) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        let trimmed = line.trim();
-        let lower = trimmed.to_lowercase();
-        if lower.starts_with("error") || lower.starts_with("[error]") {
-            out.push(Diagnostic {
-                severity: "error".into(),
-                message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "pandoc".into(),
-            });
-        } else if lower.starts_with("warning") || lower.starts_with("[warning]") {
-            out.push(Diagnostic {
-                severity: "warning".into(),
-                message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "pandoc".into(),
-            });
-        }
-    }
-    out
-}
-
 /// Strip the trailing extension and append `new_ext`. Idempotent for files
 /// that already end in `.<new_ext>`. Falls back to appending when the
 /// source has no extension.
@@ -517,16 +433,6 @@ mod tests {
         assert!(diags[0].message.contains("undefined variable"));
         assert_eq!(diags[1].severity, "warning");
         assert_eq!(diags[0].source, "typst");
-    }
-
-    #[test]
-    fn parse_pandoc_log_classifies_error_warning_prefixes() {
-        let log = "Error: failed to find a working LaTeX engine\n[WARNING] deprecated option\nok line\n";
-        let diags = parse_pandoc_log(log, "main.md");
-        assert_eq!(diags.len(), 2);
-        assert_eq!(diags[0].severity, "error");
-        assert_eq!(diags[1].severity, "warning");
-        assert_eq!(diags[0].source, "pandoc");
     }
 
 }

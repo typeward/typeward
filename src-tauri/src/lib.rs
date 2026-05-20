@@ -34,7 +34,6 @@ pub fn run() {
             commands::parse_latex_log_cmd,
             commands::compile_latex,
             commands::compile_typst,
-            commands::compile_markdown,
             synctex::synctex_forward,
             synctex::synctex_inverse,
             commands::load_settings,

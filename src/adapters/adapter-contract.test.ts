@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { DocumentExperience } from "~/experiences/types";
 import type { ProjectFormat } from "~/adapters/types";
 import { LatexAdapter } from "./latex/LatexAdapter";
-import { MarkdownAdapter } from "./markdown/MarkdownAdapter";
 import { TypstAdapter } from "./typst/TypstAdapter";
 
 // Adapter shape contract. Every concrete adapter must:
@@ -20,11 +19,6 @@ interface AdapterCase {
 
 const adapters: AdapterCase[] = [
   { name: "LatexAdapter", adapter: LatexAdapter, buildCommandId: "latex.compile" },
-  {
-    name: "MarkdownAdapter",
-    adapter: MarkdownAdapter,
-    buildCommandId: "markdown.compile",
-  },
   { name: "TypstAdapter", adapter: TypstAdapter, buildCommandId: "typst.compile" },
 ];
 
@@ -39,8 +33,8 @@ describe.each(adapters)("$name", ({ adapter, buildCommandId }) => {
 });
 
 describe("experience routing", () => {
-  it("text-experience adapters: latex, typst, markdown", () => {
-    for (const a of [LatexAdapter, TypstAdapter, MarkdownAdapter]) {
+  it("text-experience adapters: latex, typst", () => {
+    for (const a of [LatexAdapter, TypstAdapter]) {
       expect(a.experience).toBe("text");
     }
   });

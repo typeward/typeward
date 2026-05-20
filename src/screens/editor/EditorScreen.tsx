@@ -32,7 +32,6 @@ import { startWatching, stopWatching } from "~/stores/watcher-store";
 import { TextShell } from "./shells/text-shell";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
-import { MarkdownAdapter } from "~/adapters/markdown/MarkdownAdapter";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
 import {
   registerAdapterCommands,
@@ -44,7 +43,6 @@ const adapterForFormat = (
   format: string,
 ): EditorAdapter | null => {
   if (format === "latex") return LatexAdapter;
-  if (format === "markdown") return MarkdownAdapter;
   if (format === "typst") return TypstAdapter;
   return null;
 };
@@ -111,8 +109,6 @@ const EditorScreen: Component = () => {
         // no-ops if the binary isn't installed.
         if (p.format === "latex") void startSession("latex", p, token.isCurrent);
         else if (p.format === "typst") void startSession("typst", p, token.isCurrent);
-        else if (p.format === "markdown")
-          void startSession("markdown", p, token.isCurrent);
         await openFile(p.rootFile, p, token.isCurrent);
       } catch (e) {
         if (!token.isCurrent()) return;
