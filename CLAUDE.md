@@ -49,6 +49,7 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 
 - **Use npm**, not pnpm or yarn (user preference).
 - **No emojis** in code, files, or commit messages unless explicitly asked.
+- **No `Co-Authored-By:` trailers on commits** — the local git identity is the user; don't append Claude or any assistant as co-author. Applies to direct commits and to any subagent instructed to commit.
 - **No new docs/README files** unless requested.
 - **No comments explaining what code does** — only *why*, when non-obvious. Don't reference tasks/PRs/callers in comments.
 - **Designs are visual truth** — port HTML output, not the prototype's React structure.
