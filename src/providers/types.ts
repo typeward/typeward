@@ -18,7 +18,7 @@ export interface CompileProvider {
   compile(project: Project): Promise<CompileResult>;
 }
 
-export type PreviewKind = "pdf" | "html" | "notebook";
+export type PreviewKind = "pdf";
 
 /**
  * Marker interface for now — the actual Preview component is rendered by the

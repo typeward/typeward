@@ -54,36 +54,6 @@ const SNIPPETS: Record<ProjectFormat, Record<Kind, string>> = {
     link: "\\href{$|}{text}",
     citation: "\\cite{$|}",
   },
-  markdown: {
-    bold: "**$|**",
-    italic: "*$|*",
-    code: "`$|`",
-    heading: "# $|",
-    list: "- $|\n- ",
-    orderedList: "1. $|\n2. ",
-    quote: "> $|",
-    inlineMath: "$$|$",
-    equation: "$$\n$|\n$$\n",
-    figure: "![$|](path/to/image)\n",
-    table: "| col1 | col2 |\n| --- | --- |\n| $| |  |\n",
-    link: "[$|](url)",
-    citation: "[@$|]",
-  },
-  rmarkdown: {
-    bold: "**$|**",
-    italic: "*$|*",
-    code: "`$|`",
-    heading: "# $|",
-    list: "- $|\n- ",
-    orderedList: "1. $|\n2. ",
-    quote: "> $|",
-    inlineMath: "$$|$",
-    equation: "$$\n$|\n$$\n",
-    figure: "![$|](path/to/image)\n",
-    table: "| col1 | col2 |\n| --- | --- |\n| $| |  |\n",
-    link: "[$|](url)",
-    citation: "[@$|]",
-  },
   typst: {
     bold: "*$|*",
     italic: "_$|_",
@@ -155,7 +125,7 @@ const INSERT_GROUP: ToolBtn[] = [
  * Format toolbar mounted below the file-tabs strip in the editor pane.
  * Three groups separated by vertical dividers: text style, document
  * structure, insert. Each button inserts a format-aware snippet at the
- * caret (LaTeX / Markdown / RMarkdown / Typst).
+ * caret (LaTeX / Typst).
  */
 export const FormatToolbar: Component = () => {
   return (

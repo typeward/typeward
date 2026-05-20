@@ -1,10 +1,4 @@
-import type { DocumentExperience } from "~/experiences/types";
-
-export type ProjectFormat =
-  | "latex"
-  | "typst"
-  | "markdown"
-  | "rmarkdown";
+export type ProjectFormat = "latex" | "typst";
 
 /**
  * Round-tripped to .typeward/project.json on disk. Anything UI-state-only
@@ -16,7 +10,6 @@ export interface Project {
   rootPath: string;
   /** Entry file relative to rootPath, e.g. "main.tex". */
   rootFile: string;
-  experience: DocumentExperience;
   format: ProjectFormat;
   /** Display name; defaults to folder basename, user-overridable. */
   name: string;
@@ -88,9 +81,8 @@ export type CodeMirrorExtension = unknown;
 
 export interface EditorAdapter {
   languageId: string;
-  experience: DocumentExperience;
   format: ProjectFormat;
-  previewKind: "pdf" | "html" | "notebook";
+  previewKind: "pdf";
   cmExtensions(): CodeMirrorExtension[];
   /** Delegates to a CompileProvider chosen by project settings. */
   compile(project: Project): Promise<CompileResult>;

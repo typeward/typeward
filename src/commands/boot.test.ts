@@ -49,7 +49,6 @@ describe("bootCoreCommands", () => {
 describe("adapter command (un)registration", () => {
   const fakeAdapter: EditorAdapter = {
     languageId: "fake",
-    experience: "text",
     format: "latex",
     previewKind: "pdf",
     cmExtensions: () => [],
