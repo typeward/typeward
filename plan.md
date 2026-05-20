@@ -10,7 +10,7 @@
 |---|---|---|
 | 0 — Skeleton | **complete** (2026-05-10) | Tauri 2 + Solid + TS scaffolded. Tailwind v4, Kobalte, lucide-solid, corvu, @solidjs/router installed. Theme tokens (Aurora/Obsidian/Graphite/Paper) + accent palettes (Violet-Cyan/Amber-Rose/Emerald-Teal/Indigo-Pink) wired with localStorage persistence. Vitest (jsdom) and `cargo test` baseline tests passing. Icons generated for all platforms. |
 | 1 — Vertical slice on desktop | **complete** (2026-05-10) | All four screens (Onboarding/Projects/Editor/Settings) ported and functional. CodeMirror 6 + PDF.js wired into a 3-pane corvu Resizable shell. Real LaTeX compile via system TeX (latexmk/pdflatex) or Tectonic. Architecture seams defined (DocumentExperience, EditorAdapter, CompileProvider, PreviewProvider, LspProvider, CommandRegistry). LSP transport (texlab spawn + JSON-RPC framing over Tauri event channels), unified file watcher (notify-based), autosave + recovery dialog, and telemetry capture (panic hook + frontend error hook + JSONL log) all in. |
-| 2 — Multi-format & preview polish | substantively complete | CommandRegistry bound, Markdown/Typst/RMD adapters, SyncTeX, notebook shell with cell-aware editor + persistent R kernel all landed (2026-05-11..15). Two items intentionally skipped per user direction: smart per-page PDF diff and sync-to-cursor toggle. Quarto support was scoped in then dropped 2026-05-12 — RMD-only for notebooks now. Deferred follow-ups: plot/image capture, Python/Julia per-cell execution. |
+| 2 — Multi-format & preview polish | substantively complete | CommandRegistry bound, Typst adapter, SyncTeX all landed (2026-05-11..15). Two items intentionally skipped per user direction: smart per-page PDF diff and sync-to-cursor toggle. Quarto support was scoped in then dropped 2026-05-12. Markdown/RMD adapters and notebook shell were subsequently removed (2026-05-20 scope narrowing — see below). |
 | 3 — Tablet | substantively complete (2026-05-13) | Responsive layout (viewport-store + PaneSwitcher + LogsSheet + swipe gestures), texlyre-busytex CompileProvider (multi-file walker, SyncTeX persistence, settings UI with install-status probe), Android target scaffolded via `tauri android init`. APK build-and-run on emulator/device is the only remaining piece — user-driven. |
 | 4 — Cloud + collab | **deferred (2026-05-13)** | Supabase / accounts / realtime collab paused indefinitely. When it comes back, scope is **auth + collab + license keys only** — files stay local-first; nothing is mirrored to Supabase storage. The original "folder sync as files + metadata" framing has been retired. |
 
@@ -18,7 +18,7 @@
 
 ## Context
 
-Multiplatform editor app ("Typeward") similar to Overleaf, but format-agnostic: LaTeX, Typst, Markdown, R Markdown. (Jupyter / `.ipynb` and Quarto were originally in scope but both have been dropped — focus is on text + RMD notebooks.) Targets desktop (Win/Mac/Linux) and tablets (iPadOS, Android tablets — no phones). Designs already exist in `design_files/` (HTML/CSS/JS prototypes from claude.ai/design): glassmorphism aesthetic, custom Tailwind utilities + CSS custom properties, four built-in themes (Aurora/Obsidian/Graphite/Paper) and four accent palettes. Ships local-first; cloud sync, accounts, and real-time collaboration are future phases. Approach: skeleton → pixel-perfect UI/UX with real desktop compile (vertical slice) → multi-format → tablet → cloud/collab.
+Multiplatform editor app ("Typeward") similar to Overleaf, format-agnostic: LaTeX and Typst, with live `.md` file preview. (Jupyter / `.ipynb`, Quarto, Markdown-as-project, and R Markdown / notebook experience were all dropped — see "Scope narrowing — 2026-05-20" below.) Targets desktop (Win/Mac/Linux) and tablets (iPadOS, Android tablets — no phones). Designs already exist in `design_files/` (HTML/CSS/JS prototypes from claude.ai/design): glassmorphism aesthetic, custom Tailwind utilities + CSS custom properties, four built-in themes (Aurora/Obsidian/Graphite/Paper) and four accent palettes. Ships local-first; cloud sync, accounts, and real-time collaboration are future phases. Approach: skeleton → pixel-perfect UI/UX with real desktop compile (vertical slice) → multi-format → tablet → cloud/collab.
 
 ---
 
@@ -35,13 +35,13 @@ Multiplatform editor app ("Typeward") similar to Overleaf, but format-agnostic: 
 | Routing | **@solidjs/router** | Onboarding / Projects / Editor / Settings are distinct top-level screens — small router beats a hand-rolled switch. |
 | State | **Solid stores + signals** | No external state lib. |
 | Editor | **CodeMirror 6** + `@codemirror/lang-*` (latex, markdown, etc.); custom Typst lang | Map prototype's token CSS classes to CM6 syntax classes. |
-| LSP integration | **codemirror-languageserver** over Tauri **event channels** (not `invoke`) | LSP servers (texlab, tinymist, marksman, typst-lsp) run as Tauri sidecars; Rust owns child-process lifecycle, frontend owns editor protocol state. Bidirectional event streams keep autocomplete/diagnostics latency low — request/response `invoke` jitters under load. |
+| LSP integration | **codemirror-languageserver** over Tauri **event channels** (not `invoke`) | LSP servers (texlab, tinymist) run as Tauri sidecars; Rust owns child-process lifecycle, frontend owns editor protocol state. Bidirectional event streams keep autocomplete/diagnostics latency low — request/response `invoke` jitters under load. |
 | PDF preview | **pdfjs-dist** (PDF.js) | Offline, hot-reload on compile output. |
 | Resizable panes | **corvu** (`corvu/resizable`) | Mature Solid primitive; the prototype's `useDrag` works but corvu handles a11y + edge cases for free. |
 | TeX engine — desktop (primary) | **System install** (TeX Live / MiKTeX / MacTeX) | Detect at onboarding; invoke `latexmk`/`pdflatex` directly via Rust. |
 | TeX engine — desktop (quick-start) | **Tectonic** (bundled Rust binary) | Onboarding offers this as a zero-friction alternative — full TeX install can come later. Avoids losing users at the install gate. |
 | TeX engine — tablet | **texlyre-busytex** (WASM) | Phase 3. |
-| Other compilers | **Typst CLI**, **pandoc**, **Rscript** as detected binaries | Detected on PATH per-platform; not bundled. |
+| Other compilers | **Typst CLI** as a detected binary | Detected on PATH per-platform; not bundled. |
 | Testing | **Vitest** + **@solidjs/testing-library** + **Playwright** + **cargo test** | E2E uses Tauri's WebDriver bridge. |
 | Cloud (future, phase 4) | **Supabase** (auth, Postgres, storage, realtime) | Folder-level sync; per-file content syncs as text. |
 | Real-time collab (future) | **Yjs** + **y-codemirror.next** | Transport over Supabase realtime channels. |
@@ -57,43 +57,31 @@ Multiplatform editor app ("Typeward") similar to Overleaf, but format-agnostic: 
 
 These are the seams that prevent the app from collapsing into format-specific spaghetti by Phase 2. **Define them in Phase 1**, even when only LaTeX is implemented — retrofitting later is brutal.
 
-### 1. `DocumentExperience` (top-level)
-
-A document **experience** owns the entire editor shell for a class of documents. Not just syntax — layout, panels, persistence semantics, toolbar, compile/preview/run model.
-
-```ts
-type DocumentExperience =
-  | "text"        // LaTeX, Typst, Markdown — single body, compile to artifact
-  | "notebook"    // RMarkdown chunks — cell execution, inline outputs
-  | "publishing"  // future: book/multi-doc, slides
-```
-
-The new-project flow picks an experience; everything downstream branches from there. Notebook is a **distinct shell**, not a bolt-on to the text editor.
-
-### 2. `EditorAdapter` (per format, within an experience)
+### 1. `EditorAdapter` (per format)
 
 ```ts
 interface EditorAdapter {
-  languageId: string;                                  // "latex" | "typst" | "markdown" | ...
-  experience: DocumentExperience;
+  languageId: string;                                  // "latex" | "typst"
   cmExtensions(ctx: EditorCtx): Extension[];           // CodeMirror 6 extensions
   compile(project: Project): Promise<CompileResult>;   // delegates to a CompileProvider
-  previewKind: "pdf" | "html" | "notebook";
+  previewKind: "pdf";
   diagnostics$: Stream<Diagnostic[]>;                  // from LSP or compile
   completions(ctx, pos): Promise<Completion[]>;        // from LSP
   commands: EditorCommand[];                           // toolbar/palette commands
 }
 ```
 
-Concrete today: `LatexAdapter`, `TypstAdapter`, `MarkdownAdapter`, `RmarkdownAdapter`. Common plumbing (compile/diagnostics/completion wiring) lives in a base class; adapters only declare their specifics.
+Concrete today: `LatexAdapter`, `TypstAdapter`. Common plumbing (compile/diagnostics/completion wiring) lives in a base class; adapters only declare their specifics.
+
+`.md` files open in the text editor but their right pane renders `<MarkdownPreview>` (markdown-it + KaTeX + DOMPurify) instead of `<PdfViewer>`. Markdown does not have an adapter and does not participate in compile.
 
 ### 3. Provider seams (extension boundaries)
 
 Even with no plugin system today, define interfaces so format logic isn't hardcoded:
 
-- `CompileProvider` — system-tex / tectonic / typst-cli / pandoc / Rscript / busytex (mobile)
-- `PreviewProvider` — pdf.js / html / notebook
-- `LspProvider` — texlab / tinymist / marksman / typst-lsp
+- `CompileProvider` — system-tex / tectonic / typst-cli / busytex (mobile)
+- `PreviewProvider` — pdf.js / html (html = MarkdownPreview, frontend-only)
+- `LspProvider` — texlab / tinymist
 - `CommandRegistry` — toolbar actions, command palette, keybindings register here, not directly in components
 
 Plugins later become "things that register adapters and providers." Without these seams, every format leaks into every component.
@@ -108,7 +96,7 @@ A single Rust service (built on `notify` crate) emits typed events for:
 
 - compile output changes → trigger preview reload
 - external file edits (user edits in another tool) → reconcile with editor buffer
-- generated files (notebook outputs, .aux/.log) → update file tree, hide/group as appropriate
+- generated files (.aux/.log) → update file tree, hide/group as appropriate
 - Git branch switches → invalidate caches, prompt to reload open buffers
 
 All consumers (preview, file tree, editor buffers, build system) subscribe to one stream. **No ad-hoc `fs::watch` calls scattered around.**
@@ -140,28 +128,24 @@ src/                          # Solid frontend
   app.tsx                     # Router root
   screens/
     onboarding/               # Welcome, formats, detect engines, install (incl. Tectonic quick-start)
-    projects/                 # Project list + new project (picks DocumentExperience)
-    editor/                   # Hosts a DocumentExperience shell
+    projects/                 # Project list + new project (LaTeX or Typst)
+    editor/                   # Hosts the editor shell
       shells/
-        text-shell.tsx        # 3-pane text editor (LaTeX/Typst/Markdown)
-        notebook-shell.tsx    # Cell-based shell (RMD cells)
-        publishing-shell.tsx  # Phase 4+
+        text-shell.tsx        # 3-pane text editor (LaTeX/Typst; .md files get MarkdownPreview)
     settings/                 # Themes, editor opts, integrations, billing
-  experiences/                # DocumentExperience definitions
   adapters/                   # EditorAdapter implementations
     latex/                    # LatexAdapter, latex CM extensions, snippets
     typst/
-    markdown/
-    rmarkdown/
   providers/                  # Pluggable seams
-    compile/                  # CompileProvider impls: system-tex, tectonic, typst, pandoc, Rscript, busytex
-    preview/                  # PreviewProvider impls: pdf, html, notebook
+    compile/                  # CompileProvider impls: system-tex, tectonic, typst, busytex
+    preview/                  # PreviewProvider impls: pdf
     lsp/                      # LspProvider impls
   components/
     primitives/               # Thin Tailwind wrappers around Kobalte
     glass/                    # Glass card variants
     forms/                    # Toggle, Slider, ColorPicker, Combobox
     editor/                   # CodeMirror integration, gutters, status bar
+    preview/                  # MarkdownPreview.tsx (markdown-it + KaTeX + DOMPurify)
     pdf/                      # PDF.js viewer with retained scroll/zoom + SyncTeX (Phase 2)
     layout/                   # ResizablePanes, Tabs, Sidebar
   themes/
@@ -186,27 +170,22 @@ src-tauri/
       system_tex.rs           # latexmk/pdflatex
       tectonic.rs             # bundled Tectonic
       typst.rs
-      pandoc.rs
-      rmarkdown.rs
       busytex.rs              # Phase 3 (mobile target only)
     lsp/
       mod.rs                  # Sidecar lifecycle + event-channel transport
       texlab.rs
       tinymist.rs
-      marksman.rs
     detect.rs                 # System TeX/engine detection
     autosave.rs               # Snapshot store
     telemetry.rs              # Panic hook + structured error capture
     main.rs
-  binaries/                   # Sidecar binaries (Tectonic, optionally LSPs/typst/pandoc)
+  binaries/                   # Sidecar binaries (Tectonic, optionally LSPs/typst)
   tauri.conf.json
   Cargo.toml
 fixtures/                     # Compile fixture projects for regression tests
   latex-basic/
   latex-bib/
   typst-basic/
-  markdown-pandoc/
-  notebook-basic/
 design_files/                 # Untouched reference (HTML/JSX prototypes)
 ```
 
@@ -244,14 +223,14 @@ What landed:
 What landed:
 
 - **Glass + accent utilities** (`src/themes/utilities.css`): theme-aware `.glass` / `.glass-soft` / `.glass-inset`, accent gradients tied to `--color-accent-1/2`, `.lift`, `.label-xs`, `.mono`, plus `pulse` / `blink` / `shimmer` keyframes. Shadow tokens override per theme (Paper gets soft drops).
-- **Architecture seams** (interfaces only, types tested): `DocumentExperience` (`src/experiences/`), `EditorAdapter` + `Project` + `Diagnostic` + `CompileResult` + `EditorCommand` (`src/adapters/types.ts`), `CompileProvider` / `PreviewProvider` / `LspProvider` (`src/providers/types.ts`), reactive `CommandRegistry` (`src/commands/registry.ts`).
-- **Onboarding** (3 steps): welcome, engine probe (auto-runs `which` for pdflatex/xelatex/lualatex/latexmk/tectonic/typst/pandoc), choose system TeX vs bundled Tectonic. Persists choice to settings.
-- **Projects** screen: list + search + new-project dialog (all six formats), backed by `~/Documents/Typeward/<folder>/.typeward/project.json`.
+- **Architecture seams** (interfaces only, types tested): `EditorAdapter` + `Project` + `Diagnostic` + `CompileResult` + `EditorCommand` (`src/adapters/types.ts`), `CompileProvider` / `PreviewProvider` / `LspProvider` (`src/providers/types.ts`), reactive `CommandRegistry` (`src/commands/registry.ts`).
+- **Onboarding** (3 steps): welcome, engine probe (auto-runs `which` for pdflatex/xelatex/lualatex/latexmk/tectonic/typst), choose system TeX vs bundled Tectonic. Persists choice to settings.
+- **Projects** screen: list + search + new-project dialog (LaTeX or Typst), backed by `~/Documents/Typeward/<folder>/.typeward/project.json`.
 - **Settings** screen: Theme + Editor sections fully wired; placeholder cards for Account/Notifications/Security/Billing/Integrations until cloud lands.
 - **Editor** screen: corvu Resizable 3-pane shell, CodeMirror 6 with `lang-stex` (LaTeX) and `lang-markdown`, theme-aware editor styling, FileTree from disk via Tauri fs plugin, PDF.js viewer with retained scroll position + zoom across recompiles, status bar (line count / language / encoding / compile time), Problems pane.
 - **LatexAdapter** (`src/adapters/latex/LatexAdapter.ts`) — first concrete `EditorAdapter`. Delegates to `compileLatex` IPC.
 - **CompileProvider impls** in Rust (`src-tauri/src/commands.rs`): system TeX path runs `latexmk -pdf` (falling back to `pdflatex`); Tectonic path runs `tectonic -X compile`. Minimal `.log` parser produces error/warning diagnostics.
-- **LSP transport** (`src-tauri/src/lsp.rs` + `src/lib/lsp/client.ts`): Rust spawns texlab/tinymist/marksman as a child process, parses Content-Length-framed JSON-RPC, emits inbound payloads as Tauri events. Outbound traffic via `send_lsp_message` invoke. Lifecycle ops (`start_lsp` / `stop_lsp`) via invoke. **codemirror-languageserver binding into LatexAdapter is iteration work; the channel is functional today.**
+- **LSP transport** (`src-tauri/src/lsp.rs` + `src/lib/lsp/client.ts`): Rust spawns texlab/tinymist as a child process, parses Content-Length-framed JSON-RPC, emits inbound payloads as Tauri events. Outbound traffic via `send_lsp_message` invoke. Lifecycle ops (`start_lsp` / `stop_lsp`) via invoke. **codemirror-languageserver binding into LatexAdapter is iteration work; the channel is functional today.**
 - **Unified file watcher** (`src-tauri/src/watcher.rs` + `src/lib/watcher/client.ts`): `notify`-based, one watcher per project, typed events emitted on a single channel.
 - **Autosave + crash recovery**: debounced 500ms snapshots to `<project>/.typeward/snapshots/<rel>.snap`. On project open, the editor scans for orphans (snapshots newer than file mtime) and prompts via `RecoveryDialog`.
 - **Telemetry**: Rust panic hook + frontend `window.error` / `unhandledrejection` hook → structured JSONL log at `<app_data>/telemetry.log`. Compile failures forwarded automatically. No submission UI yet.
@@ -266,7 +245,6 @@ Original breakdown follows for reference:
 
 1. **Theme + glass primitives** — port `.glass`, `.glass-soft`, `.glass-inset`, `.lift`, `.accent-grad` to Tailwind plugin or component layer (see `design_files/Editor.html` line 304+ for canonical styles)
 2. **Architectural seams** (build the interfaces even if only one implementation exists):
-   - `DocumentExperience` enum + `text-shell.tsx` route
    - `EditorAdapter` interface + `LatexAdapter` concrete impl
    - `CompileProvider` trait + `system_tex.rs` and `tectonic.rs` impls
    - `PreviewProvider` trait + `pdf.rs` impl
@@ -275,7 +253,7 @@ Original breakdown follows for reference:
    - LSP transport over event channels (not `invoke`)
    - Unified `watcher.rs` service with one frontend client
 3. **Onboarding** — port `design_files/Onboarding.html`; engine step offers two paths: "Use installed TeX" (runs `detect.rs`) or "Use Typeward's quick-start engine" (Tectonic, no install needed)
-4. **Projects screen** — port `design_files/Projects.html`; backed by a Tauri command listing `~/Documents/Typeward/`. New-project flow picks a `DocumentExperience` and writes it into `project.json`
+4. **Projects screen** — port `design_files/Projects.html`; backed by a Tauri command listing `~/Documents/Typeward/`. New-project flow picks LaTeX or Typst and writes it into `project.json`
 5. **Settings screen** — port `design_files/Settings.html`; themes + accent palettes wire to store; editor options persist to `settings.json`
 6. **Editor screen** (`text-shell` + `LatexAdapter`) — port `design_files/Editor.html`:
    - Resizable 3-pane layout via corvu
@@ -289,37 +267,10 @@ Original breakdown follows for reference:
 
 ### Phase 2 — Multi-format & preview polish
 
-> **Note:** Quarto support was scoped and built (2026-05-11) then removed (2026-05-12). References to QuartoAdapter, compile_quarto, parse_quarto_log, and .qmd routing have been stripped from the codebase. The historical entries below preserve "what landed" for context — some of what they describe (Quarto adapter, `.qmd` parsing) is no longer in the tree.
-
-**Landed (2026-05-12) — Cell-aware notebook editor + R execution** (kernel made persistent 2026-05-15)
-
-- Cell parser/serializer (`src/lib/notebook/parser.ts`): RMD source ↔ `Cell[]` (metadata | markdown | code). Round-trip is idempotent after the first parse-serialize; preserves chunk options (`{r, echo=FALSE}`) verbatim. 11 parser tests.
-- Notebook cells store (`src/stores/notebook-store.ts`): derives a reactive `Cell[]` from `activeFile.content` when the active file is `.Rmd`. Cell edits re-serialize back through `updateActiveFile` so save + autosave + file-watcher reconciliation all keep working. Guards against the parse/serialize feedback loop via a `lastSyncedContent` token.
-- Cell UI: `Cell.tsx` (per-cell card with type badge, language picker for code cells, move/delete/run controls), `CellEditor.tsx` (slim CodeMirror surface — no line numbers, no global view-store push, language registry covers markdown / yaml / r / python / julia / sql / shell), `CellOutput.tsx` (stdout + stderr + exit/duration footer).
-- `notebook-shell.tsx` rewritten as a real cell-aware layout: shared `EditorSidebar` (extracted to its own file so both shells reuse it), cells column, PdfViewer, LogsDrawer. Falls back to a clear "open the main notebook" placeholder when the active tab isn't `.Rmd`.
-- Per-cell execution (`src-tauri/src/notebook.rs` `run_r_chunk`): originally spawned a fresh `Rscript` per call. **Upgraded 2026-05-15 to a persistent R kernel** — `KernelManager` (Tauri-managed state) holds one long-lived `R --slave --no-save --no-restore --no-echo --no-readline` child process per project, gated through a `tokio::Mutex<KernelHandle>`. Chunk bodies write to `.typeward/cache/cell_<nonce>.R` and source from a one-line wrapper sent over stdin; sentinels `<<<__TYPEWARD_END__:NONCE:STATUS>>>` on both streams demarcate end-of-output so leftover bytes never bleed between runs. Variables defined in cell N persist into cell N+1. Returns `{ok, stdout, stderr, exitCode, durationMs}` with the same shape as before. Non-R languages still return a stub message. Two new IPCs: `stop_r_kernel` (kill + drop kernel) and `r_kernel_status` (bool). 4 new Rust tests cover the sentinel parser.
-- `notebook-outputs-store.ts`: outputs map keyed by cell id + a `runningIds` set so Run All can advance cells sequentially while the user inspects earlier output.
-- New global command `notebook.runAll` (Mod+Shift+Enter) registered in `boot.ts` with `when: () => project()?.experience === "notebook"` so it's only active while a notebook project is open. Bails on the first failed cell.
-- IPC: `ipc.runRChunk({projectRoot, code}) → CellRunResult`.
-- 45 frontend tests + 12 Rust tests pass (after Quarto removal).
-
-**Deferred follow-ups** (smaller next slices):
-- Plot/image capture (capture the R graphics device, surface as `<img>` outputs below the code)
-- Per-cell Python/Julia execution
-
-**Landed (2026-05-11) — Notebook shell (whole-file render)** [Quarto pieces since removed]
-
-- Rust: `compile_rmarkdown` runs `Rscript -e "rmarkdown::render('<file>', output_format='pdf_document', quiet=TRUE)"`. (Originally also `compile_quarto` via `quarto render --to pdf`; removed 2026-05-12.) Both returned `CompileResult` mirroring the LaTeX/Typst/Markdown adapters. Log parser `parse_r_log` classifies the canonical R/knitr error/warning prefixes.
-- IPC: `ipc.compileRmarkdown(project)`.
-- Adapter: `RmarkdownAdapter` declares `experience: "notebook"` and publishes `rmarkdown.render` with Mod+Enter and Build group.
-- `notebook-shell.tsx` — originally a thin wrapper around `TextShell`; subsequently rewritten as a real cell-aware layout (see entry above).
-- `EditorScreen` picks shell from `project.experience` (`<Show when={project()?.experience === "notebook"}>`). LSP startup routes RMD through the markdown LSP (marksman) for basic prose completions; a chunk-aware server is deferred.
-- `actions.adapterFor()` and `EditorScreen.adapterForFormat()` route the format → adapter mapping in lockstep.
+> **Note:** Quarto support was scoped and built (2026-05-11) then removed (2026-05-12). Markdown-as-project, R Markdown, and the notebook shell were built then removed (2026-05-20) — see "Scope narrowing — 2026-05-20" below. The historical entries for those features are omitted to avoid confusion.
 
 **Deferred from Phase 2 (next slices):**
 
-- Cell-aware notebook editor (split source into per-chunk CodeMirror instances; reorder/add/delete cells)
-- Cell-level execution (inline outputs, persistent R / Python kernels)
 - Smart per-page PDF diff (only re-render changed pages on recompile)
 - Sync-to-cursor toggle (auto-scroll PDF as the user types)
 
@@ -339,14 +290,14 @@ Original breakdown follows for reference:
 - Smart per-page diff and a sync-to-cursor toggle were considered and **deferred** — they add substantial complexity (PDF page hashing, settings UI, opt-in plumbing) without changing the core SyncTeX UX in this slice.
 - Tests: 5 Rust unit tests + new LatexAdapter test (2 cases covering shape of `latex.syncForward`). 37 frontend tests + 11 Rust tests pass.
 
-**Landed (2026-05-11) — Markdown + Typst adapters**
+**Landed (2026-05-11) — Typst adapter** [MarkdownAdapter removed 2026-05-20]
 
-- Rust: `compile_typst` runs `typst compile <file>` (native PDF, no LaTeX needed); `compile_markdown` runs `pandoc <file> -o <out.pdf>` (delegates PDF generation to a LaTeX engine). Both return `CompileResult` mirroring `compile_latex`. Log parsers (`parse_typst_log`, `parse_pandoc_log`) classify error/warning prefixes; unit tests cover both + the shared `replace_ext` helper.
-- IPC: `ipc.compileTypst(project)` and `ipc.compileMarkdown(project)` wrappers in `src/ipc/index.ts`.
-- Adapters: `src/adapters/markdown/MarkdownAdapter.ts` and `src/adapters/typst/TypstAdapter.ts`. Each publishes a format-specific compile command (`markdown.compile`, `typst.compile`) with Mod+Enter and Build group. Registered via `EditorScreen`'s `adapterForFormat()` on project load; the keyboard router shows them in the palette only while a project of that format is open.
+- Rust: `compile_typst` runs `typst compile <file>` (native PDF, no LaTeX needed). Returns `CompileResult` mirroring `compile_latex`. Log parser (`parse_typst_log`) classifies error/warning prefixes; unit tests cover both + the shared `replace_ext` helper.
+- IPC: `ipc.compileTypst(project)` wrapper in `src/ipc/index.ts`.
+- Adapter: `src/adapters/typst/TypstAdapter.ts` publishes `typst.compile` with Mod+Enter and Build group. Registered via `EditorScreen`'s `adapterForFormat()` on project load.
 - Typst syntax highlighting: `src/adapters/typst/typst-language.ts` — minimal hand-rolled CM6 `StreamLanguage` (comments, strings, math `$...$`, `#funcs`, headings, emphasis, brackets). text-shell's `languageFor()` routes `.typ` → typst.
-- `commands/actions.ts` `adapterFor()` and `EditorScreen.adapterForFormat()` updated in lockstep — keep them aligned when notebook adapters land.
-- Tests: shared adapter contract test (9 across LaTeX/Markdown/Typst). 35 frontend tests + 6 Rust tests pass.
+- `commands/actions.ts` `adapterFor()` and `EditorScreen.adapterForFormat()` updated in lockstep.
+- Tests: shared adapter contract test (covering LaTeX/Typst). 35 frontend tests + 6 Rust tests pass.
 
 **Landed (2026-05-11) — CommandRegistry binding**
 
@@ -358,21 +309,6 @@ Original breakdown follows for reference:
 - Shared `<CommandPalette />` (`src/components/CommandPalette.tsx`) rendered once at the App root, driven by `paletteOpen_` signal. Reads registry commands + recent projects, supports arrow-key nav, group headers, and per-key `<kbd>` chips via `shortcutTokens()` from the new `src/lib/shortcuts.ts`.
 - ProjectsScreen no longer hosts its own palette / keyboard handler — they're global now.
 - Tests: shortcuts parser (10 tests), palette-store (4), boot (4), registry (4 existing). All 26 frontend tests pass.
-
-**Still pending in Phase 2:**
-
-Each new format = a new `EditorAdapter` + `CompileProvider` + (sometimes) `LspProvider`. **No format logic outside its adapter.**
-
-**Text-experience formats** (reuse `text-shell`):
-
-- **Typst** — custom CodeMirror lang, **tinymist** LSP, `typst compile` sidecar
-- **Markdown** — `@codemirror/lang-markdown`, **marksman** LSP, **pandoc** sidecar for PDF/HTML preview
-
-**Notebook experience** (new `notebook-shell` — distinct layout, distinct persistence semantics):
-
-- Cell-based editor (markdown / code / output cells), per `design_files/editors/editor-variants.jsx`
-- Chunk execution: R via a persistent kernel per project (long-lived `R --slave` child, sentinel-delimited stdin/stdout protocol). Variables carry across cells. No Jupyter kernel — `.ipynb` support is out of scope.
-- **R Markdown** as the sole notebook adapter (Quarto was scoped and then removed)
 
 **Preview-quality work** (this is what separates a serious LaTeX tool from a toy):
 
@@ -390,7 +326,7 @@ The plan called for "drop-in replacement for desktop's `compile.rs` on mobile ta
 - `src/stores/viewport-store.ts` — reactive `viewportMode` (`desktop` ≥1024 / `tablet` <1024), `activePane` (`sidebar`/`editor`/`preview`), `logsSheetOpen`. Test-only `__setViewportWidthForTest` helper for unit tests.
 - `src/components/layout/PaneSwitcher.tsx` — bottom segmented control with 44px+ tap targets (FolderTree/FileText/Eye + ScrollText for logs toggle).
 - `src/lib/gestures.ts` `installSwipeListener` — horizontal swipe detector, touch/pen only (no mouse), 70px threshold, 1.5x horizontal:vertical ratio gate so the editor's vertical scrolls don't get hijacked.
-- `text-shell.tsx` + `notebook-shell.tsx` — both split into `DesktopLayout` (corvu Resizable, unchanged) and `TabletLayout` (single-pane `<Switch>` + PaneSwitcher + slide-up LogsSheet + swipe listener). File-select on tablet auto-swaps active pane back to "editor". CenterPane scales tab strip and close-button hit areas in tablet mode.
+- `text-shell.tsx` — split into `DesktopLayout` (corvu Resizable, unchanged) and `TabletLayout` (single-pane `<Switch>` + PaneSwitcher + slide-up LogsSheet + swipe listener). File-select on tablet auto-swaps active pane back to "editor". CenterPane scales tab strip and close-button hit areas in tablet mode.
 - 3 new viewport-store tests.
 
 **Landed (2026-05-13) — busytex WASM CompileProvider**
@@ -423,6 +359,18 @@ The plan called for "drop-in replacement for desktop's `compile.rs` on mobile ta
 - Tauri 2 mobile build pipeline (Xcode + Android Studio)
 - **texlyre-busytex** integration: drop-in replacement for desktop's `compile.rs` on mobile target via cfg-gated Rust
 
+### Scope narrowing — 2026-05-20
+
+Supported project formats reduced to **LaTeX and Typst**. The following were built and then removed:
+
+- Markdown-as-project (MarkdownAdapter, `compile_markdown` via pandoc, marksman LSP)
+- R Markdown / notebook experience (RmarkdownAdapter, `compile_rmarkdown`, notebook shell, cell parser, notebook-store, persistent R kernel via `KernelManager`, notebook.rs)
+- Quarto was removed earlier (2026-05-12)
+
+`.md` files can still be opened inside any project; the right pane swaps from `<PdfViewer>` to `<MarkdownPreview>` (markdown-it + KaTeX + DOMPurify) for a live HTML preview. Markdown does not compile and has no adapter.
+
+See `docs/ntb_feature.md` (archival notes on what was removed) and `docs/superpowers/specs/2026-05-20-narrow-formats-md-preview-design.md` (spec for the replacement preview).
+
 ### Phase 4 — Cloud + collaboration — deferred (2026-05-13)
 
 Paused indefinitely. When it resumes, scope has been narrowed: **no cloud file storage**. Files remain local-first; Supabase is only used for:
@@ -449,7 +397,7 @@ Pending design questions, to revisit when the phase resumes:
 | `design_files/Settings.html` | Defines the theme & customization surface (4 themes + 4 accent palettes + editor options) |
 | `design_files/Projects.html` | Projects list visual spec |
 | `design_files/Onboarding.html` | Onboarding flow + engine detection UI (both "Workshop" and "Console" directions — pick one) |
-| `design_files/editors/editor-variants.jsx` | Per-format editor variants (Markdown, Typst, RMD; Quarto/Jupyter prototypes there are historical) |
+| `design_files/editors/editor-variants.jsx` | Per-format editor variants (Typst; Markdown/RMD/Quarto/Jupyter prototypes there are historical) |
 | `design_files/onboarding/screens.jsx` | Onboarding screen list |
 
 > The HTML prototypes are the source of truth for **visual output**. The JSX files are React; do **not** copy structure verbatim — port to idiomatic Solid (signals over hooks, no `React.Children`, no portals where unneeded).
@@ -477,7 +425,7 @@ Automated:
 - `npm test` — Vitest passes (stores, theme switcher, file utils, autosave snapshots, command registry)
 - `npm run test:e2e` — Playwright drives the full flow above against the desktop build
 - `cargo test --manifest-path src-tauri/Cargo.toml` — Rust unit tests for `fs.rs`, `detect.rs`, `compile/`, `watcher.rs`, `autosave.rs`
-- **Compile fixture regression suite** — `fixtures/{latex-basic,latex-bib,typst-basic,markdown-pandoc,notebook-basic}/` each have an expected output (PDF hash or text snapshot, expected diagnostics, expected compile time bound). CI compiles each via the relevant `CompileProvider` and asserts. Catches engine-bump regressions and adapter wiring bugs.
+- **Compile fixture regression suite** — `fixtures/{latex-basic,latex-bib,typst-basic}/` each have an expected output (PDF hash or text snapshot, expected diagnostics, expected compile time bound). CI compiles each via the relevant `CompileProvider` and asserts. Catches engine-bump regressions and adapter wiring bugs.
 
 ---
 
@@ -490,7 +438,6 @@ Automated:
 | **Telemetry / error reporting** | Structured local logs for crashes, compile failures, LSP failures; opt-in submission | Phase 1 (capture) → later (submission UI) |
 | **Extension seams** | `EditorAdapter`, `CompileProvider`, `PreviewProvider`, `LspProvider`, `CommandRegistry` defined day one | Phase 1 (interfaces) → Phase 5+ (real plugin loader) |
 | **SyncTeX** | Forward + inverse search through PDF preview | Phase 2 |
-| **Document experiences** | `text` vs `notebook` vs `publishing` shells — chosen at project creation | text in Phase 1, notebook in Phase 2 |
 
 ---
 
@@ -499,5 +446,5 @@ Automated:
 - Spell-check engine choice (Hunspell vs LanguageTool) — phase 2
 - Vim mode binding plugin selection — phase 2
 - BibTeX/Zotero integration — phase 2 once core editor is solid
-- Whether to bundle Typst/pandoc binaries vs detect-system — decide per-platform during phase 2
+- Whether to bundle the Typst binary vs detect-system — decide per-platform
 - Update mechanism (Tauri updater vs app stores) — phase 3+
