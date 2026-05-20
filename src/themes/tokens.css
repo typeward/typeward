@@ -78,8 +78,6 @@
    */
   --format-latex: #a78bfa;
   --format-typst: #67e8f9;
-  --format-markdown: #9ca3af;
-  --format-rmarkdown: #fbbf24;
 
   /*
    * Subtle accent-tinted background used to mark "active" / "selected"

@@ -34,8 +34,6 @@
   /* Deeper format accents readable on the cream bg. */
   --format-latex: #7c3aed;
   --format-typst: #0891b2;
-  --format-markdown: #475569;
-  --format-rmarkdown: #b45309;
 
   --color-accent-1: #7c3aed;
   --color-accent-2: #0891b2;
