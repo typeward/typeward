@@ -3,13 +3,11 @@ import type { DocumentExperience } from "~/experiences/types";
 import type { ProjectFormat } from "~/adapters/types";
 import { LatexAdapter } from "./latex/LatexAdapter";
 import { MarkdownAdapter } from "./markdown/MarkdownAdapter";
-import { RmarkdownAdapter } from "./rmarkdown/RmarkdownAdapter";
 import { TypstAdapter } from "./typst/TypstAdapter";
 
 // Adapter shape contract. Every concrete adapter must:
 //   1. Declare a `format` matching a ProjectFormat union member.
-//   2. Declare an `experience` ("text" for LaTeX/Typst/Markdown,
-//      "notebook" for R Markdown).
+//   2. Declare an `experience` ("text" for all current adapters).
 //   3. Publish a build command with Mod+Enter in the Build group, scoped
 //      to "editor" — the global keyboard router uses these conventions
 //      to route the shortcut correctly.
@@ -28,11 +26,6 @@ const adapters: AdapterCase[] = [
     buildCommandId: "markdown.compile",
   },
   { name: "TypstAdapter", adapter: TypstAdapter, buildCommandId: "typst.compile" },
-  {
-    name: "RmarkdownAdapter",
-    adapter: RmarkdownAdapter,
-    buildCommandId: "rmarkdown.render",
-  },
 ];
 
 describe.each(adapters)("$name", ({ adapter, buildCommandId }) => {
@@ -50,9 +43,5 @@ describe("experience routing", () => {
     for (const a of [LatexAdapter, TypstAdapter, MarkdownAdapter]) {
       expect(a.experience).toBe("text");
     }
-  });
-
-  it("notebook-experience adapters: rmarkdown", () => {
-    expect(RmarkdownAdapter.experience).toBe("notebook");
   });
 });
