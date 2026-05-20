@@ -34,7 +34,6 @@ const commands: EditorCommand[] = [
 
 export const TypstAdapter: EditorAdapter = {
   languageId: "typst",
-  experience: "text",
   format: "typst",
   previewKind: "pdf",
   cmExtensions(): CodeMirrorExtension[] {

@@ -66,7 +66,6 @@ const commands: EditorCommand[] = [
  */
 export const LatexAdapter: EditorAdapter = {
   languageId: "latex",
-  experience: "text",
   format: "latex",
   previewKind: "pdf",
   cmExtensions(): CodeMirrorExtension[] {

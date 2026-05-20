@@ -24,7 +24,6 @@ describe("busytex-provider", () => {
       rootPath: "/tmp/demo",
       rootFile: "main.tex",
       format: "latex",
-      experience: "text",
     });
 
     expect(result.ok).toBe(false);

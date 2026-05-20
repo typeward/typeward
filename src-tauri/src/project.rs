@@ -16,17 +16,8 @@ pub struct Project {
     /// Entry file relative to rootPath, e.g. "main.tex".
     #[serde(rename = "rootFile")]
     pub root_file: String,
-    pub experience: DocumentExperience,
     pub format: ProjectFormat,
     pub name: String,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DocumentExperience {
-    Text,
-    Notebook,
-    Publishing,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -34,8 +25,6 @@ pub enum DocumentExperience {
 pub enum ProjectFormat {
     Latex,
     Typst,
-    Markdown,
-    Rmarkdown,
 }
 
 impl ProjectFormat {
@@ -43,15 +32,6 @@ impl ProjectFormat {
         match self {
             Self::Latex => "main.tex",
             Self::Typst => "main.typ",
-            Self::Markdown => "main.md",
-            Self::Rmarkdown => "main.Rmd",
-        }
-    }
-
-    pub fn default_experience(self) -> DocumentExperience {
-        match self {
-            Self::Latex | Self::Typst | Self::Markdown => DocumentExperience::Text,
-            Self::Rmarkdown => DocumentExperience::Notebook,
         }
     }
 
@@ -62,10 +42,6 @@ impl ProjectFormat {
                 "\\documentclass{{article}}\n\\title{{{name}}}\n\\author{{}}\n\\date{{\\today}}\n\n\\begin{{document}}\n\\maketitle\n\nWelcome to {name}.\n\\end{{document}}\n"
             ),
             Self::Typst => format!("= {name}\n\nWelcome to {name}.\n"),
-            Self::Markdown => format!("# {name}\n\nWelcome to {name}.\n"),
-            Self::Rmarkdown => format!(
-                "---\ntitle: \"{name}\"\noutput: html_document\n---\n\n```{{r}}\nsummary(cars)\n```\n"
-            ),
         }
     }
 }
@@ -148,7 +124,6 @@ pub fn create_project(
     parent: &Path,
     name: &str,
     format: ProjectFormat,
-    experience: Option<DocumentExperience>,
 ) -> Result<Project, ProjectError> {
     let safe_name = sanitize_folder_name(name);
     let root = parent.join(&safe_name);
@@ -164,7 +139,6 @@ pub fn create_project(
     let project = Project {
         root_path: root.to_string_lossy().to_string(),
         root_file: root_file.to_string(),
-        experience: experience.unwrap_or_else(|| format.default_experience()),
         format,
         name: name.to_string(),
     };
@@ -273,7 +247,7 @@ mod tests {
     #[test]
     fn round_trips_project_json() {
         let dir = temp_dir();
-        let project = create_project(&dir, "Test", ProjectFormat::Latex, None).unwrap();
+        let project = create_project(&dir, "Test", ProjectFormat::Latex).unwrap();
         let read = read_project(Path::new(&project.root_path)).unwrap();
         assert_eq!(read.name, "Test");
         assert_eq!(read.root_file, "main.tex");
@@ -283,7 +257,7 @@ mod tests {
     #[test]
     fn list_skips_folders_without_sidecar() {
         let dir = temp_dir();
-        create_project(&dir, "Real", ProjectFormat::Markdown, None).unwrap();
+        create_project(&dir, "Real", ProjectFormat::Typst).unwrap();
         fs::create_dir_all(dir.join("Plain")).unwrap();
         let projects = list_projects(&dir).unwrap();
         assert_eq!(projects.len(), 1);
@@ -305,7 +279,6 @@ mod tests {
             r#"{
   "rootPath": "ignored",
   "rootFile": "../outside.tex",
-  "experience": "text",
   "format": "latex",
   "name": "Bad"
 }"#,

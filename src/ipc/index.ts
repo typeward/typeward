@@ -5,7 +5,6 @@ import type {
   Project,
   ProjectFormat,
 } from "~/adapters/types";
-import type { DocumentExperience } from "~/experiences/types";
 
 // ----- TeX engine detection ------------------------------------------------
 
@@ -31,7 +30,6 @@ export const listProjects = (root?: string): Promise<Project[]> =>
 export const createProject = (params: {
   name: string;
   format: ProjectFormat;
-  experience?: DocumentExperience;
   parent?: string;
 }): Promise<Project> => invoke("create_project", params);
 

@@ -8,7 +8,7 @@ use tauri_plugin_shell::ShellExt;
 use crate::autosave::{self, Snapshot};
 use crate::detect::{self, EngineProbe};
 use crate::fs_ops;
-use crate::project::{self, DocumentExperience, Project, ProjectFormat};
+use crate::project::{self, Project, ProjectFormat};
 use crate::settings::{self, Settings};
 
 /// Convert any error into a String at the command boundary so Tauri's bridge
@@ -49,7 +49,6 @@ pub fn list_projects(root: Option<String>) -> CmdResult<Vec<Project>> {
 pub fn create_project(
     name: String,
     format: ProjectFormat,
-    experience: Option<DocumentExperience>,
     parent: Option<String>,
 ) -> CmdResult<Project> {
     let parent = parent
@@ -58,7 +57,7 @@ pub fn create_project(
     if !parent.exists() {
         std::fs::create_dir_all(&parent).map_err(err)?;
     }
-    project::create_project(&parent, &name, format, experience).map_err(err)
+    project::create_project(&parent, &name, format).map_err(err)
 }
 
 #[tauri::command]

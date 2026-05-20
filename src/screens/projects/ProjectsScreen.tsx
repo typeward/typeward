@@ -65,16 +65,12 @@ import { WidgetsShelf } from "~/widgets/WidgetsShelf";
 const FORMAT_LABEL: Record<ProjectFormat, string> = {
   latex: "LaTeX",
   typst: "Typst",
-  markdown: "Markdown",
-  rmarkdown: "R Markdown",
 };
 
 // Theme-aware via CSS vars set in tokens.css + light theme overrides.
 const FORMAT_ACCENT: Record<ProjectFormat, string> = {
   latex: "var(--format-latex)",
   typst: "var(--format-typst)",
-  markdown: "var(--format-markdown)",
-  rmarkdown: "var(--format-rmarkdown)",
 };
 
 const SORT_LABEL: Record<ProjectsSort, string> = {
@@ -641,8 +637,6 @@ const ProjectRow: Component<{ project: Project; onOpen: () => void }> = (props) 
 const FORMATS: Array<{ id: ProjectFormat; label: string; sub: string }> = [
   { id: "latex", label: "LaTeX", sub: "main.tex + bib + figures" },
   { id: "typst", label: "Typst", sub: "Modern alternative to LaTeX" },
-  { id: "markdown", label: "Markdown", sub: "Plain prose with pandoc export" },
-  { id: "rmarkdown", label: "R Markdown", sub: "Notebook with R code chunks" },
 ];
 
 const NewProjectDialog: Component<{

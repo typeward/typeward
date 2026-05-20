@@ -1,7 +1,6 @@
 import { createSignal } from "solid-js";
 import * as ipc from "~/ipc";
 import type { Project, ProjectFormat } from "~/adapters/types";
-import type { DocumentExperience } from "~/experiences/types";
 import { projectsRoot } from "~/stores/settings-store";
 
 const [projects, setProjects] = createSignal<Project[]>([]);
@@ -27,7 +26,6 @@ async function refresh() {
 async function create(input: {
   name: string;
   format: ProjectFormat;
-  experience?: DocumentExperience;
 }): Promise<Project> {
   const project = await ipc.createProject({
     ...input,
