@@ -1,10 +1,10 @@
-import { FileDown, FileText, FileType2, MessageSquare, Package } from "lucide-solid";
+import { FileDown, FileType2, MessageSquare, Package } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createSignal, onCleanup } from "solid-js";
 
 /**
  * Export dropdown — replaces the old Download icon. Each option is a UI stub
- * today; backing pipelines (pandoc → docx/md/html, annotation flattening, zip
+ * today; backing pipelines (pandoc → docx/html, annotation flattening, zip
  * bundle) land in a follow-up slice. PDF export becomes a one-liner once
  * `fs:allow-write-file` is added to capabilities for arbitrary destinations.
  */
@@ -37,8 +37,7 @@ export const ExportMenu: Component<{
   const options: ExportOption[] = [
     { id: "pdf", label: "Export PDF", hint: "Copy the compiled PDF", icon: () => <FileDown size={13} /> },
     { id: "pdf-ann", label: "PDF + annotations", hint: "Flatten comments into PDF", icon: () => <FileDown size={13} /> },
-    { id: "md", label: "Markdown", hint: "Pandoc → .md", icon: () => <FileText size={13} /> },
-    { id: "docx", label: "Word (.docx)", hint: "Pandoc → Word", icon: () => <FileType2 size={13} /> },
+{ id: "docx", label: "Word (.docx)", hint: "Pandoc → Word", icon: () => <FileType2 size={13} /> },
     { id: "html", label: "HTML", hint: "Pandoc → standalone HTML", icon: () => <MessageSquare size={13} /> },
     { id: "source", label: "Source bundle (.zip)", hint: "Project folder, gitignored excluded", icon: () => <Package size={13} /> },
   ];
