@@ -40,6 +40,11 @@ rand = "0.8"
 url = "2"
 sha2 = "0.10"
 
+# VCS — Phase 3. libgit2 bindings; HTTPS uses libcurl + system TLS so we
+# pick up the same crypto chain as the rest of the desktop binary.
+git2 = { version = "0.20", default-features = false, features = ["https"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
