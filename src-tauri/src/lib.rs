@@ -55,6 +55,7 @@ pub fn run() {
             integrations::credentials::credential_get,
             integrations::credentials::credential_delete,
             integrations::http::http_request,
+            integrations::http::http_request_bytes,
             integrations::oauth::oauth_begin,
             integrations::oauth::oauth_wait,
         ])

@@ -87,6 +87,29 @@ pub struct HttpResponse {
     pub body: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryHttpRequest {
+    pub method: String,
+    pub url: String,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    /// Optional body bytes. Tauri serializes `Vec<u8>` as a JSON number
+    /// array on the wire — callers pass `Array.from(bytes)` from JS.
+    #[serde(default)]
+    pub body: Option<Vec<u8>>,
+    #[serde(default)]
+    pub auth_ref: Option<AuthRef>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BinaryHttpResponse {
+    pub status: u16,
+    pub headers: HashMap<String, String>,
+    pub body: Vec<u8>,
+}
+
 fn parse_method(method: &str) -> Result<Method, HttpError> {
     method
         .parse::<Method>()
@@ -161,6 +184,75 @@ pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
         }
         Err(other) => Err(other),
     }
+}
+
+/// Binary-safe variant of [`http_request`] — body in and body out are
+/// raw bytes. Used for cloud-provider file upload / download where the
+/// payload is arbitrary binary content that can't survive a UTF-8 round
+/// trip.
+#[tauri::command]
+pub async fn http_request_bytes(
+    req: BinaryHttpRequest,
+) -> Result<BinaryHttpResponse, HttpError> {
+    match perform_once_bytes(&req, req.auth_ref.as_ref()).await {
+        Ok(res) => Ok(res),
+        Err(HttpError::Network(_)) => {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            perform_once_bytes(&req, req.auth_ref.as_ref()).await
+        }
+        Err(other) => Err(other),
+    }
+}
+
+async fn perform_once_bytes(
+    req: &BinaryHttpRequest,
+    auth: Option<&AuthRef>,
+) -> Result<BinaryHttpResponse, HttpError> {
+    let method = parse_method(&req.method)?;
+    let mut builder = client().request(method, &req.url);
+
+    for (name, value) in &req.headers {
+        builder = builder.header(name, value);
+    }
+
+    if let Some(auth) = auth {
+        let secret = tokio::task::spawn_blocking({
+            let service = auth.service.clone();
+            let account = auth.account.clone();
+            move || credentials::get_secret(&service, &account)
+        })
+        .await
+        .map_err(|e| HttpError::Credential(e.to_string()))?
+        .map_err(|e| HttpError::Credential(e.to_string()))?;
+
+        if let Some(secret) = secret {
+            let value = format!("{}{}", auth.prefix, secret);
+            builder = builder.header(&auth.header, value);
+        }
+    }
+
+    if let Some(body) = &req.body {
+        builder = builder.body(body.clone());
+    }
+
+    let res = builder
+        .send()
+        .await
+        .map_err(|e| HttpError::Network(e.to_string()))?;
+
+    let status = res.status().as_u16();
+    let headers = res
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let bytes = res
+        .bytes()
+        .await
+        .map_err(|e| HttpError::Body(e.to_string()))?
+        .to_vec();
+
+    Ok(BinaryHttpResponse { status, headers, body: bytes })
 }
 
 #[cfg(test)]
