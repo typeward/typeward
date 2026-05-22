@@ -29,6 +29,9 @@ import {
   type CloudAccountRef,
 } from "~/integrations/cloud/registry";
 import type { RemoteFolder } from "~/integrations/types";
+import { CloneDialog } from "~/components/vcs/CloneDialog";
+import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import * as ipc from "~/ipc";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
@@ -658,6 +661,32 @@ const NewProjectDialog: Component<{
   const [location, setLocation] = createSignal<"local" | "cloud">("local");
   const [account, setAccount] = createSignal<CloudAccountRef | null>(null);
   const [remoteRoot, setRemoteRoot] = createSignal<RemoteFolder | null>(null);
+  const [cloneOpen, setCloneOpen] = createSignal(false);
+
+  const importOverleafZip = async () => {
+    const picked = await openFileDialog({
+      title: "Pick an Overleaf-exported .zip",
+      filters: [{ name: "Zip", extensions: ["zip"] }],
+      multiple: false,
+    });
+    if (!picked || typeof picked !== "string") return;
+    const root = projectsRoot();
+    if (!root) {
+      setErr("Set a projects root in Settings first.");
+      return;
+    }
+    setErr(null);
+    setSubmitting(true);
+    try {
+      const projectName = inferNameFromPath(picked);
+      const project = await ipc.overleafImportZip(picked, root, projectName);
+      reset();
+      props.onCreated(project);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setSubmitting(false);
+    }
+  };
 
   const cloudAccounts = createMemo<CloudAccountRef[]>(() =>
     integrationsSettings()
@@ -767,6 +796,16 @@ const NewProjectDialog: Component<{
       }
     >
       <div class="flex flex-col gap-4">
+        <div class="flex items-center gap-2 rounded-md border border-dashed border-glass-stroke px-3 py-2">
+          <span class="text-[11px] text-fg-3">Import existing:</span>
+          <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
+            Clone repository
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
+            Overleaf zip
+          </Button>
+        </div>
+
         <Show when={cloudAccounts().length > 0}>
           <fieldset class="flex flex-col gap-2">
             <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
@@ -952,6 +991,21 @@ const NewProjectDialog: Component<{
           </div>
         </Show>
       </div>
+      <CloneDialog
+        open={cloneOpen()}
+        onOpenChange={setCloneOpen}
+        onCloned={() => {
+          reset();
+          props.onClose();
+        }}
+      />
     </Dialog>
   );
 };
+
+function inferNameFromPath(absPath: string): string {
+  const trimmed = absPath.replace(/[\\/]+$/, "");
+  const lastSep = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  const base = lastSep >= 0 ? trimmed.slice(lastSep + 1) : trimmed;
+  return base.replace(/\.zip$/i, "");
+}

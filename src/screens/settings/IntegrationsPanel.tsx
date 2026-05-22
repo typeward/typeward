@@ -33,6 +33,11 @@ import {
 } from "~/integrations/references/mendeley";
 import { probeBetterBibTex } from "~/integrations/references/zotero";
 import {
+  connectGithub,
+  disconnectGithub,
+  hasGithubCredential,
+} from "~/integrations/vcs/github";
+import {
   connectDropbox,
   disconnectDropbox,
 } from "~/integrations/cloud/dropbox";
@@ -52,10 +57,7 @@ export const IntegrationsPanel: Component = () => {
     <div class="flex flex-col gap-3">
       <ReferencesCard />
       <CloudStorageCard />
-      <ComingSoonCard
-        title="Git & GitHub"
-        body="Pull / commit / push from inside the editor. Clone a repo as a new project. Overleaf zip + git-bridge import."
-      />
+      <VcsCard />
       <ComingSoonCard
         title="AI providers"
         body="Claude, ChatGPT, Gemini, and local Ollama — selectable per project, streaming inline."
@@ -545,6 +547,149 @@ const ICloudRow: Component = () => {
         <span class="text-[11px] text-fg-3 italic">No sign-in needed</span>
       }
     />
+  );
+};
+
+// =================================================================
+// Git & GitHub card
+// =================================================================
+
+const VcsCard: Component = () => {
+  return (
+    <Card
+      title="Git & GitHub"
+      subtitle="Commit / push / pull from inside the editor. Clone repos as new projects. Set your author identity here so commits go through with the right name and email."
+    >
+      <AuthorIdentityRow />
+      <GithubAccountRow />
+    </Card>
+  );
+};
+
+const AuthorIdentityRow: Component = () => {
+  const git = () => integrationsSettings().vcs.git;
+
+  const update = (patch: { authorName?: string; authorEmail?: string }) => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      vcs: {
+        ...integrationsSettings().vcs,
+        git: { ...git(), ...patch },
+      },
+    });
+  };
+
+  return (
+    <ProviderRow
+      name="Author identity"
+      hint="Falls back to your system gitconfig when blank. Required for commits — git will refuse to commit without a signature."
+      status={git().authorName && git().authorEmail ? "ready" : "unconfigured"}
+      controls={<span class="text-[11px] text-fg-3 italic">Saved in settings.json</span>}
+    >
+      <div class="mt-3 flex flex-col gap-2">
+        <div class="flex gap-2">
+          <input
+            type="text"
+            placeholder="Name"
+            value={git().authorName ?? ""}
+            onInput={(e) => update({ authorName: e.currentTarget.value || undefined })}
+            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          />
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={git().authorEmail ?? ""}
+            onInput={(e) => update({ authorEmail: e.currentTarget.value || undefined })}
+            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          />
+        </div>
+      </div>
+    </ProviderRow>
+  );
+};
+
+const GithubAccountRow: Component = () => {
+  const accountId = () => integrationsSettings().vcs.github.accountId;
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+  const [userCode, setUserCode] = createSignal<string | null>(null);
+
+  const [hasCred] = createResource(accountId, async (login) => {
+    if (!login) return false;
+    return await hasGithubCredential();
+  });
+
+  const handleConnect = async () => {
+    setError(null);
+    setUserCode(null);
+    setBusy(true);
+    try {
+      const account = await connectGithub((code) => setUserCode(code));
+      setIntegrationsSettings({
+        ...integrationsSettings(),
+        vcs: {
+          ...integrationsSettings().vcs,
+          github: { accountId: account.login },
+        },
+      });
+      setUserCode(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    const login = accountId();
+    if (!login) return;
+    await disconnectGithub(login);
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      vcs: {
+        ...integrationsSettings().vcs,
+        github: {},
+      },
+    });
+  };
+
+  return (
+    <ProviderRow
+      name="GitHub"
+      hint={
+        accountId()
+          ? `Connected as ${accountId()}. The token is stored in the OS keyring under git.github.com so libgit2 picks it up on push / pull.`
+          : "Sign in via GitHub's device flow — works on desktop and tablet, no loopback callback needed."
+      }
+      status={accountId() && hasCred() ? "ready" : "unconfigured"}
+      controls={
+        <Show
+          when={accountId()}
+          fallback={
+            <Button variant="primary" size="sm" onClick={handleConnect} disabled={busy()}>
+              {busy() ? "Waiting…" : "Sign in"}
+            </Button>
+          }
+        >
+          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+            Disconnect
+          </Button>
+        </Show>
+      }
+    >
+      <Show when={userCode()}>
+        <div class="mt-3 flex items-center gap-3 rounded-md bg-[var(--color-control-fill)] px-3 py-2">
+          <span class="text-[11px] text-fg-3">User code:</span>
+          <span class="mono select-all text-[16px] font-semibold tracking-[0.25em] text-fg-1">
+            {userCode()}
+          </span>
+          <span class="text-[11px] text-fg-3">— your browser should open with this prefilled.</span>
+        </div>
+      </Show>
+      <Show when={error()}>
+        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+      </Show>
+    </ProviderRow>
   );
 };
 
