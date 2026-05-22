@@ -65,6 +65,18 @@ pub fn open_project(path: String) -> CmdResult<Project> {
     project::read_project(Path::new(&path)).map_err(err)
 }
 
+/// Replace the project's `integrations` block. Caller passes the
+/// already-built struct; the file is read, the block is swapped, and
+/// the file is rewritten atomically. No partial mutation API — keeping
+/// the seam narrow makes it harder to land a half-updated project.json.
+#[tauri::command]
+pub fn set_project_integrations(
+    project_root: String,
+    integrations: project::ProjectIntegrations,
+) -> CmdResult<Project> {
+    project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
+}
+
 #[tauri::command]
 pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResult<String> {
     let path = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)

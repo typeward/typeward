@@ -30,6 +30,7 @@ pub fn run() {
             commands::list_projects,
             commands::create_project,
             commands::open_project,
+            commands::set_project_integrations,
             commands::read_project_text_file,
             commands::read_project_binary_file,
             commands::write_project_text_file,

@@ -9,6 +9,7 @@ export {
 } from "./paths";
 export {
   allSyncStatuses,
+  clearConflict,
   clearSyncStatus,
   getSyncStatus,
   recordConflicts,

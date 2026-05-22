@@ -4,6 +4,7 @@ import type {
   Diagnostic,
   Project,
   ProjectFormat,
+  ProjectIntegrations,
 } from "~/adapters/types";
 
 // ----- TeX engine detection ------------------------------------------------
@@ -35,6 +36,12 @@ export const createProject = (params: {
 
 export const openProject = (path: string): Promise<Project> =>
   invoke("open_project", { path });
+
+export const setProjectIntegrations = (
+  projectRoot: string,
+  integrations: ProjectIntegrations,
+): Promise<Project> =>
+  invoke("set_project_integrations", { projectRoot, integrations });
 
 // ----- File I/O ------------------------------------------------------------
 
