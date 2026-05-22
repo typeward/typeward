@@ -9,10 +9,12 @@
 
 import { AlertTriangle, Check, Cloud, Loader2, X } from "lucide-solid";
 import type { Component } from "solid-js";
-import { Show, createMemo } from "solid-js";
+import { Show, createMemo, createSignal } from "solid-js";
 
 import { allSyncStatuses } from "~/integrations/cloud/core";
 import type { SyncPhase } from "~/integrations/types";
+
+import { ConflictResolverDialog } from "./ConflictResolverDialog";
 
 const PHASE_RANK: Record<SyncPhase, number> = {
   conflict: 4,
@@ -29,6 +31,8 @@ interface Aggregated {
 }
 
 export const SyncStatusBadge: Component = () => {
+  const [resolverOpen, setResolverOpen] = createSignal(false);
+
   const aggregate = createMemo<Aggregated | null>(() => {
     const all = Array.from(allSyncStatuses().values());
     if (all.length === 0) return null;
@@ -42,35 +46,41 @@ export const SyncStatusBadge: Component = () => {
   });
 
   return (
-    <Show when={aggregate()}>
-      {(agg) => (
-        <div
-          class="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--ui-font-xs)]"
-          style={{
-            background: agg().phase === "idle"
-              ? "var(--color-control-fill)"
-              : agg().phase === "conflict"
-                ? "rgba(248, 113, 113, 0.16)"
-                : agg().phase === "error"
+    <>
+      <Show when={aggregate()}>
+        {(agg) => (
+          <button
+            type="button"
+            class="lift flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--ui-font-xs)] disabled:cursor-default"
+            disabled={agg().conflicts === 0}
+            onClick={() => setResolverOpen(true)}
+            style={{
+              background: agg().phase === "idle"
+                ? "var(--color-control-fill)"
+                : agg().phase === "conflict"
                   ? "rgba(248, 113, 113, 0.16)"
-                  : "rgba(99, 102, 241, 0.16)",
-            color: agg().phase === "idle"
-              ? "var(--color-fg-2)"
-              : agg().phase === "conflict" || agg().phase === "error"
-                ? "rgb(248, 113, 113)"
-                : "rgb(129, 140, 248)",
-          }}
-          title={
-            agg().conflicts > 0
-              ? `${agg().conflicts} unresolved conflict${agg().conflicts === 1 ? "" : "s"}`
-              : `${agg().count} cloud-backed project${agg().count === 1 ? "" : "s"}`
-          }
-        >
-          <PhaseIcon phase={agg().phase} />
-          <span>{labelFor(agg().phase, agg().conflicts)}</span>
-        </div>
-      )}
-    </Show>
+                  : agg().phase === "error"
+                    ? "rgba(248, 113, 113, 0.16)"
+                    : "rgba(99, 102, 241, 0.16)",
+              color: agg().phase === "idle"
+                ? "var(--color-fg-2)"
+                : agg().phase === "conflict" || agg().phase === "error"
+                  ? "rgb(248, 113, 113)"
+                  : "rgb(129, 140, 248)",
+            }}
+            title={
+              agg().conflicts > 0
+                ? `${agg().conflicts} unresolved conflict${agg().conflicts === 1 ? "" : "s"} — click to resolve`
+                : `${agg().count} cloud-backed project${agg().count === 1 ? "" : "s"}`
+            }
+          >
+            <PhaseIcon phase={agg().phase} />
+            <span>{labelFor(agg().phase, agg().conflicts)}</span>
+          </button>
+        )}
+      </Show>
+      <ConflictResolverDialog open={resolverOpen()} onOpenChange={setResolverOpen} />
+    </>
   );
 };
 

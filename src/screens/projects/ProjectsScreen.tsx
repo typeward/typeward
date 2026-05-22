@@ -21,8 +21,15 @@ import {
   Users,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from "solid-js";
 import type { Project, ProjectFormat } from "~/adapters/types";
+import { createCloudBackedProject } from "~/integrations/cloud/create";
+import {
+  cloudProviderForAccount,
+  type CloudAccountRef,
+} from "~/integrations/cloud/registry";
+import type { RemoteFolder } from "~/integrations/types";
+import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Dialog } from "~/components/primitives/Dialog";
@@ -648,12 +655,49 @@ const NewProjectDialog: Component<{
   const [format, setFormat] = createSignal<ProjectFormat>("latex");
   const [submitting, setSubmitting] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
+  const [location, setLocation] = createSignal<"local" | "cloud">("local");
+  const [account, setAccount] = createSignal<CloudAccountRef | null>(null);
+  const [remoteRoot, setRemoteRoot] = createSignal<RemoteFolder | null>(null);
+
+  const cloudAccounts = createMemo<CloudAccountRef[]>(() =>
+    integrationsSettings()
+      .cloud.accounts.filter(
+        (a) =>
+          a.provider === "dropbox" ||
+          a.provider === "onedrive" ||
+          a.provider === "gdrive",
+      )
+      .map((a) => ({
+        provider: a.provider as CloudAccountRef["provider"],
+        accountId: a.accountId,
+        label: a.label,
+      })),
+  );
+
+  const [remoteRoots] = createResource(account, async (acc) => {
+    if (!acc) return [];
+    const root = projectsRoot();
+    if (!root) return [];
+    try {
+      const provider = cloudProviderForAccount(acc, {
+        projectsRoot: root,
+        projectId: "_picker",
+      });
+      return await provider.listRoots();
+    } catch (e) {
+      setErr(`Could not list remote folders: ${e instanceof Error ? e.message : String(e)}`);
+      return [];
+    }
+  });
 
   const reset = () => {
     setName("");
     setFormat("latex");
     setErr(null);
     setSubmitting(false);
+    setLocation("local");
+    setAccount(null);
+    setRemoteRoot(null);
   };
 
   const submit = async () => {
@@ -664,11 +708,31 @@ const NewProjectDialog: Component<{
     setSubmitting(true);
     setErr(null);
     try {
-      const project = await create({ name: name().trim(), format: format() });
+      let project: Project;
+      if (location() === "cloud") {
+        const acc = account();
+        const root = remoteRoot();
+        const projRoot = projectsRoot();
+        if (!acc || !root || !projRoot) {
+          throw new Error("Pick a cloud account and a remote folder first.");
+        }
+        const result = await createCloudBackedProject({
+          account: acc,
+          remoteRoot: root,
+          name: name().trim(),
+          format: format(),
+          projectsRoot: projRoot,
+        });
+        // Engine starts automatically once the project becomes the active
+        // one in editor-store; init.ts watches `project()`.
+        project = result.project;
+      } else {
+        project = await create({ name: name().trim(), format: format() });
+      }
       reset();
       props.onCreated(project);
     } catch (e) {
-      setErr(String(e));
+      setErr(e instanceof Error ? e.message : String(e));
       setSubmitting(false);
     }
   };
@@ -703,6 +767,138 @@ const NewProjectDialog: Component<{
       }
     >
       <div class="flex flex-col gap-4">
+        <Show when={cloudAccounts().length > 0}>
+          <fieldset class="flex flex-col gap-2">
+            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+              Where
+            </legend>
+            <div class="grid grid-cols-2 gap-2">
+              <For each={[{ id: "local" as const, label: "Local", sub: "Folder under your projects root" }, { id: "cloud" as const, label: "Cloud", sub: "Sync with a connected provider" }]}>
+                {(opt) => (
+                  <label
+                    class={`lift flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 ${
+                      location() === opt.id
+                        ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
+                        : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="location"
+                      value={opt.id}
+                      checked={location() === opt.id}
+                      onChange={() => setLocation(opt.id)}
+                      class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
+                    />
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                        {opt.label}
+                      </span>
+                      <span class="text-[11px] text-fg-3">{opt.sub}</span>
+                    </div>
+                  </label>
+                )}
+              </For>
+            </div>
+          </fieldset>
+        </Show>
+
+        <Show when={location() === "cloud"}>
+          <fieldset class="flex flex-col gap-2">
+            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+              Account
+            </legend>
+            <div class="flex flex-col gap-1">
+              <For each={cloudAccounts()}>
+                {(acc) => (
+                  <label
+                    class={`lift flex cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-1.5 ${
+                      account()?.accountId === acc.accountId &&
+                      account()?.provider === acc.provider
+                        ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
+                        : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="cloud-account"
+                      checked={
+                        account()?.accountId === acc.accountId &&
+                        account()?.provider === acc.provider
+                      }
+                      onChange={() => {
+                        setAccount(acc);
+                        setRemoteRoot(null);
+                      }}
+                      class="h-3 w-3 accent-[var(--color-accent-1)]"
+                    />
+                    <span class="mono text-[11px] uppercase tracking-wider text-fg-3">
+                      {acc.provider}
+                    </span>
+                    <span class="text-[length:var(--ui-font-sm)] text-fg-1">
+                      {acc.label ?? acc.accountId}
+                    </span>
+                  </label>
+                )}
+              </For>
+            </div>
+          </fieldset>
+        </Show>
+
+        <Show when={location() === "cloud" && account()}>
+          <fieldset class="flex flex-col gap-2">
+            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+              Remote folder
+            </legend>
+            <Show
+              when={!remoteRoots.loading}
+              fallback={
+                <div class="text-[11px] text-fg-3">Loading remote folders…</div>
+              }
+            >
+              <Show
+                when={(remoteRoots() ?? []).length > 0}
+                fallback={
+                  <div class="text-[11px] text-fg-3">
+                    No folders found.{" "}
+                    {account()?.provider === "gdrive"
+                      ? "Google Drive's drive.file scope only shows folders Typeward has created — create one in Drive's web UI first, or use a different provider."
+                      : "Create one in the provider's web UI, then come back."}
+                  </div>
+                }
+              >
+                <div class="max-h-40 overflow-auto scroll rounded-md border border-glass-stroke">
+                  <For each={remoteRoots() ?? []}>
+                    {(folder) => (
+                      <label
+                        class={`flex cursor-pointer items-center gap-2 border-b border-glass-stroke px-2.5 py-1.5 last:border-b-0 ${
+                          remoteRoot()?.id === folder.id
+                            ? "bg-[var(--color-selection-bg)]"
+                            : "hover:bg-[var(--color-control-fill)]"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="remote-root"
+                          checked={remoteRoot()?.id === folder.id}
+                          onChange={() => {
+                            setRemoteRoot(folder);
+                            if (!name().trim()) setName(folder.name);
+                          }}
+                          class="h-3 w-3 accent-[var(--color-accent-1)]"
+                        />
+                        <span class="text-[length:var(--ui-font-sm)] text-fg-1">
+                          {folder.name}
+                        </span>
+                      </label>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </Show>
+          </fieldset>
+        </Show>
+
         <label class="flex flex-col gap-1.5">
           <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
             Name
