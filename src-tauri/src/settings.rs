@@ -93,8 +93,64 @@ pub struct IntegrationsSettings {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ReferencesSettings {
+    /// Identifier of the active provider for the picker UI when multiple
+    /// are configured. Optional — when absent, all enabled providers fan
+    /// out in parallel.
     #[serde(rename = "activeProvider", default)]
     pub active_provider: Option<String>,
+    #[serde(rename = "betterBibTex", default)]
+    pub better_bib_tex: BetterBibTexSettings,
+    #[serde(rename = "zoteroWeb", default)]
+    pub zotero_web: ZoteroWebSettings,
+    #[serde(default)]
+    pub mendeley: MendeleyAccountSettings,
+    #[serde(default)]
+    pub jabref: JabRefSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BetterBibTexSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Zotero library id; `1` is the user's personal library.
+    #[serde(rename = "libraryId", default = "default_library_id")]
+    pub library_id: u32,
+}
+
+impl Default for BetterBibTexSettings {
+    fn default() -> Self {
+        Self { enabled: false, library_id: default_library_id() }
+    }
+}
+
+fn default_library_id() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ZoteroWebSettings {
+    /// Numeric Zotero user id. The API key lives in the OS keyring under
+    /// service `zotero-web`, account = user id.
+    #[serde(rename = "userId", default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MendeleyAccountSettings {
+    /// Mendeley profile id of the connected account. The token bundle
+    /// (access + refresh + expiry) lives in the OS keyring under
+    /// service `mendeley`, account = profile id.
+    #[serde(rename = "profileId", default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(rename = "displayName", default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JabRefSettings {
+    /// Absolute paths to `.bib` files the user has added.
+    #[serde(default)]
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

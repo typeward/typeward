@@ -12,6 +12,7 @@ import "~/stores/settings-store";
 import { setupAutosave } from "~/lib/autosave";
 import { installFrontendErrorHook } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
+import { initReferenceProviders } from "~/integrations/references/init";
 import {
   installGlobalShortcuts,
   uninstallGlobalShortcuts,
@@ -29,6 +30,7 @@ import "@fontsource/jetbrains-mono/600.css";
 setupAutosave();
 installFrontendErrorHook();
 bootCoreCommands();
+initReferenceProviders();
 
 /**
  * Default `/` route. After settings load, if the user hasn't completed
