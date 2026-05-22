@@ -1,0 +1,264 @@
+/**
+ * Generic git-clone modal. Pasted URLs are sniffed: GitHub URLs offer
+ * a one-click sign-in if the user hasn't connected GitHub yet; Overleaf
+ * URLs surface an email + project-token form pre-filled with the
+ * Overleaf credential slot. Any other URL falls back to a generic
+ * user/password pair that lands in `git.<host>` in the keyring.
+ *
+ * Clone destination is `<projectsRoot>/<sanitized-name>/` — same place
+ * `create()` puts a fresh local project, just with the cloned tree
+ * filling it.
+ */
+
+import { GitBranch } from "lucide-solid";
+import type { Component } from "solid-js";
+import { Show, createMemo, createSignal } from "solid-js";
+
+import { Button } from "~/components/primitives/Button";
+import { Dialog } from "~/components/primitives/Dialog";
+import { setCredential } from "~/integrations/auth/credentials";
+import {
+  connectGithub,
+  hasGithubCredential,
+} from "~/integrations/vcs/github";
+import * as ipc from "~/ipc";
+import { refresh as refreshProjects } from "~/stores/projects-store";
+import { projectsRoot } from "~/stores/settings-store";
+
+interface CloneDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCloned?: (destPath: string) => void;
+}
+
+type Kind = "github" | "overleaf" | "generic";
+
+export const CloneDialog: Component<CloneDialogProps> = (props) => {
+  const [url, setUrl] = createSignal("");
+  const [name, setName] = createSignal("");
+  const [username, setUsername] = createSignal("");
+  const [password, setPassword] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const kind = createMemo<Kind>(() => {
+    const u = url();
+    if (/^https:\/\/git(hub|lab)\.com\//i.test(u)) return "github";
+    if (/^https:\/\/git\.overleaf\.com\//i.test(u)) return "overleaf";
+    return "generic";
+  });
+
+  const hostFromUrl = createMemo(() => {
+    try {
+      return new URL(url()).host;
+    } catch {
+      return null;
+    }
+  });
+
+  const inferredName = createMemo(() => {
+    if (name().trim()) return name().trim();
+    const u = url().trim();
+    const match = u.match(/\/([^/]+?)(?:\.git)?$/);
+    return match ? match[1] : "";
+  });
+
+  const reset = () => {
+    setUrl("");
+    setName("");
+    setUsername("");
+    setPassword("");
+    setError(null);
+    setBusy(false);
+  };
+
+  const connectGithubInline = async () => {
+    setError(null);
+    try {
+      await connectGithub();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleClone = async () => {
+    setError(null);
+    const u = url().trim();
+    const projRoot = projectsRoot();
+    if (!u || !projRoot) {
+      setError("Paste a repository URL first.");
+      return;
+    }
+    const destName = inferredName();
+    if (!destName) {
+      setError("Could not derive a project name from the URL — fill in Name.");
+      return;
+    }
+    setBusy(true);
+    try {
+      // Stash credentials before triggering the clone so libgit2's
+      // callback can find them.
+      const host = hostFromUrl();
+      if (kind() === "overleaf") {
+        if (!username().trim() || !password().trim()) {
+          throw new Error("Overleaf needs your account email + a project-specific token.");
+        }
+        await setCredential(
+          { service: `git.${host ?? "git.overleaf.com"}`, account: username().trim() },
+          password().trim(),
+        );
+      } else if (kind() === "github") {
+        if (!(await hasGithubCredential())) {
+          throw new Error("Sign in to GitHub first — the button above opens the device flow.");
+        }
+      } else if (username().trim() && password().trim()) {
+        if (!host) throw new Error("Could not parse host from the URL.");
+        await setCredential(
+          { service: `git.${host}`, account: username().trim() },
+          password().trim(),
+        );
+      }
+
+      const destPath = joinPath(projRoot, sanitize(destName));
+      await ipc.gitClone(u, destPath);
+      await refreshProjects();
+      reset();
+      props.onCloned?.(destPath);
+      props.onOpenChange(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!open) reset();
+        props.onOpenChange(open);
+      }}
+      title="Clone repository"
+      description="Paste a git URL — GitHub, Overleaf git-bridge, or any HTTPS-served repo."
+      widthClass="w-[560px]"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => props.onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={busy() || !url().trim()} onClick={handleClone}>
+            {busy() ? "Cloning…" : "Clone"}
+          </Button>
+        </>
+      }
+    >
+      <div class="flex flex-col gap-3">
+        <label class="flex flex-col gap-1">
+          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">URL</span>
+          <input
+            type="text"
+            value={url()}
+            onInput={(e) => setUrl(e.currentTarget.value)}
+            placeholder="https://github.com/typeward/app.git"
+            class="glass-inset h-9 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            autofocus
+          />
+        </label>
+
+        <label class="flex flex-col gap-1">
+          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">Project name</span>
+          <input
+            type="text"
+            value={name()}
+            onInput={(e) => setName(e.currentTarget.value)}
+            placeholder={inferredName() || "my-thesis"}
+            class="glass-inset h-9 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          />
+        </label>
+
+        <Show when={kind() === "github"}>
+          <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2">
+            <GitBranch class="ui-icon-sm text-fg-3" />
+            <div class="flex-1 text-[11px] text-fg-2">
+              GitHub clones go through your signed-in account. Sign in once and Typeward stores the token in the system keyring.
+            </div>
+            <Button variant="secondary" size="sm" onClick={connectGithubInline}>
+              Sign in
+            </Button>
+          </div>
+        </Show>
+
+        <Show when={kind() === "overleaf"}>
+          <div class="flex flex-col gap-2">
+            <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2 text-[11px] text-fg-2">
+              <GitBranch class="ui-icon-sm text-fg-3" />
+              Overleaf's git bridge is a premium feature. Paste your account email + the project-specific token from Overleaf's Project → Git → Generate token.
+            </div>
+            <input
+              type="text"
+              placeholder="Email (Overleaf account)"
+              value={username()}
+              onInput={(e) => setUsername(e.currentTarget.value)}
+              class="glass-inset h-8 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            />
+            <input
+              type="password"
+              placeholder="Project token"
+              value={password()}
+              onInput={(e) => setPassword(e.currentTarget.value)}
+              class="glass-inset h-8 rounded-md px-2.5 font-mono text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            />
+          </div>
+        </Show>
+
+        <Show when={kind() === "generic"}>
+          <div class="flex flex-col gap-2">
+            <div class="text-[11px] text-fg-3">
+              Optional. Leave blank for public repos; fill for any HTTPS repo that needs basic auth or a personal access token.
+            </div>
+            <div class="flex gap-2">
+              <input
+                type="text"
+                placeholder="Username (optional)"
+                value={username()}
+                onInput={(e) => setUsername(e.currentTarget.value)}
+                class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              />
+              <input
+                type="password"
+                placeholder="Password / token (optional)"
+                value={password()}
+                onInput={(e) => setPassword(e.currentTarget.value)}
+                class="glass-inset h-8 flex-1 rounded-md px-2.5 font-mono text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              />
+            </div>
+          </div>
+        </Show>
+
+        <Show when={error()}>
+          <div class="rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+            {error()}
+          </div>
+        </Show>
+      </div>
+    </Dialog>
+  );
+};
+
+function sanitize(name: string): string {
+  return (
+    name
+      .split("")
+      .map((c) => (/[A-Za-z0-9_\-]/.test(c) ? c : "-"))
+      .join("")
+      .replace(/-+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project"
+  );
+}
+
+function joinPath(root: string, rel: string): string {
+  const sep = root.includes("\\") ? "\\" : "/";
+  const trimmed = root.replace(/[\\/]+$/, "");
+  return `${trimmed}${sep}${rel}`;
+}

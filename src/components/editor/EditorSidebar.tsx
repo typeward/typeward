@@ -14,6 +14,7 @@ import type { Component, JSX } from "solid-js";
 import { For, Show } from "solid-js";
 import { FileTree } from "~/components/editor/FileTree";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
+import { CommitPanel } from "~/components/vcs/CommitPanel";
 import { activeFile, project } from "~/stores/editor-store";
 import { compileEngine } from "~/stores/settings-store";
 import { KbdHint } from "~/components/primitives/KbdHint";
@@ -34,7 +35,7 @@ const ENGINE_LABEL: Record<string, string> = {
  * and lets future shells decide what tabs they support.
  */
 
-export type LeftTab = "files" | "references" | "review" | "todo";
+export type LeftTab = "files" | "references" | "scm" | "review" | "todo";
 
 interface EditorSidebarProps {
   tab: LeftTab;
@@ -67,6 +68,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           each={[
             { id: "files" as LeftTab, label: "Files" },
             { id: "references" as LeftTab, label: "Refs" },
+            { id: "scm" as LeftTab, label: "SCM" },
             { id: "review" as LeftTab, label: "Review", count: 0 },
             { id: "todo" as LeftTab, label: "TODO", count: 0 },
           ]}
@@ -154,6 +156,9 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         </Show>
         <Show when={props.tab === "references"}>
           <ReferencesPanel />
+        </Show>
+        <Show when={props.tab === "scm"}>
+          <CommitPanel />
         </Show>
         <Show when={props.tab === "review"}>
           <EmptyTab
