@@ -67,3 +67,20 @@ export const setCursorLine = (line: number): void => {
     scrollIntoView: true,
   });
 };
+
+/**
+ * Insert `text` at the primary cursor, replacing any active selection.
+ * Focuses the editor first so the user sees the cursor land on the
+ * inserted text. No-op when no view is mounted (e.g. before the editor
+ * has opened any file).
+ */
+export const insertAtCursor = (text: string): void => {
+  if (!_view) return;
+  _view.focus();
+  const range = _view.state.selection.main;
+  _view.dispatch({
+    changes: { from: range.from, to: range.to, insert: text },
+    selection: { anchor: range.from + text.length },
+    scrollIntoView: true,
+  });
+};
