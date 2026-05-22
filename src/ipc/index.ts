@@ -249,6 +249,111 @@ export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");
 export const saveSettings = (settings: AppSettings): Promise<void> =>
   invoke("save_settings", { settings });
 
+// ----- Git ----------------------------------------------------------------
+
+export type GitChangeKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "typechange"
+  | "none";
+
+export interface GitFileStatus {
+  path: string;
+  staged: GitChangeKind;
+  unstaged: GitChangeKind;
+  untracked: boolean;
+}
+
+export interface GitStatusSummary {
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  files: GitFileStatus[];
+}
+
+export interface GitCommit {
+  oid: string;
+  shortOid: string;
+  message: string;
+  authorName: string;
+  authorEmail: string;
+  /** Unix epoch seconds. */
+  timestamp: number;
+}
+
+export interface GitBranch {
+  name: string;
+  isHead: boolean;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+}
+
+export interface GitAuthor {
+  name: string;
+  email: string;
+}
+
+export const gitInit = (repoPath: string, bare = false): Promise<void> =>
+  invoke("git_init", { repoPath, bare });
+
+export const gitStatus = (repoPath: string): Promise<GitStatusSummary> =>
+  invoke("git_status", { repoPath });
+
+export const gitStage = (repoPath: string, paths: string[]): Promise<void> =>
+  invoke("git_stage", { repoPath, paths });
+
+export const gitUnstage = (repoPath: string, paths: string[]): Promise<void> =>
+  invoke("git_unstage", { repoPath, paths });
+
+export const gitCommit = (
+  repoPath: string,
+  message: string,
+  author?: GitAuthor,
+): Promise<string> => invoke("git_commit", { repoPath, message, author });
+
+export const gitLog = (repoPath: string, limit?: number): Promise<GitCommit[]> =>
+  invoke("git_log", { repoPath, limit });
+
+export const gitBranchList = (repoPath: string): Promise<GitBranch[]> =>
+  invoke("git_branch_list", { repoPath });
+
+export const gitBranchCreate = (
+  repoPath: string,
+  name: string,
+  checkout = false,
+): Promise<void> => invoke("git_branch_create", { repoPath, name, checkout });
+
+export const gitBranchCheckout = (repoPath: string, name: string): Promise<void> =>
+  invoke("git_branch_checkout", { repoPath, name });
+
+export const gitFetch = (repoPath: string, remote?: string): Promise<void> =>
+  invoke("git_fetch", { repoPath, remote });
+
+export const gitPull = (
+  repoPath: string,
+  remote?: string,
+  author?: GitAuthor,
+): Promise<void> => invoke("git_pull", { repoPath, remote, author });
+
+export const gitPush = (
+  repoPath: string,
+  remote?: string,
+  branch?: string,
+): Promise<void> => invoke("git_push", { repoPath, remote, branch });
+
+export const gitClone = (url: string, destPath: string): Promise<void> =>
+  invoke("git_clone", { url, destPath });
+
+export const overleafImportZip = (
+  zipPath: string,
+  parentDir: string,
+  name: string,
+): Promise<Project> => invoke("overleaf_import_zip", { zipPath, parentDir, name });
+
 // ----- Autosave / recovery -------------------------------------------------
 
 export interface Snapshot {

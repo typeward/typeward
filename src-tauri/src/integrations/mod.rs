@@ -17,3 +17,5 @@
 pub mod credentials;
 pub mod http;
 pub mod oauth;
+pub mod overleaf;
+pub mod vcs;

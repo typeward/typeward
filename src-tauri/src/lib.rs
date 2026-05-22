@@ -59,6 +59,20 @@ pub fn run() {
             integrations::http::http_request_bytes,
             integrations::oauth::oauth_begin,
             integrations::oauth::oauth_wait,
+            integrations::vcs::git::git_init,
+            integrations::vcs::git::git_status,
+            integrations::vcs::git::git_stage,
+            integrations::vcs::git::git_unstage,
+            integrations::vcs::git::git_commit,
+            integrations::vcs::git::git_log,
+            integrations::vcs::git::git_branch_list,
+            integrations::vcs::git::git_branch_create,
+            integrations::vcs::git::git_branch_checkout,
+            integrations::vcs::git::git_fetch,
+            integrations::vcs::git::git_pull,
+            integrations::vcs::git::git_push,
+            integrations::vcs::git::git_clone,
+            integrations::overleaf::overleaf_import_zip,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
