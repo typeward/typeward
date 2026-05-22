@@ -25,6 +25,7 @@ pub fn run() {
         .manage(lsp::LspManager::default())
         .manage(watcher::WatcherManager::default())
         .manage(integrations::oauth::OauthManager::default())
+        .manage(std::sync::Arc::new(integrations::ai::streaming::AiStreamManager::default()))
         .invoke_handler(tauri::generate_handler![
             commands::detect_tex,
             commands::list_projects,
@@ -73,6 +74,8 @@ pub fn run() {
             integrations::vcs::git::git_push,
             integrations::vcs::git::git_clone,
             integrations::overleaf::overleaf_import_zip,
+            integrations::ai::streaming::ai_stream_start,
+            integrations::ai::streaming::ai_stream_abort,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
