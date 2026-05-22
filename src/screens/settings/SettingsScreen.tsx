@@ -26,6 +26,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Switch } from "~/components/forms/Switch";
+import { IntegrationsPanel } from "./IntegrationsPanel";
 import {
   type CompileEngine,
   type EditorSettings,
@@ -255,12 +256,16 @@ const SettingsScreen: Component = () => {
               <Show when={active() === "security"}>
                 <SecurityPanel />
               </Show>
+              <Show when={active() === "integrations"}>
+                <IntegrationsPanel />
+              </Show>
               <Show
                 when={
                   active() !== "appearance" &&
                   active() !== "editor" &&
                   active() !== "notifications" &&
-                  active() !== "security"
+                  active() !== "security" &&
+                  active() !== "integrations"
                 }
               >
                 <PlaceholderPanel sectionId={active()} />
