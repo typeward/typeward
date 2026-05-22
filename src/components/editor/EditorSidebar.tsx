@@ -13,6 +13,7 @@ import {
 import type { Component, JSX } from "solid-js";
 import { For, Show } from "solid-js";
 import { FileTree } from "~/components/editor/FileTree";
+import { ReferencesPanel } from "~/components/references/ReferencesPanel";
 import { activeFile, project } from "~/stores/editor-store";
 import { compileEngine } from "~/stores/settings-store";
 import { KbdHint } from "~/components/primitives/KbdHint";
@@ -33,7 +34,7 @@ const ENGINE_LABEL: Record<string, string> = {
  * and lets future shells decide what tabs they support.
  */
 
-export type LeftTab = "files" | "review" | "todo";
+export type LeftTab = "files" | "references" | "review" | "todo";
 
 interface EditorSidebarProps {
   tab: LeftTab;
@@ -65,6 +66,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         <For
           each={[
             { id: "files" as LeftTab, label: "Files" },
+            { id: "references" as LeftTab, label: "Refs" },
             { id: "review" as LeftTab, label: "Review", count: 0 },
             { id: "todo" as LeftTab, label: "TODO", count: 0 },
           ]}
@@ -149,6 +151,9 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
             activeRelPath={activeFile()?.relPath ?? null}
             onOpen={props.onSelectFile}
           />
+        </Show>
+        <Show when={props.tab === "references"}>
+          <ReferencesPanel />
         </Show>
         <Show when={props.tab === "review"}>
           <EmptyTab

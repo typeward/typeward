@@ -7,7 +7,8 @@ import {
   toggleCommandPalette,
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
-import { activeFile } from "~/stores/editor-store";
+import { refreshLibraryBib } from "~/integrations/references/aggregator";
+import { activeFile, project } from "~/stores/editor-store";
 import { paletteOpen_ } from "./palette-store";
 
 /**
@@ -70,6 +71,18 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => activeFile()?.dirty === true,
     run: async () => {
       await saveActiveFile();
+    },
+  },
+  {
+    id: "references.refreshLibrary",
+    title: "Refresh reference library",
+    subtitle: "Re-pull every reference provider and rewrite .typeward/citations/library.bib",
+    group: "References",
+    scope: "global",
+    when: () => project() !== null,
+    run: async () => {
+      const proj = project();
+      if (proj) await refreshLibraryBib(proj);
     },
   },
   // Note: compile is intentionally not a core command. Each adapter ships
