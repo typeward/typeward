@@ -13,6 +13,27 @@ export interface Project {
   format: ProjectFormat;
   /** Display name; defaults to folder basename, user-overridable. */
   name: string;
+  /**
+   * Per-project integration state. Optional: older project.json files load
+   * with `integrations` absent; default to an empty object at read time.
+   */
+  integrations?: ProjectIntegrations;
+}
+
+export interface ProjectIntegrations {
+  cloudOrigin?: {
+    provider: string;
+    accountId: string;
+    remotePath: string;
+  };
+  git?: {
+    remote?: string;
+    branch?: string;
+  };
+  references?: {
+    provider: string;
+    collectionId?: string;
+  };
 }
 
 export type DiagnosticSeverity = "error" | "warning" | "info" | "hint";

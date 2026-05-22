@@ -187,6 +187,7 @@ export interface AppSettings {
   onboarded: boolean;
   ui: UiSettings;
   workspace: WorkspaceSettings;
+  integrations: IntegrationsSettings;
 }
 
 export interface UiSettings {
@@ -204,6 +205,28 @@ export interface WorkspaceSettings {
   defaultView: string; // "cards" | "list"
   defaultSort: string; // "last-opened" | "created" | "name" | "modified" | "format"
   widgets: Record<string, boolean>;
+}
+
+/**
+ * Per-integration preferences. Tokens NEVER live here — they're stored via
+ * the OS keyring (see src/integrations/auth/credentials.ts). The fields
+ * below only reference *which* keyring slot is in use.
+ */
+export interface IntegrationsSettings {
+  references: { activeProvider?: string };
+  cloud: { accounts: Array<{ provider: string; accountId: string; label?: string }> };
+  vcs: {
+    git: { authorName?: string; authorEmail?: string };
+    github: { accountId?: string };
+  };
+  ai: {
+    activeProvider?: string;
+    ollamaBaseUrl?: string;
+    perProviderModel: Record<string, string>;
+  };
+  grammar: { enabled: boolean; language?: string };
+  templates: { recentTemplateIds: string[] };
+  account: { signedInEmail?: string; lastValidatedAt?: string };
 }
 
 export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");
