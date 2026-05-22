@@ -32,16 +32,26 @@ import {
   disconnectMendeley,
 } from "~/integrations/references/mendeley";
 import { probeBetterBibTex } from "~/integrations/references/zotero";
+import {
+  connectDropbox,
+  disconnectDropbox,
+} from "~/integrations/cloud/dropbox";
+import {
+  connectOneDrive,
+  disconnectOneDrive,
+} from "~/integrations/cloud/onedrive";
+import {
+  connectGoogleDrive,
+  disconnectGoogleDrive,
+} from "~/integrations/cloud/gdrive";
+import { detectICloudDrive } from "~/integrations/cloud/icloud";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 
 export const IntegrationsPanel: Component = () => {
   return (
     <div class="flex flex-col gap-3">
       <ReferencesCard />
-      <ComingSoonCard
-        title="Cloud storage"
-        body="OneDrive, Dropbox, Google Drive, iCloud Drive. Open and save Typeward projects directly from your cloud root."
-      />
+      <CloudStorageCard />
       <ComingSoonCard
         title="Git & GitHub"
         body="Pull / commit / push from inside the editor. Clone a repo as a new project. Overleaf zip + git-bridge import."
@@ -390,6 +400,151 @@ const JabRefRow: Component = () => {
         </div>
       </Show>
     </ProviderRow>
+  );
+};
+
+// =================================================================
+// Cloud storage card
+// =================================================================
+
+const CLOUD_PROVIDERS = [
+  {
+    id: "dropbox" as const,
+    name: "Dropbox",
+    hint: "Hybrid sync — your project lives in a local cache that polls Dropbox via longpoll cursor. Conflicts surface as `.conflict-*` files.",
+    connect: connectDropbox,
+    disconnect: disconnectDropbox,
+  },
+  {
+    id: "onedrive" as const,
+    name: "OneDrive",
+    hint: "Microsoft Graph with delta polling every 60s. `Files.ReadWrite` + `offline_access` scopes — broad enough to open any folder, narrow enough to keep tokens minimal.",
+    connect: connectOneDrive,
+    disconnect: disconnectOneDrive,
+  },
+  {
+    id: "gdrive" as const,
+    name: "Google Drive",
+    hint: "`drive.file` scope — Typeward only sees files it created or you opened with it. Picking an arbitrary existing folder isn't possible under this scope; create a new project to start.",
+    connect: connectGoogleDrive,
+    disconnect: disconnectGoogleDrive,
+  },
+];
+
+const CloudStorageCard: Component = () => {
+  return (
+    <Card
+      title="Cloud storage"
+      subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave. iCloud Drive uses the OS sync on macOS — no API call needed."
+    >
+      <For each={CLOUD_PROVIDERS}>
+        {(provider) => <CloudProviderRow provider={provider} />}
+      </For>
+      <ICloudRow />
+    </Card>
+  );
+};
+
+interface CloudProviderConfig {
+  id: "dropbox" | "onedrive" | "gdrive";
+  name: string;
+  hint: string;
+  connect: () => Promise<{ accountId: string; email: string; displayName: string }>;
+  disconnect: (accountId: string) => Promise<void>;
+}
+
+const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) => {
+  const account = () =>
+    integrationsSettings().cloud.accounts.find((a) => a.provider === props.provider.id);
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const handleConnect = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const acc = await props.provider.connect();
+      setIntegrationsSettings({
+        ...integrationsSettings(),
+        cloud: {
+          accounts: [
+            ...integrationsSettings().cloud.accounts.filter(
+              (a) => a.provider !== props.provider.id,
+            ),
+            { provider: props.provider.id, accountId: acc.accountId, label: acc.displayName },
+          ],
+        },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    const current = account();
+    if (!current) return;
+    await props.provider.disconnect(current.accountId);
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      cloud: {
+        accounts: integrationsSettings().cloud.accounts.filter(
+          (a) => a.provider !== props.provider.id,
+        ),
+      },
+    });
+  };
+
+  return (
+    <ProviderRow
+      name={props.provider.name}
+      hint={account() ? `Connected as ${account()!.label}.` : props.provider.hint}
+      status={account() ? "ready" : "unconfigured"}
+      controls={
+        <Show
+          when={account()}
+          fallback={
+            <Button variant="primary" size="sm" onClick={handleConnect} disabled={busy()}>
+              {busy() ? "Connecting…" : "Sign in"}
+            </Button>
+          }
+        >
+          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+            Disconnect
+          </Button>
+        </Show>
+      }
+    >
+      <Show when={error()}>
+        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+      </Show>
+    </ProviderRow>
+  );
+};
+
+const ICloudRow: Component = () => {
+  const [info] = createResource(detectICloudDrive);
+
+  const status = (): ProviderStatus => {
+    const v = info();
+    if (!v) return "checking";
+    return v.available ? "ready" : "unreachable";
+  };
+
+  return (
+    <ProviderRow
+      name="iCloud Drive"
+      hint={
+        info()?.available
+          ? "Available — open or save a project inside ~/Library/Mobile Documents/com~apple~CloudDocs and macOS keeps it in sync."
+          : (info()?.reason ?? "Apple platforms only.")
+      }
+      status={status()}
+      controls={
+        <span class="text-[11px] text-fg-3 italic">No sign-in needed</span>
+      }
+    />
   );
 };
 
