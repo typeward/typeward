@@ -59,6 +59,25 @@ export function recordConflicts(
   });
 }
 
+export function clearConflict(
+  providerId: string,
+  projectId: string,
+  relPath: string,
+): void {
+  setStatuses((m) => {
+    const next = new Map(m);
+    const prev = next.get(key(providerId, projectId));
+    if (!prev) return m;
+    const conflicts = prev.conflicts.filter((p) => p !== relPath);
+    next.set(key(providerId, projectId), {
+      ...prev,
+      conflicts,
+      phase: conflicts.length === 0 && prev.phase === "conflict" ? "idle" : prev.phase,
+    });
+    return next;
+  });
+}
+
 export function clearSyncStatus(providerId: string, projectId: string): void {
   setStatuses((m) => {
     const next = new Map(m);

@@ -131,6 +131,20 @@ pub fn write_project(project: &Project) -> Result<(), ProjectError> {
     Ok(())
 }
 
+/// Read-modify-write update of the integrations block. Used after
+/// `create_project` to attach a cloudOrigin / git binding without
+/// shipping a separate setter for every field. Keeps the rest of the
+/// project shape (rootFile, format, name) untouched.
+pub fn update_project_integrations(
+    root: &Path,
+    integrations: ProjectIntegrations,
+) -> Result<Project, ProjectError> {
+    let mut project = read_project(root)?;
+    project.integrations = integrations;
+    write_project(&project)?;
+    Ok(project)
+}
+
 /// Enumerate Typeward projects under `root` (one folder per project).
 pub fn list_projects(root: &Path) -> Result<Vec<Project>, ProjectError> {
     if !root.exists() {

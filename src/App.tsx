@@ -12,6 +12,7 @@ import "~/stores/settings-store";
 import { setupAutosave } from "~/lib/autosave";
 import { installFrontendErrorHook } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
+import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
 import {
   installGlobalShortcuts,
@@ -31,6 +32,7 @@ setupAutosave();
 installFrontendErrorHook();
 bootCoreCommands();
 initReferenceProviders();
+initCloudSync();
 
 /**
  * Default `/` route. After settings load, if the user hasn't completed
