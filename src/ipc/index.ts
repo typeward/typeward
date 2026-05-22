@@ -213,7 +213,7 @@ export interface WorkspaceSettings {
  * below only reference *which* keyring slot is in use.
  */
 export interface IntegrationsSettings {
-  references: { activeProvider?: string };
+  references: ReferencesProvidersSettings;
   cloud: { accounts: Array<{ provider: string; accountId: string; label?: string }> };
   vcs: {
     git: { authorName?: string; authorEmail?: string };
@@ -227,6 +227,14 @@ export interface IntegrationsSettings {
   grammar: { enabled: boolean; language?: string };
   templates: { recentTemplateIds: string[] };
   account: { signedInEmail?: string; lastValidatedAt?: string };
+}
+
+export interface ReferencesProvidersSettings {
+  activeProvider?: string;
+  betterBibTex: { enabled: boolean; libraryId: number };
+  zoteroWeb: { userId?: string };
+  mendeley: { profileId?: string; displayName?: string };
+  jabref: { paths: string[] };
 }
 
 export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");

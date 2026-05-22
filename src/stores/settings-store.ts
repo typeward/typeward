@@ -57,7 +57,12 @@ const DEFAULT_EDITOR: EditorSettings = {
 };
 
 const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
-  references: {},
+  references: {
+    betterBibTex: { enabled: false, libraryId: 1 },
+    zoteroWeb: {},
+    mendeley: {},
+    jabref: { paths: [] },
+  },
   cloud: { accounts: [] },
   vcs: { git: {}, github: {} },
   ai: { perProviderModel: {} },
