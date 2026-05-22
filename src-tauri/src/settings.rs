@@ -29,6 +29,8 @@ pub struct Settings {
     pub ui: UiSettings,
     #[serde(default)]
     pub workspace: WorkspaceSettings,
+    #[serde(default)]
+    pub integrations: IntegrationsSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +63,108 @@ fn default_true() -> bool {
     true
 }
 
+/// Integrations preferences. Each sub-section is `#[serde(default)]` so the
+/// block stays additive across versions — older settings.json files load
+/// against the new binary without losing any other fields.
+///
+/// Phase 0 ships the shape with all sub-sections empty. Phases 1–7 populate
+/// the relevant subset (Zotero account refs, cloud provider state, AI active
+/// provider, etc.). Tokens NEVER live here — credentials go through the OS
+/// keyring via `integrations::credentials`. Anything in this struct that
+/// references a credential carries only an *account identifier*, never the
+/// secret itself.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IntegrationsSettings {
+    #[serde(default)]
+    pub references: ReferencesSettings,
+    #[serde(default)]
+    pub cloud: CloudSettings,
+    #[serde(default)]
+    pub vcs: VcsSettings,
+    #[serde(default)]
+    pub ai: AiSettings,
+    #[serde(default)]
+    pub grammar: GrammarSettings,
+    #[serde(default)]
+    pub templates: TemplatesSettings,
+    #[serde(default)]
+    pub account: AccountSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReferencesSettings {
+    #[serde(rename = "activeProvider", default)]
+    pub active_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CloudSettings {
+    #[serde(default)]
+    pub accounts: Vec<CloudAccountRef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudAccountRef {
+    pub provider: String,
+    #[serde(rename = "accountId")]
+    pub account_id: String,
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VcsSettings {
+    #[serde(default)]
+    pub git: GitSettings,
+    #[serde(default)]
+    pub github: GithubSettings,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GitSettings {
+    #[serde(rename = "authorName", default)]
+    pub author_name: Option<String>,
+    #[serde(rename = "authorEmail", default)]
+    pub author_email: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GithubSettings {
+    #[serde(rename = "accountId", default)]
+    pub account_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiSettings {
+    #[serde(rename = "activeProvider", default)]
+    pub active_provider: Option<String>,
+    #[serde(rename = "ollamaBaseUrl", default)]
+    pub ollama_base_url: Option<String>,
+    #[serde(rename = "perProviderModel", default)]
+    pub per_provider_model: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GrammarSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TemplatesSettings {
+    #[serde(rename = "recentTemplateIds", default)]
+    pub recent_template_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AccountSettings {
+    #[serde(rename = "signedInEmail", default)]
+    pub signed_in_email: Option<String>,
+    #[serde(rename = "lastValidatedAt", default)]
+    pub last_validated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
     #[serde(rename = "enableSpaces")]
@@ -87,6 +191,7 @@ impl Default for Settings {
             onboarded: false,
             ui: UiSettings::default(),
             workspace: WorkspaceSettings::default(),
+            integrations: IntegrationsSettings::default(),
         }
     }
 }

@@ -2,6 +2,7 @@ mod autosave;
 mod commands;
 mod detect;
 mod fs_ops;
+mod integrations;
 mod lsp;
 mod project;
 mod settings;
@@ -16,12 +17,14 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             telemetry::install(&app.handle());
             Ok(())
         })
         .manage(lsp::LspManager::default())
         .manage(watcher::WatcherManager::default())
+        .manage(integrations::oauth::OauthManager::default())
         .invoke_handler(tauri::generate_handler![
             commands::detect_tex,
             commands::list_projects,
@@ -48,6 +51,12 @@ pub fn run() {
             commands::list_orphan_snapshots,
             telemetry::record_event,
             telemetry::list_recent_events,
+            integrations::credentials::credential_set,
+            integrations::credentials::credential_get,
+            integrations::credentials::credential_delete,
+            integrations::http::http_request,
+            integrations::oauth::oauth_begin,
+            integrations::oauth::oauth_wait,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
