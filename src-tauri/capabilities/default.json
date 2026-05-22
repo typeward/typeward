@@ -49,6 +49,13 @@
     "dialog:allow-confirm",
     "os:default",
     {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://*" },
+        { "url": "http://127.0.0.1:*" }
+      ]
+    },
+    {
       "identifier": "shell:allow-execute",
       "allow": [
         {

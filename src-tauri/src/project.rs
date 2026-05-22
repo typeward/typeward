@@ -18,6 +18,43 @@ pub struct Project {
     pub root_file: String,
     pub format: ProjectFormat,
     pub name: String,
+    /// Per-project integration state (cloud origin, git binding, reference
+    /// library binding). Optional / additive — older project.json files
+    /// without this block load with `ProjectIntegrations::default()`.
+    #[serde(default)]
+    pub integrations: ProjectIntegrations,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProjectIntegrations {
+    #[serde(rename = "cloudOrigin", default, skip_serializing_if = "Option::is_none")]
+    pub cloud_origin: Option<CloudOrigin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub references: Option<ReferenceBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudOrigin {
+    pub provider: String,
+    #[serde(rename = "accountId")]
+    pub account_id: String,
+    #[serde(rename = "remotePath")]
+    pub remote_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitState {
+    pub remote: Option<String>,
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferenceBinding {
+    pub provider: String,
+    #[serde(rename = "collectionId", default, skip_serializing_if = "Option::is_none")]
+    pub collection_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -141,6 +178,7 @@ pub fn create_project(
         root_file: root_file.to_string(),
         format,
         name: name.to_string(),
+        integrations: ProjectIntegrations::default(),
     };
     write_project(&project)?;
     Ok(project)

@@ -19,6 +19,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
+tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "8"
@@ -27,6 +28,17 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 dirs = "5"
+
+# Integrations foundation (Phase 0): outbound HTTP, OS keyring, OAuth PKCE,
+# loopback redirect server. Kept behind project-scoped IPC commands so the
+# capability surface stays minimal.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip", "brotli"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
+base64 = "0.22"
+rand = "0.8"
+url = "2"
+sha2 = "0.10"
 
 [profile.release]
 panic = "abort"
