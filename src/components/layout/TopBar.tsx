@@ -6,6 +6,7 @@ import {
 import type { Component } from "solid-js";
 import { Show } from "solid-js";
 import { KbdHint } from "~/components/primitives/KbdHint";
+import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
 
 interface TopBarProps {
   /** Triggered when the user clicks the centered search button or presses Cmd+K. */
@@ -51,7 +52,8 @@ export const TopBar: Component<TopBarProps> = (props) => {
       </div>
 
       {/* Right cluster — density-sized icons */}
-      <div class="absolute right-4 top-0 flex h-full items-center gap-1">
+      <div class="absolute right-4 top-0 flex h-full items-center gap-2">
+        <SyncStatusBadge />
         <button
           type="button"
           onClick={() => props.onToggleNotifications?.()}
