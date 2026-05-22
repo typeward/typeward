@@ -80,35 +80,72 @@ export interface CitationProvider extends IntegrationProvider {
 // ----- Cloud filesystem --------------------------------------------------
 
 export interface RemoteFolder {
-  /** Provider-scoped opaque id. For path-based providers, this is the path. */
+  /** Provider-scoped opaque id. For path-based providers (Dropbox), this is
+   * the path; for id-based ones (Drive, OneDrive) it's the opaque file id. */
   id: string;
   name: string;
   parentId?: string;
   modifiedAt?: string;
 }
 
-export interface SyncResult {
-  changedFiles: number;
-  conflicts: string[];
-  /** Cursor to persist for the next delta call. */
-  cursor?: string;
+export interface RemoteFile {
+  /** Provider-scoped opaque id of this file. */
+  id: string;
+  /** Path relative to the project root inside the cache. */
+  relPath: string;
+  /** Provider-reported revision tag (etag, rev, content_hash, etc.). */
+  rev?: string;
+  /** Provider-reported size in bytes when known. */
+  size?: number;
+  modifiedAt?: string;
 }
+
+export type DeltaChange =
+  | { kind: "added" | "modified"; file: RemoteFile }
+  | { kind: "removed"; relPath: string; id?: string };
 
 export interface DeltaResult {
-  changes: Array<{
-    kind: "added" | "modified" | "removed";
-    /** Project-relative path. */
-    relPath: string;
-  }>;
+  changes: DeltaChange[];
+  /** Opaque cursor to pass into the next `delta()` call. */
   nextCursor: string;
+  /** Provider hint that more pages remain; engine should loop. */
+  hasMore?: boolean;
 }
 
+/**
+ * Per-file operations. Engine drives these from the orchestration layer;
+ * provider implementations only need to know how to do their own transport.
+ */
 export interface CloudFsProvider extends IntegrationProvider {
   category: "cloud";
+  /** Folders the user can pick as a project root. */
   listRoots(): Promise<RemoteFolder[]>;
-  pull(remoteId: string, localCachePath: string): Promise<SyncResult>;
-  push(localCachePath: string, remoteId: string): Promise<SyncResult>;
-  delta(cursor: string | undefined): Promise<DeltaResult>;
+  /** Initial enumeration of every file under a remote root, recursive. */
+  enumerateFiles(rootId: string): Promise<{ files: RemoteFile[]; cursor: string }>;
+  /** Download one file's bytes to the given absolute local path. */
+  downloadFile(file: RemoteFile, destAbsPath: string): Promise<void>;
+  /** Upload local bytes to a remote relative path under a root folder. */
+  uploadFile(
+    rootId: string,
+    relPath: string,
+    sourceAbsPath: string,
+  ): Promise<RemoteFile>;
+  /** Delete a remote file. */
+  deleteRemoteFile(rootId: string, file: RemoteFile): Promise<void>;
+  /** Pull changes since `cursor`. */
+  delta(rootId: string, cursor: string | undefined): Promise<DeltaResult>;
+}
+
+export type SyncPhase = "idle" | "pulling" | "pushing" | "conflict" | "error";
+
+export interface SyncStatus {
+  phase: SyncPhase;
+  /** Last full sync completion, when known. */
+  lastSyncAt?: number;
+  /** Free-form message for the badge tooltip. */
+  message?: string;
+  /** Project-relative paths that hit conflicts on the most recent pass. */
+  conflicts: string[];
 }
 
 // ----- AI ----------------------------------------------------------------
