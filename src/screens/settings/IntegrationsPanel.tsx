@@ -58,10 +58,7 @@ export const IntegrationsPanel: Component = () => {
       <ReferencesCard />
       <CloudStorageCard />
       <VcsCard />
-      <ComingSoonCard
-        title="AI providers"
-        body="Claude, ChatGPT, Gemini, and local Ollama — selectable per project, streaming inline."
-      />
+      <AiCard />
       <ComingSoonCard
         title="Grammar"
         body="Local Harper grammar lint, with diagnostics in the editor gutter. Zero network, all on-device."
@@ -692,6 +689,269 @@ const GithubAccountRow: Component = () => {
     </ProviderRow>
   );
 };
+
+// =================================================================
+// AI card
+// =================================================================
+
+interface AiKnownProvider {
+  id: "anthropic" | "openai" | "gemini" | "ollama";
+  name: string;
+  hint: string;
+  /** Keyring service for the API key. Ollama has no auth. */
+  keyringService?: string;
+  /** URL to drop the user at when they need a key. */
+  keyUrl?: string;
+}
+
+const AI_PROVIDERS: AiKnownProvider[] = [
+  {
+    id: "anthropic",
+    name: "Claude (Anthropic)",
+    hint: "Paste a key from console.anthropic.com → API Keys. Streaming via the Messages API; the key never leaves the keyring.",
+    keyringService: "anthropic",
+    keyUrl: "https://console.anthropic.com/settings/keys",
+  },
+  {
+    id: "openai",
+    name: "ChatGPT (OpenAI)",
+    hint: "Paste a key from platform.openai.com → API keys. Chat Completions endpoint with bearer auth.",
+    keyringService: "openai",
+    keyUrl: "https://platform.openai.com/api-keys",
+  },
+  {
+    id: "gemini",
+    name: "Gemini (Google)",
+    hint: "Paste an API key from aistudio.google.com. The key goes in the URL query, so the IPC briefly holds it before the wire — same compromise as Mendeley/Dropbox during OAuth.",
+    keyringService: "gemini",
+    keyUrl: "https://aistudio.google.com/apikey",
+  },
+  {
+    id: "ollama",
+    name: "Ollama (local)",
+    hint: "Runs against a local `ollama serve` daemon. No key — just point at the right base URL if you've moved it off the default port.",
+  },
+];
+
+const AiCard: Component = () => {
+  const ai = () => integrationsSettings().ai;
+
+  const setActive = (id: string | undefined) => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      ai: { ...ai(), activeProvider: id },
+    });
+  };
+
+  return (
+    <Card
+      title="AI providers"
+      subtitle="Claude, ChatGPT, Gemini, and a local Ollama daemon. Pick one as the active provider; the editor's AI panel routes through it."
+    >
+      <For each={AI_PROVIDERS}>{(p) => <AiProviderRow provider={p} onActivate={setActive} />}</For>
+    </Card>
+  );
+};
+
+const AiProviderRow: Component<{
+  provider: AiKnownProvider;
+  onActivate: (id: string | undefined) => void;
+}> = (props) => {
+  const ai = () => integrationsSettings().ai;
+  const [apiKeyInput, setApiKeyInput] = createSignal("");
+  const [baseUrlInput, setBaseUrlInput] = createSignal(ai().ollamaBaseUrl ?? "");
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const [hasKey, { refetch: refetchKey }] = createResource(
+    () => props.provider.keyringService,
+    async (service) => {
+      if (!service) return true; // Ollama: no key needed.
+      const { getCredential } = await import("~/integrations/auth/credentials");
+      return (await getCredential({ service, account: "default" })) !== null;
+    },
+  );
+
+  const isActive = () => ai().activeProvider === props.provider.id;
+
+  const status = (): ProviderStatus => {
+    if (props.provider.id === "ollama") return "ready";
+    return hasKey() ? "ready" : "unconfigured";
+  };
+
+  const saveKey = async () => {
+    setError(null);
+    const service = props.provider.keyringService;
+    if (!service) return;
+    const value = apiKeyInput().trim();
+    if (!value) {
+      setError("Paste a key first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      // Probe the key by hitting the provider's /models endpoint
+      // through Rust so the bearer never crosses the IPC the wrong way.
+      const { setCredential, deleteCredential } = await import(
+        "~/integrations/auth/credentials"
+      );
+      await setCredential({ service, account: "default" }, value);
+      const probe = await probeProvider(props.provider.id);
+      if (!probe.ok) {
+        await deleteCredential({ service, account: "default" });
+        throw new Error(probe.message);
+      }
+      setApiKeyInput("");
+      await refetchKey();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeKey = async () => {
+    const service = props.provider.keyringService;
+    if (!service) return;
+    const { deleteCredential } = await import("~/integrations/auth/credentials");
+    await deleteCredential({ service, account: "default" });
+    if (ai().activeProvider === props.provider.id) {
+      props.onActivate(undefined);
+    }
+    await refetchKey();
+  };
+
+  const persistOllamaBaseUrl = () => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      ai: { ...ai(), ollamaBaseUrl: baseUrlInput().trim() || undefined },
+    });
+  };
+
+  return (
+    <ProviderRow
+      name={props.provider.name}
+      hint={props.provider.hint}
+      status={status()}
+      controls={
+        <div class="flex items-center gap-1.5">
+          <Show when={status() === "ready"}>
+            <Button
+              variant={isActive() ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => props.onActivate(isActive() ? undefined : props.provider.id)}
+            >
+              {isActive() ? "Active" : "Use this"}
+            </Button>
+          </Show>
+          <Show when={props.provider.keyUrl && !hasKey()}>
+            <a
+              href={props.provider.keyUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="lift flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12px] text-fg-2 hover:text-fg-1 hover:bg-[var(--color-control-fill)]"
+            >
+              Get key
+              <ExternalLink class="ui-icon-sm" />
+            </a>
+          </Show>
+        </div>
+      }
+    >
+      <Show when={props.provider.keyringService && !hasKey()}>
+        <div class="mt-3 flex gap-2">
+          <input
+            type="password"
+            placeholder="API key"
+            value={apiKeyInput()}
+            onInput={(e) => setApiKeyInput(e.currentTarget.value)}
+            class="glass-inset h-8 flex-1 rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          />
+          <Button variant="primary" size="sm" onClick={saveKey} disabled={busy()}>
+            {busy() ? "Testing…" : "Save"}
+          </Button>
+        </div>
+      </Show>
+      <Show when={props.provider.keyringService && hasKey()}>
+        <div class="mt-3 text-[11px] text-fg-3">
+          Key stored in keyring as <span class="mono">{props.provider.keyringService}</span>.
+          <button
+            type="button"
+            onClick={removeKey}
+            class="ml-2 text-[var(--color-err)] hover:underline"
+          >
+            Remove
+          </button>
+        </div>
+      </Show>
+      <Show when={props.provider.id === "ollama"}>
+        <div class="mt-3 flex items-center gap-2 text-[12px] text-fg-2">
+          <span>Base URL</span>
+          <input
+            type="text"
+            value={baseUrlInput()}
+            onInput={(e) => setBaseUrlInput(e.currentTarget.value)}
+            onBlur={persistOllamaBaseUrl}
+            placeholder="http://localhost:11434"
+            class="glass-inset h-7 flex-1 rounded-md px-2.5 font-mono text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          />
+        </div>
+      </Show>
+      <Show when={error()}>
+        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+      </Show>
+    </ProviderRow>
+  );
+};
+
+async function probeProvider(
+  id: "anthropic" | "openai" | "gemini" | "ollama",
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  // Cheap probe per provider: a single auth'd request that fails fast
+  // if the key is wrong. Each provider's models endpoint is the lowest
+  // surface.
+  try {
+    switch (id) {
+      case "anthropic": {
+        const res = await httpRequest({
+          method: "GET",
+          url: "https://api.anthropic.com/v1/models?limit=1",
+          headers: { "anthropic-version": "2023-06-01" },
+          authRef: { service: "anthropic", account: "default", header: "x-api-key", prefix: "" },
+        });
+        return res.status >= 200 && res.status < 300
+          ? { ok: true }
+          : { ok: false, message: `Anthropic rejected the key (status ${res.status}).` };
+      }
+      case "openai": {
+        const res = await httpRequest({
+          method: "GET",
+          url: "https://api.openai.com/v1/models",
+          authRef: { service: "openai", account: "default", header: "Authorization", prefix: "Bearer " },
+        });
+        return res.status >= 200 && res.status < 300
+          ? { ok: true }
+          : { ok: false, message: `OpenAI rejected the key (status ${res.status}).` };
+      }
+      case "gemini": {
+        const { getCredential } = await import("~/integrations/auth/credentials");
+        const key = await getCredential({ service: "gemini", account: "default" });
+        if (!key) return { ok: false, message: "Key not stored." };
+        const res = await httpRequest({
+          method: "GET",
+          url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1`,
+        });
+        return res.status >= 200 && res.status < 300
+          ? { ok: true }
+          : { ok: false, message: `Gemini rejected the key (status ${res.status}).` };
+      }
+      case "ollama":
+        return { ok: true };
+    }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 // =================================================================
 // Shared layout
