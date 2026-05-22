@@ -1,0 +1,28 @@
+/**
+ * AI lifecycle. Reads `integrations.ai.activeProvider` from settings
+ * and keeps the registry in sync with it. Mirrors the same pattern
+ * references/init.ts uses.
+ */
+
+import { createEffect, createRoot } from "solid-js";
+
+import { integrationsSettings } from "~/stores/settings-store";
+
+import {
+  type AiProviderId,
+  getAvailableProviderIds,
+  setActiveProvider,
+} from "./registry";
+
+export function initAiProviders(): void {
+  createRoot(() => {
+    createEffect(() => {
+      const desired = integrationsSettings().ai.activeProvider as AiProviderId | undefined;
+      if (desired && getAvailableProviderIds().includes(desired)) {
+        setActiveProvider(desired);
+      } else {
+        setActiveProvider(null);
+      }
+    });
+  });
+}
