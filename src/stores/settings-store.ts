@@ -56,12 +56,24 @@ const DEFAULT_EDITOR: EditorSettings = {
   fontSize: 13,
 };
 
+const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
+  references: {},
+  cloud: { accounts: [] },
+  vcs: { git: {}, github: {} },
+  ai: { perProviderModel: {} },
+  grammar: { enabled: false },
+  templates: { recentTemplateIds: [] },
+  account: {},
+};
+
 const [editorSettings, setEditorSettings] = createSignal<EditorSettings>({
   ...DEFAULT_EDITOR,
 });
 const [projectsRoot, setProjectsRoot] = createSignal<string>("");
 const [compileEngine, setCompileEngine] = createSignal<CompileEngine>("system-tex");
 const [onboarded, setOnboarded] = createSignal<boolean>(false);
+const [integrationsSettings, setIntegrationsSettings] =
+  createSignal<ipc.IntegrationsSettings>(DEFAULT_INTEGRATIONS);
 const [settingsLoaded, setSettingsLoaded] = createSignal<boolean>(false);
 
 createRoot(() => {
@@ -87,6 +99,10 @@ createRoot(() => {
       setDefaultView(s.workspace.defaultView as ProjectsView);
       setDefaultSort(s.workspace.defaultSort as ProjectsSort);
       setWidgetEnabled(s.workspace.widgets);
+
+      if (s.integrations) {
+        setIntegrationsSettings({ ...DEFAULT_INTEGRATIONS, ...s.integrations });
+      }
     } catch {
       // First boot or non-Tauri context (Vitest); leave defaults in place.
     } finally {
@@ -118,6 +134,7 @@ createRoot(() => {
         defaultSort: defaultSort(),
         widgets: widgetEnabled(),
       },
+      integrations: integrationsSettings(),
     };
     if (!settingsLoaded()) return;
     if (saveTimer) clearTimeout(saveTimer);
@@ -132,11 +149,13 @@ createRoot(() => {
 export {
   compileEngine,
   editorSettings,
+  integrationsSettings,
   onboarded,
   projectsRoot,
   settingsLoaded,
   setCompileEngine,
   setEditorSettings,
+  setIntegrationsSettings,
   setOnboarded,
   setProjectsRoot,
 };
