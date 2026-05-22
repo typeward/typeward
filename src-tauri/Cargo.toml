@@ -39,6 +39,7 @@ base64 = "0.22"
 rand = "0.8"
 url = "2"
 sha2 = "0.10"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # VCS — Phase 3. libgit2 bindings; HTTPS uses libcurl + system TLS so we
 # pick up the same crypto chain as the rest of the desktop binary.

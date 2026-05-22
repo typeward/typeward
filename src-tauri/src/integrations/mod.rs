@@ -14,6 +14,7 @@
 //! Frontend never touches secrets directly; it calls the IPC handlers
 //! exported here.
 
+pub mod ai;
 pub mod credentials;
 pub mod http;
 pub mod oauth;
