@@ -56,8 +56,24 @@ export interface LibraryChange {
 
 export interface CitationProvider extends IntegrationProvider {
   category: "references";
+  /**
+   * Lightweight search for picker UIs. Returns metadata only (title,
+   * authors, year). Empty query is allowed and should surface "recent" or
+   * "all" entries up to a sensible limit.
+   */
   searchLibrary(query: string): Promise<Citation[]>;
+  /** Full BibTeX for one entry, identified by its citation key. */
   fetchEntry(key: string): Promise<BibTexEntry>;
+  /**
+   * Full BibTeX for every entry the provider exposes. The aggregator
+   * concatenates these across providers, dedupes by key, and writes the
+   * result into `<project>/.typeward/citations/library.bib` so texlab /
+   * tinymist / busytex see one source of truth.
+   *
+   * Providers that don't have a persistent library (e.g. the DOI lookup
+   * resolver) return an empty string here.
+   */
+  exportAllAsBibTex(): Promise<string>;
   watchChanges?(): AsyncIterable<LibraryChange>;
 }
 
