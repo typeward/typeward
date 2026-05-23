@@ -76,6 +76,7 @@ pub fn run() {
             integrations::overleaf::overleaf_import_zip,
             integrations::ai::streaming::ai_stream_start,
             integrations::ai::streaming::ai_stream_abort,
+            integrations::grammar::grammar_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

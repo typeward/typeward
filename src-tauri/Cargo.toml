@@ -46,6 +46,9 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 git2 = { version = "0.20", default-features = false, features = ["https"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# Grammar — Phase 5. Rust-native, runs in-process, zero network.
+harper-core = "0.59"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
