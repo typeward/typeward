@@ -15,6 +15,8 @@ import { bootCoreCommands } from "~/commands/boot";
 import { initAiProviders } from "~/integrations/ai/init";
 import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
+import { initSupabaseEntitlements } from "~/integrations/supabase/entitlements-source";
+import { startSupabaseSession } from "~/integrations/supabase/session";
 import {
   installGlobalShortcuts,
   uninstallGlobalShortcuts,
@@ -32,6 +34,8 @@ import "@fontsource/jetbrains-mono/600.css";
 setupAutosave();
 installFrontendErrorHook();
 bootCoreCommands();
+startSupabaseSession();
+initSupabaseEntitlements();
 initReferenceProviders();
 initCloudSync();
 initAiProviders();
