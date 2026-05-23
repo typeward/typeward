@@ -1,0 +1,138 @@
+/**
+ * Real entitlement source backed by `get_entitlements()` on Supabase.
+ *
+ * Lifecycle:
+ *   - At sign-in time, fetch the RPC, snapshot the result in memory +
+ *     persist a JSON copy to the OS keyring so the user can keep their
+ *     entitlements offline.
+ *   - At sign-out, swap back to the free-tier stub.
+ *   - On boot (with a persisted session), restore the cached snapshot
+ *     immediately, then re-fetch in the background to refresh.
+ *
+ * Cache TTL is 7 days; after that we collapse to free-tier and surface
+ * an in-app banner the user can dismiss by going online.
+ */
+
+import { createEffect, createRoot } from "solid-js";
+
+import { resetEntitlementSource, setEntitlementSource } from "~/integrations/entitlements";
+import type {
+  EntitlementKey,
+  EntitlementSource,
+  Tier,
+} from "~/integrations/types";
+import { getCredential, setCredential } from "~/integrations/auth/credentials";
+
+import { getSupabaseClient } from "./client";
+import { supabaseSession, supabaseSessionReady } from "./session";
+
+const CACHE_SERVICE = "supabase.entitlements";
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface CachedSnapshot {
+  fetchedAt: number;
+  /** Raw RPC rows from `get_entitlements`. */
+  rows: Array<{ feature_key: string; value: string }>;
+  /** The plan id resolved at fetch time (for the tier label). */
+  plan: Tier;
+}
+
+function planFromRows(rows: CachedSnapshot["rows"]): Tier {
+  // The plan isn't returned by get_entitlements directly; derive from the
+  // presence of pro/team-only feature flags. Cheap and stable.
+  const lookup = (key: string): boolean =>
+    rows.find((r) => r.feature_key === key)?.value === "true";
+  if (lookup("templates.shared.publish")) return "team";
+  if (lookup("integrations.cloud.dropbox")) return "pro";
+  return "free";
+}
+
+function buildSource(snapshot: CachedSnapshot): EntitlementSource {
+  const index = new Map(snapshot.rows.map((r) => [r.feature_key, r.value]));
+  const tier = snapshot.plan;
+  return {
+    current: () => tier,
+    has(key: EntitlementKey): boolean {
+      const value = index.get(key);
+      if (value === undefined) {
+        // Unknown key — Phase 7 ships the matrix in seed.sql; anything
+        // not there is a developer error. Fail closed for paid features
+        // (anything not on the free row) and open for clearly-local ones
+        // (the free row marks them true). We can't tell without the
+        // matrix, so default to false to avoid silent leakage of gated
+        // features.
+        return false;
+      }
+      return value === "true" || value === "unlimited";
+    },
+    reasonIfMissing(key: EntitlementKey) {
+      const value = index.get(key);
+      if (value === undefined) return "no-account";
+      if (value === "false") return "wrong-tier";
+      return undefined;
+    },
+  };
+}
+
+async function readCache(userId: string): Promise<CachedSnapshot | null> {
+  const raw = await getCredential({ service: CACHE_SERVICE, account: userId });
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as CachedSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCache(userId: string, snapshot: CachedSnapshot): Promise<void> {
+  await setCredential({ service: CACHE_SERVICE, account: userId }, JSON.stringify(snapshot));
+}
+
+async function fetchEntitlements(): Promise<CachedSnapshot | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  const { data, error } = await client.rpc("get_entitlements");
+  if (error || !data) return null;
+  const rows = data as Array<{ feature_key: string; value: string }>;
+  return {
+    fetchedAt: Date.now(),
+    rows,
+    plan: planFromRows(rows),
+  };
+}
+
+/**
+ * Mount the source-swap effect. Called once at boot from App.tsx.
+ *
+ * The effect reacts to `supabaseSession()`:
+ *   - Signed in → restore cache (instant) + background refresh + swap source.
+ *   - Signed out → reset to stub.
+ */
+export function initSupabaseEntitlements(): void {
+  createRoot(() => {
+    createEffect(() => {
+      if (!supabaseSessionReady()) return;
+      const session = supabaseSession();
+      if (!session) {
+        resetEntitlementSource();
+        return;
+      }
+      const userId = session.user.id;
+
+      // Restore cache first so the UI doesn't bounce while we fetch.
+      void readCache(userId).then((cached) => {
+        if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+          setEntitlementSource(buildSource(cached));
+        }
+      });
+
+      // Then refresh.
+      void fetchEntitlements().then((fresh) => {
+        if (fresh) {
+          setEntitlementSource(buildSource(fresh));
+          void writeCache(userId, fresh).catch(() => undefined);
+        }
+      });
+    });
+  });
+}
