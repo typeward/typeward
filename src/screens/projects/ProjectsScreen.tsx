@@ -30,6 +30,7 @@ import {
 } from "~/integrations/cloud/registry";
 import type { RemoteFolder } from "~/integrations/types";
 import { CloneDialog } from "~/components/vcs/CloneDialog";
+import { TemplateGallery } from "~/components/templates/TemplateGallery";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import * as ipc from "~/ipc";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
@@ -662,6 +663,7 @@ const NewProjectDialog: Component<{
   const [account, setAccount] = createSignal<CloudAccountRef | null>(null);
   const [remoteRoot, setRemoteRoot] = createSignal<RemoteFolder | null>(null);
   const [cloneOpen, setCloneOpen] = createSignal(false);
+  const [galleryOpen, setGalleryOpen] = createSignal(false);
 
   const importOverleafZip = async () => {
     const picked = await openFileDialog({
@@ -796,8 +798,12 @@ const NewProjectDialog: Component<{
       }
     >
       <div class="flex flex-col gap-4">
-        <div class="flex items-center gap-2 rounded-md border border-dashed border-glass-stroke px-3 py-2">
-          <span class="text-[11px] text-fg-3">Import existing:</span>
+        <div class="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-glass-stroke px-3 py-2">
+          <span class="text-[11px] text-fg-3">Or start from:</span>
+          <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
+            Template
+          </Button>
+          <span class="text-[11px] text-fg-3">·</span>
           <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
             Clone repository
           </Button>
@@ -997,6 +1003,14 @@ const NewProjectDialog: Component<{
         onCloned={() => {
           reset();
           props.onClose();
+        }}
+      />
+      <TemplateGallery
+        open={galleryOpen()}
+        onOpenChange={setGalleryOpen}
+        onCreated={(project) => {
+          reset();
+          props.onCreated(project);
         }}
       />
     </Dialog>
