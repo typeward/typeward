@@ -77,6 +77,8 @@ pub fn run() {
             integrations::ai::streaming::ai_stream_start,
             integrations::ai::streaming::ai_stream_abort,
             integrations::grammar::grammar_check,
+            integrations::templates::templates_list,
+            integrations::templates::template_instantiate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

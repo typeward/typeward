@@ -1,0 +1,13 @@
+{
+  "id": "typst-article",
+  "name": "Typst article",
+  "description": "Modern Typst article with title, author, and a starter body. Compiles with the bundled Typst CLI.",
+  "format": "typst",
+  "tags": ["typst", "article"],
+  "rootFile": "main.typ",
+  "variables": [
+    { "key": "title", "label": "Title", "default": "Untitled" },
+    { "key": "author", "label": "Author", "default": "" }
+  ],
+  "files": [{ "path": "main.typ", "template": true }]
+}

@@ -1,0 +1,442 @@
+//! Project templates (built-in + user custom).
+//!
+//! Built-in templates live under `src-tauri/resources/templates/`
+//! (declared in `tauri.conf.json` so they ship with the bundle).
+//! User custom templates live under `<app_data>/templates/custom/`.
+//!
+//! Each template is a directory with:
+//!   - `template.json` (the manifest below)
+//!   - the actual project files (LaTeX / Typst sources, .bib, etc.)
+//!
+//! At instantiate time, files marked `template: true` go through
+//! Handlebars-subset `{{varname}}` substitution. Everything else is
+//! copied verbatim — keeps `.cls` files and binary assets safe from
+//! accidental token expansion.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Manager};
+use thiserror::Error;
+
+use crate::project::{self, Project, ProjectFormat, ProjectIntegrations};
+
+#[derive(Debug, Error, Serialize)]
+pub enum TemplateError {
+    #[error("io error: {0}")]
+    Io(String),
+    #[error("json error: {0}")]
+    Json(String),
+    #[error("template '{0}' not found")]
+    NotFound(String),
+    #[error("destination already exists: {0}")]
+    AlreadyExists(String),
+    #[error("template entry path escapes destination: {0}")]
+    UnsafePath(String),
+    #[error("could not resolve {0}")]
+    BadPath(String),
+    #[error("project metadata write failed: {0}")]
+    ProjectError(String),
+}
+
+impl From<std::io::Error> for TemplateError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value.to_string())
+    }
+}
+impl From<serde_json::Error> for TemplateError {
+    fn from(value: serde_json::Error) -> Self {
+        Self::Json(value.to_string())
+    }
+}
+impl From<project::ProjectError> for TemplateError {
+    fn from(value: project::ProjectError) -> Self {
+        Self::ProjectError(value.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateVariable {
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub default: String,
+    #[serde(default)]
+    pub multiline: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateFile {
+    pub path: String,
+    /// Whether to run `{{var}}` substitution. Defaults to false.
+    #[serde(default)]
+    pub template: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateManifestDoc {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub format: ProjectFormat,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+    pub root_file: String,
+    #[serde(default)]
+    pub variables: Vec<TemplateVariable>,
+    #[serde(default)]
+    pub files: Vec<TemplateFile>,
+    /// Optional entitlement key (Phase 0 stub approves everything).
+    #[serde(default)]
+    pub entitlement: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TemplateSource {
+    Builtin,
+    Custom,
+}
+
+/// What the IPC returns — manifest doc plus where it came from.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TemplateManifest {
+    #[serde(flatten)]
+    pub doc: TemplateManifestDoc,
+    pub source: TemplateSource,
+}
+
+#[tauri::command]
+pub async fn templates_list(app: AppHandle) -> Result<Vec<TemplateManifest>, TemplateError> {
+    let builtin_root = builtin_root(&app)?;
+    let custom_root = custom_root(&app)?;
+
+    tokio::task::spawn_blocking(move || -> Result<Vec<TemplateManifest>, TemplateError> {
+        let mut out = Vec::new();
+        scan_root(&builtin_root, TemplateSource::Builtin, &mut out)?;
+        if custom_root.exists() {
+            scan_root(&custom_root, TemplateSource::Custom, &mut out)?;
+        }
+        out.sort_by(|a, b| a.doc.name.to_lowercase().cmp(&b.doc.name.to_lowercase()));
+        Ok(out)
+    })
+    .await
+    .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
+}
+
+#[tauri::command]
+pub async fn template_instantiate(
+    app: AppHandle,
+    template_id: String,
+    dest_parent: String,
+    name: String,
+    vars: HashMap<String, String>,
+) -> Result<Project, TemplateError> {
+    let builtin_root = builtin_root(&app)?;
+    let custom_root = custom_root(&app)?;
+
+    tokio::task::spawn_blocking(move || -> Result<Project, TemplateError> {
+        let source = locate_template(&template_id, &builtin_root, &custom_root)?;
+        let manifest = read_manifest(&source.dir)?;
+
+        let parent = PathBuf::from(&dest_parent);
+        let safe_name = sanitize(&name);
+        let dest = parent.join(&safe_name);
+        if dest.exists() {
+            return Err(TemplateError::AlreadyExists(dest.to_string_lossy().into()));
+        }
+        fs::create_dir_all(&dest)?;
+
+        // Files explicitly enumerated in the manifest are processed
+        // with their `template` flag honored. Anything else in the
+        // directory (except the manifest itself) is copied verbatim —
+        // gives template authors a quick path to ship `.cls`, images,
+        // and other static assets without listing each one.
+        let explicit_paths: std::collections::HashSet<String> = manifest
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+
+        for file in &manifest.files {
+            let safe = sanitize_relative(&file.path)
+                .ok_or_else(|| TemplateError::UnsafePath(file.path.clone()))?;
+            copy_or_render(&source.dir, &dest, &safe, file.template, &vars)?;
+        }
+
+        for entry in walkdir(&source.dir)? {
+            let rel = entry
+                .strip_prefix(&source.dir)
+                .map_err(|_| TemplateError::BadPath(entry.to_string_lossy().into()))?
+                .to_path_buf();
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            if rel_str == "template.json" {
+                continue;
+            }
+            if explicit_paths.contains(&rel_str) {
+                continue;
+            }
+            copy_or_render(&source.dir, &dest, &rel, false, &vars)?;
+        }
+
+        let project = Project {
+            root_path: dest.to_string_lossy().to_string(),
+            root_file: manifest.root_file.clone(),
+            format: manifest.format,
+            name: name.clone(),
+            integrations: ProjectIntegrations::default(),
+        };
+        project::write_project(&project)?;
+        Ok(project)
+    })
+    .await
+    .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
+}
+
+struct LocatedTemplate {
+    dir: PathBuf,
+}
+
+fn locate_template(
+    template_id: &str,
+    builtin_root: &Path,
+    custom_root: &Path,
+) -> Result<LocatedTemplate, TemplateError> {
+    let (prefix, id) = template_id
+        .split_once(':')
+        .ok_or_else(|| TemplateError::NotFound(template_id.to_string()))?;
+    let root = match prefix {
+        "builtin" => builtin_root,
+        "custom" => custom_root,
+        _ => return Err(TemplateError::NotFound(template_id.to_string())),
+    };
+
+    // template paths are always `<format>/<id>` for builtins and just
+    // `<id>` for customs. Try both shapes — keeps the manifest's id
+    // field decoupled from the on-disk layout convention.
+    let direct = root.join(id);
+    if direct.join("template.json").exists() {
+        return Ok(LocatedTemplate { dir: direct });
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let candidate = entry.path().join(id);
+        if candidate.join("template.json").exists() {
+            return Ok(LocatedTemplate { dir: candidate });
+        }
+    }
+    Err(TemplateError::NotFound(template_id.to_string()))
+}
+
+fn scan_root(
+    root: &Path,
+    source: TemplateSource,
+    out: &mut Vec<TemplateManifest>,
+) -> Result<(), TemplateError> {
+    if !root.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        let manifest_path = path.join("template.json");
+        if manifest_path.exists() {
+            if let Ok(mut doc) = read_manifest(&path) {
+                // Prefix the id so different sources can share short names.
+                doc.id = qualify_id(source, &doc.id);
+                out.push(TemplateManifest { doc, source });
+            }
+        } else {
+            // Built-in directory is grouped by format (latex/, typst/);
+            // descend one level.
+            for inner in fs::read_dir(&path)? {
+                let inner = inner?;
+                if !inner.file_type()?.is_dir() {
+                    continue;
+                }
+                if inner.path().join("template.json").exists() {
+                    if let Ok(mut doc) = read_manifest(&inner.path()) {
+                        doc.id = qualify_id(source, &doc.id);
+                        out.push(TemplateManifest { doc, source });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn qualify_id(source: TemplateSource, raw: &str) -> String {
+    let prefix = match source {
+        TemplateSource::Builtin => "builtin",
+        TemplateSource::Custom => "custom",
+    };
+    format!("{prefix}:{raw}")
+}
+
+fn read_manifest(template_dir: &Path) -> Result<TemplateManifestDoc, TemplateError> {
+    let raw = fs::read_to_string(template_dir.join("template.json"))?;
+    let doc: TemplateManifestDoc = serde_json::from_str(&raw)?;
+    Ok(doc)
+}
+
+fn copy_or_render(
+    src_root: &Path,
+    dest_root: &Path,
+    rel: &Path,
+    do_template: bool,
+    vars: &HashMap<String, String>,
+) -> Result<(), TemplateError> {
+    let src_path = src_root.join(rel);
+    let dest_path = dest_root.join(rel);
+    if let Some(parent) = dest_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if do_template {
+        let raw = fs::read_to_string(&src_path)?;
+        let rendered = render(&raw, vars);
+        fs::write(&dest_path, rendered)?;
+    } else {
+        fs::copy(&src_path, &dest_path)?;
+    }
+    Ok(())
+}
+
+/// Handlebars-subset `{{var}}` substitution. Unknown vars resolve to
+/// the empty string — template authors shouldn't crash a new-project
+/// flow because the user left a field blank.
+fn render(input: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        if ch == '{' && input[i..].starts_with("{{") {
+            if let Some(close) = input[i..].find("}}") {
+                let key = input[i + 2..i + close].trim();
+                if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    out.push_str(vars.get(key).map(|s| s.as_str()).unwrap_or(""));
+                    // Skip past the closing braces.
+                    while let Some((j, _)) = chars.peek() {
+                        if *j < i + close + 2 {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn walkdir(root: &Path) -> Result<Vec<PathBuf>, TemplateError> {
+    let mut out = Vec::new();
+    walk(root, &mut out)?;
+    Ok(out)
+}
+
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), TemplateError> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            walk(&path, out)?;
+        } else {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn sanitize_relative(input: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in Path::new(input).components() {
+        match component {
+            Component::Normal(part) => out.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn builtin_root(app: &AppHandle) -> Result<PathBuf, TemplateError> {
+    app.path()
+        .resolve("templates", BaseDirectory::Resource)
+        .map_err(|e| TemplateError::BadPath(e.to_string()))
+}
+
+fn custom_root(app: &AppHandle) -> Result<PathBuf, TemplateError> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| TemplateError::BadPath(e.to_string()))?;
+    Ok(dir.join("templates").join("custom"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_substitutes_known_vars() {
+        let vars = HashMap::from([
+            ("title".to_string(), "Hello".to_string()),
+            ("author".to_string(), "Marek".to_string()),
+        ]);
+        assert_eq!(
+            render("title={{title}}, by {{author}}", &vars),
+            "title=Hello, by Marek"
+        );
+    }
+
+    #[test]
+    fn render_treats_unknown_vars_as_empty() {
+        let vars = HashMap::new();
+        assert_eq!(render("hi {{name}}", &vars), "hi ");
+    }
+
+    #[test]
+    fn render_leaves_invalid_braces_alone() {
+        let vars = HashMap::new();
+        assert_eq!(render("{{ not-a-key }}", &vars), "{{ not-a-key }}");
+        assert_eq!(render("{ single }", &vars), "{ single }");
+    }
+
+    #[test]
+    fn sanitize_relative_rejects_parent_escape() {
+        assert!(sanitize_relative("../outside.tex").is_none());
+        assert!(sanitize_relative("/abs/path").is_none());
+        assert!(sanitize_relative("ok/sub.tex").is_some());
+    }
+}

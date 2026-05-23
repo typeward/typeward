@@ -20,4 +20,5 @@ pub mod grammar;
 pub mod http;
 pub mod oauth;
 pub mod overleaf;
+pub mod templates;
 pub mod vcs;

@@ -1,0 +1,14 @@
+{
+  "id": "article",
+  "name": "Basic article",
+  "description": "Single-file LaTeX article with title, author, abstract, and a starter body.",
+  "format": "latex",
+  "tags": ["basic", "article"],
+  "rootFile": "main.tex",
+  "variables": [
+    { "key": "title", "label": "Title", "default": "Untitled" },
+    { "key": "author", "label": "Author", "default": "" },
+    { "key": "abstract", "label": "Abstract", "default": "", "multiline": true }
+  ],
+  "files": [{ "path": "main.tex", "template": true }]
+}
