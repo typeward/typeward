@@ -1,0 +1,8 @@
+# Supabase CLI scratch + local state
+supabase/.temp/
+supabase/.branches/
+supabase/.dump/
+
+# Local-only override files
+.env
+.env.local
