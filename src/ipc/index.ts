@@ -377,6 +377,45 @@ export const grammarCheck = (
 ): Promise<GrammarDiagnostic[]> =>
   invoke("grammar_check", { text, file, syntax });
 
+// ----- Templates --------------------------------------------------------
+
+export interface TemplateVariable {
+  key: string;
+  label: string;
+  default: string;
+  multiline: boolean;
+}
+
+export interface TemplateFile {
+  path: string;
+  template: boolean;
+}
+
+export interface TemplateManifest {
+  id: string;
+  name: string;
+  description: string;
+  format: ProjectFormat;
+  tags: string[];
+  thumbnail: string | null;
+  rootFile: string;
+  variables: TemplateVariable[];
+  files: TemplateFile[];
+  entitlement: string | null;
+  source: "builtin" | "custom";
+}
+
+export const templatesList = (): Promise<TemplateManifest[]> =>
+  invoke("templates_list");
+
+export const templateInstantiate = (
+  templateId: string,
+  destParent: string,
+  name: string,
+  vars: Record<string, string>,
+): Promise<Project> =>
+  invoke("template_instantiate", { templateId, destParent, name, vars });
+
 // ----- Autosave / recovery -------------------------------------------------
 
 export interface Snapshot {
