@@ -16,6 +16,7 @@
 
 pub mod ai;
 pub mod credentials;
+pub mod grammar;
 pub mod http;
 pub mod oauth;
 pub mod overleaf;
