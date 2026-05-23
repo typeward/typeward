@@ -28,6 +28,7 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 - **Local git** (`src-tauri/src/integrations/vcs/git.rs`) — libgit2 via the `git2` crate, every operation wrapped in `tokio::task::spawn_blocking` because libgit2 is fully synchronous. HTTPS auth comes from the keyring under service `git.<host>` so a single GitHub device-flow sign-in covers both REST API calls (via `httpRequest` `authRef`) and libgit2's push/pull callbacks. SSH transport is out of scope; only HTTPS + PAT. `git_pull` is fast-forward only — merge commits need a conflict UX we don't ship yet.
 - **Harper grammar** (`src-tauri/src/integrations/grammar/mod.rs`, `src/lib/grammar/cm6.ts`) — Rust-native, runs in-process via `harper-core`. `grammar_check(text, file, syntax)` IPC returns diagnostics in the same shape as compile/LSP diagnostics so the existing gutter renders them without changes. CM6 linter extension via `@codemirror/lint`, debounced 400ms; up to 3 quick-fix actions per lint. Wired into the editor only when `integrations.grammar.enabled` — zero IPC when off.
 - **Templates** (`src-tauri/src/integrations/templates.rs`) — `templates_list()` merges built-ins from `<resource>/templates/` (bundled per `tauri.conf.json` `bundle.resources`) with user customs at `<app_data>/templates/custom/`. Each template ships a `template.json` manifest plus its files; `template.files[*].template = true` opts a file into Handlebars-subset `{{var}}` substitution at `template_instantiate` time. Other files copy verbatim. IDs are namespaced (`builtin:<id>` / `custom:<id>`) so short names don't collide across sources.
+- **Supabase auth + entitlement source** (`src/integrations/supabase/`) — singleton `SupabaseClient<Database>` keyed off `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` from `.env.local`; returns `null` when missing so the app keeps working free-tier. Session bundle persists via a keyring-backed `Storage` adapter (`storage.ts` routes `get/set/removeItem` through `credential_*` IPCs under service `typeward.supabase.session`). Reactive `supabaseSession()` signal in `session.ts`. `initSupabaseEntitlements()` watches the signal and swaps the Phase 0 stub `EntitlementSource` for a real one backed by the `get_entitlements()` RPC; the resolved snapshot caches in the keyring under `typeward.supabase.entitlements/<userId>` with a 7-day TTL for offline. The whole chain is mounted once from `App.tsx`. Backend SQL + RLS + RPC live in the sibling `infrastructure/` folder (gets moved to a dedicated repo later).
 
 ## Gotchas
 
@@ -47,6 +48,9 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 - **Google Drive `drive.file` scope** — Typeward only sees files it created or you opened with it. The CloudPickerDialog's "browse remote folders" list will be empty for first-time users; they have to create a folder in Drive's web UI first or pick a different provider. Folder-chain auto-creation on upload is also deferred — uploads currently throw if the parent folder isn't already in the id↔path map.
 - **`git_pull` is fast-forward only.** Merge commits surface as an error verbatim — the user resolves by hand for now. The conflict surface that would handle non-fast-forward pulls is the same gap that keeps SSH transport out of scope.
 - **OS keyring on Linux blocks on D-Bus.** All `credential_*` IPC handlers spawn-blocking around the sync keyring API so the Tokio runtime (LSP / watcher / autosave / cloud sync) doesn't park during a Secret Service unlock prompt. New keyring callers should follow the same `tokio::task::spawn_blocking` pattern.
+- **Supabase publishable keys vs legacy anon JWTs.** `sb_publishable_…` is Supabase's post-Oct-2025 API key format that replaces the JWT-shaped `anon` key. `supabase-js` ≥2.45 accepts both transparently; older versions silently fall back to anonymous and every authenticated request 401s. Pin the dep ≥2.106 (our lockfile does). Service-role keys take the matching `sb_secret_…` shape and **must never** land in `.env.local` — only in `infrastructure/`'s edge functions.
+- **`Database` types need every supabase-js field.** When hand-rolling `database.types.ts` (before the user has run `supabase gen types typescript --linked`), each table entry needs `Row`, `Insert`, `Update`, **and `Relationships: []`**; the public schema needs `Tables`, `Views`, `Functions`, `Enums`, `CompositeTypes` even if most are `Record<string, never>`. Without all of them, supabase-js narrows row types to `never` and queries like `client.from("subscriptions").select("plan_id").maybeSingle()` fail to compile.
+- **Anonymous entitlement source defaults closed.** When `get_entitlements()` returns an unknown feature key, the real source returns `false` (not the stub's `true`). Add every new gated key to `seed.sql`'s `entitlements_map` block — otherwise the feature silently locks for signed-in users on the next deploy. The plan tier matrix in the Phase 7 plan section is the canonical list.
 
 ## Stack (anchors)
 
@@ -61,7 +65,7 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 - Integrations program (2026-05-22 → present): `reqwest` (rustls) + `keyring` v3 + `axum` (loopback OAuth) + `git2` (libgit2) + `zip` + `harper-core` (grammar) + `futures-util` on the Rust side; `@codemirror/lint` + `@tauri-apps/plugin-opener` on the frontend
 - Cloud providers: Dropbox / OneDrive (Graph) / Google Drive (`drive.file` scope) via OAuth PKCE; iCloud Drive is OS-mediated on macOS, no API
 - AI providers: Anthropic Claude, OpenAI, Google Gemini, local Ollama — one streaming primitive, four parsers
-- Future cloud (Phase 7): Supabase auth + subscription-driven entitlements only (no file storage, no realtime collab — both deferred separately)
+- Supabase auth + subscription-driven entitlements (Phase 7, shipped 2026-05-23; `@supabase/supabase-js` ^2.106). No file storage, no realtime collab — both remain separately deferred. Backend SQL lives in the sibling `infrastructure/` folder.
 
 ## Conventions
 
@@ -115,12 +119,14 @@ npx tauri icon ./typeward-icon.png
 src/
   screens/      onboarding | projects | editor (shells/text-shell.tsx) | settings
                 settings/IntegrationsPanel.tsx — References, Cloud, VCS, AI, Grammar cards
+                settings/AccountSection.tsx — Supabase email/password sign-in, plan badge
   adapters/     EditorAdapter impls — latex, typst + shared adapter-contract test
   providers/    Compile/Preview/Lsp interfaces (aspirational — adapters call IPC directly today)
   integrations/ types.ts, entitlements.ts, http.ts, auth/{credentials,oauth-client}.ts,
                 ai/{stream,anthropic,openai,gemini,ollama,registry,init}.ts,
                 cloud/{core,dropbox,onedrive,gdrive,icloud,create,init,registry}/...,
                 references/{aggregator,bibtex,registry,init,doi-lookup,zotero,mendeley,jabref}/...,
+                supabase/{client,session,storage,entitlements-source,database.types}.ts,
                 vcs/github/{auth,api}.ts
   components/
     editor/     CodeMirror, FileTree, LogsDrawer, RecoveryDialog, EditorSidebar, AiView
@@ -129,12 +135,13 @@ src/
     glass/      Glass card variants
     forms/      Switch, Slider
     primitives/ Button, Dialog (Kobalte wrappers)
-    layout/     AmbientBackdrop, TopBar (mounts SyncStatusBadge + GitStatusBar)
+    layout/     AmbientBackdrop, TopBar (mounts SubscriptionBadge + SyncStatusBadge + GitStatusBar)
     entitlement/ FeatureGate, UpgradePrompt
     references/ ReferencesPanel, DoiLookupDialog
     sync/       SyncStatusBadge, ConflictResolverDialog
     vcs/        CommitPanel (SCM sidebar tab), GitStatusBar, CloneDialog
     templates/  TemplateGallery
+    account/    SubscriptionBadge (signed-in tier pill; sign-in lives in Settings → AccountSection)
     CommandPalette.tsx — rendered once at App root
   themes/       tokens.css + themes/{obsidian,graphite,paper}.css + accents.css + utilities.css + theme-store.ts
   commands/     registry, palette-store, boot (core commands), keyboard (global router), actions (save/compile/sync orchestration)
@@ -154,6 +161,7 @@ src-tauri/
     integrations/ mod.rs, credentials.rs, http.rs, oauth.rs, overleaf.rs, templates.rs,
                   vcs/{mod,git}.rs, ai/{mod,streaming}.rs, grammar/mod.rs
   resources/    templates/{latex,typst}/<id>/ — bundled built-in templates (shipped via tauri.conf.json bundle.resources)
+infrastructure/ supabase/ — sibling backend folder (migrations, RLS, RPC, seed); gets `git mv`'d to a dedicated repo when Integ Phase 7.6 lands
   binaries/     sidecar binaries (gitignored; Tectonic via fetch script)
   capabilities/default.json — fs/dialog/shell/os scopes + tectonic sidecar shell:allow-execute
                 + opener:allow-open-url for OAuth browser launches
@@ -184,4 +192,10 @@ design_files/   HTML/JSX prototypes (read-only reference)
 - **Integ Phase 4 — AI providers** (2026-05-22). One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter (`aiStream`). Empty `AiView` filled with real streaming chat (model picker, stop button, Mod+Enter send). AI settings card paste-key probe → ready.
 - **Integ Phase 5 — Grammar** (2026-05-23). Harper via `harper-core` (Rust-native, in-process, zero network). `grammar_check(text, file, syntax)` IPC, CM6 `@codemirror/lint` linter (400ms debounce, 3 quick-fix actions per lint), gated on `integrations.grammar.enabled`.
 - **Integ Phase 6 — Templates** (2026-05-23). Manifest-driven (`template.json` with `variables[]` + `files[]`), Handlebars-subset `{{var}}` substitution, zip-slip path guard. 4 built-in templates shipped (latex article / IEEE conference / beamer, typst article) under `src-tauri/resources/templates/`. `<TemplateGallery>` two-stage dialog in new-project flow. Save-as-template deferred — custom templates can be hand-authored under `<app_data>/templates/custom/<id>/`.
-- **Integ Phase 7 — Supabase auth + entitlements** (pending). Resumes the deferred Phase 4 work scoped to **auth + subscription gating only** — no license keys, no file storage, no realtime collab. Backend (SQL migrations, RPCs, RLS policies, Stripe webhook edge function) is developed in a sibling `infrastructure/` folder at the repo root during the phase, then moved to the dedicated `infrastructure` GitHub repo. When this lands, the entitlement gate's stub source swaps for a real Supabase-backed source via `setEntitlementSource()` — no per-feature wiring changes.
+- **Integ Phase 7 — Supabase auth + entitlements** (substantively complete 2026-05-23; only the Stripe webhook + staging push remain). Resumes the deferred Phase 4 work scoped to **auth + subscription gating only** — no license keys, no file storage, no realtime collab. Backend lives in the sibling `infrastructure/` folder at the repo root and gets `git mv`'d to the dedicated `infrastructure` GitHub repo when this phase fully lands.
+  - **7.1 — Infrastructure folder.** `infrastructure/supabase/` with `config.toml`, two migrations (`20260523000001_init.sql` = `plans` + `subscriptions` + `profiles` + `entitlements_map` + `on_auth_user_created` signup trigger + `get_entitlements()` `SECURITY DEFINER` RPC; `20260523000002_shared_templates.sql` = template-share tables + RLS), `seed.sql` (free/pro/team catalog + ~20-key entitlement matrix), `seed_test_users.sql` (staging-only test@test.cz → Pro), README documenting `supabase link` / `db push` / `gen types` / move-out checklist.
+  - **7.2 — Client.** `@supabase/supabase-js` (^2.106) with a keyring-backed storage adapter (`integrations/supabase/storage.ts`) — session bundle sits in `typeward.supabase.session` keyring slots, not localStorage. Singleton typed `SupabaseClient<Database>`; returns `null` when env vars are missing so the rest of the app keeps working free-tier. Reactive `supabaseSession()` signal driven by `onAuthStateChange`; boots once from App.tsx via `startSupabaseSession()`.
+  - **7.3 — UI.** `AccountSection` in Settings → Account: email/password sign-in, sign-out, plan badge read from the user's `subscriptions` row. `<SubscriptionBadge>` in TopBar (next to Sync / Git badges). Both collapse silently when Supabase isn't configured.
+  - **7.4 — Entitlement source swap.** `initSupabaseEntitlements()` watches `supabaseSession()`: on sign-in, restore a 7-day-TTL keyring-cached snapshot (instant), then fetch fresh `get_entitlements()` and call `setEntitlementSource(...)`. Sign-out resets to the Phase 0 stub. Every previously-declared `<FeatureGate>` call site started gating with this swap — zero per-feature wiring changes.
+  - **7.5 — Staging push** (user-driven). `cd infrastructure && supabase link --project-ref aepfxzsnhjonzevwglgr && supabase db push && psql "$(supabase db url)" -f supabase/seed.sql && psql "$(supabase db url)" -f supabase/seed_test_users.sql`. Then sign in as test@test.cz / test123 to verify the Pro plan badge.
+  - **7.6 — Stripe webhook edge function** (pending). Lands once Stripe products + prices exist. The schema already carries `stripe_subscription_id` / `stripe_customer_id` for the webhook to upsert via service-role.
