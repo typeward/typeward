@@ -11,6 +11,8 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 
 ## Architecture seams — read before adding format-specific code
 
+- **Integrations module** (`src/integrations/`, `src-tauri/src/integrations/`) — the substrate every third-party integration plugs into. Provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`) live in `src/integrations/types.ts`. Each category has its own registry + init module that watches `integrationsSettings()` and registers providers reactively (`references/init.ts`, `cloud/init.ts`, `ai/init.ts`). `App.tsx` wires the inits at boot alongside `bootCoreCommands()`. Shared Rust primitives: `integrations::credentials` (OS keyring, service prefix `typeward.<provider>`), `integrations::http` (`http_request` / `http_request_bytes` — single funnel; auth tokens resolve from keyring inside Rust so the frontend never holds bearers), `integrations::oauth` (PKCE + `axum` loopback callback on `127.0.0.1:0`).
+- **Entitlement gate** (`src/integrations/entitlements.ts`, `src/components/entitlement/FeatureGate.tsx`) — every paid-tier surface wraps in `<FeatureGate feature="integrations.x.y">`. Phase 0 ships a stub source that returns `"team"` and approves everything; Phase 7 (Supabase) will swap the source via `setEntitlementSource()` and the same call sites start gating without code edits.
 - **`EditorAdapter`** (`src/adapters/<format>/`) — per-format glue: CM extensions, compile delegate, preview kind, diagnostics, completions, commands. Two concrete impls today: `LatexAdapter` (`compile_latex` → latexmk/pdflatex or Tectonic), `TypstAdapter` (`compile_typst` → native typst CLI). Each calls IPC directly; the `CompileProvider` interface in `src/providers/types.ts` is still aspirational. The format → adapter mapping lives in two places that must stay in lockstep: `src/commands/actions.ts` `adapterFor()` and `src/screens/editor/EditorScreen.tsx` `adapterForFormat()`.
 - **Markdown files** — when the active editor tab is a `.md` file, the right pane swaps from `<PdfViewer>` to `<MarkdownPreview>` (markdown-it + KaTeX + DOMPurify; lives at `src/components/preview/MarkdownPreview.tsx`). Sandboxed HTML render with relative-asset rewrite against the active file's directory; debounced ~80ms. Does not participate in compile. See `docs/superpowers/specs/2026-05-20-narrow-formats-md-preview-design.md` and `docs/ntb_feature.md` for the removal rationale.
 - **`CommandRegistry`** (`src/commands/`) — wired through end-to-end. `bootCoreCommands()` runs at app startup; adapter commands register on project load (`EditorScreen`) and unregister on cleanup. The shared `<CommandPalette />` rendered at App root reads from `commands()` directly. Global shortcuts (`Mod+K`, `Mod+N`, `Mod+,`, `Mod+S`, format-specific compile) dispatch through `src/commands/keyboard.ts` — CodeMirror no longer hardcodes `Mod-s` / `Mod-Enter`. Save/compile orchestration lives in `src/commands/actions.ts` (single point that maps `project.format` → adapter). Editor-scoped commands gate on focus being inside `.cm-content` or `[data-editor-shell]`.
@@ -20,6 +22,12 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 - **Telemetry** (`src/lib/telemetry/index.ts`, `src-tauri/src/telemetry.rs`) — Rust panic hook + frontend `error`/`unhandledrejection` → JSONL log at `<app_data>/telemetry.log`. Capture only; no submission UI.
 - **Responsive layout** (`src/stores/viewport-store.ts`, `src/components/layout/PaneSwitcher.tsx`, `src/lib/gestures.ts`) — `viewportMode()` flips at the 1024px breakpoint. `TextShell` keeps a desktop `DesktopLayout` (corvu Resizable, unchanged) and a tablet variant that swaps in `<Switch>`-based single-pane rendering, the `PaneSwitcher` segmented control, the slide-up `LogsSheet`, and a swipe listener. `setActivePane()` is the public lever for pane navigation; treat `cyclePane()` as gesture-only. Don't add fixed-width assumptions in shells — guard behind `isTabletViewport()` instead.
 - **busytex CompileProvider** (`src/providers/compile/busytex-provider.ts`) — frontend Web Worker LaTeX engine via `texlyre-busytex`. Selected when `compileEngine() === "busytex"`. `LatexAdapter.compile()` dynamic-imports the provider so the WASM bridge isn't pulled into the bundle when unused. Assets (~32MB WASM + 90-400MB TeX Live data) live in `public/core/busytex/` and are fetched once with `npx texlyre-busytex download-assets ./public/core`; the provider HEAD-probes the asset before init and returns an actionable diagnostic when missing. PDF bytes are persisted via the project-scoped `write_project_binary_file` IPC into `<project>/.typeward/build/<base>.pdf` so the existing file-path-driven PdfViewer renders it unchanged. Diagnostics route through the shared Rust parser via the `parse_latex_log_cmd` IPC. The provider walks both text dependencies (`.tex`, `.bib`, `.cls`, `.sty`, etc., read via `read_project_text_file`) and binary figures (`.png`, `.jpg`, `.jpeg`, `.pdf`, `.gif`, `.eps`, via `read_project_binary_file`); capped at 200 files / 10 MB combined.
+- **Reference aggregator** (`src/integrations/references/aggregator.ts`) — `refreshLibraryBib(project)` calls `exportAllAsBibTex()` on every registered `CitationProvider` (Zotero Better BibTeX, Zotero Web, Mendeley, JabRef), pulls in `<project>/.typeward/citations/local.bib` (DOI/arXiv lookups land here), dedupes by citation key, and writes the unified result to `<project>/.typeward/citations/library.bib`. The busytex walker auto-discovers it; texlab/tinymist see it as a normal `.bib` and provide `\cite{}` completions for free. Per-provider config lives in `IntegrationsSettings.references.{betterBibTex,zoteroWeb,mendeley,jabref}`; tokens live in the keyring under service names matching the provider id.
+- **Cloud sync engine** (`src/integrations/cloud/core/engine.ts`) — generic orchestration. One `SyncEngine` per active cloud-backed project. Local cache layout: `<projectsRoot>/.remote-cache/<provider>/<projectId>/`; the cache *is* a normal Typeward project (same `.typeward/` sidecar, same watcher, same compile pipeline). Provider state under `<cache>/.typeward/integrations/<provider>/` (cursor + ID/path map). Conflict resolution writes the loser to `<name>.conflict-<ISO>.<ext>`; `<ConflictResolverDialog>` (reachable by clicking `<SyncStatusBadge>` when conflicts > 0) resolves them. Engine lifecycle in `cloud/init.ts` — when a project with `integrations.cloudOrigin` becomes active, the matching provider instantiates from settings and the engine starts. Provider factory `cloudProviderForAccount(ref, { projectsRoot, projectId })` in `cloud/registry.ts`.
+- **AI streaming primitive** (`src-tauri/src/integrations/ai/streaming.rs`, `src/integrations/ai/stream.ts`) — one Rust task per stream, format-specific parsers in `parse_event()` (AnthropicSse / OpenAiSse / GeminiSse / OllamaNdjson). Chunks emit on a per-stream Tauri event channel `ai-stream:<streamId>`; the frontend `aiStream(req, signal)` AsyncIterable adapter listens, yields each delta, calls `ai_stream_abort` when the AbortSignal fires. All four providers (Claude/ChatGPT/Gemini/Ollama) implement the same `AiProvider` shape (`models()` + `chat(messages, opts)`); only one is active at a time per `IntegrationsSettings.ai.activeProvider`.
+- **Local git** (`src-tauri/src/integrations/vcs/git.rs`) — libgit2 via the `git2` crate, every operation wrapped in `tokio::task::spawn_blocking` because libgit2 is fully synchronous. HTTPS auth comes from the keyring under service `git.<host>` so a single GitHub device-flow sign-in covers both REST API calls (via `httpRequest` `authRef`) and libgit2's push/pull callbacks. SSH transport is out of scope; only HTTPS + PAT. `git_pull` is fast-forward only — merge commits need a conflict UX we don't ship yet.
+- **Harper grammar** (`src-tauri/src/integrations/grammar/mod.rs`, `src/lib/grammar/cm6.ts`) — Rust-native, runs in-process via `harper-core`. `grammar_check(text, file, syntax)` IPC returns diagnostics in the same shape as compile/LSP diagnostics so the existing gutter renders them without changes. CM6 linter extension via `@codemirror/lint`, debounced 400ms; up to 3 quick-fix actions per lint. Wired into the editor only when `integrations.grammar.enabled` — zero IPC when off.
+- **Templates** (`src-tauri/src/integrations/templates.rs`) — `templates_list()` merges built-ins from `<resource>/templates/` (bundled per `tauri.conf.json` `bundle.resources`) with user customs at `<app_data>/templates/custom/`. Each template ships a `template.json` manifest plus its files; `template.files[*].template = true` opts a file into Handlebars-subset `{{var}}` substitution at `template_instantiate` time. Other files copy verbatim. IDs are namespaced (`builtin:<id>` / `custom:<id>`) so short names don't collide across sources.
 
 ## Gotchas
 
@@ -32,6 +40,13 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 - **Compile fallback chain**: `system-tex` engine tries `latexmk` first, falls back to `pdflatex` on spawn/exit failure (MiKTeX sometimes ships latexmk without a usable Perl). `tectonic` engine tries the sidecar (`binaries/tectonic-<triple>`) first, falls back to `tectonic` on PATH. Either way, the actual command + log get surfaced in the LogsDrawer's Logs tab.
 - **Typst syntax highlighter is hand-rolled.** `src/adapters/typst/typst-language.ts` is a minimal CM6 `StreamLanguage` covering the visual basics (comments, strings, math, `#funcs`, headings, emphasis). It's intentionally not a full grammar — when tinymist's structured tokens become consumable through the LSP transport, prefer those over expanding this parser.
 - **SyncTeX shells out to the system `synctex` CLI** (`src-tauri/src/synctex.rs`), not a Rust binding. TeX Live / MiKTeX / MacTeX all ship it; the CLI returns `Ok(None)` if not on PATH so Tectonic-only users get a graceful "no sync" rather than an error. Compile flags: `-synctex=1` for latexmk/pdflatex, `--synctex` for tectonic. Forward search wires through `requestPdfScroll(page, y)` → PdfViewer's `scrollTarget` effect. Inverse search uses **shift+click** on PDF page → `onPageClick(page, x, y)` (coords divided by current zoom to get PDF pts) → `requestGotoSource(relPath, line)` → EditorScreen opens the file and moves the cursor via the imperative `editor-view-store` handle.
+- **Linux dev hosts need `libdbus-1-dev`** for the `keyring` crate's Secret Service backend, plus `libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` for Tauri's GTK chain. Apt one-liner: `sudo apt install -y libdbus-1-dev libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev`.
+- **Tectonic sidecar naming** — `fetch-tectonic.mjs` downloads the musl static binary (`tectonic-x86_64-unknown-linux-musl`), but Tauri's build script looks up the rustc target triple (`tectonic-x86_64-unknown-linux-gnu` on Linux). Symlink `gnu → musl` after fetch if Tauri build complains: `ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu` in `src-tauri/binaries/`. The musl binary works fine on glibc systems — it's statically linked.
+- **OAuth client ids come from `.env`** as `VITE_<provider>_CLIENT_ID`. Mendeley / Dropbox / Microsoft / Google / GitHub each need their own registered app. The code paths are valid without the env vars — sign-in just throws an actionable "register your app at <url>" error. PKCE flows never need client secrets.
+- **`http_request` returns text body; binary needs `http_request_bytes`** — when a cloud provider downloads/uploads file bytes, route through the binary IPC and `httpRequestBytes`. The text variant truncates non-UTF-8 payloads.
+- **Google Drive `drive.file` scope** — Typeward only sees files it created or you opened with it. The CloudPickerDialog's "browse remote folders" list will be empty for first-time users; they have to create a folder in Drive's web UI first or pick a different provider. Folder-chain auto-creation on upload is also deferred — uploads currently throw if the parent folder isn't already in the id↔path map.
+- **`git_pull` is fast-forward only.** Merge commits surface as an error verbatim — the user resolves by hand for now. The conflict surface that would handle non-fast-forward pulls is the same gap that keeps SSH transport out of scope.
+- **OS keyring on Linux blocks on D-Bus.** All `credential_*` IPC handlers spawn-blocking around the sync keyring API so the Tokio runtime (LSP / watcher / autosave / cloud sync) doesn't park during a Secret Service unlock prompt. New keyring callers should follow the same `tokio::task::spawn_blocking` pattern.
 
 ## Stack (anchors)
 
@@ -43,7 +58,10 @@ Multiplatform editor app similar to Overleaf, format-agnostic: LaTeX and Typst, 
 - Hand-rolled LSP integration (no `codemirror-languageserver`)
 - TeX engines: system (TeX Live/MacTeX/MiKTeX) **or** bundled Tectonic on desktop (download via `npm run fetch:tectonic`); texlyre-busytex on tablet (Phase 3)
 - Compilers: **Typst CLI** detected on PATH; not bundled
-- Future cloud: Supabase (auth/storage/realtime) + Yjs CRDT for collab
+- Integrations program (2026-05-22 → present): `reqwest` (rustls) + `keyring` v3 + `axum` (loopback OAuth) + `git2` (libgit2) + `zip` + `harper-core` (grammar) + `futures-util` on the Rust side; `@codemirror/lint` + `@tauri-apps/plugin-opener` on the frontend
+- Cloud providers: Dropbox / OneDrive (Graph) / Google Drive (`drive.file` scope) via OAuth PKCE; iCloud Drive is OS-mediated on macOS, no API
+- AI providers: Anthropic Claude, OpenAI, Google Gemini, local Ollama — one streaming primitive, four parsers
+- Future cloud (Phase 7): Supabase auth + subscription-driven entitlements only (no file storage, no realtime collab — both deferred separately)
 
 ## Conventions
 
@@ -96,16 +114,27 @@ npx tauri icon ./typeward-icon.png
 ```
 src/
   screens/      onboarding | projects | editor (shells/text-shell.tsx) | settings
+                settings/IntegrationsPanel.tsx — References, Cloud, VCS, AI, Grammar cards
   adapters/     EditorAdapter impls — latex, typst + shared adapter-contract test
   providers/    Compile/Preview/Lsp interfaces (aspirational — adapters call IPC directly today)
+  integrations/ types.ts, entitlements.ts, http.ts, auth/{credentials,oauth-client}.ts,
+                ai/{stream,anthropic,openai,gemini,ollama,registry,init}.ts,
+                cloud/{core,dropbox,onedrive,gdrive,icloud,create,init,registry}/...,
+                references/{aggregator,bibtex,registry,init,doi-lookup,zotero,mendeley,jabref}/...,
+                vcs/github/{auth,api}.ts
   components/
-    editor/     CodeMirror, FileTree, LogsDrawer, RecoveryDialog, EditorSidebar
+    editor/     CodeMirror, FileTree, LogsDrawer, RecoveryDialog, EditorSidebar, AiView
     preview/    MarkdownPreview.tsx (markdown-it + KaTeX + DOMPurify)
     pdf/        PdfViewer (page nav, zoom dropdown, retained scroll, Recompile, SyncTeX pulse + shift-click)
     glass/      Glass card variants
     forms/      Switch, Slider
     primitives/ Button, Dialog (Kobalte wrappers)
-    layout/     AmbientBackdrop, TopBar
+    layout/     AmbientBackdrop, TopBar (mounts SyncStatusBadge + GitStatusBar)
+    entitlement/ FeatureGate, UpgradePrompt
+    references/ ReferencesPanel, DoiLookupDialog
+    sync/       SyncStatusBadge, ConflictResolverDialog
+    vcs/        CommitPanel (SCM sidebar tab), GitStatusBar, CloneDialog
+    templates/  TemplateGallery
     CommandPalette.tsx — rendered once at App root
   themes/       tokens.css + themes/{obsidian,graphite,paper}.css + accents.css + utilities.css + theme-store.ts
   commands/     registry, palette-store, boot (core commands), keyboard (global router), actions (save/compile/sync orchestration)
@@ -116,18 +145,25 @@ src/
     watcher/    client.ts (Tauri event subscription)
     autosave/   debounced snapshot writer
     telemetry/  frontend error hook + recordError()
+    grammar/    cm6.ts (Harper linter extension)
     shortcuts.ts — Mod+X token parser shared by keyboard router + palette
   ipc/          typed Tauri command wrappers (one big index.ts)
 src-tauri/
   src/          commands.rs, detect.rs, fs_ops.rs, project.rs, settings.rs,
                 autosave.rs, telemetry.rs, lsp.rs, watcher.rs, synctex.rs, lib.rs, main.rs
+    integrations/ mod.rs, credentials.rs, http.rs, oauth.rs, overleaf.rs, templates.rs,
+                  vcs/{mod,git}.rs, ai/{mod,streaming}.rs, grammar/mod.rs
+  resources/    templates/{latex,typst}/<id>/ — bundled built-in templates (shipped via tauri.conf.json bundle.resources)
   binaries/     sidecar binaries (gitignored; Tectonic via fetch script)
   capabilities/default.json — fs/dialog/shell/os scopes + tectonic sidecar shell:allow-execute
+                + opener:allow-open-url for OAuth browser launches
 scripts/        fetch-tectonic.mjs
 design_files/   HTML/JSX prototypes (read-only reference)
 ```
 
 ## Status
+
+**App build phases (original plan):**
 
 - **Phase 0** — skeleton (Tauri+Solid+TS, Tailwind v4, Kobalte/corvu/router/lucide, themes, baseline tests).
 - **Phase 1** — vertical slice complete on desktop: four screens fully ported with visual passes; multi-tab editor; LSP transport + hand-rolled CM6 integration (texlab/tinymist when on PATH); real LaTeX compile via system TeX with `latexmk → pdflatex` fallback or Tectonic; PDF.js preview with toolbar (Recompile, page nav, zoom dropdown); LogsDrawer with Logs + Issues tabs; autosave + crash recovery; telemetry capture; first-run onboarding redirect; unified file watcher driving FileTree refresh. Tectonic sidecar bundled via `externalBin: ["binaries/tectonic"]` (enabled 2026-05-15); binary fetched per-dev-host with `npm run fetch:tectonic`.
@@ -138,3 +174,14 @@ design_files/   HTML/JSX prototypes (read-only reference)
   - **Android build pipeline**. `tauri android init` ran cleanly with `JAVA_HOME` pointing at Android Studio's bundled JBR 21 (Java not on PATH on the dev host — prefix `$JAVA_HOME\bin` before Android commands). Generated `src-tauri/gen/android/` with Gradle wrapper, app module, and gitignores for build artifacts. All four Android Rust targets (`aarch64`, `armv7`, `i686`, `x86_64`-linux-android) installed. `Cargo.toml` already had `crate-type = ["staticlib", "cdylib", "rlib"]`. Actually building an APK on an emulator/device is deferred — needs the user to drive emulator setup.
 - **Phase 4 — deferred (2026-05-13)**. Supabase / accounts / collab / licensing paused indefinitely. When it resumes, scope narrows to **auth + collab + license keys only** — files stay local-first, nothing mirrored to Supabase Storage. The plan.md "folder sync" framing is retired.
 - **Scope narrowed (2026-05-20)** — supported project formats reduced to LaTeX + Typst. Markdown-as-project, R Markdown, and the notebook experience were removed. `.md` files inside any project now get a live in-app HTML preview. See `docs/ntb_feature.md` (archival notes) and `docs/superpowers/specs/2026-05-20-narrow-formats-md-preview-design.md` (spec).
+
+**Integrations program (2026-05-22 → 2026-05-23):** approved plan at `~/.claude/plans/research-and-completely-plan-resilient-brook.md`. Phases 0–6 shipped on `main`; Phase 7 (Supabase auth + entitlements) is the remaining work.
+
+- **Integ Phase 0 — Foundations** (2026-05-22). Rust: `reqwest` HTTPS, OS keyring, PKCE OAuth with `axum` loopback callback, `opener` plugin + capability. Frontend: provider interfaces, entitlement-gate stub, `runOauthFlow` driver, `<FeatureGate>` / `<UpgradePrompt>`. Settings + Project schemas extended (`IntegrationsSettings` + `ProjectIntegrations`, both `#[serde(default)]`-additive).
+- **Integ Phase 1 — References** (2026-05-22). Zotero (Better BibTeX local probe + Web API key), Mendeley (OAuth PKCE; flagged as maintenance-mode), JabRef (file-based), DOI/arXiv lookup (no auth — `doi.org` content negotiation; modern arXiv via synthesized `10.48550/` DOI, older arXiv via Atom). Aggregator writes `<project>/.typeward/citations/library.bib`; busytex + texlab/tinymist pick it up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card.
+- **Integ Phase 2 — Cloud storage** (2026-05-22). Dropbox (longpoll cursor), OneDrive (Graph delta), Google Drive (changes.list + ID/path map at `<cache>/.typeward/integrations/gdrive/idmap.json`, `drive.file` scope). iCloud Drive is OS-mediated on macOS. Sync engine + status badge + ConflictResolverDialog + new-project Cloud branch.
+- **Integ Phase 3 — Git/GitHub/Overleaf** (2026-05-22). libgit2 via `git2` (12 IPCs, all spawn-blocking); GitHub device-flow OAuth (token shared with libgit2 in keyring `git.github.com`); Overleaf zip import via `zip` crate (zip-slip guarded); premium git-bridge clone reuses `git_clone`. CommitPanel (SCM sidebar), GitStatusBar (TopBar), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings.
+- **Integ Phase 4 — AI providers** (2026-05-22). One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter (`aiStream`). Empty `AiView` filled with real streaming chat (model picker, stop button, Mod+Enter send). AI settings card paste-key probe → ready.
+- **Integ Phase 5 — Grammar** (2026-05-23). Harper via `harper-core` (Rust-native, in-process, zero network). `grammar_check(text, file, syntax)` IPC, CM6 `@codemirror/lint` linter (400ms debounce, 3 quick-fix actions per lint), gated on `integrations.grammar.enabled`.
+- **Integ Phase 6 — Templates** (2026-05-23). Manifest-driven (`template.json` with `variables[]` + `files[]`), Handlebars-subset `{{var}}` substitution, zip-slip path guard. 4 built-in templates shipped (latex article / IEEE conference / beamer, typst article) under `src-tauri/resources/templates/`. `<TemplateGallery>` two-stage dialog in new-project flow. Save-as-template deferred — custom templates can be hand-authored under `<app_data>/templates/custom/<id>/`.
+- **Integ Phase 7 — Supabase auth + entitlements** (pending). Resumes the deferred Phase 4 work scoped to **auth + subscription gating only** — no license keys, no file storage, no realtime collab. Backend (SQL migrations, RPCs, RLS policies, Stripe webhook edge function) is developed in a sibling `infrastructure/` folder at the repo root during the phase, then moved to the dedicated `infrastructure` GitHub repo. When this lands, the entitlement gate's stub source swaps for a real Supabase-backed source via `setEntitlementSource()` — no per-feature wiring changes.
