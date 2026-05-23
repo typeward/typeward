@@ -354,6 +354,29 @@ export const overleafImportZip = (
   name: string,
 ): Promise<Project> => invoke("overleaf_import_zip", { zipPath, parentDir, name });
 
+// ----- Grammar -----------------------------------------------------------
+
+export type GrammarSyntax = "plain" | "latex" | "typst";
+
+export interface GrammarDiagnostic {
+  severity: "warning" | "info";
+  message: string;
+  file: string;
+  line: number;
+  col: number;
+  endLine: number;
+  endCol: number;
+  source: string;
+  replacements: string[];
+}
+
+export const grammarCheck = (
+  text: string,
+  file: string,
+  syntax: GrammarSyntax = "plain",
+): Promise<GrammarDiagnostic[]> =>
+  invoke("grammar_check", { text, file, syntax });
+
 // ----- Autosave / recovery -------------------------------------------------
 
 export interface Snapshot {
