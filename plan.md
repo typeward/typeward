@@ -6,13 +6,30 @@
 
 ## Status
 
+### App build phases (original plan)
+
 | Phase | State | Summary |
 |---|---|---|
 | 0 — Skeleton | **complete** (2026-05-10) | Tauri 2 + Solid + TS scaffolded. Tailwind v4, Kobalte, lucide-solid, corvu, @solidjs/router installed. Theme tokens (Aurora/Obsidian/Graphite/Paper) + accent palettes (Violet-Cyan/Amber-Rose/Emerald-Teal/Indigo-Pink) wired with localStorage persistence. Vitest (jsdom) and `cargo test` baseline tests passing. Icons generated for all platforms. |
 | 1 — Vertical slice on desktop | **complete** (2026-05-10) | All four screens (Onboarding/Projects/Editor/Settings) ported and functional. CodeMirror 6 + PDF.js wired into a 3-pane corvu Resizable shell. Real LaTeX compile via system TeX (latexmk/pdflatex) or Tectonic. Architecture seams defined (DocumentExperience, EditorAdapter, CompileProvider, PreviewProvider, LspProvider, CommandRegistry). LSP transport (texlab spawn + JSON-RPC framing over Tauri event channels), unified file watcher (notify-based), autosave + recovery dialog, and telemetry capture (panic hook + frontend error hook + JSONL log) all in. |
 | 2 — Multi-format & preview polish | substantively complete | CommandRegistry bound, Typst adapter, SyncTeX all landed (2026-05-11..15). Two items intentionally skipped per user direction: smart per-page PDF diff and sync-to-cursor toggle. Quarto support was scoped in then dropped 2026-05-12. Markdown/RMD adapters and notebook shell were subsequently removed (2026-05-20 scope narrowing — see below). |
 | 3 — Tablet | substantively complete (2026-05-13) | Responsive layout (viewport-store + PaneSwitcher + LogsSheet + swipe gestures), texlyre-busytex CompileProvider (multi-file walker, SyncTeX persistence, settings UI with install-status probe), Android target scaffolded via `tauri android init`. APK build-and-run on emulator/device is the only remaining piece — user-driven. |
-| 4 — Cloud + collab | **deferred (2026-05-13)** | Supabase / accounts / realtime collab paused indefinitely. When it comes back, scope is **auth + collab + license keys only** — files stay local-first; nothing is mirrored to Supabase storage. The original "folder sync as files + metadata" framing has been retired. |
+| 4 — Cloud + collab | **superseded** (2026-05-22) | The original "folder sync to Supabase + realtime collab" framing was retired 2026-05-13. The integrations program (below) picks up the still-relevant pieces — third-party cloud storage providers landed as Integ Phase 2; Supabase resurfaces as Integ Phase 7 with a narrower scope (auth + entitlements only, no file storage, no realtime collab). Realtime collab via Yjs remains separately deferred. |
+
+### Integrations program (2026-05-22 → present)
+
+Approved plan: `~/.claude/plans/research-and-completely-plan-resilient-brook.md`.
+
+| Integ Phase | State | Summary |
+|---|---|---|
+| 0 — Foundations | **complete** (2026-05-22) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), entitlement-gate stub (`<FeatureGate>` + `<UpgradePrompt>`), `runOauthFlow` driver. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). |
+| 1 — References | **complete** (2026-05-22) | Zotero (Better BibTeX local probe + Web API key), Mendeley (OAuth PKCE; flagged maintenance-mode), JabRef (file-based), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which busytex + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. |
+| 2 — Cloud storage | **complete** (2026-05-22) | Dropbox (longpoll cursor), OneDrive (Graph `delta`), Google Drive (`changes.list` + ID↔path map, `drive.file` scope). iCloud Drive is OS-mediated on macOS (no third-party API). Generic sync engine + local cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/`, conflict resolution writes `<name>.conflict-<ISO>.<ext>` siblings. CloudPickerDialog (new-project Cloud branch) + SyncStatusBadge + ConflictResolverDialog. |
+| 3 — Git / GitHub / Overleaf | **complete** (2026-05-22) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only. SSH out of scope for now. |
+| 4 — AI providers | **complete** (2026-05-22) | One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter `aiStream`. Four providers (Claude / ChatGPT / Gemini / Ollama) share the same `AiProvider` shape; one active at a time. Empty `AiView` filled with real streaming chat (model picker, stop button, Mod+Enter send). |
+| 5 — Grammar | **complete** (2026-05-23) | Harper via `harper-core` — Rust-native, in-process, zero network. `grammar_check` IPC + CM6 `@codemirror/lint` linter (400ms debounce, 3 quick-fix actions per lint). Gated on `integrations.grammar.enabled` so off = zero IPC. American English only for now. |
+| 6 — Templates | **complete** (2026-05-23) | Manifest-driven (`template.json` with `variables[]` + `files[]`), Handlebars-subset `{{var}}` substitution. 4 built-in templates shipped under `src-tauri/resources/templates/`: latex/article, latex/ieee-conference, latex/beamer, typst/typst-article. `<TemplateGallery>` two-stage dialog wired into new-project flow. Custom templates load from `<app_data>/templates/custom/<id>/`. |
+| 7 — Supabase auth + entitlements | **pending** | Resumes deferred Phase 4 work scoped to **auth + subscription-driven feature gating only** — no license keys, no file storage, no realtime collab. Backend (SQL migrations, RPCs, RLS policies, Stripe webhook edge function) is developed in a sibling `infrastructure/` folder at the repo root during the phase, then moved to the dedicated `infrastructure` GitHub repo. When this lands, the entitlement gate's stub source swaps for a real Supabase-backed source via `setEntitlementSource()` — no per-feature wiring changes. |
 
 ---
 
@@ -371,21 +388,18 @@ Supported project formats reduced to **LaTeX and Typst**. The following were bui
 
 See `docs/ntb_feature.md` (archival notes on what was removed) and `docs/superpowers/specs/2026-05-20-narrow-formats-md-preview-design.md` (spec for the replacement preview).
 
-### Phase 4 — Cloud + collaboration — deferred (2026-05-13)
+### Phase 4 — Cloud + collaboration — superseded by the integrations program (2026-05-22)
 
-Paused indefinitely. When it resumes, scope has been narrowed: **no cloud file storage**. Files remain local-first; Supabase is only used for:
+Originally deferred 2026-05-13 with the framing "Supabase auth + realtime collab + license keys, no Storage." Superseded by the integrations program above, which picks up the still-relevant pieces with sharper scope:
 
-- Email/password auth (no OAuth in v0)
-- Real-time collaboration (Yjs over Supabase Realtime channels, files streamed during the session rather than persisted to Supabase Storage)
-- License keys / subscription tier validation
+- **Third-party cloud storage** (OneDrive / Dropbox / Google Drive / iCloud Drive) landed as **Integ Phase 2**. Files remain local-first; the sync engine maintains a per-project cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/` and reconciles via per-provider delta APIs.
+- **Supabase** resurfaces as **Integ Phase 7** with scope narrowed once more to **auth + subscription-driven entitlements only** — no file storage of user docs, no license keys (subscription-only revenue model). License-key validation is explicitly retired.
+- **Realtime collab via Yjs** remains separately deferred — it has no current owner phase. When it resumes, the design questions below still apply.
 
-The original Phase 4 bullets ("Supabase auth/storage", "Folder sync as files + metadata in Supabase storage + Postgres", "Account UI in Settings") are superseded by this narrower scope and should not be implemented as written.
-
-Pending design questions, to revisit when the phase resumes:
+Open design questions for a future collab phase:
 
 - What does collab look like without cloud file storage? (Live-session model where one peer hosts and others join via Yjs awareness/edits, with no Supabase persistence? Bring-your-own-storage via Git/Dropbox/iCloud?)
-- What does the subscription gate? (Feature gates, project count, compile minutes, or just Pro vs Free with no concrete restrictions?)
-- Where do entitlements live and how often are they refreshed?
+- What does the subscription gate? Phase 7's tier matrix (see the approved integrations plan) is the starting point — Pro covers the third-party cloud providers; Team would gate collab + shared templates.
 
 ---
 
@@ -443,8 +457,19 @@ Automated:
 
 ## Open items deliberately deferred
 
-- Spell-check engine choice (Hunspell vs LanguageTool) — phase 2
-- Vim mode binding plugin selection — phase 2
-- BibTeX/Zotero integration — phase 2 once core editor is solid
-- Whether to bundle the Typst binary vs detect-system — decide per-platform
+- **Vim mode binding plugin selection** — open
+- **Whether to bundle the Typst binary vs detect-system** — decide per-platform
+- **Smart per-page PDF diff** and **sync-to-cursor toggle** — original Phase 2 deferrals
+- **Cloud-storage push side wiring to autosave** (Integ Phase 2) — pulls work end-to-end; push currently happens only via the engine's explicit `pushOne()` rather than auto-flushed on the autosave debounce. To revisit when the cloud-sync flow gets real usage.
+- **Google Drive folder-chain auto-creation on upload** (Integ Phase 2.4) — currently throws if a file's parent folder isn't already in the id↔path map. Cleaner approach is needed before this is a normal user path.
+- **Conversation persistence + selection-driven AI commands** (Integ Phase 4 polish) — chat stays in memory per session; "Explain selection" / "Rewrite paragraph" haven't landed as commands yet.
+- **Save-as-template** (Integ Phase 6) — `<TemplateGallery>` reads existing custom templates, but the "capture current project as a custom template" command isn't shipped. Hand-authoring under `<app_data>/templates/custom/<id>/` works today.
+- **Grammar language picker** (Integ Phase 5) — Harper ships American English only at the moment; British and other dialects depend on Harper's dictionary set growing.
+- **SSH transport for git** — HTTPS + PAT covers the integration phase's scope; SSH agent forwarding + host verification is its own UX surface.
+- **iPadOS target + UIDocumentPicker for iCloud Drive** — both wait for the Tauri iOS target to be exercised.
+
+Resolved by the integrations program:
+
+- ~~Spell-check engine choice~~ → Harper (Integ Phase 5).
+- ~~BibTeX/Zotero integration~~ → Integ Phase 1 (Zotero / Mendeley / JabRef / DOI lookup all shipped).
 - Update mechanism (Tauri updater vs app stores) — phase 3+
