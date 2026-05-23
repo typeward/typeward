@@ -32,7 +32,9 @@ import {
 } from "~/stores/editor-store";
 import { theme } from "~/themes/theme-store";
 import { cursorCol, cursorLine } from "~/stores/editor-view-store";
-import { editorSettings } from "~/stores/settings-store";
+import { editorSettings, integrationsSettings } from "~/stores/settings-store";
+import { harperLinter } from "~/lib/grammar/cm6";
+import type { GrammarSyntax } from "~/ipc";
 import {
   consolePosition,
   editorLayout,
@@ -462,6 +464,11 @@ const CenterPane: Component<{
                   languageId: lang,
                 }) ?? []
               : [];
+            const grammarOn = integrationsSettings().grammar.enabled;
+            const extrasList = Array.isArray(extras) ? extras : [extras];
+            const grammarExt = grammarOn
+              ? [harperLinter({ syntax: grammarSyntaxFor(lang), file: f.relPath })]
+              : [];
             return (
               <CodeMirror
                 value={f.content}
@@ -469,7 +476,7 @@ const CenterPane: Component<{
                 language={lang}
                 fontSize={editorSettings().fontSize}
                 lineWrap={editorSettings().lineWrap}
-                extraExtensions={Array.isArray(extras) ? extras : [extras]}
+                extraExtensions={[...extrasList, ...grammarExt]}
               />
             );
           }}
@@ -539,6 +546,14 @@ function languageFor(
   if (lower.endsWith(".tex") || lower.endsWith(".bib")) return "latex";
   if (lower.endsWith(".typ")) return "typst";
   if (lower.endsWith(".md")) return "markdown";
+  return "plain";
+}
+
+function grammarSyntaxFor(
+  lang: "latex" | "markdown" | "typst" | "plain",
+): GrammarSyntax {
+  if (lang === "latex") return "latex";
+  if (lang === "typst") return "typst";
   return "plain";
 }
 

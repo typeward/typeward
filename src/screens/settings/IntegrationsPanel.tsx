@@ -59,10 +59,7 @@ export const IntegrationsPanel: Component = () => {
       <CloudStorageCard />
       <VcsCard />
       <AiCard />
-      <ComingSoonCard
-        title="Grammar"
-        body="Local Harper grammar lint, with diagnostics in the editor gutter. Zero network, all on-device."
-      />
+      <GrammarCard />
     </div>
   );
 };
@@ -954,6 +951,35 @@ async function probeProvider(
 }
 
 // =================================================================
+// Grammar card
+// =================================================================
+
+const GrammarCard: Component = () => {
+  const grammar = () => integrationsSettings().grammar;
+
+  const toggle = (enabled: boolean) => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      grammar: { ...grammar(), enabled },
+    });
+  };
+
+  return (
+    <Card
+      title="Grammar"
+      subtitle="Local Harper grammar lint. Runs in-process via the Rust crate — zero network, all on-device. Diagnostics surface as squiggles in the editor with one-click apply for suggested replacements."
+    >
+      <ProviderRow
+        name="Harper (American English)"
+        hint="Phase 5 ships en-US only. Additional dialects land as Harper's dictionary set grows."
+        status={grammar().enabled ? "ready" : "unconfigured"}
+        controls={<Switch checked={grammar().enabled} onChange={toggle} />}
+      />
+    </Card>
+  );
+};
+
+// =================================================================
 // Shared layout
 // =================================================================
 
@@ -1019,7 +1045,7 @@ const ProviderRow: Component<{
   </div>
 );
 
-// Local Card + ComingSoonCard kept inline so this panel doesn't depend on
+// Local Card kept inline so this panel doesn't depend on
 // SettingsScreen's internal primitives (those aren't exported).
 
 const Card: Component<{
@@ -1038,19 +1064,3 @@ const Card: Component<{
   </div>
 );
 
-const ComingSoonCard: Component<{ title: string; body: string }> = (props) => (
-  <div class="glass overflow-hidden rounded-xl opacity-60">
-    <div class="flex items-start justify-between gap-3 px-5 py-4">
-      <div>
-        <div class="text-[14px] font-semibold tracking-tight text-fg-1">{props.title}</div>
-        <div class="mt-0.5 text-[12px] leading-relaxed text-fg-2">{props.body}</div>
-      </div>
-      <span
-        class="mono inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider"
-        style={{ background: "var(--color-control-fill)", color: "var(--color-fg-3)" }}
-      >
-        Coming soon
-      </span>
-    </div>
-  </div>
-);
