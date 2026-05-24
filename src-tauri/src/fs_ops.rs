@@ -5,9 +5,9 @@ use std::path::Path;
 /// Write bytes to `path` via a temp-file rename, so a process crash mid-write
 /// can never leave a half-written project.json on disk.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let dir = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "path has no parent")
-    })?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(dir)?;
     let tmp = dir.join(format!(
         ".{}.tmp",

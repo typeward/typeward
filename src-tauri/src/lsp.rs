@@ -104,9 +104,18 @@ pub async fn start_lsp(
         .kill_on_drop(true)
         .spawn()?;
 
-    let stdin = child.stdin.take().ok_or_else(|| LspError::Io("missing stdin".into()))?;
-    let stdout = child.stdout.take().ok_or_else(|| LspError::Io("missing stdout".into()))?;
-    let stderr = child.stderr.take().ok_or_else(|| LspError::Io("missing stderr".into()))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| LspError::Io("missing stdin".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| LspError::Io("missing stdout".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| LspError::Io("missing stderr".into()))?;
 
     let (tx, mut rx) = mpsc::channel::<String>(64);
 
@@ -161,13 +170,7 @@ pub async fn start_lsp(
     });
 
     let mut servers = manager.servers.lock().expect("lsp lock poisoned");
-    servers.insert(
-        server_id.clone(),
-        ServerHandle {
-            tx,
-            _child: child,
-        },
-    );
+    servers.insert(server_id.clone(), ServerHandle { tx, _child: child });
 
     Ok(StartResult { server_id })
 }

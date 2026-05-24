@@ -23,6 +23,8 @@ pub enum CredentialError {
     InvalidAccount(String),
     #[error("secret is empty")]
     EmptySecret,
+    #[error("frontend reads are not allowed for service: {0}")]
+    ReadForbidden(String),
     #[error("keyring error: {0}")]
     Keyring(String),
     #[error("background task failed: {0}")]
@@ -74,6 +76,10 @@ pub fn get_secret(service: &str, account: &str) -> Result<Option<String>, Creden
     }
 }
 
+pub fn secret_exists(service: &str, account: &str) -> Result<bool, CredentialError> {
+    Ok(get_secret(service, account)?.is_some())
+}
+
 /// Remove a secret. `Ok(())` when the entry didn't exist — deletion is
 /// idempotent so frontends can call this on sign-out without checking
 /// existence first.
@@ -109,19 +115,38 @@ pub async fn credential_get(
     service: String,
     account: String,
 ) -> Result<Option<String>, CredentialError> {
+    if !frontend_read_allowed(&service) {
+        return Err(CredentialError::ReadForbidden(service));
+    }
     tokio::task::spawn_blocking(move || get_secret(&service, &account))
         .await
         .map_err(|e| CredentialError::Join(e.to_string()))?
 }
 
 #[tauri::command]
-pub async fn credential_delete(
-    service: String,
-    account: String,
-) -> Result<(), CredentialError> {
+pub async fn credential_exists(service: String, account: String) -> Result<bool, CredentialError> {
+    tokio::task::spawn_blocking(move || secret_exists(&service, &account))
+        .await
+        .map_err(|e| CredentialError::Join(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn credential_delete(service: String, account: String) -> Result<(), CredentialError> {
     tokio::task::spawn_blocking(move || delete_secret(&service, &account))
         .await
         .map_err(|e| CredentialError::Join(e.to_string()))?
+}
+
+fn frontend_read_allowed(service: &str) -> bool {
+    matches!(
+        service,
+        "dropbox"
+            | "microsoft"
+            | "google"
+            | "mendeley"
+            | "supabase.session"
+            | "supabase.entitlements"
+    )
 }
 
 #[cfg(test)]
@@ -144,6 +169,14 @@ mod tests {
     fn validate_produces_scoped_service() {
         let scoped = validate("zotero", "alice@example.com").unwrap();
         assert_eq!(scoped, "typeward.zotero");
+    }
+
+    #[test]
+    fn frontend_read_policy_blocks_api_key_services() {
+        assert!(!frontend_read_allowed("openai"));
+        assert!(!frontend_read_allowed("anthropic"));
+        assert!(!frontend_read_allowed("gemini"));
+        assert!(frontend_read_allowed("supabase.session"));
     }
 
     // Round-trip tests against the real OS keyring are skipped in CI because

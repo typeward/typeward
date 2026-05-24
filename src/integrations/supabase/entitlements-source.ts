@@ -101,6 +101,10 @@ async function fetchEntitlements(): Promise<CachedSnapshot | null> {
   };
 }
 
+function isCurrentSessionUser(userId: string): boolean {
+  return supabaseSession()?.user.id === userId;
+}
+
 /**
  * Mount the source-swap effect. Called once at boot from App.tsx.
  *
@@ -118,9 +122,11 @@ export function initSupabaseEntitlements(): void {
         return;
       }
       const userId = session.user.id;
+      resetEntitlementSource();
 
       // Restore cache first so the UI doesn't bounce while we fetch.
       void readCache(userId).then((cached) => {
+        if (!isCurrentSessionUser(userId)) return;
         if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
           setEntitlementSource(buildSource(cached));
         }
@@ -128,6 +134,7 @@ export function initSupabaseEntitlements(): void {
 
       // Then refresh.
       void fetchEntitlements().then((fresh) => {
+        if (!isCurrentSessionUser(userId)) return;
         if (fresh) {
           setEntitlementSource(buildSource(fresh));
           void writeCache(userId, fresh).catch(() => undefined);

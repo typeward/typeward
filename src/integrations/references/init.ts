@@ -10,6 +10,7 @@
 
 import { createEffect, createRoot } from "solid-js";
 
+import { hasEntitlement } from "~/integrations/entitlements";
 import { integrationsSettings } from "~/stores/settings-store";
 
 import { createBetterBibTexProvider } from "./zotero/better-bibtex";
@@ -43,13 +44,20 @@ export function initReferenceProviders(): void {
         );
       }
 
-      if (refs.zoteroWeb.userId) {
+      if (
+        refs.zoteroWeb.userId &&
+        hasEntitlement("integrations.references.zotero.web")
+      ) {
         const id = PROVIDER_IDS.zoteroWeb(refs.zoteroWeb.userId);
         desired.add(id);
         registerCitationProvider(createZoteroWebProvider({ userId: refs.zoteroWeb.userId }));
       }
 
-      if (refs.mendeley.profileId && refs.mendeley.displayName) {
+      if (
+        refs.mendeley.profileId &&
+        refs.mendeley.displayName &&
+        hasEntitlement("integrations.references.mendeley")
+      ) {
         const id = PROVIDER_IDS.mendeley(refs.mendeley.profileId);
         desired.add(id);
         registerCitationProvider(

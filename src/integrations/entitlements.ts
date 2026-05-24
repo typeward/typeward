@@ -1,12 +1,8 @@
 /**
  * Entitlement gate. Every integration call site that's behind a paid tier
- * reads through `useEntitlement(key)` (this file). Phase 0 ships a stub
- * source that grants everything — there is no Supabase session yet — so
- * the gates exist as plumbing without actually locking anything down.
- *
- * Phase 7 (Supabase auth) swaps `currentSource` for a real source backed
- * by the user's subscription. Because every call site already reads
- * through `useEntitlement`, that swap is a one-file change.
+ * reads through `useEntitlement(key)` (this file). The fallback source is
+ * the free tier so unsigned-out/offline users get local features, while
+ * paid integrations fail closed until Supabase resolves a subscription.
  *
  * Tokens / sessions never live here — credentials go through the keyring.
  * This module only consumes already-resolved tier + feature-flag state.
@@ -16,18 +12,27 @@ import { createSignal } from "solid-js";
 
 import type { EntitlementKey, EntitlementSource, Tier } from "./types";
 
-/**
- * Stub source: returns the highest tier and grants every entitlement.
- * Used until the Supabase source is wired in Phase 7 — same shape, just
- * "yes" for everything.
- */
-const stubSource: EntitlementSource = {
-  current: () => "team",
-  has: () => true,
-  reasonIfMissing: () => undefined,
+const FREE_ENTITLEMENTS = new Set<EntitlementKey>([
+  "integrations.references.zotero.local",
+  "integrations.references.jabref",
+  "integrations.references.doi_lookup",
+  "integrations.cloud.icloud",
+  "integrations.vcs.git",
+  "integrations.vcs.github",
+  "integrations.vcs.overleaf_import",
+  "integrations.ai.ollama",
+  "integrations.grammar.harper",
+  "templates.builtin.free",
+  "templates.custom.max",
+]);
+
+const freeTierSource: EntitlementSource = {
+  current: () => "free",
+  has: (key) => FREE_ENTITLEMENTS.has(key),
+  reasonIfMissing: (key) => (FREE_ENTITLEMENTS.has(key) ? undefined : "no-account"),
 };
 
-const [currentSource, setCurrentSource] = createSignal<EntitlementSource>(stubSource);
+const [currentSource, setCurrentSource] = createSignal<EntitlementSource>(freeTierSource);
 
 /**
  * Reactive entitlement check. Read this inside JSX or any tracking scope —
@@ -75,15 +80,15 @@ export function currentTier(): Tier {
 }
 
 /**
- * Swap the active entitlement source. Phase 7's Supabase wiring calls this
- * once after sign-in (and again with `stubSource` on sign-out). No other
- * code should call this — it's the seam, not an API.
+ * Swap the active entitlement source. Supabase wiring calls this after
+ * sign-in and `resetEntitlementSource` on sign-out. No other code should
+ * call this — it's the seam, not an API.
  */
 export function setEntitlementSource(source: EntitlementSource): void {
   setCurrentSource(() => source);
 }
 
-/** Restore the stub source. Useful in tests; also called on sign-out. */
+/** Restore the free-tier fallback. Useful in tests; also called on sign-out. */
 export function resetEntitlementSource(): void {
-  setCurrentSource(() => stubSource);
+  setCurrentSource(() => freeTierSource);
 }

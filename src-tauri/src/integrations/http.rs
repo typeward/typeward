@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use reqwest::{Client, Method};
+use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -39,6 +39,18 @@ fn client() -> &'static Client {
 pub enum HttpError {
     #[error("invalid method: {0}")]
     InvalidMethod(String),
+    #[error("invalid URL: {0}")]
+    InvalidUrl(String),
+    #[error("blocked outbound URL: {0}")]
+    BlockedUrl(String),
+    #[error("blocked outbound auth header for host: {0}")]
+    BlockedAuthHeader(String),
+    #[error("credential {service}/{account} is not allowed for host {host}")]
+    BlockedAuthRef {
+        service: String,
+        account: String,
+        host: String,
+    },
     #[error("network error: {0}")]
     Network(String),
     #[error("response body read failed: {0}")]
@@ -116,8 +128,119 @@ fn parse_method(method: &str) -> Result<Method, HttpError> {
         .map_err(|_| HttpError::InvalidMethod(method.to_string()))
 }
 
-async fn perform_once(req: &HttpRequest, auth: Option<&AuthRef>) -> Result<HttpResponse, HttpError> {
+fn parse_url(url: &str) -> Result<Url, HttpError> {
+    Url::parse(url).map_err(|e| HttpError::InvalidUrl(e.to_string()))
+}
+
+fn normalized_host(url: &Url) -> Result<String, HttpError> {
+    url.host_str()
+        .map(|host| host.to_ascii_lowercase())
+        .ok_or_else(|| HttpError::BlockedUrl(url.as_str().to_string()))
+}
+
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+
+fn allowed_https_host(host: &str) -> bool {
+    matches!(
+        host,
+        "api.zotero.org"
+            | "doi.org"
+            | "export.arxiv.org"
+            | "api.mendeley.com"
+            | "api.dropboxapi.com"
+            | "content.dropboxapi.com"
+            | "notify.dropboxapi.com"
+            | "login.microsoftonline.com"
+            | "graph.microsoft.com"
+            | "accounts.google.com"
+            | "oauth2.googleapis.com"
+            | "www.googleapis.com"
+            | "generativelanguage.googleapis.com"
+            | "github.com"
+            | "api.github.com"
+            | "api.openai.com"
+            | "api.anthropic.com"
+    )
+}
+
+fn allowed_raw_auth_header_host(host: &str) -> bool {
+    matches!(
+        host,
+        "api.mendeley.com"
+            | "api.dropboxapi.com"
+            | "content.dropboxapi.com"
+            | "notify.dropboxapi.com"
+            | "graph.microsoft.com"
+            | "www.googleapis.com"
+            | "generativelanguage.googleapis.com"
+    )
+}
+
+fn is_sensitive_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("authorization")
+        || name.eq_ignore_ascii_case("x-api-key")
+        || name.eq_ignore_ascii_case("api-key")
+}
+
+pub fn validate_auth_ref_for_host(auth: &AuthRef, host: &str) -> Result<(), HttpError> {
+    let allowed = matches!(
+        (auth.service.as_str(), host),
+        ("zotero-web", "api.zotero.org")
+            | ("git.github.com", "api.github.com")
+            | ("openai", "api.openai.com")
+            | ("anthropic", "api.anthropic.com")
+            | ("gemini", "generativelanguage.googleapis.com")
+    );
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(HttpError::BlockedAuthRef {
+            service: auth.service.clone(),
+            account: auth.account.clone(),
+            host: host.to_string(),
+        })
+    }
+}
+
+pub fn validate_outbound_url(url: &str, auth_ref: Option<&AuthRef>) -> Result<Url, HttpError> {
+    let parsed = parse_url(url)?;
+    let host = normalized_host(&parsed)?;
+    match parsed.scheme() {
+        "https" if allowed_https_host(&host) => {}
+        "http" if is_loopback_host(&host) => {}
+        _ => return Err(HttpError::BlockedUrl(url.to_string())),
+    }
+    if let Some(auth) = auth_ref {
+        validate_auth_ref_for_host(auth, &host)?;
+    }
+    Ok(parsed)
+}
+
+pub fn validate_outbound_request(
+    url: &str,
+    headers: &HashMap<String, String>,
+    auth_ref: Option<&AuthRef>,
+) -> Result<(), HttpError> {
+    let parsed = validate_outbound_url(url, auth_ref)?;
+    let host = normalized_host(&parsed)?;
+    if headers.keys().any(|name| is_sensitive_header(name))
+        && auth_ref.is_none()
+        && !allowed_raw_auth_header_host(&host)
+    {
+        return Err(HttpError::BlockedAuthHeader(host));
+    }
+    Ok(())
+}
+
+async fn perform_once(
+    req: &HttpRequest,
+    auth: Option<&AuthRef>,
+) -> Result<HttpResponse, HttpError> {
     let method = parse_method(&req.method)?;
+    validate_outbound_request(&req.url, &req.headers, auth)?;
     let mut builder = client().request(method, &req.url);
 
     for (name, value) in &req.headers {
@@ -191,9 +314,7 @@ pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
 /// payload is arbitrary binary content that can't survive a UTF-8 round
 /// trip.
 #[tauri::command]
-pub async fn http_request_bytes(
-    req: BinaryHttpRequest,
-) -> Result<BinaryHttpResponse, HttpError> {
+pub async fn http_request_bytes(req: BinaryHttpRequest) -> Result<BinaryHttpResponse, HttpError> {
     match perform_once_bytes(&req, req.auth_ref.as_ref()).await {
         Ok(res) => Ok(res),
         Err(HttpError::Network(_)) => {
@@ -209,6 +330,7 @@ async fn perform_once_bytes(
     auth: Option<&AuthRef>,
 ) -> Result<BinaryHttpResponse, HttpError> {
     let method = parse_method(&req.method)?;
+    validate_outbound_request(&req.url, &req.headers, auth)?;
     let mut builder = client().request(method, &req.url);
 
     for (name, value) in &req.headers {
@@ -252,7 +374,11 @@ async fn perform_once_bytes(
         .map_err(|e| HttpError::Body(e.to_string()))?
         .to_vec();
 
-    Ok(BinaryHttpResponse { status, headers, body: bytes })
+    Ok(BinaryHttpResponse {
+        status,
+        headers,
+        body: bytes,
+    })
 }
 
 #[cfg(test)]
@@ -281,6 +407,47 @@ mod tests {
     }
 
     #[test]
+    fn outbound_allowlist_accepts_known_https_hosts() {
+        assert!(validate_outbound_url("https://api.zotero.org/users/1/items", None).is_ok());
+        assert!(validate_outbound_url("https://api.openai.com/v1/models", None).is_ok());
+    }
+
+    #[test]
+    fn outbound_allowlist_blocks_unknown_hosts() {
+        let err = validate_outbound_url("https://example.com/leak", None).unwrap_err();
+        assert!(matches!(err, HttpError::BlockedUrl(_)));
+    }
+
+    #[test]
+    fn outbound_allowlist_allows_http_only_for_loopback() {
+        assert!(validate_outbound_url("http://127.0.0.1:23119/better-bibtex", None).is_ok());
+        let err = validate_outbound_url("http://api.zotero.org/users/1/items", None).unwrap_err();
+        assert!(matches!(err, HttpError::BlockedUrl(_)));
+    }
+
+    #[test]
+    fn auth_ref_is_bound_to_expected_host() {
+        let auth = AuthRef {
+            service: "openai".into(),
+            account: "default".into(),
+            header: "Authorization".into(),
+            prefix: "Bearer ".into(),
+        };
+        assert!(validate_outbound_url("https://api.openai.com/v1/models", Some(&auth)).is_ok());
+        let err = validate_outbound_url("https://api.github.com/user", Some(&auth)).unwrap_err();
+        assert!(matches!(err, HttpError::BlockedAuthRef { .. }));
+    }
+
+    #[test]
+    fn raw_auth_headers_are_rejected_for_public_metadata_hosts() {
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".into(), "Bearer secret".into());
+        let err =
+            validate_outbound_request("https://doi.org/10.1000/test", &headers, None).unwrap_err();
+        assert!(matches!(err, HttpError::BlockedAuthHeader(_)));
+    }
+
+    #[test]
     fn http_response_serializes_as_camel_case() {
         let res = HttpResponse {
             status: 200,
@@ -292,5 +459,4 @@ mod tests {
         assert!(json.contains("\"status\":200"));
         assert!(json.contains("\"body\":\"ok\""));
     }
-
 }

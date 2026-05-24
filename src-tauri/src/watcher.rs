@@ -129,4 +129,3 @@ fn classify(kind: &EventKind) -> String {
         EventKind::Any => "any".into(),
     }
 }
-

@@ -4,6 +4,8 @@ export {
   REMOTE_CACHE_DIR,
   cursorPath,
   idMapPath,
+  cachePathForRemoteRel,
+  normalizeRemoteRelPath,
   projectCacheRoot,
   providerCacheRoot,
 } from "./paths";

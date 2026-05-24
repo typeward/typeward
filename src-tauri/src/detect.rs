@@ -22,13 +22,7 @@ pub struct EngineProbe {
 }
 
 const ENGINES: &[&str] = &[
-    "pdflatex",
-    "xelatex",
-    "lualatex",
-    "latexmk",
-    "tectonic",
-    "typst",
-    "pandoc",
+    "pdflatex", "xelatex", "lualatex", "latexmk", "tectonic", "typst", "pandoc",
 ];
 
 pub fn probe() -> EngineProbe {
@@ -43,7 +37,9 @@ pub fn probe() -> EngineProbe {
 }
 
 fn probe_one(name: &str) -> TexEngine {
-    let path = which::which(name).ok().map(|p| p.to_string_lossy().into_owned());
+    let path = which::which(name)
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned());
     let version = path.as_ref().and_then(|_| run_version(name));
     TexEngine {
         installed: path.is_some(),

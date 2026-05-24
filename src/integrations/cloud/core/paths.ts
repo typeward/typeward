@@ -55,6 +55,32 @@ export function idMapPath(
   );
 }
 
+export function normalizeRemoteRelPath(relPath: string): string {
+  const normalized = relPath.trim().replace(/\\/g, "/");
+  if (
+    !normalized ||
+    normalized.includes("\0") ||
+    normalized.startsWith("/") ||
+    normalized.startsWith("//") ||
+    /^[a-z]:/i.test(normalized)
+  ) {
+    throw new Error(`Unsafe remote path '${relPath}'`);
+  }
+
+  const segments = normalized.split("/");
+  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new Error(`Unsafe remote path '${relPath}'`);
+  }
+  if (segments[0] === ".typeward") {
+    throw new Error(`Remote path '${relPath}' targets Typeward's internal state`);
+  }
+  return segments.join("/");
+}
+
+export function cachePathForRemoteRel(cacheRoot: string, relPath: string): string {
+  return joinPath(cacheRoot, normalizeRemoteRelPath(relPath));
+}
+
 /**
  * Cross-platform path join — keeps the code paths working on both Win
  * (`\`) and unix. Strips redundant separators and leading slashes from

@@ -22,7 +22,12 @@ import {
 import type { CloudFsProvider, DeltaChange, RemoteFile } from "~/integrations/types";
 
 import { decideConflict } from "./conflict";
-import { cursorPath, projectCacheRoot } from "./paths";
+import {
+  cachePathForRemoteRel,
+  cursorPath,
+  normalizeRemoteRelPath,
+  projectCacheRoot,
+} from "./paths";
 import {
   recordConflicts,
   setSyncPhase,
@@ -131,7 +136,7 @@ export class SyncEngine {
 
   private async applyChange(change: DeltaChange): Promise<string | undefined> {
     if (change.kind === "removed") {
-      const abs = `${this.cacheRoot()}/${change.relPath}`;
+      const abs = cachePathForRemoteRel(this.cacheRoot(), change.relPath);
       try {
         await remove(abs);
       } catch {
@@ -140,7 +145,7 @@ export class SyncEngine {
       return undefined;
     }
 
-    const abs = `${this.cacheRoot()}/${change.file.relPath}`;
+    const abs = cachePathForRemoteRel(this.cacheRoot(), change.file.relPath);
     const localExists = await safeExists(abs);
 
     if (localExists) {
@@ -154,13 +159,13 @@ export class SyncEngine {
         if (decision.winner === "local") {
           // Local wins → write the remote copy to the conflict path so
           // the user can compare. Don't overwrite local.
-          const conflictAbs = `${this.cacheRoot()}/${decision.conflictPath}`;
+          const conflictAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
           await mkdirParents(conflictAbs);
           await this.provider.downloadFile(change.file, conflictAbs);
           return change.file.relPath;
         }
         // Remote wins → save the local copy aside, then overwrite local.
-        const sidecarAbs = `${this.cacheRoot()}/${decision.conflictPath}`;
+        const sidecarAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
         await mkdirParents(sidecarAbs);
         const localBytes = await readFile(abs);
         await writeFile(sidecarAbs, localBytes);
@@ -218,5 +223,9 @@ export interface PushPlan {
 }
 
 export async function pushOne(provider: CloudFsProvider, plan: PushPlan): Promise<RemoteFile> {
-  return provider.uploadFile(plan.rootId, plan.relPath, plan.sourceAbsPath);
+  return provider.uploadFile(
+    plan.rootId,
+    normalizeRemoteRelPath(plan.relPath),
+    plan.sourceAbsPath,
+  );
 }

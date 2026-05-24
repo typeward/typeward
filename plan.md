@@ -22,14 +22,14 @@ Approved plan: `~/.claude/plans/research-and-completely-plan-resilient-brook.md`
 
 | Integ Phase | State | Summary |
 |---|---|---|
-| 0 — Foundations | **complete** (2026-05-22) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), entitlement-gate stub (`<FeatureGate>` + `<UpgradePrompt>`), `runOauthFlow` driver. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). |
+| 0 — Foundations | **complete** (2026-05-22; hardened 2026-05-24) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + scoped capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), free-tier entitlement fallback (`<FeatureGate>` + `<UpgradePrompt>`), `runOauthFlow` driver. HTTP IPC is host allowlisted; `authRef` is host-bound. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). |
 | 1 — References | **complete** (2026-05-22) | Zotero (Better BibTeX local probe + Web API key), Mendeley (OAuth PKCE; flagged maintenance-mode), JabRef (file-based), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which busytex + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. |
-| 2 — Cloud storage | **complete** (2026-05-22) | Dropbox (longpoll cursor), OneDrive (Graph `delta`), Google Drive (`changes.list` + ID↔path map, `drive.file` scope). iCloud Drive is OS-mediated on macOS (no third-party API). Generic sync engine + local cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/`, conflict resolution writes `<name>.conflict-<ISO>.<ext>` siblings. CloudPickerDialog (new-project Cloud branch) + SyncStatusBadge + ConflictResolverDialog. |
-| 3 — Git / GitHub / Overleaf | **complete** (2026-05-22) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only. SSH out of scope for now. |
-| 4 — AI providers | **complete** (2026-05-22) | One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter `aiStream`. Four providers (Claude / ChatGPT / Gemini / Ollama) share the same `AiProvider` shape; one active at a time. Empty `AiView` filled with real streaming chat (model picker, stop button, Mod+Enter send). |
+| 2 — Cloud storage | **complete** (2026-05-22; hardened 2026-05-24) | Dropbox (longpoll cursor), OneDrive (Graph `delta` with root-relative path stripping), Google Drive (`changes.list` + ID↔path map, `drive.file` scope). iCloud Drive is OS-mediated on macOS (no third-party API). Generic sync engine + local cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/`, conflict resolution writes `<name>.conflict-<ISO>.<ext>` siblings. Remote paths are normalized before cache IO and `.typeward/` targets are rejected. CloudPickerDialog (new-project Cloud branch) + SyncStatusBadge + ConflictResolverDialog. |
+| 3 — Git / GitHub / Overleaf | **complete** (2026-05-22; hardened 2026-05-24) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only and refuses dirty worktrees. SSH out of scope for now. |
+| 4 — AI providers | **complete** (2026-05-22; hardened 2026-05-24) | One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter `aiStream`. Four providers (Claude / ChatGPT / Gemini / Ollama) share the same `AiProvider` shape; one active at a time and entitlement-gated. OpenAI / Anthropic / Gemini keys attach in Rust via `authRef`; status UI uses `credential_exists`. |
 | 5 — Grammar | **complete** (2026-05-23) | Harper via `harper-core` — Rust-native, in-process, zero network. `grammar_check` IPC + CM6 `@codemirror/lint` linter (400ms debounce, 3 quick-fix actions per lint). Gated on `integrations.grammar.enabled` so off = zero IPC. American English only for now. |
 | 6 — Templates | **complete** (2026-05-23) | Manifest-driven (`template.json` with `variables[]` + `files[]`), Handlebars-subset `{{var}}` substitution. 4 built-in templates shipped under `src-tauri/resources/templates/`: latex/article, latex/ieee-conference, latex/beamer, typst/typst-article. `<TemplateGallery>` two-stage dialog wired into new-project flow. Custom templates load from `<app_data>/templates/custom/<id>/`. |
-| 7 — Supabase auth + entitlements | **substantively complete** (2026-05-23) | Auth + subscription-driven feature gating only — no license keys, no file storage, no realtime collab. **7.1** `infrastructure/supabase/` with two migrations (plans / subscriptions / profiles / entitlements_map / signup trigger / `get_entitlements()` RPC + shared_templates), `seed.sql` with the free/pro/team catalog + ~20-key entitlement matrix, `seed_test_users.sql` staging seed. **7.2** `@supabase/supabase-js` ^2.106 with a keyring-backed storage adapter (sessions live in `typeward.supabase.session` keyring slots, not localStorage). Reactive `supabaseSession()` signal driven by `onAuthStateChange`. **7.3** AccountSection in Settings (email/password sign-in, plan badge), SubscriptionBadge in TopBar. **7.4** `initSupabaseEntitlements()` swaps the Phase 0 stub for a real source on sign-in, with a 7-day-TTL keyring-cached snapshot for offline. **7.5** staging push (`supabase db push` + seeds) is user-driven against `aepfxzsnhjonzevwglgr`. **7.6** Stripe webhook edge function pending — schema already carries `stripe_subscription_id` / `stripe_customer_id` for the webhook to upsert via service-role. |
+| 7 — Supabase auth + entitlements | **substantively complete** (2026-05-23; hardened 2026-05-24) | Auth + subscription-driven feature gating only — no license keys, no file storage, no realtime collab. **7.1** `infrastructure/supabase/` with two migrations (plans / subscriptions / profiles / entitlements_map / signup trigger / `get_entitlements()` RPC + shared_templates), `seed.sql` with the free/pro/team catalog + ~20-key entitlement matrix, `seed_test_users.sql` staging seed. **7.2** `@supabase/supabase-js` ^2.106 with a keyring-backed storage adapter (sessions live in `typeward.supabase.session` keyring slots, not localStorage). Reactive `supabaseSession()` signal driven by `onAuthStateChange`. **7.3** AccountSection in Settings (email/password sign-in, plan badge), SubscriptionBadge in TopBar reads `currentTier()`. **7.4** `initSupabaseEntitlements()` swaps the free fallback for a real source on sign-in, with a 7-day-TTL keyring-cached snapshot for offline and stale-result guards after sign-out/account switches. Paid Settings rows, registries, AI activation, and cloud sync startup are gated. **7.5** staging push (`supabase db push` + seeds) is user-driven against `aepfxzsnhjonzevwglgr`. **7.6** Stripe webhook edge function pending — schema already carries `stripe_subscription_id` / `stripe_customer_id` for the webhook to upsert via service-role. |
 
 ---
 
@@ -52,7 +52,7 @@ Multiplatform editor app ("Typeward") similar to Overleaf, format-agnostic: LaTe
 | Routing | **@solidjs/router** | Onboarding / Projects / Editor / Settings are distinct top-level screens — small router beats a hand-rolled switch. |
 | State | **Solid stores + signals** | No external state lib. |
 | Editor | **CodeMirror 6** + `@codemirror/lang-*` (latex, markdown, etc.); custom Typst lang | Map prototype's token CSS classes to CM6 syntax classes. |
-| LSP integration | **codemirror-languageserver** over Tauri **event channels** (not `invoke`) | LSP servers (texlab, tinymist) run as Tauri sidecars; Rust owns child-process lifecycle, frontend owns editor protocol state. Bidirectional event streams keep autocomplete/diagnostics latency low — request/response `invoke` jitters under load. |
+| LSP integration | **Hand-rolled CM6 binding** over Tauri **event channels** (not `invoke`) | LSP servers (texlab, tinymist) run as Tauri sidecars; Rust owns child-process lifecycle, frontend owns editor protocol state. Bidirectional event streams keep autocomplete/diagnostics latency low; lifecycle writes still use `invoke`. We avoided `codemirror-languageserver` because its transport stack is WebSocket/open-rpc oriented. |
 | PDF preview | **pdfjs-dist** (PDF.js) | Offline, hot-reload on compile output. |
 | Resizable panes | **corvu** (`corvu/resizable`) | Mature Solid primitive; the prototype's `useDrag` works but corvu handles a11y + edge cases for free. |
 | TeX engine — desktop (primary) | **System install** (TeX Live / MiKTeX / MacTeX) | Detect at onboarding; invoke `latexmk`/`pdflatex` directly via Rust. |
@@ -60,7 +60,7 @@ Multiplatform editor app ("Typeward") similar to Overleaf, format-agnostic: LaTe
 | TeX engine — tablet | **texlyre-busytex** (WASM) | Phase 3. |
 | Other compilers | **Typst CLI** as a detected binary | Detected on PATH per-platform; not bundled. |
 | Testing | **Vitest** + **@solidjs/testing-library** + **Playwright** + **cargo test** | E2E uses Tauri's WebDriver bridge. |
-| Cloud (future, phase 4) | **Supabase** (auth, Postgres, storage, realtime) | Folder-level sync; per-file content syncs as text. |
+| Cloud / accounts | **Third-party cloud providers + Supabase auth** | Dropbox / OneDrive / Google Drive sync through provider APIs and local cache. Supabase is auth + subscription entitlements only; no document storage or realtime collab in the current scope. |
 | Real-time collab (future) | **Yjs** + **y-codemirror.next** | Transport over Supabase realtime channels. |
 
 ### Why not these (briefly)
@@ -105,7 +105,7 @@ Plugins later become "things that register adapters and providers." Without thes
 
 ### 4. LSP transport
 
-Rust owns LSP child processes; Solid frontend talks over **Tauri event channels** (`emit`/`listen`), not `invoke`. The frontend LSP client wraps this in a JSON-RPC stream interface that `codemirror-languageserver` consumes. Live traffic stays event-driven; only one-shot lifecycle ops (start/stop server) use `invoke`.
+Rust owns LSP child processes; Solid frontend talks over **Tauri event channels** (`emit`/`listen`), not `invoke`, for inbound server traffic. The frontend LSP client wraps this in a JSON-RPC stream and a local CM6 integration (`src/lib/lsp/cm6.ts`). Live traffic stays event-driven; only one-shot lifecycle ops (start/stop server) and outbound writes use `invoke`.
 
 ### 5. Unified file-watcher service
 
@@ -247,13 +247,13 @@ What landed:
 - **Editor** screen: corvu Resizable 3-pane shell, CodeMirror 6 with `lang-stex` (LaTeX) and `lang-markdown`, theme-aware editor styling, FileTree from disk via Tauri fs plugin, PDF.js viewer with retained scroll position + zoom across recompiles, status bar (line count / language / encoding / compile time), Problems pane.
 - **LatexAdapter** (`src/adapters/latex/LatexAdapter.ts`) — first concrete `EditorAdapter`. Delegates to `compileLatex` IPC.
 - **CompileProvider impls** in Rust (`src-tauri/src/commands.rs`): system TeX path runs `latexmk -pdf` (falling back to `pdflatex`); Tectonic path runs `tectonic -X compile`. Minimal `.log` parser produces error/warning diagnostics.
-- **LSP transport** (`src-tauri/src/lsp.rs` + `src/lib/lsp/client.ts`): Rust spawns texlab/tinymist as a child process, parses Content-Length-framed JSON-RPC, emits inbound payloads as Tauri events. Outbound traffic via `send_lsp_message` invoke. Lifecycle ops (`start_lsp` / `stop_lsp`) via invoke. **codemirror-languageserver binding into LatexAdapter is iteration work; the channel is functional today.**
+- **LSP transport** (`src-tauri/src/lsp.rs` + `src/lib/lsp/client.ts` + `src/lib/lsp/cm6.ts`): Rust spawns texlab/tinymist as a child process, parses Content-Length-framed JSON-RPC, emits inbound payloads as Tauri events. Outbound traffic via `send_lsp_message` invoke. Lifecycle ops (`start_lsp` / `stop_lsp`) via invoke. The CM6 binding is local, not `codemirror-languageserver`.
 - **Unified file watcher** (`src-tauri/src/watcher.rs` + `src/lib/watcher/client.ts`): `notify`-based, one watcher per project, typed events emitted on a single channel.
 - **Autosave + crash recovery**: debounced 500ms snapshots to `<project>/.typeward/snapshots/<rel>.snap`. On project open, the editor scans for orphans (snapshots newer than file mtime) and prompts via `RecoveryDialog`.
 - **Telemetry**: Rust panic hook + frontend `window.error` / `unhandledrejection` hook → structured JSONL log at `<app_data>/telemetry.log`. Compile failures forwarded automatically. No submission UI yet.
 
 Iteration items intentionally deferred:
-- **codemirror-languageserver wiring** into the editor — LSP transport + frontend client are functional but not yet bound to CM6's autocomplete/diagnostics.
+- **Structured LSP token/semantic support** — the hand-rolled CM6 binding covers diagnostics/completion; richer semantic tokens are still deferred.
 - **Bundled Tectonic binary** — compile path invokes the `tectonic` CLI from PATH; the actual sidecar binary download/bundling lands separately.
 - **Multi-tab editor** — only one file open at a time for now.
 - **Pixel-perfect parity** with `design_files/Editor.html` — the layout and components match design intent but were not pixel-matched line-by-line; iterate visually after the user reviews.
@@ -275,7 +275,7 @@ Original breakdown follows for reference:
 6. **Editor screen** (`text-shell` + `LatexAdapter`) — port `design_files/Editor.html`:
    - Resizable 3-pane layout via corvu
    - CodeMirror 6 with `@codemirror/lang-tex` (extensions provided by `LatexAdapter.cmExtensions()`)
-   - texlab spawned as sidecar; LSP wired via codemirror-languageserver over event channels
+   - texlab spawned as sidecar; LSP wired through the local CM6 binding over event channels
    - "Compile" → goes through `CompileProvider` (system-tex or Tectonic per project setting)
    - PDF.js renders compiled output via `PreviewProvider`, **retains scroll position + zoom across recompile** (don't naively rebuild the viewer)
    - File tree from disk via `watcher.rs`; tabs from open files; status bar live (line/col/encoding)
@@ -393,13 +393,13 @@ See `docs/ntb_feature.md` (archival notes on what was removed) and `docs/superpo
 Originally deferred 2026-05-13 with the framing "Supabase auth + realtime collab + license keys, no Storage." Superseded by the integrations program above, which picks up the still-relevant pieces with sharper scope:
 
 - **Third-party cloud storage** (OneDrive / Dropbox / Google Drive / iCloud Drive) landed as **Integ Phase 2**. Files remain local-first; the sync engine maintains a per-project cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/` and reconciles via per-provider delta APIs.
-- **Supabase** resurfaced as **Integ Phase 7** and shipped 2026-05-23 (the Stripe webhook + staging push are the only remainders). Scope narrowed once more to **auth + subscription-driven entitlements only** — no file storage of user docs, no license keys (subscription-only revenue model). License-key validation is explicitly retired.
+- **Supabase** resurfaced as **Integ Phase 7** and shipped 2026-05-23 (the Stripe webhook + staging push are the only remainders). Scope narrowed once more to **auth + subscription-driven entitlements only** — no file storage of user docs, no license keys (subscription-only revenue model). License-key validation is explicitly retired. The default offline/unsigned state is the free-tier matrix, not an allow-all stub.
 - **Realtime collab via Yjs** remains separately deferred — it has no current owner phase. When it resumes, the design questions below still apply.
 
 Open design questions for a future collab phase:
 
 - What does collab look like without cloud file storage? (Live-session model where one peer hosts and others join via Yjs awareness/edits, with no Supabase persistence? Bring-your-own-storage via Git/Dropbox/iCloud?)
-- What does the subscription gate? Phase 7's tier matrix (see the approved integrations plan) is the starting point — Pro covers the third-party cloud providers; Team would gate collab + shared templates.
+- What does the subscription gate? Phase 7's tier matrix (see `infrastructure/supabase/seed.sql`) is the starting point — Pro covers third-party cloud providers and hosted AI/reference integrations; Team gates shared templates and future collab.
 
 ---
 

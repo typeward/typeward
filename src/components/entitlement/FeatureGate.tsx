@@ -22,9 +22,8 @@ interface FeatureGateProps {
 /**
  * Conditionally renders gated UI based on the current entitlement source.
  *
- * Phase 0 ships with a stub source that approves everything — nothing is
- * actually locked yet. Phase 7 swaps the source and the same call sites
- * start showing fallbacks for free-tier users.
+ * The default source is the free-tier matrix. Supabase swaps in a
+ * subscription-backed source after sign-in.
  */
 export const FeatureGate: Component<FeatureGateProps> = (props) => {
   const entitled = useEntitlement(props.feature);

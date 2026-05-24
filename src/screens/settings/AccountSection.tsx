@@ -6,10 +6,9 @@
  * the section collapses to a "Supabase isn't configured" hint and the
  * rest of the app stays in free-tier-everywhere mode.
  *
- * The subscription / entitlement display lights up in Phase 7.4 once
- * the real EntitlementSource swaps in; for now we render the plan name
- * directly off the user's `subscriptions` row when one exists, falling
- * back to "Free" otherwise.
+ * The entitlement source swaps to the user's subscription after sign-in.
+ * The plan query here is only a compact account summary; the gates
+ * themselves read from `src/integrations/entitlements.ts`.
  */
 
 import { LogIn, LogOut, Mail, ShieldCheck } from "lucide-solid";
@@ -195,9 +194,8 @@ const SignedInCard: Component = () => {
         <div class="flex items-center gap-1.5 text-[11px] text-fg-3">
           <ShieldCheck class="ui-icon-sm" />
           <span>
-            Entitlement gating becomes live in Phase 7.4 — for now the UI is
-            visible everywhere; the plan badge above reflects what gating
-            will use.
+            Paid integrations are gated by the current entitlement source.
+            Sign-out returns to the free-tier matrix.
           </span>
         </div>
       </div>

@@ -73,11 +73,7 @@ pub async fn grammar_check(
             let span = lint.span;
             let (start_line, start_col) = locate(&line_starts, span.start);
             let (end_line, end_col) = locate(&line_starts, span.end);
-            let replacements = lint
-                .suggestions
-                .iter()
-                .map(suggestion_text)
-                .collect();
+            let replacements = lint.suggestions.iter().map(suggestion_text).collect();
             out.push(GrammarDiagnostic {
                 severity: "warning",
                 message: lint.message,

@@ -8,6 +8,7 @@
 
 import { createEffect, createRoot } from "solid-js";
 
+import { hasEntitlement } from "~/integrations/entitlements";
 import { project } from "~/stores/editor-store";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 
@@ -39,6 +40,10 @@ export function initCloudSync(): void {
 
       const origin = readCloudOrigin(proj);
       if (!origin) {
+        teardown();
+        return;
+      }
+      if (!hasEntitlement(`integrations.cloud.${origin.provider}`)) {
         teardown();
         return;
       }

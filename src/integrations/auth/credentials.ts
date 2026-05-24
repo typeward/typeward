@@ -23,5 +23,11 @@ export const getCredential = (ref: CredentialRef): Promise<string | null> =>
     account: ref.account,
   });
 
+export const credentialExists = (ref: CredentialRef): Promise<boolean> =>
+  invoke<boolean>("credential_exists", {
+    service: ref.service,
+    account: ref.account,
+  });
+
 export const deleteCredential = (ref: CredentialRef): Promise<void> =>
   invoke("credential_delete", { service: ref.service, account: ref.account });

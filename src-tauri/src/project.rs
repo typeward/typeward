@@ -27,7 +27,11 @@ pub struct Project {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProjectIntegrations {
-    #[serde(rename = "cloudOrigin", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "cloudOrigin",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cloud_origin: Option<CloudOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<GitState>,
@@ -53,7 +57,11 @@ pub struct GitState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReferenceBinding {
     pub provider: String,
-    #[serde(rename = "collectionId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "collectionId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub collection_id: Option<String>,
 }
 
@@ -200,7 +208,13 @@ pub fn create_project(
 
 fn sanitize_folder_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
@@ -233,10 +247,7 @@ pub fn validate_project_relative_path(rel_path: &str) -> Result<PathBuf, Project
     Ok(out)
 }
 
-pub fn resolve_existing_project_path(
-    root: &Path,
-    rel_path: &str,
-) -> Result<PathBuf, ProjectError> {
+pub fn resolve_existing_project_path(root: &Path, rel_path: &str) -> Result<PathBuf, ProjectError> {
     let rel = validate_project_relative_path(rel_path)?;
     let root = root.canonicalize()?;
     let resolved = root.join(rel).canonicalize()?;
@@ -248,16 +259,13 @@ pub fn resolve_existing_project_path(
     Ok(resolved)
 }
 
-pub fn resolve_project_write_path(
-    root: &Path,
-    rel_path: &str,
-) -> Result<PathBuf, ProjectError> {
+pub fn resolve_project_write_path(root: &Path, rel_path: &str) -> Result<PathBuf, ProjectError> {
     let rel = validate_project_relative_path(rel_path)?;
     let root = root.canonicalize()?;
     let path = root.join(rel);
-    let parent = path.parent().ok_or_else(|| {
-        ProjectError::InvalidRelativePath(rel_path.to_string())
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| ProjectError::InvalidRelativePath(rel_path.to_string()))?;
     let existing_parent = canonical_existing_ancestor(parent)?;
     if !existing_parent.starts_with(&root) {
         return Err(ProjectError::PathEscapesRoot(
@@ -345,7 +353,11 @@ mod tests {
     fn project_path_resolution_rejects_parent_and_absolute_paths() {
         let dir = temp_dir();
 
-        for rel in ["../outside.tex", "/tmp/outside.tex", "sections/../../outside.tex"] {
+        for rel in [
+            "../outside.tex",
+            "/tmp/outside.tex",
+            "sections/../../outside.tex",
+        ] {
             let err = resolve_existing_project_path(&dir, rel)
                 .expect_err("unsafe relative path should be rejected");
             assert!(err.to_string().contains("invalid project-relative path"));

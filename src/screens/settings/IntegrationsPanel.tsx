@@ -20,9 +20,14 @@ import {
 import type { Component, JSX } from "solid-js";
 import { Show, createResource, createSignal, For } from "solid-js";
 
+import { FeatureGate } from "~/components/entitlement/FeatureGate";
+import { UpgradePrompt } from "~/components/entitlement/UpgradePrompt";
 import { Button } from "~/components/primitives/Button";
 import { Switch } from "~/components/forms/Switch";
+import { assertEntitlement } from "~/integrations/entitlements";
+import type { EntitlementKey } from "~/integrations/types";
 import {
+  credentialExists,
   deleteCredential,
   setCredential,
 } from "~/integrations/auth/credentials";
@@ -75,8 +80,30 @@ const ReferencesCard: Component = () => {
       subtitle="Connect a reference manager to autocomplete \\cite{…} keys and append the aggregated library to the project's .bib."
     >
       <BetterBibTexRow />
-      <ZoteroWebRow />
-      <MendeleyRow />
+      <FeatureGate
+        feature="integrations.references.zotero.web"
+        fallback={
+          <LockedProviderRow
+            name="Zotero Web API"
+            hint="Read-only Zotero Web API sync."
+            feature="integrations.references.zotero.web"
+          />
+        }
+      >
+        <ZoteroWebRow />
+      </FeatureGate>
+      <FeatureGate
+        feature="integrations.references.mendeley"
+        fallback={
+          <LockedProviderRow
+            name="Mendeley"
+            hint="OAuth-backed Mendeley import for legacy libraries."
+            feature="integrations.references.mendeley"
+          />
+        }
+      >
+        <MendeleyRow />
+      </FeatureGate>
       <JabRefRow />
     </Card>
   );
@@ -158,6 +185,7 @@ const ZoteroWebRow: Component = () => {
 
     setBusy(true);
     try {
+      assertEntitlement("integrations.references.zotero.web");
       // Stash the key first so the probe call uses it via the keyring.
       await setCredential({ service: "zotero-web", account: userId }, apiKey);
       const probe = await httpRequest({
@@ -274,6 +302,7 @@ const MendeleyRow: Component = () => {
     setError(null);
     setBusy(true);
     try {
+      assertEntitlement("integrations.references.mendeley");
       const account = await connectMendeley();
       setIntegrationsSettings({
         ...integrationsSettings(),
@@ -407,6 +436,7 @@ const CLOUD_PROVIDERS = [
   {
     id: "dropbox" as const,
     name: "Dropbox",
+    feature: "integrations.cloud.dropbox" as const,
     hint: "Hybrid sync — your project lives in a local cache that polls Dropbox via longpoll cursor. Conflicts surface as `.conflict-*` files.",
     connect: connectDropbox,
     disconnect: disconnectDropbox,
@@ -414,6 +444,7 @@ const CLOUD_PROVIDERS = [
   {
     id: "onedrive" as const,
     name: "OneDrive",
+    feature: "integrations.cloud.onedrive" as const,
     hint: "Microsoft Graph with delta polling every 60s. `Files.ReadWrite` + `offline_access` scopes — broad enough to open any folder, narrow enough to keep tokens minimal.",
     connect: connectOneDrive,
     disconnect: disconnectOneDrive,
@@ -421,6 +452,7 @@ const CLOUD_PROVIDERS = [
   {
     id: "gdrive" as const,
     name: "Google Drive",
+    feature: "integrations.cloud.gdrive" as const,
     hint: "`drive.file` scope — Typeward only sees files it created or you opened with it. Picking an arbitrary existing folder isn't possible under this scope; create a new project to start.",
     connect: connectGoogleDrive,
     disconnect: disconnectGoogleDrive,
@@ -434,7 +466,20 @@ const CloudStorageCard: Component = () => {
       subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave. iCloud Drive uses the OS sync on macOS — no API call needed."
     >
       <For each={CLOUD_PROVIDERS}>
-        {(provider) => <CloudProviderRow provider={provider} />}
+        {(provider) => (
+          <FeatureGate
+            feature={provider.feature}
+            fallback={
+              <LockedProviderRow
+                name={provider.name}
+                hint={provider.hint}
+                feature={provider.feature}
+              />
+            }
+          >
+            <CloudProviderRow provider={provider} />
+          </FeatureGate>
+        )}
       </For>
       <ICloudRow />
     </Card>
@@ -444,6 +489,7 @@ const CloudStorageCard: Component = () => {
 interface CloudProviderConfig {
   id: "dropbox" | "onedrive" | "gdrive";
   name: string;
+  feature: EntitlementKey;
   hint: string;
   connect: () => Promise<{ accountId: string; email: string; displayName: string }>;
   disconnect: (accountId: string) => Promise<void>;
@@ -459,6 +505,7 @@ const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) =
     setError(null);
     setBusy(true);
     try {
+      assertEntitlement(props.provider.feature);
       const acc = await props.provider.connect();
       setIntegrationsSettings({
         ...integrationsSettings(),
@@ -694,6 +741,7 @@ const GithubAccountRow: Component = () => {
 interface AiKnownProvider {
   id: "anthropic" | "openai" | "gemini" | "ollama";
   name: string;
+  feature: EntitlementKey;
   hint: string;
   /** Keyring service for the API key. Ollama has no auth. */
   keyringService?: string;
@@ -705,6 +753,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
   {
     id: "anthropic",
     name: "Claude (Anthropic)",
+    feature: "integrations.ai.anthropic",
     hint: "Paste a key from console.anthropic.com → API Keys. Streaming via the Messages API; the key never leaves the keyring.",
     keyringService: "anthropic",
     keyUrl: "https://console.anthropic.com/settings/keys",
@@ -712,6 +761,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
   {
     id: "openai",
     name: "ChatGPT (OpenAI)",
+    feature: "integrations.ai.openai",
     hint: "Paste a key from platform.openai.com → API keys. Chat Completions endpoint with bearer auth.",
     keyringService: "openai",
     keyUrl: "https://platform.openai.com/api-keys",
@@ -719,6 +769,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
   {
     id: "gemini",
     name: "Gemini (Google)",
+    feature: "integrations.ai.gemini",
     hint: "Paste an API key from aistudio.google.com. The key goes in the URL query, so the IPC briefly holds it before the wire — same compromise as Mendeley/Dropbox during OAuth.",
     keyringService: "gemini",
     keyUrl: "https://aistudio.google.com/apikey",
@@ -726,6 +777,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
   {
     id: "ollama",
     name: "Ollama (local)",
+    feature: "integrations.ai.ollama",
     hint: "Runs against a local `ollama serve` daemon. No key — just point at the right base URL if you've moved it off the default port.",
   },
 ];
@@ -745,7 +797,16 @@ const AiCard: Component = () => {
       title="AI providers"
       subtitle="Claude, ChatGPT, Gemini, and a local Ollama daemon. Pick one as the active provider; the editor's AI panel routes through it."
     >
-      <For each={AI_PROVIDERS}>{(p) => <AiProviderRow provider={p} onActivate={setActive} />}</For>
+      <For each={AI_PROVIDERS}>
+        {(p) => (
+          <FeatureGate
+            feature={p.feature}
+            fallback={<LockedProviderRow name={p.name} hint={p.hint} feature={p.feature} />}
+          >
+            <AiProviderRow provider={p} onActivate={setActive} />
+          </FeatureGate>
+        )}
+      </For>
     </Card>
   );
 };
@@ -764,8 +825,7 @@ const AiProviderRow: Component<{
     () => props.provider.keyringService,
     async (service) => {
       if (!service) return true; // Ollama: no key needed.
-      const { getCredential } = await import("~/integrations/auth/credentials");
-      return (await getCredential({ service, account: "default" })) !== null;
+      return credentialExists({ service, account: "default" });
     },
   );
 
@@ -787,6 +847,7 @@ const AiProviderRow: Component<{
     }
     setBusy(true);
     try {
+      assertEntitlement(props.provider.feature);
       // Probe the key by hitting the provider's /models endpoint
       // through Rust so the bearer never crosses the IPC the wrong way.
       const { setCredential, deleteCredential } = await import(
@@ -836,7 +897,10 @@ const AiProviderRow: Component<{
             <Button
               variant={isActive() ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => props.onActivate(isActive() ? undefined : props.provider.id)}
+              onClick={() => {
+                if (!isActive()) assertEntitlement(props.provider.feature);
+                props.onActivate(isActive() ? undefined : props.provider.id);
+              }}
             >
               {isActive() ? "Active" : "Use this"}
             </Button>
@@ -931,12 +995,10 @@ async function probeProvider(
           : { ok: false, message: `OpenAI rejected the key (status ${res.status}).` };
       }
       case "gemini": {
-        const { getCredential } = await import("~/integrations/auth/credentials");
-        const key = await getCredential({ service: "gemini", account: "default" });
-        if (!key) return { ok: false, message: "Key not stored." };
         const res = await httpRequest({
           method: "GET",
-          url: `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1`,
+          url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+          authRef: { service: "gemini", account: "default", header: "x-goog-api-key", prefix: "" },
         });
         return res.status >= 200 && res.status < 300
           ? { ok: true }
@@ -1045,6 +1107,23 @@ const ProviderRow: Component<{
   </div>
 );
 
+const LockedProviderRow: Component<{
+  name: string;
+  hint: string;
+  feature: EntitlementKey;
+}> = (props) => (
+  <ProviderRow
+    name={props.name}
+    hint={props.hint}
+    status="unconfigured"
+    controls={<span class="text-[11px] text-fg-3 italic">Locked</span>}
+  >
+    <div class="mt-3">
+      <UpgradePrompt feature={props.feature} />
+    </div>
+  </ProviderRow>
+);
+
 // Local Card kept inline so this panel doesn't depend on
 // SettingsScreen's internal primitives (those aren't exported).
 
@@ -1063,4 +1142,3 @@ const Card: Component<{
     <div>{props.children}</div>
   </div>
 );
-

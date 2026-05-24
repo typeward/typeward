@@ -68,7 +68,7 @@ describe("shortcuts display helpers", () => {
 describe("shortcuts on Mac", () => {
   it("renders Mod+K as ⌘K when running on Mac", async () => {
     vi.resetModules();
-    Object.defineProperty(global.navigator, "platform", {
+    Object.defineProperty(globalThis.navigator, "platform", {
       configurable: true,
       get: () => "MacIntel",
     });
@@ -82,7 +82,7 @@ describe("shortcuts on Mac", () => {
       ),
     ).toBe(true);
     // Restore for any later tests.
-    Object.defineProperty(global.navigator, "platform", {
+    Object.defineProperty(globalThis.navigator, "platform", {
       configurable: true,
       get: () => "Win32",
     });

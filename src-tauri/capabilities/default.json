@@ -5,59 +5,61 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "shell:allow-open",
     "fs:default",
     {
       "identifier": "fs:allow-read-file",
       "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DOCUMENT/**" }
       ]
     },
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DOCUMENT/**" }
       ]
     },
     {
       "identifier": "fs:allow-write-text-file",
       "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DOCUMENT/**" }
       ]
     },
     {
       "identifier": "fs:allow-write-file",
       "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DOCUMENT/**" }
       ]
     },
     {
       "identifier": "fs:allow-read-dir",
       "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DOCUMENT/**" }
       ]
     },
     {
       "identifier": "fs:allow-stat",
       "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$DOCUMENT/**" },
-        { "path": "$DESKTOP/**" }
+        { "path": "$DOCUMENT/**" }
       ]
     },
-    "fs:allow-mkdir",
-    "fs:allow-remove",
-    "fs:allow-exists",
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        { "path": "$DOCUMENT/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        { "path": "$DOCUMENT/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "$DOCUMENT/**" }
+      ]
+    },
     "dialog:default",
     "dialog:allow-open",
     "dialog:allow-save",
@@ -67,7 +69,11 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "https://*" },
+        { "url": "https://www.dropbox.com/oauth2/authorize*" },
+        { "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize*" },
+        { "url": "https://accounts.google.com/o/oauth2/v2/auth*" },
+        { "url": "https://api.mendeley.com/oauth/authorize*" },
+        { "url": "https://github.com/login/device*" },
         { "url": "http://127.0.0.1:*" }
       ]
     },
@@ -82,7 +88,7 @@
             "compile",
             { "validator": "^[A-Za-z0-9_\\-./]+$" },
             "--keep-logs",
-            "--keep-intermediates"
+            "--synctex"
           ]
         }
       ]
