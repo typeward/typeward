@@ -79,8 +79,8 @@ pub fn set_project_integrations(
 
 #[tauri::command]
 pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResult<String> {
-    let path = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)
-        .map_err(err)?;
+    let path =
+        project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
     fs_ops::read_text(&path).map_err(err)
 }
 
@@ -89,8 +89,8 @@ pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResu
 /// the WASM in-memory FS so `\includegraphics{...}` resolves.
 #[tauri::command]
 pub fn read_project_binary_file(project_root: String, rel_path: String) -> CmdResult<Vec<u8>> {
-    let path = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)
-        .map_err(err)?;
+    let path =
+        project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
     std::fs::read(&path).map_err(err)
 }
 
@@ -100,8 +100,8 @@ pub fn write_project_text_file(
     rel_path: String,
     content: String,
 ) -> CmdResult<()> {
-    let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
-        .map_err(err)?;
+    let path =
+        project::resolve_project_write_path(Path::new(&project_root), &rel_path).map_err(err)?;
     fs_ops::write_text(&path, &content).map_err(err)
 }
 
@@ -115,8 +115,8 @@ pub fn write_project_binary_file(
     rel_path: String,
     bytes: Vec<u8>,
 ) -> CmdResult<()> {
-    let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
-        .map_err(err)?;
+    let path =
+        project::resolve_project_write_path(Path::new(&project_root), &rel_path).map_err(err)?;
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             std::fs::create_dir_all(parent).map_err(err)?;
@@ -176,7 +176,13 @@ pub async fn compile_latex(
     let engine = engine.unwrap_or_else(|| "system-tex".into());
     let (log, success) = match engine.as_str() {
         "tectonic" => run_tectonic(&app, &root_file, &root).await?,
-        _ => run_system_tex(&root_file, &root)?,
+        _ => {
+            let root_for_cmd = root.clone();
+            let root_file_for_cmd = root_file.clone();
+            tokio::task::spawn_blocking(move || run_system_tex(&root_file_for_cmd, &root_for_cmd))
+                .await
+                .map_err(err)??
+        }
     };
 
     let pdf_path = root.join(replace_ext(&root_file, "pdf"));
@@ -270,13 +276,7 @@ async fn run_tectonic(
     // --synctex emits the .synctex.gz alongside the PDF; harmless when the
     // user doesn't have the synctex CLI installed (forward/inverse just
     // return None then).
-    let tectonic_args = [
-        "-X",
-        "compile",
-        root_file,
-        "--keep-logs",
-        "--synctex",
-    ];
+    let tectonic_args = ["-X", "compile", root_file, "--keep-logs", "--synctex"];
     // Try the bundled sidecar first.
     let sidecar_result = app.shell().sidecar("binaries/tectonic");
     if let Ok(cmd) = sidecar_result {
@@ -295,12 +295,27 @@ async fn run_tectonic(
             "tectonic is not bundled (run `npm run fetch:tectonic`) and not on PATH".into(),
         );
     }
-    let output = Command::new("tectonic")
-        .args(tectonic_args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
-    Ok((merge_io(&output.stdout, &output.stderr), output.status.success()))
+    let root_for_cmd = root.to_path_buf();
+    let root_file_for_cmd = root_file.to_string();
+    tokio::task::spawn_blocking(move || {
+        let output = Command::new("tectonic")
+            .args([
+                "-X",
+                "compile",
+                root_file_for_cmd.as_str(),
+                "--keep-logs",
+                "--synctex",
+            ])
+            .current_dir(root_for_cmd)
+            .output()
+            .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
+        Ok((
+            merge_io(&output.stdout, &output.stderr),
+            output.status.success(),
+        ))
+    })
+    .await
+    .map_err(err)?
 }
 
 fn merge_io(stdout: &[u8], stderr: &[u8]) -> String {
@@ -355,24 +370,31 @@ fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
 pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
     let started = Instant::now();
     let (root, root_file) = checked_project_root_and_file(&project)?;
-    if which::which("typst").is_err() {
-        return Err(
-            "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
-                .into(),
-        );
-    }
+    let root_for_cmd = root.clone();
+    let root_file_for_cmd = root_file.clone();
+    let (log, success) = tokio::task::spawn_blocking(move || -> CmdResult<(String, bool)> {
+        if which::which("typst").is_err() {
+            return Err(
+                "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
+                    .into(),
+            );
+        }
 
-    let mut log = String::new();
-    log.push_str(&format!("$ typst compile {}\n", root_file));
-    let output = Command::new("typst")
-        .args(["compile", root_file.as_str()])
-        .current_dir(&root)
-        .output()
-        .map_err(|e| format!("failed to spawn typst: {}", e))?;
-    log.push_str(&merge_io(&output.stdout, &output.stderr));
+        let mut log = String::new();
+        log.push_str(&format!("$ typst compile {}\n", root_file_for_cmd));
+        let output = Command::new("typst")
+            .args(["compile", root_file_for_cmd.as_str()])
+            .current_dir(&root_for_cmd)
+            .output()
+            .map_err(|e| format!("failed to spawn typst: {}", e))?;
+        log.push_str(&merge_io(&output.stdout, &output.stderr));
+        Ok((log, output.status.success()))
+    })
+    .await
+    .map_err(err)??;
 
     let pdf_path = root.join(replace_ext(&root_file, "pdf"));
-    let ok = output.status.success() && pdf_path.exists();
+    let ok = success && pdf_path.exists();
     let diagnostics = parse_typst_log(&log, &root_file);
 
     Ok(CompileResult {
@@ -445,7 +467,6 @@ mod tests {
         assert_eq!(diags[1].severity, "warning");
         assert_eq!(diags[0].source, "typst");
     }
-
 }
 
 #[tauri::command]
@@ -461,11 +482,7 @@ pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()>
 // ---------- Autosave / crash recovery -------------------------------------
 
 #[tauri::command]
-pub fn write_snapshot(
-    project_root: String,
-    rel_path: String,
-    content: String,
-) -> CmdResult<()> {
+pub fn write_snapshot(project_root: String, rel_path: String, content: String) -> CmdResult<()> {
     autosave::write(Path::new(&project_root), &rel_path, &content).map_err(err)
 }
 

@@ -119,7 +119,10 @@ pub struct BetterBibTexSettings {
 
 impl Default for BetterBibTexSettings {
     fn default() -> Self {
-        Self { enabled: false, library_id: default_library_id() }
+        Self {
+            enabled: false,
+            library_id: default_library_id(),
+        }
     }
 }
 
@@ -142,7 +145,11 @@ pub struct MendeleyAccountSettings {
     /// service `mendeley`, account = profile id.
     #[serde(rename = "profileId", default, skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
-    #[serde(rename = "displayName", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "displayName",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub display_name: Option<String>,
 }
 

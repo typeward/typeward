@@ -1,19 +1,11 @@
 /**
  * Google Gemini provider.
  *
- * Gemini's API auth quirk: the key goes in the query string (`?key=`)
- * rather than a header. Storing it in the keyring under `gemini` /
- * `default` is still the right move — we fetch it in Rust via a
- * keyring lookup just before issuing the request, by reading it from
- * the header (which is dropped) and re-injecting it into the URL.
- *
- * Phase 4 takes the simpler path: read the key on the frontend via
- * `getCredential` and append it to the URL ourselves. Briefly in
- * memory, never on disk outside the keyring — same compromise as
- * Mendeley / Dropbox during their initial dance.
+ * The API key lives in the OS keyring under `gemini` / `default`.
+ * Requests pass an `authRef`; Rust reads the secret and attaches it as
+ * `x-goog-api-key` so the key does not cross into frontend code.
  */
 
-import { getCredential } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
 import { aiStream, type AiStreamChunk } from "~/integrations/ai/stream";
 import type {
@@ -28,6 +20,12 @@ import type {
 const API_ROOT = "https://generativelanguage.googleapis.com/v1beta";
 const KEYRING_SERVICE = "gemini";
 const KEYRING_ACCOUNT = "default";
+const authRef = {
+  service: KEYRING_SERVICE,
+  account: KEYRING_ACCOUNT,
+  header: "x-goog-api-key",
+  prefix: "",
+};
 
 interface GeminiModelList {
   models: Array<{
@@ -38,15 +36,6 @@ interface GeminiModelList {
   }>;
 }
 
-async function apiKey(): Promise<string> {
-  const value = await getCredential({
-    service: KEYRING_SERVICE,
-    account: KEYRING_ACCOUNT,
-  });
-  if (!value) throw new Error("Gemini API key not configured");
-  return value;
-}
-
 export function createGeminiProvider(): AiProvider {
   return {
     id: "gemini",
@@ -55,10 +44,10 @@ export function createGeminiProvider(): AiProvider {
 
     async status(): Promise<ProviderStatus> {
       try {
-        const key = await apiKey();
         const res = await httpRequest({
           method: "GET",
-          url: `${API_ROOT}/models?key=${encodeURIComponent(key)}&pageSize=1`,
+          url: `${API_ROOT}/models?pageSize=1`,
+          authRef,
         });
         return res.status >= 200 && res.status < 300 ? "ready" : "unconfigured";
       } catch {
@@ -67,10 +56,10 @@ export function createGeminiProvider(): AiProvider {
     },
 
     async models(): Promise<ModelInfo[]> {
-      const key = await apiKey();
       const res = await httpRequest({
         method: "GET",
-        url: `${API_ROOT}/models?key=${encodeURIComponent(key)}&pageSize=100`,
+        url: `${API_ROOT}/models?pageSize=100`,
+        authRef,
       });
       if (res.status < 200 || res.status >= 300) {
         throw new Error(`Gemini /models failed (status ${res.status})`);
@@ -96,8 +85,6 @@ async function* chatStream(
   messages: ChatMessage[],
   opts: ChatOptions,
 ): AsyncIterable<ChatChunk> {
-  const key = await apiKey();
-
   // Gemini's content shape: roles are "user" / "model"; system content
   // goes into `systemInstruction`. Map our generic messages onto that.
   const system = messages.find((m) => m.role === "system")?.content;
@@ -117,7 +104,7 @@ async function* chatStream(
     },
   });
 
-  const url = `${API_ROOT}/models/${encodeURIComponent(opts.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`;
+  const url = `${API_ROOT}/models/${encodeURIComponent(opts.model)}:streamGenerateContent?alt=sse`;
 
   const stream = aiStream(
     {
@@ -126,6 +113,7 @@ async function* chatStream(
       headers: { "Content-Type": "application/json" },
       body,
       format: "gemini-sse",
+      authRef,
     },
     opts.signal,
   );

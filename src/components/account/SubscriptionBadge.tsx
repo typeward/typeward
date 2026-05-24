@@ -1,17 +1,14 @@
 /**
  * TopBar tier indicator. Hidden when Supabase isn't configured or
- * nobody is signed in. Reads the plan via a one-shot `subscriptions`
- * row lookup on session change — same path the AccountSection uses.
- *
- * Once Phase 7.4 swaps in the real EntitlementSource this should
- * switch to reading from `currentTier()` so we don't double-query
- * Supabase per render.
+ * nobody is signed in. Reads the active entitlement source so it stays
+ * aligned with the gates used by integration surfaces.
  */
 
 import type { Component } from "solid-js";
-import { Show, createResource } from "solid-js";
+import { Show } from "solid-js";
 
-import { getSupabaseClient, supabaseEnabled } from "~/integrations/supabase/client";
+import { currentTier } from "~/integrations/entitlements";
+import { supabaseEnabled } from "~/integrations/supabase/client";
 import { supabaseUser } from "~/integrations/supabase/session";
 
 const PALETTE: Record<string, { bg: string; color: string }> = {
@@ -23,33 +20,17 @@ const PALETTE: Record<string, { bg: string; color: string }> = {
 export const SubscriptionBadge: Component = () => {
   if (!supabaseEnabled()) return null;
 
-  const [plan] = createResource(
-    () => supabaseUser()?.id,
-    async (userId) => {
-      if (!userId) return null;
-      const client = getSupabaseClient();
-      if (!client) return null;
-      const { data } = await client
-        .from("subscriptions")
-        .select("plan_id,status")
-        .eq("user_id", userId)
-        .in("status", ["active", "trialing"])
-        .maybeSingle();
-      return data?.plan_id ?? "free";
-    },
-  );
-
   return (
     <Show when={supabaseUser()}>
       <span
         class="mono rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider"
         style={{
-          background: PALETTE[plan() ?? "free"]?.bg,
-          color: PALETTE[plan() ?? "free"]?.color,
+          background: PALETTE[currentTier()]?.bg,
+          color: PALETTE[currentTier()]?.color,
         }}
-        title={`Current plan: ${plan() ?? "free"}`}
+        title={`Current plan: ${currentTier()}`}
       >
-        {plan() ?? "free"}
+        {currentTier()}
       </span>
     </Show>
   );

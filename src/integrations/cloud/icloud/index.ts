@@ -46,9 +46,6 @@ export async function detectICloudDrive(): Promise<ICloudAvailability> {
 }
 
 async function getHomeDir(): Promise<string | null> {
-  if (typeof process !== "undefined" && process.env?.HOME) {
-    return process.env.HOME;
-  }
   try {
     const mod = await import("@tauri-apps/api/path");
     return await mod.homeDir();

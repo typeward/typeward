@@ -24,6 +24,16 @@ describe("MarkdownPreview", () => {
     });
   });
 
+  it("renders display math via KaTeX", async () => {
+    const [content] = createSignal("$$E = mc^2$$");
+    const { container } = render(() => (
+      <MarkdownPreview content={content} baseDir="/tmp" theme={() => "dark"} />
+    ));
+    await waitFor(() => {
+      expect(container.querySelector(".katex-display")).not.toBeNull();
+    });
+  });
+
   it("strips <script> via DOMPurify", async () => {
     const [content] = createSignal("hello\n\n<script>window.x=1</script>");
     const { container } = render(() => (
@@ -45,5 +55,28 @@ describe("MarkdownPreview", () => {
         "file:///proj/sub/pic.png",
       );
     });
+  });
+
+  it("drops image paths that escape the markdown file directory", async () => {
+    const [content] = createSignal("![alt](../secret.png)");
+    const { container } = render(() => (
+      <MarkdownPreview content={content} baseDir="/proj/sub" theme={() => "dark"} />
+    ));
+    await waitFor(() => {
+      expect(container.textContent).toContain("![alt](../secret.png)");
+    });
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("drops direct file URLs from links and images", async () => {
+    const [content] = createSignal("[x](file:///etc/passwd)\n\n![alt](file:///etc/passwd)");
+    const { container } = render(() => (
+      <MarkdownPreview content={content} baseDir="/proj/sub" theme={() => "dark"} />
+    ));
+    await waitFor(() => {
+      expect(container.textContent).toContain("[x](file:///etc/passwd)");
+    });
+    expect(container.querySelector("a")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
   });
 });

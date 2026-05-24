@@ -39,6 +39,8 @@ pub enum GitError {
     Join(String),
     #[error("no signature configured (set author name + email in settings or system gitconfig)")]
     NoSignature,
+    #[error("working tree has uncommitted changes; commit or stash before pulling")]
+    DirtyWorktree,
 }
 
 impl From<git2::Error> for GitError {
@@ -121,8 +123,8 @@ fn validate_repo_path(repo_path: &str) -> Result<PathBuf, GitError> {
 }
 
 fn classify(status: git2::Status) -> (&'static str, &'static str, bool) {
-    let untracked = status.contains(git2::Status::WT_NEW)
-        && !status.contains(git2::Status::INDEX_NEW);
+    let untracked =
+        status.contains(git2::Status::WT_NEW) && !status.contains(git2::Status::INDEX_NEW);
 
     let staged = if status.contains(git2::Status::INDEX_NEW) {
         "added"
@@ -169,6 +171,19 @@ fn signature<'a>(
     }
 }
 
+fn ensure_clean_worktree(repo: &Repository) -> Result<(), GitError> {
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true);
+    let statuses = repo.statuses(Some(&mut opts))?;
+    if statuses
+        .iter()
+        .any(|entry| entry.status() != git2::Status::CURRENT)
+    {
+        return Err(GitError::DirtyWorktree);
+    }
+    Ok(())
+}
+
 fn branch_ahead_behind(
     repo: &Repository,
     local: &git2::Branch,
@@ -178,11 +193,7 @@ fn branch_ahead_behind(
         Err(e) if e.code() == ErrorCode::NotFound => return Ok((None, 0, 0)),
         Err(e) => return Err(e.into()),
     };
-    let upstream_name = upstream
-        .name()
-        .ok()
-        .flatten()
-        .map(|s| s.to_string());
+    let upstream_name = upstream.name().ok().flatten().map(|s| s.to_string());
 
     let local_oid = local.get().target().unwrap_or_else(git2::Oid::zero);
     let upstream_oid = upstream.get().target().unwrap_or_else(git2::Oid::zero);
@@ -208,9 +219,9 @@ fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
                 "only HTTPS user/password credentials are supported in Phase 3",
             ));
         }
-        let host = host.clone().ok_or_else(|| {
-            git2::Error::from_str("could not parse host from remote URL")
-        })?;
+        let host = host
+            .clone()
+            .ok_or_else(|| git2::Error::from_str("could not parse host from remote URL"))?;
         let username = username_from_url.unwrap_or("x-access-token");
         let secret = credentials::get_secret(&format!("git.{host}"), username)
             .map_err(|e| git2::Error::from_str(&format!("keyring lookup: {e}")))?
@@ -259,7 +270,12 @@ pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, GitError>
                 continue;
             }
             let (staged, unstaged, untracked) = classify(entry.status());
-            files.push(GitFileStatus { path: rel, staged, unstaged, untracked });
+            files.push(GitFileStatus {
+                path: rel,
+                staged,
+                unstaged,
+                untracked,
+            });
         }
 
         let head = repo.head().ok();
@@ -280,7 +296,13 @@ pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, GitError>
             (None, 0, 0)
         };
 
-        Ok(GitStatusSummary { branch, upstream, ahead, behind, files })
+        Ok(GitStatusSummary {
+            branch,
+            upstream,
+            ahead,
+            behind,
+            files,
+        })
     })
     .await
     .map_err(|e| GitError::Join(e.to_string()))?
@@ -358,10 +380,7 @@ pub async fn git_commit(
 }
 
 #[tauri::command]
-pub async fn git_log(
-    repo_path: String,
-    limit: Option<usize>,
-) -> Result<Vec<GitCommit>, GitError> {
+pub async fn git_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitCommit>, GitError> {
     let cap = limit.unwrap_or(50).min(500);
     tokio::task::spawn_blocking(move || -> Result<Vec<GitCommit>, GitError> {
         let path = validate_repo_path(&repo_path)?;
@@ -461,10 +480,7 @@ fn checkout_branch(repo: &Repository, name: &str) -> Result<(), GitError> {
 }
 
 #[tauri::command]
-pub async fn git_fetch(
-    repo_path: String,
-    remote: Option<String>,
-) -> Result<(), GitError> {
+pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), GitError> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -508,16 +524,14 @@ pub async fn git_pull(
             return Ok(());
         }
         if analysis.0.is_fast_forward() {
-            let refname = format!(
-                "refs/heads/{}",
-                repo.head()?.shorthand().unwrap_or("main")
-            );
+            ensure_clean_worktree(&repo)?;
+            let refname = format!("refs/heads/{}", repo.head()?.shorthand().unwrap_or("main"));
             let mut reference = repo.find_reference(&refname)?;
             reference.set_target(fetch_commit.id(), "fast-forward")?;
             repo.set_head(&refname)?;
-            repo.checkout_head(Some(
-                git2::build::CheckoutBuilder::default().force(),
-            ))?;
+            let mut checkout = git2::build::CheckoutBuilder::new();
+            checkout.safe();
+            repo.checkout_head(Some(&mut checkout))?;
             // Author param is currently unused here — fast-forward needs no
             // commit. Reserved for the merge-commit path in a follow-up.
             drop(author);
@@ -562,10 +576,7 @@ pub async fn git_push(
 }
 
 #[tauri::command]
-pub async fn git_clone(
-    url: String,
-    dest_path: String,
-) -> Result<(), GitError> {
+pub async fn git_clone(url: String, dest_path: String) -> Result<(), GitError> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let dest = validate_repo_path(&dest_path)?;
         if dest.exists() {
@@ -585,4 +596,3 @@ pub async fn git_clone(
     .await
     .map_err(|e| GitError::Join(e.to_string()))?
 }
-

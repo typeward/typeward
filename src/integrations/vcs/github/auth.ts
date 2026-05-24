@@ -21,8 +21,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import {
+  credentialExists,
   deleteCredential,
-  getCredential,
   setCredential,
 } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
@@ -127,11 +127,10 @@ export async function disconnectGithub(login: string): Promise<void> {
  * for gating UI without forcing a network round trip.
  */
 export async function hasGithubCredential(): Promise<boolean> {
-  const value = await getCredential({
+  return credentialExists({
     service: KEYRING_SERVICE,
     account: KEYRING_ACCOUNT,
   });
-  return value !== null;
 }
 
 async function beginDeviceFlow(): Promise<DeviceCodeResponse> {

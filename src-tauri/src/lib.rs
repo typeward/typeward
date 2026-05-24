@@ -25,7 +25,9 @@ pub fn run() {
         .manage(lsp::LspManager::default())
         .manage(watcher::WatcherManager::default())
         .manage(integrations::oauth::OauthManager::default())
-        .manage(std::sync::Arc::new(integrations::ai::streaming::AiStreamManager::default()))
+        .manage(std::sync::Arc::new(
+            integrations::ai::streaming::AiStreamManager::default(),
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::detect_tex,
             commands::list_projects,
@@ -55,6 +57,7 @@ pub fn run() {
             telemetry::list_recent_events,
             integrations::credentials::credential_set,
             integrations::credentials::credential_get,
+            integrations::credentials::credential_exists,
             integrations::credentials::credential_delete,
             integrations::http::http_request,
             integrations::http::http_request_bytes,

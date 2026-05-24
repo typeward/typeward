@@ -145,7 +145,10 @@ pub struct OauthManager {
 
 impl OauthManager {
     fn insert(&self, state: String, flow: Arc<PendingFlow>) {
-        self.flows.lock().expect("oauth flows lock").insert(state, flow);
+        self.flows
+            .lock()
+            .expect("oauth flows lock")
+            .insert(state, flow);
     }
 
     fn take(&self, state: &str) -> Option<Arc<PendingFlow>> {
@@ -153,7 +156,11 @@ impl OauthManager {
     }
 
     fn peek(&self, state: &str) -> Option<Arc<PendingFlow>> {
-        self.flows.lock().expect("oauth flows lock").get(state).cloned()
+        self.flows
+            .lock()
+            .expect("oauth flows lock")
+            .get(state)
+            .cloned()
     }
 }
 
@@ -305,7 +312,10 @@ pub async fn oauth_begin(
     });
     manager.insert(state.clone(), flow);
 
-    Ok(OauthBeginResponse { url: auth_url, state })
+    Ok(OauthBeginResponse {
+        url: auth_url,
+        state,
+    })
 }
 
 #[tauri::command]
@@ -395,15 +405,27 @@ mod tests {
     #[test]
     fn pkce_verifier_and_challenge_have_expected_shape() {
         let (verifier, challenge) = generate_pkce();
-        assert!(verifier.len() >= 43, "verifier too short: {}", verifier.len());
-        assert!(verifier.len() <= 128, "verifier too long: {}", verifier.len());
+        assert!(
+            verifier.len() >= 43,
+            "verifier too short: {}",
+            verifier.len()
+        );
+        assert!(
+            verifier.len() <= 128,
+            "verifier too long: {}",
+            verifier.len()
+        );
         assert_eq!(challenge.len(), 43, "S256 challenge is always 43 chars");
         assert!(
             !verifier.contains('=') && !challenge.contains('='),
             "PKCE values must be base64url without padding"
         );
-        assert!(verifier.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
-        assert!(challenge.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(verifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(challenge
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

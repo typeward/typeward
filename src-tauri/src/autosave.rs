@@ -42,8 +42,8 @@ fn snapshot_dir(project_root: &Path) -> PathBuf {
 
 fn snapshot_path(project_root: &Path, rel_path: &str) -> PathBuf {
     let mut p = snapshot_dir(project_root);
-    let rel = validate_project_relative_path(rel_path)
-        .unwrap_or_else(|_| PathBuf::from("__invalid__"));
+    let rel =
+        validate_project_relative_path(rel_path).unwrap_or_else(|_| PathBuf::from("__invalid__"));
     p.push(rel);
     p.set_extension(format!(
         "{}snap",
@@ -55,11 +55,7 @@ fn snapshot_path(project_root: &Path, rel_path: &str) -> PathBuf {
     p
 }
 
-pub fn write(
-    project_root: &Path,
-    rel_path: &str,
-    content: &str,
-) -> Result<(), AutosaveError> {
+pub fn write(project_root: &Path, rel_path: &str, content: &str) -> Result<(), AutosaveError> {
     validate_project_relative_path(rel_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let path = snapshot_path(project_root, rel_path);

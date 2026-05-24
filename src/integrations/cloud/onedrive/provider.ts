@@ -24,6 +24,7 @@ import type {
   RemoteFolder,
 } from "~/integrations/types";
 
+import { normalizeRemoteRelPath } from "../core";
 import { type MicrosoftAccount, getAccessToken } from "./auth";
 
 const GRAPH = "https://graph.microsoft.com/v1.0";
@@ -92,13 +93,15 @@ export function createOneDriveProvider(account: MicrosoftAccount): CloudFsProvid
       // initial call. Subsequent passes use the returned deltaLink as
       // the cursor, so the engine converges on incremental updates.
       const files: RemoteFile[] = [];
+      const rootPathPrefix = await resolveRootPathPrefix(get, rootId);
       let cursor = "";
       let url = `${GRAPH}/me/drive/items/${encodeURIComponent(rootId)}/delta`;
       while (url) {
         const page = await get<GraphPage<GraphDriveItem>>(url);
         for (const item of page.value) {
           if (!item.file || item.deleted) continue;
-          files.push(toRemoteFile(item, rootId));
+          const file = toRemoteFile(item, rootPathPrefix);
+          if (file) files.push(file);
         }
         if (page["@odata.nextLink"]) {
           url = page["@odata.nextLink"];
@@ -111,6 +114,7 @@ export function createOneDriveProvider(account: MicrosoftAccount): CloudFsProvid
     },
 
     async delta(rootId: string, cursor: string | undefined): Promise<DeltaResult> {
+      const rootPathPrefix = await resolveRootPathPrefix(get, rootId);
       const url =
         cursor ||
         `${GRAPH}/me/drive/items/${encodeURIComponent(rootId)}/delta`;
@@ -119,10 +123,11 @@ export function createOneDriveProvider(account: MicrosoftAccount): CloudFsProvid
       const changes: DeltaChange[] = [];
       for (const item of page.value) {
         if (item.deleted) {
-          const relPath = relPathFor(item, rootId);
+          const relPath = relPathFor(item, rootPathPrefix);
           if (relPath !== null) changes.push({ kind: "removed", relPath, id: item.id });
         } else if (item.file) {
-          changes.push({ kind: "modified", file: toRemoteFile(item, rootId) });
+          const file = toRemoteFile(item, rootPathPrefix);
+          if (file) changes.push({ kind: "modified", file });
         }
         // Folder items themselves don't drive sync; their file children do.
       }
@@ -171,8 +176,15 @@ export function createOneDriveProvider(account: MicrosoftAccount): CloudFsProvid
         const text = new TextDecoder().decode(res.body);
         throw new Error(`OneDrive upload failed (status ${res.status}): ${text}`);
       }
+      const rootPathPrefix = await resolveRootPathPrefix(get, rootId);
       const metadata = JSON.parse(new TextDecoder().decode(res.body)) as GraphDriveItem;
-      return toRemoteFile(metadata, rootId);
+      return toRemoteFile(metadata, rootPathPrefix) ?? {
+        id: metadata.id,
+        relPath,
+        rev: metadata.eTag ?? metadata.cTag,
+        size: metadata.size,
+        modifiedAt: metadata.lastModifiedDateTime,
+      };
     },
 
     async deleteRemoteFile(_rootId, file): Promise<void> {
@@ -188,10 +200,22 @@ export function createOneDriveProvider(account: MicrosoftAccount): CloudFsProvid
   };
 }
 
-function toRemoteFile(item: GraphDriveItem, rootId: string): RemoteFile {
+async function resolveRootPathPrefix(
+  get: <T>(url: string) => Promise<T>,
+  rootId: string,
+): Promise<string> {
+  const root = await get<GraphDriveItem>(
+    `${GRAPH}/me/drive/items/${encodeURIComponent(rootId)}?$select=id,name,parentReference`,
+  );
+  return itemAbsolutePath(root) ?? root.name;
+}
+
+function toRemoteFile(item: GraphDriveItem, rootPathPrefix: string): RemoteFile | null {
+  const relPath = relPathFor(item, rootPathPrefix);
+  if (!relPath) return null;
   return {
     id: item.id,
-    relPath: relPathFor(item, rootId) ?? item.name,
+    relPath,
     rev: item.eTag ?? item.cTag,
     size: item.size,
     modifiedAt: item.lastModifiedDateTime,
@@ -201,16 +225,33 @@ function toRemoteFile(item: GraphDriveItem, rootId: string): RemoteFile {
 /**
  * Compute the project-relative path from the item's parent reference.
  * Graph returns paths like `/drive/root:/Typeward/proj1/sub/foo` and the
- * file's name separately. We can't reconstruct the relative path without
- * walking the tree to find the root's path; instead we fall back to
- * just using the file name when the parent info is insufficient. For
- * project roots that live at the drive root, parentReference.path is
- * "/drive/root:" so relPath becomes just the name.
+ * file's name separately. We resolve the chosen root folder once, then
+ * strip exactly that prefix from children and deltas.
  */
-function relPathFor(item: GraphDriveItem, _rootId: string): string | null {
-  const parentPath = item.parentReference?.path ?? "";
-  // Strip the `/drive/root:` prefix Graph uses.
-  const cleaned = parentPath.replace(/^\/drive\/root:?\/?/, "");
-  if (!cleaned) return item.name;
-  return `${cleaned}/${item.name}`;
+function relPathFor(item: GraphDriveItem, rootPathPrefix: string): string | null {
+  const absolute = itemAbsolutePath(item);
+  if (!absolute) return null;
+  const root = trimSlashes(rootPathPrefix);
+  if (absolute === root) return null;
+  if (!absolute.startsWith(`${root}/`)) return null;
+  const rel = absolute.slice(root.length + 1);
+  try {
+    return normalizeRemoteRelPath(rel);
+  } catch {
+    return null;
+  }
+}
+
+function itemAbsolutePath(item: GraphDriveItem): string | null {
+  if (!item.name) return null;
+  const parentPath = trimSlashes(stripDriveRootPrefix(item.parentReference?.path ?? ""));
+  return parentPath ? `${parentPath}/${item.name}` : item.name;
+}
+
+function stripDriveRootPrefix(path: string): string {
+  return path.replace(/^\/drive\/root:?\/?/, "");
+}
+
+function trimSlashes(path: string): string {
+  return path.replace(/[\\/]+/g, "/").replace(/^\/+|\/+$/g, "");
 }

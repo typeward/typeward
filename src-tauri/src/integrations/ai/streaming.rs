@@ -19,7 +19,7 @@ use thiserror::Error;
 use tokio::sync::oneshot;
 
 use crate::integrations::credentials;
-use crate::integrations::http::AuthRef;
+use crate::integrations::http::{validate_outbound_request, AuthRef};
 
 /// What flavor of stream encoding the provider speaks. Each variant
 /// gets its own line/event parser in [`parse_event`].
@@ -74,6 +74,8 @@ pub struct ChunkEvent {
 pub enum AiError {
     #[error("invalid method: {0}")]
     InvalidMethod(String),
+    #[error("blocked outbound request: {0}")]
+    BlockedRequest(String),
     #[error("network error: {0}")]
     Network(String),
     #[error("credential lookup failed: {0}")]
@@ -100,6 +102,8 @@ pub async fn ai_stream_start(
         .method
         .parse::<reqwest::Method>()
         .map_err(|_| AiError::InvalidMethod(req.method.clone()))?;
+    validate_outbound_request(&req.url, &req.headers, req.auth_ref.as_ref())
+        .map_err(|e| AiError::BlockedRequest(e.to_string()))?;
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))

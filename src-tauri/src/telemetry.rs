@@ -107,13 +107,12 @@ fn append(event: &Event) -> std::io::Result<()> {
         .lock()
         .expect("telemetry lock poisoned")
         .clone()
-        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "telemetry not initialized"))?;
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::Other, "telemetry not initialized")
+        })?;
     let line = serde_json::to_string(event)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(f, "{}", line)?;
 
     // Trim to the last MAX_ENTRIES lines to bound disk growth.

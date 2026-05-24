@@ -162,11 +162,8 @@ pub async fn template_instantiate(
         // directory (except the manifest itself) is copied verbatim —
         // gives template authors a quick path to ship `.cls`, images,
         // and other static assets without listing each one.
-        let explicit_paths: std::collections::HashSet<String> = manifest
-            .files
-            .iter()
-            .map(|f| f.path.clone())
-            .collect();
+        let explicit_paths: std::collections::HashSet<String> =
+            manifest.files.iter().map(|f| f.path.clone()).collect();
 
         for file in &manifest.files {
             let safe = sanitize_relative(&file.path)
@@ -368,7 +365,13 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), TemplateError> {
 
 fn sanitize(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string()
