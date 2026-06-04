@@ -4,7 +4,6 @@ import {
   CircleDot,
   FilePlus,
   FolderPlus,
-  Inbox,
   ListTree,
   MoreHorizontal,
   Search,
@@ -15,8 +14,10 @@ import { For, Show } from "solid-js";
 import { FileTree } from "~/components/editor/FileTree";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
 import { CommitPanel } from "~/components/vcs/CommitPanel";
+import { ReviewPanel } from "~/components/reviews/ReviewPanel";
 import { activeFile, project } from "~/stores/editor-store";
 import { compileEngine } from "~/stores/settings-store";
+import { allOpenThreadCount } from "~/stores/review-store";
 import { KbdHint } from "~/components/primitives/KbdHint";
 
 const ENGINE_LABEL: Record<string, string> = {
@@ -69,7 +70,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
             { id: "files" as LeftTab, label: "Files" },
             { id: "references" as LeftTab, label: "Refs" },
             { id: "scm" as LeftTab, label: "SCM" },
-            { id: "review" as LeftTab, label: "Review", count: 0 },
+            { id: "review" as LeftTab, label: "Review", count: allOpenThreadCount() },
             { id: "todo" as LeftTab, label: "TODO", count: 0 },
           ]}
         >
@@ -161,11 +162,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           <CommitPanel />
         </Show>
         <Show when={props.tab === "review"}>
-          <EmptyTab
-            icon={<Inbox size={20} />}
-            title="No reviews yet"
-            body="Once collaborators leave comments on your draft, they'll appear here. Phase 4 unlocks real-time review."
-          />
+          <ReviewPanel />
         </Show>
         <Show when={props.tab === "todo"}>
           <EmptyTab
