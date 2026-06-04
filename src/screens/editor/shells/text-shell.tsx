@@ -34,6 +34,10 @@ import { theme } from "~/themes/theme-store";
 import { cursorCol, cursorLine } from "~/stores/editor-view-store";
 import { editorSettings, integrationsSettings } from "~/stores/settings-store";
 import { harperLinter } from "~/lib/grammar/cm6";
+import { reviewExtension, dispatchSetThreads } from "~/lib/reviews/cm6";
+import { recoverThreads } from "~/lib/reviews/recovery";
+import { activeFileThreads, updateThreadOffsets, loadThreads } from "~/stores/review-store";
+import { getActiveEditorView } from "~/stores/editor-view-store";
 import type { GrammarSyntax } from "~/ipc";
 import {
   consolePosition,
@@ -274,6 +278,7 @@ const TabletLayout: Component<ShellProps> = (props) => {
   let rootRef: HTMLDivElement | undefined;
 
   onMount(() => {
+    loadThreads();
     if (!rootRef) return;
     const teardown = installSwipeListener(rootRef, (direction) => {
       cyclePane(direction);
@@ -469,6 +474,33 @@ const CenterPane: Component<{
             const grammarExt = grammarOn
               ? [harperLinter({ syntax: grammarSyntaxFor(lang), file: f.relPath })]
               : [];
+            const reviewExt = reviewExtension({
+              onOffsetsChanged: (updates) => {
+                const af = activeFile();
+                if (af) updateThreadOffsets(af.relPath, updates.map((u) => ({
+                  id: u.id, fromOffset: u.from, toOffset: u.to, anchorText: u.anchorText,
+                })));
+              },
+              onGutterClick: () => {},
+            });
+            queueMicrotask(() => {
+              const view = getActiveEditorView();
+              if (!view) return;
+              const fileThreads = activeFileThreads();
+              if (fileThreads.length === 0) return;
+              const recovered = recoverThreads(fileThreads, f.content, f.relPath);
+              dispatchSetThreads(
+                view,
+                recovered
+                  .filter((r) => r.recoveryStatus !== "orphaned")
+                  .map((r) => ({
+                    id: r.thread.id,
+                    from: r.fromOffset,
+                    to: r.toOffset,
+                    status: r.thread.status,
+                  })),
+              );
+            });
             return (
               <CodeMirror
                 value={f.content}
@@ -476,7 +508,7 @@ const CenterPane: Component<{
                 language={lang}
                 fontSize={editorSettings().fontSize}
                 lineWrap={editorSettings().lineWrap}
-                extraExtensions={[...extrasList, ...grammarExt]}
+                extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
               />
             );
           }}

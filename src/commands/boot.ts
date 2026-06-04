@@ -10,6 +10,10 @@ import { registerCommand, unregisterCommand } from "./registry";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import { paletteOpen_ } from "./palette-store";
+import { getActiveEditorView } from "~/stores/editor-view-store";
+import { createThread } from "~/lib/reviews/types";
+import { addThread } from "~/stores/review-store";
+import { dispatchSetThreads, getCurrentRanges } from "~/lib/reviews/cm6";
 
 /**
  * Commands available regardless of which screen is mounted. The keyboard
@@ -85,10 +89,46 @@ const CORE_COMMANDS: EditorCommand[] = [
       if (proj) await refreshLibraryBib(proj);
     },
   },
-  // Note: compile is intentionally not a core command. Each adapter ships
-  // its own format-specific compile entry (LatexAdapter → "Compile LaTeX",
-  // future Typst → "Compile Typst") which gets registered while a project
-  // of that format is open. That keeps Mod+Enter contextual.
+  {
+    id: "review.addComment",
+    title: "Add Review Comment",
+    subtitle: "Start a review thread on the current selection",
+    shortcut: "Mod+Shift+M",
+    group: "Review",
+    scope: "editor",
+    when: () => {
+      const view = getActiveEditorView();
+      if (!view) return false;
+      const sel = view.state.selection.main;
+      return sel.from !== sel.to && activeFile() !== null;
+    },
+    run: () => {
+      const view = getActiveEditorView();
+      const f = activeFile();
+      if (!view || !f) return;
+      const sel = view.state.selection.main;
+      if (sel.from === sel.to) return;
+      const anchorText = view.state.doc.sliceString(sel.from, sel.to);
+      const thread = createThread(f.relPath, sel.from, sel.to, anchorText, "You", "");
+      addThread(thread);
+      const existing = getCurrentRanges(view);
+      dispatchSetThreads(view, [
+        ...existing,
+        { id: thread.id, from: sel.from, to: sel.to, status: "open" },
+      ]);
+    },
+  },
+  {
+    id: "review.togglePanel",
+    title: "Toggle Review Panel",
+    subtitle: "Show or hide the review sidebar",
+    group: "Review",
+    scope: "global",
+    when: () => project() !== null,
+    run: () => {
+      window.dispatchEvent(new CustomEvent("typeward:toggle-review-panel"));
+    },
+  },
 ];
 
 /**
