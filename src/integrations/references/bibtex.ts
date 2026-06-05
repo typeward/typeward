@@ -3,7 +3,7 @@
  * for deduplication and listing.
  *
  * NOT a full parser — we don't need value extraction here. The compile
- * pipeline (texlab / busytex) parses the canonical .bib that we emit; the
+ * pipeline (texlab / the compile engine) parses the canonical .bib that we emit; the
  * frontend only needs to know what keys exist and where each entry's
  * `@type{key, ...}` block starts and ends.
  */

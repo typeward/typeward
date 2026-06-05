@@ -26,7 +26,11 @@ import {
   createOneDriveProvider,
   type MicrosoftAccount,
 } from "~/integrations/cloud/onedrive";
-import { idMapPath, projectCacheRoot } from "~/integrations/cloud/core";
+import {
+  idMapPath,
+  idMapPathForCacheRoot,
+  projectCacheRoot,
+} from "~/integrations/cloud/core";
 import type { CloudFsProvider } from "~/integrations/types";
 
 export type CloudProviderId = "dropbox" | "onedrive" | "gdrive";
@@ -45,7 +49,7 @@ export interface CloudAccountRef {
  */
 export function cloudProviderForAccount(
   ref: CloudAccountRef,
-  options: { projectsRoot: string; projectId?: string },
+  options: { projectsRoot: string; projectId?: string; cacheRoot?: string },
 ): CloudFsProvider {
   switch (ref.provider) {
     case "dropbox":
@@ -59,7 +63,9 @@ export function cloudProviderForAccount(
         );
       }
       return createGoogleDriveProvider(asGoogle(ref), {
-        idMapPath: idMapPath(options.projectsRoot, ref.provider, options.projectId),
+        idMapPath: options.cacheRoot
+          ? idMapPathForCacheRoot(options.cacheRoot, ref.provider)
+          : idMapPath(options.projectsRoot, ref.provider, options.projectId),
       });
     }
     default: {

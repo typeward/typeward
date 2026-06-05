@@ -23,7 +23,7 @@ import { KbdHint } from "~/components/primitives/KbdHint";
 const ENGINE_LABEL: Record<string, string> = {
   "system-tex": "pdflatex",
   tectonic: "Tectonic (xelatex)",
-  busytex: "busytex (WASM)",
+  "texlive-wasm": "TeX Live (WASM)",
 };
 
 /**

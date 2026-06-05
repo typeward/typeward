@@ -52,9 +52,9 @@ export const readProjectTextFile = (
   invoke("read_project_text_file", { projectRoot, relPath });
 
 /**
- * Read raw bytes for a project-relative file. busytex pulls figure
- * assets (`.png`/`.jpg`/`.pdf`) through this so `\includegraphics{...}`
- * resolves inside its in-memory FS.
+ * Read raw bytes for a project-relative file. The WASM compile provider
+ * pulls figure assets (`.png`/`.jpg`/`.pdf`) through this so
+ * `\includegraphics{...}` resolves inside the engine's in-memory FS.
  */
 export const readProjectBinaryFile = async (
   projectRoot: string,
@@ -75,8 +75,8 @@ export const writeProjectTextFile = (
   invoke("write_project_text_file", { projectRoot, relPath, content });
 
 /**
- * Persist arbitrary binary bytes. Used by the busytex CompileProvider to
- * write the WASM-emitted PDF into `<project>/.typeward/build/<base>.pdf`
+ * Persist arbitrary binary bytes. Used by the WASM compile provider to
+ * write the engine-emitted PDF into `<project>/.typeward/build/<base>.pdf`
  * so the file-backed PdfViewer can render it without changes.
  */
 export const writeProjectBinaryFile = (
@@ -91,7 +91,7 @@ export const writeProjectBinaryFile = (
   });
 
 /**
- * Reuse the Rust LaTeX log parser from frontend compile paths (busytex).
+ * Reuse the Rust LaTeX log parser from frontend compile paths (WASM engine).
  * Keeps diagnostic shape identical across engines without a TS duplicate.
  */
 export const parseLatexLog = (
@@ -117,7 +117,7 @@ interface BackendCompileResult {
 
 export const compileLatex = async (
   project: Project,
-  engine?: "system-tex" | "tectonic" | "busytex",
+  engine?: "system-tex" | "tectonic",
 ): Promise<CompileResult> => {
   const result = await invoke<BackendCompileResult>("compile_latex", {
     project,

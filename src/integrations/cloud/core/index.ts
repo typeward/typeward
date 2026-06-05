@@ -3,7 +3,9 @@ export { decideConflict, suffixWithConflict } from "./conflict";
 export {
   REMOTE_CACHE_DIR,
   cursorPath,
+  cursorPathForCacheRoot,
   idMapPath,
+  idMapPathForCacheRoot,
   cachePathForRemoteRel,
   normalizeRemoteRelPath,
   projectCacheRoot,

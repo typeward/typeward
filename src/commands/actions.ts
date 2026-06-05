@@ -15,6 +15,7 @@ import {
   updateActiveFile,
 } from "~/stores/editor-store";
 import { currentCursorLine } from "~/stores/editor-view-store";
+import { compileEngine } from "~/stores/settings-store";
 import {
   navigateTo,
   setPaletteOpen,
@@ -63,7 +64,7 @@ export async function compileActiveProject(): Promise<void> {
     const result = await adapter.compile(p);
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");
-    if (result.ok) {
+    if (result.ok && result.outputPath) {
       bumpPdfVersion();
     } else {
       recordError(
@@ -124,7 +125,7 @@ export const openProjects = (): void => navigateTo("/projects");
  * Forward search: cursor in editor → PDF location. Requires:
  *   - A compiled PDF (`lastResult.outputPath`)
  *   - The active file is part of the open project
- *   - synctex CLI installed (IPC returns null otherwise)
+ *   - SyncTeX data from the active compile engine
  *
  * The user-visible feedback is the PdfViewer's pulse-ribbon highlight at
  * the target Y. We silently no-op (rather than erroring loudly) when any
@@ -140,6 +141,11 @@ export async function syncForwardFromCursor(): Promise<void> {
   const line = currentCursorLine();
   if (!line) return;
 
+  if (compileEngine() === "texlive-wasm") {
+    await syncForwardWithWasmSynctex(p, result.outputPath, file.relPath, line);
+    return;
+  }
+
   try {
     const loc = await ipc.synctexForward({
       projectRoot: p.rootPath,
@@ -151,15 +157,13 @@ export async function syncForwardFromCursor(): Promise<void> {
       requestPdfScroll(loc.page, loc.y);
     }
   } catch (e) {
-    // Telemetry only — SyncTeX is best-effort. Don't surface to the user.
     recordError("synctex-forward", "synctex_forward IPC threw", e);
   }
 }
 
 /**
  * Inverse search: PDF click → cursor in source. Translates an absolute
- * source path returned by synctex into a project-relative one (synctex
- * emits absolute paths on every platform) and routes through the
+ * source path returned by SyncTeX into a project-relative one and routes through the
  * goto-source intent signal so EditorScreen can open the file if needed.
  */
 export async function syncInverseFromPdfClick(
@@ -171,6 +175,11 @@ export async function syncInverseFromPdfClick(
   if (!p) return;
   const result = lastResult();
   if (!result?.outputPath) return;
+
+  if (compileEngine() === "texlive-wasm") {
+    await syncInverseWithWasmSynctex(p, result.outputPath, pageNum, x, y);
+    return;
+  }
 
   try {
     const loc = await ipc.synctexInverse({
@@ -185,6 +194,75 @@ export async function syncInverseFromPdfClick(
   } catch (e) {
     recordError("synctex-inverse", "synctex_inverse IPC threw", e);
   }
+}
+
+async function syncForwardWithWasmSynctex(
+  p: Project,
+  outputPath: string,
+  relPath: string,
+  line: number,
+): Promise<void> {
+  try {
+    const lookup = await readWasmSynctex(p.rootPath, outputPath);
+    const hit = lookup?.forward(relPath, line)[0];
+    if (hit) requestPdfScroll(hit.page, hit.y);
+  } catch (e) {
+    recordError("synctex-forward", "wasm synctex forward lookup threw", e);
+  }
+}
+
+async function syncInverseWithWasmSynctex(
+  p: Project,
+  outputPath: string,
+  pageNum: number,
+  x: number,
+  y: number,
+): Promise<void> {
+  try {
+    const lookup = await readWasmSynctex(p.rootPath, outputPath);
+    const hit = lookup?.reverse(pageNum, x, y)[0];
+    if (!hit) return;
+    const relPath = synctexSourceToProjectRel(p.rootPath, hit.file);
+    if (relPath) requestGotoSource(relPath, hit.line);
+  } catch (e) {
+    recordError("synctex-inverse", "wasm synctex inverse lookup threw", e);
+  }
+}
+
+async function readWasmSynctex(
+  projectRoot: string,
+  outputPath: string,
+): Promise<import("texlive-wasm").SynctexLookup | null> {
+  const pdfRel = pathRelativeToProjectRoot(projectRoot, outputPath);
+  if (!pdfRel) return null;
+
+  const synctexRel = replaceExt(pdfRel, "synctex");
+  for (const candidate of [`${synctexRel}.gz`, synctexRel]) {
+    try {
+      const bytes = await ipc.readProjectBinaryFile(projectRoot, candidate);
+      const { createSynctex } = await import("texlive-wasm");
+      return await createSynctex(bytes);
+    } catch {
+      // Try the alternate gzip/plain SyncTeX spelling.
+    }
+  }
+  return null;
+}
+
+function synctexSourceToProjectRel(projectRoot: string, sourceFile: string): string | null {
+  const fromRoot = pathRelativeToProjectRoot(projectRoot, sourceFile);
+  if (fromRoot) return fromRoot;
+
+  const normalized = sourceFile.replace(/\\/g, "/");
+  if (normalized.startsWith("/project/")) return normalized.slice("/project/".length);
+  if (!normalized.startsWith("/") && !/^[A-Za-z]:/.test(normalized)) return normalized;
+  return null;
+}
+
+function replaceExt(filename: string, newExt: string): string {
+  const dot = filename.lastIndexOf(".");
+  if (dot < 0) return `${filename}.${newExt}`;
+  return `${filename.slice(0, dot)}.${newExt}`;
 }
 
 /**

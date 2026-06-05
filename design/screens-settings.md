@@ -38,11 +38,11 @@ Single toggle: **Enable animations** (default on). See
 
 ### Default engine
 
-- Today: shows `system-tex`, `tectonic`, `busytex`.
-- **Desktop**: `busytex` is hidden (it's a tablet fallback).
-- **Tablet**: `busytex` is the only option (system-tex / tectonic can't run
+- Today: shows `system-tex` and `tectonic` on desktop.
+- **Desktop**: `texlive-wasm` is hidden (it's the mobile fallback).
+- **Tablet/mobile**: `texlive-wasm` is the only option (system-tex / tectonic can't run
   there). The whole "Default engine" section is replaced with a one-liner
-  stating that busytex is the engine.
+  stating that TeX Live WASM is the engine.
 
 ### Other editor settings (existing)
 

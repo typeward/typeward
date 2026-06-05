@@ -41,6 +41,10 @@ export function cursorPath(
   );
 }
 
+export function cursorPathForCacheRoot(cacheRoot: string, providerId: string): string {
+  return providerStatePath(cacheRoot, providerId, "cursor");
+}
+
 export function idMapPath(
   projectsRoot: string,
   providerId: string,
@@ -53,6 +57,14 @@ export function idMapPath(
     providerId,
     "idmap.json",
   );
+}
+
+export function idMapPathForCacheRoot(cacheRoot: string, providerId: string): string {
+  return providerStatePath(cacheRoot, providerId, "idmap.json");
+}
+
+function providerStatePath(cacheRoot: string, providerId: string, fileName: string): string {
+  return joinPath(cacheRoot, ".typeward", "integrations", providerId, fileName);
 }
 
 export function normalizeRemoteRelPath(relPath: string): string {

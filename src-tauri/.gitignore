@@ -11,3 +11,7 @@ gen/
 # Don't commit them; they're 30MB+ per platform.
 binaries/*
 !binaries/.gitkeep
+
+# texlive-wasm assets — fetched via `npx texlive-wasm download-assets` for mobile builds.
+resources/texlive-wasm/*
+!resources/texlive-wasm/placeholder.txt
