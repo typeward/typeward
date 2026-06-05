@@ -13,7 +13,7 @@
 | 0 — Skeleton | **complete** (2026-05-10) | Tauri 2 + Solid + TS scaffolded. Tailwind v4, Kobalte, lucide-solid, corvu, @solidjs/router installed. Theme tokens (Aurora/Obsidian/Graphite/Paper) + accent palettes (Violet-Cyan/Amber-Rose/Emerald-Teal/Indigo-Pink) wired with localStorage persistence. Vitest (jsdom) and `cargo test` baseline tests passing. Icons generated for all platforms. |
 | 1 — Vertical slice on desktop | **complete** (2026-05-10) | All four screens (Onboarding/Projects/Editor/Settings) ported and functional. CodeMirror 6 + PDF.js wired into a 3-pane corvu Resizable shell. Real LaTeX compile via system TeX (latexmk/pdflatex) or Tectonic. Architecture seams defined (DocumentExperience, EditorAdapter, CompileProvider, PreviewProvider, LspProvider, CommandRegistry). LSP transport (texlab spawn + JSON-RPC framing over Tauri event channels), unified file watcher (notify-based), autosave + recovery dialog, and telemetry capture (panic hook + frontend error hook + JSONL log) all in. |
 | 2 — Multi-format & preview polish | substantively complete | CommandRegistry bound, Typst adapter, SyncTeX all landed (2026-05-11..15). Two items intentionally skipped per user direction: smart per-page PDF diff and sync-to-cursor toggle. Quarto support was scoped in then dropped 2026-05-12. Markdown/RMD adapters and notebook shell were subsequently removed (2026-05-20 scope narrowing — see below). |
-| 3 — Tablet | substantively complete (2026-05-13) | Responsive layout (viewport-store + PaneSwitcher + LogsSheet + swipe gestures), texlyre-busytex CompileProvider (multi-file walker, SyncTeX persistence, settings UI with install-status probe), Android target scaffolded via `tauri android init`. APK build-and-run on emulator/device is the only remaining piece — user-driven. |
+| 3 — Tablet | substantively complete (2026-05-13) | Responsive layout (viewport-store + PaneSwitcher + LogsSheet + swipe gestures), texlive-wasm CompileProvider (multi-file walker, bundled-resource assets, SyncTeX persistence), Android target scaffolded via `tauri android init`. APK build-and-run on emulator/device is the only remaining piece — user-driven. |
 | 4 — Cloud + collab | **superseded** (2026-05-22) | The original "folder sync to Supabase + realtime collab" framing was retired 2026-05-13. The integrations program (below) picks up the still-relevant pieces — third-party cloud storage providers landed as Integ Phase 2; Supabase resurfaces as Integ Phase 7 with a narrower scope (auth + entitlements only, no file storage, no realtime collab). Realtime collab via Yjs remains separately deferred. |
 
 ### Integrations program (2026-05-22 → present)
@@ -23,7 +23,7 @@ Approved plan: `~/.claude/plans/research-and-completely-plan-resilient-brook.md`
 | Integ Phase | State | Summary |
 |---|---|---|
 | 0 — Foundations | **complete** (2026-05-22; hardened 2026-05-24) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + scoped capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), free-tier entitlement fallback (`<FeatureGate>` + `<UpgradePrompt>`), `runOauthFlow` driver. HTTP IPC is host allowlisted; `authRef` is host-bound. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). |
-| 1 — References | **complete** (2026-05-22) | Zotero (Better BibTeX local probe + Web API key), Mendeley (OAuth PKCE; flagged maintenance-mode), JabRef (file-based), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which busytex + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. |
+| 1 — References | **complete** (2026-05-22) | Zotero (Better BibTeX local probe + Web API key), Mendeley (OAuth PKCE; flagged maintenance-mode), JabRef (file-based), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which texlive-wasm + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. |
 | 2 — Cloud storage | **complete** (2026-05-22; hardened 2026-05-24) | Dropbox (longpoll cursor), OneDrive (Graph `delta` with root-relative path stripping), Google Drive (`changes.list` + ID↔path map, `drive.file` scope). iCloud Drive is OS-mediated on macOS (no third-party API). Generic sync engine + local cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/`, conflict resolution writes `<name>.conflict-<ISO>.<ext>` siblings. Remote paths are normalized before cache IO and `.typeward/` targets are rejected. CloudPickerDialog (new-project Cloud branch) + SyncStatusBadge + ConflictResolverDialog. |
 | 3 — Git / GitHub / Overleaf | **complete** (2026-05-22; hardened 2026-05-24) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only and refuses dirty worktrees. SSH out of scope for now. |
 | 4 — AI providers | **complete** (2026-05-22; hardened 2026-05-24) | One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter `aiStream`. Four providers (Claude / ChatGPT / Gemini / Ollama) share the same `AiProvider` shape; one active at a time and entitlement-gated. OpenAI / Anthropic / Gemini keys attach in Rust via `authRef`; status UI uses `credential_exists`. |
@@ -57,7 +57,7 @@ Multiplatform editor app ("Typeward") similar to Overleaf, format-agnostic: LaTe
 | Resizable panes | **corvu** (`corvu/resizable`) | Mature Solid primitive; the prototype's `useDrag` works but corvu handles a11y + edge cases for free. |
 | TeX engine — desktop (primary) | **System install** (TeX Live / MiKTeX / MacTeX) | Detect at onboarding; invoke `latexmk`/`pdflatex` directly via Rust. |
 | TeX engine — desktop (quick-start) | **Tectonic** (bundled Rust binary) | Onboarding offers this as a zero-friction alternative — full TeX install can come later. Avoids losing users at the install gate. |
-| TeX engine — tablet | **texlyre-busytex** (WASM) | Phase 3. |
+| TeX engine — tablet | **texlive-wasm** (WASM) | Local sibling package; bundled as Tauri resources for mobile. |
 | Other compilers | **Typst CLI** as a detected binary | Detected on PATH per-platform; not bundled. |
 | Testing | **Vitest** + **@solidjs/testing-library** + **Playwright** + **cargo test** | E2E uses Tauri's WebDriver bridge. |
 | Cloud / accounts | **Third-party cloud providers + Supabase auth** | Dropbox / OneDrive / Google Drive sync through provider APIs and local cache. Supabase is auth + subscription entitlements only; no document storage or realtime collab in the current scope. |
@@ -96,7 +96,7 @@ Concrete today: `LatexAdapter`, `TypstAdapter`. Common plumbing (compile/diagnos
 
 Even with no plugin system today, define interfaces so format logic isn't hardcoded:
 
-- `CompileProvider` — system-tex / tectonic / typst-cli / busytex (mobile)
+- `CompileProvider` — system-tex / tectonic / typst-cli / texlive-wasm (mobile)
 - `PreviewProvider` — pdf.js / html (html = MarkdownPreview, frontend-only)
 - `LspProvider` — texlab / tinymist
 - `CommandRegistry` — toolbar actions, command palette, keybindings register here, not directly in components
@@ -154,7 +154,7 @@ src/                          # Solid frontend
     latex/                    # LatexAdapter, latex CM extensions, snippets
     typst/
   providers/                  # Pluggable seams
-    compile/                  # CompileProvider impls: system-tex, tectonic, typst, busytex
+    compile/                  # CompileProvider impls: system-tex, tectonic, typst, texlive-wasm
     preview/                  # PreviewProvider impls: pdf
     lsp/                      # LspProvider impls
   components/
@@ -187,7 +187,7 @@ src-tauri/
       system_tex.rs           # latexmk/pdflatex
       tectonic.rs             # bundled Tectonic
       typst.rs
-      busytex.rs              # Phase 3 (mobile target only)
+      texlive_wasm.rs         # Phase 3 (mobile target only; frontend provider today)
     lsp/
       mod.rs                  # Sidecar lifecycle + event-channel transport
       texlab.rs
@@ -336,7 +336,7 @@ Original breakdown follows for reference:
 
 ### Phase 3 — Tablet — substantively complete (2026-05-13)
 
-The plan called for "drop-in replacement for desktop's `compile.rs` on mobile target via cfg-gated Rust"; we landed something simpler and stronger — a frontend Web Worker provider that runs the same way on desktop and tablet, with no Rust cfg-gates needed. busytex's own runtime owns the worker; we just dispatch.
+The plan called for "drop-in replacement for desktop's `compile.rs` on mobile target via cfg-gated Rust"; we landed something simpler and stronger — a frontend Web Worker provider that runs the same way on desktop and tablet, with no Rust cfg-gates needed. `texlive-wasm` owns the worker; Typeward dispatches.
 
 **Landed (2026-05-13) — Responsive layout pass**
 
@@ -346,18 +346,18 @@ The plan called for "drop-in replacement for desktop's `compile.rs` on mobile ta
 - `text-shell.tsx` — split into `DesktopLayout` (corvu Resizable, unchanged) and `TabletLayout` (single-pane `<Switch>` + PaneSwitcher + slide-up LogsSheet + swipe listener). File-select on tablet auto-swaps active pane back to "editor". CenterPane scales tab strip and close-button hit areas in tablet mode.
 - 3 new viewport-store tests.
 
-**Landed (2026-05-13) — busytex WASM CompileProvider**
+**Landed (2026-05-13; replaced 2026-06-04) — texlive-wasm CompileProvider**
 
-- `npm install texlyre-busytex` (v1.1.1). One-time asset fetch via `npx texlyre-busytex download-assets ./public/core` → `public/core/busytex/` (~32MB WASM + 90-400MB TeX Live data), served at `/core/busytex` by Vite.
-- `src/providers/compile/busytex-provider.ts` — wraps `BusyTexRunner` + `PdfLatex` as lazy singletons (`runner.initialize(true)` uses the package's built-in Web Worker). Walks the project tree for `.tex`/`.bib`/`.cls`/`.sty`/`.bst`/`.def`/`.ldf`/`.fd`/`.cnf`/`.clo`/`.aux` (capped 200 files / 5MB), passes them as `additionalFiles`, auto-enables BibTeX when any `.bib` is present. Sniffs SyncTeX magic bytes (`1f 8b`) to write either `.synctex.gz` or `.synctex` next to the PDF so the existing `synctex` CLI resolves forward/inverse search against busytex output. Reuses the Rust `parse_latex_log` extractor via the new `parse_latex_log_cmd` IPC.
+- Local `texlive-wasm` package (`file:../texlive-wasm`). One-time asset fetch via `npx texlive-wasm download-assets ./src-tauri/resources/texlive-wasm`, bundled as Tauri resources for mobile builds.
+- `src/providers/compile/texlive-wasm-provider.ts` — wraps `latexmk()` with a lazy `pdflatex` engine handle. Walks the project tree for `.tex`/`.bib`/`.cls`/`.sty`/`.bst`/`.def`/`.ldf`/`.fd`/`.cnf`/`.clo`/`.aux` plus binary figures (capped 200 files / 10MB), auto-enables BibTeX when any `.bib` is present. Sniffs SyncTeX magic bytes (`1f 8b`) to write either `.synctex.gz` or `.synctex` next to the PDF. Reuses the Rust `parse_latex_log` extractor via `parse_latex_log_cmd`.
 - Rust: new project-scoped `write_project_binary_file` and `parse_latex_log_cmd` Tauri commands.
-- `CompileEngine` type extended to `"system-tex" | "tectonic" | "busytex"`.
-- `LatexAdapter.compile()` routes the busytex branch via dynamic import so the ~32MB bridge stays out of desktop bundles when unused.
-- Settings → Editor → Compilation now lets users pick engine; HEAD-probes `/core/busytex/busytex_pipeline.js` and surfaces a "Not installed" pill with the exact `npx texlyre-busytex download-assets ./public/core` command when missing.
+- `CompileEngine` type is `"system-tex" | "tectonic" | "texlive-wasm"`, with old persisted `"busytex"` migrated on load.
+- `LatexAdapter.compile()` routes the texlive-wasm branch via dynamic import so the WASM bridge stays out of desktop bundles when unused.
+- Settings → Editor → Compilation hides the engine picker on mobile; mobile locks to texlive-wasm.
 - Test: smoke test for the assets-missing error path.
 
-**Deferred from busytex slice:**
-- Shipping binary assets (`.png`, `.pdf` figures) into the worker's in-memory FS.
+**Deferred from texlive-wasm slice:**
+- Device/emulator compile smoke tests after mobile build hardware is available.
 
 **Landed (2026-05-13) — Android build pipeline scaffold**
 
@@ -374,7 +374,7 @@ The plan called for "drop-in replacement for desktop's `compile.rs` on mobile ta
 
 - Responsive layout pass: collapse split panes to drawers/sheets; touch hit targets ≥44px; gesture-driven pane toggle
 - Tauri 2 mobile build pipeline (Xcode + Android Studio)
-- **texlyre-busytex** integration: drop-in replacement for desktop's `compile.rs` on mobile target via cfg-gated Rust
+- **texlive-wasm** integration: mobile CompileProvider backed by bundled WASM TeX Live resources
 
 ### Scope narrowing — 2026-05-20
 

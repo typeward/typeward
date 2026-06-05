@@ -24,6 +24,9 @@ interface ActiveEngine {
   engine: SyncEngine;
   providerId: string;
   projectId: string;
+  accountId: string;
+  rootId: string;
+  cacheRoot: string;
 }
 
 let active: ActiveEngine | null = null;
@@ -58,23 +61,41 @@ export function initCloudSync(): void {
       }
 
       const projectId = deriveProjectId(proj.rootPath);
+      const cacheRoot = proj.rootPath;
       // If the same engine is already running for this project, leave it.
-      if (active?.providerId === accountRef.provider && active.projectId === projectId) return;
+      if (
+        active?.providerId === accountRef.provider &&
+        active.projectId === projectId &&
+        active.accountId === accountRef.accountId &&
+        active.rootId === origin.remotePath &&
+        active.cacheRoot === cacheRoot
+      ) {
+        return;
+      }
 
       teardown();
 
       const provider = cloudProviderForAccount(accountRef, {
         projectsRoot: root,
         projectId,
+        cacheRoot,
       });
       const engine = new SyncEngine(provider, {
         providerId: provider.id,
         projectId,
         rootId: origin.remotePath,
         projectsRoot: root,
+        cacheRoot,
       });
       void engine.start();
-      active = { engine, providerId: provider.id, projectId };
+      active = {
+        engine,
+        providerId: provider.id,
+        projectId,
+        accountId: accountRef.accountId,
+        rootId: origin.remotePath,
+        cacheRoot,
+      };
     });
   });
 }

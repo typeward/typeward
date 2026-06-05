@@ -1,5 +1,6 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import * as ipc from "~/ipc";
+import { isTauriMobile } from "~/lib/platform";
 import {
   type Accent,
   type Theme,
@@ -38,7 +39,20 @@ import {
   widgetEnabled,
 } from "~/stores/workspace-store";
 
-export type CompileEngine = "system-tex" | "tectonic" | "busytex";
+export type CompileEngine = "system-tex" | "tectonic" | "texlive-wasm";
+
+function migrateCompileEngine(raw: string): CompileEngine {
+  if (raw === "busytex") {
+    return isTauriMobile() ? "texlive-wasm" : "system-tex";
+  }
+  if (raw === "texlive-wasm" && !isTauriMobile()) {
+    return "system-tex";
+  }
+  if (raw === "system-tex" || raw === "tectonic" || raw === "texlive-wasm") {
+    return raw;
+  }
+  return isTauriMobile() ? "texlive-wasm" : "system-tex";
+}
 
 export interface EditorSettings {
   autoCompile: boolean;
@@ -89,7 +103,7 @@ createRoot(() => {
       setAccent(s.accent as Accent);
       setEditorSettings(s.editor);
       setProjectsRoot(s.projectsRoot);
-      setCompileEngine(s.compileEngine as CompileEngine);
+      setCompileEngine(migrateCompileEngine(s.compileEngine));
       setOnboarded(s.onboarded);
 
       setDensity(s.ui.density as Density);
@@ -109,7 +123,9 @@ createRoot(() => {
         setIntegrationsSettings({ ...DEFAULT_INTEGRATIONS, ...s.integrations });
       }
     } catch {
-      // First boot or non-Tauri context (Vitest); leave defaults in place.
+      // First boot or non-Tauri context (Vitest).
+      // On mobile first-boot, force the WASM engine since there's no system TeX.
+      if (isTauriMobile()) setCompileEngine("texlive-wasm");
     } finally {
       setSettingsLoaded(true);
     }

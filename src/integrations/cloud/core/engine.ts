@@ -24,7 +24,7 @@ import type { CloudFsProvider, DeltaChange, RemoteFile } from "~/integrations/ty
 import { decideConflict } from "./conflict";
 import {
   cachePathForRemoteRel,
-  cursorPath,
+  cursorPathForCacheRoot,
   normalizeRemoteRelPath,
   projectCacheRoot,
 } from "./paths";
@@ -40,6 +40,8 @@ export interface SyncEngineOptions {
   rootId: string;
   /** User's Typeward projects root — usually `~/Documents/Typeward`. */
   projectsRoot: string;
+  /** Actual local project/cache root opened by the editor. */
+  cacheRoot?: string;
   /** Default poll interval; providers can override per call (e.g. Dropbox longpoll). */
   pollIntervalMs?: number;
 }
@@ -63,7 +65,8 @@ export class SyncEngine {
   ) {}
 
   cacheRoot(): string {
-    return projectCacheRoot(this.opts.projectsRoot, this.opts.providerId, this.opts.projectId);
+    return this.opts.cacheRoot ??
+      projectCacheRoot(this.opts.projectsRoot, this.opts.providerId, this.opts.projectId);
   }
 
   async start(): Promise<void> {
@@ -179,7 +182,7 @@ export class SyncEngine {
 
   private async ensureCursorLoaded(): Promise<void> {
     if (this.cursor !== undefined) return;
-    const path = cursorPath(this.opts.projectsRoot, this.opts.providerId, this.opts.projectId);
+    const path = cursorPathForCacheRoot(this.cacheRoot(), this.opts.providerId);
     try {
       this.cursor = (await readTextFile(path)).trim() || undefined;
     } catch {
@@ -188,7 +191,7 @@ export class SyncEngine {
   }
 
   private async persistCursor(value: string): Promise<void> {
-    const path = cursorPath(this.opts.projectsRoot, this.opts.providerId, this.opts.projectId);
+    const path = cursorPathForCacheRoot(this.cacheRoot(), this.opts.providerId);
     await mkdirParents(path);
     await writeTextFile(path, value);
   }

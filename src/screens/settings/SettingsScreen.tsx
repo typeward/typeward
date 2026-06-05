@@ -22,7 +22,7 @@ import {
   Users,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Switch } from "~/components/forms/Switch";
@@ -67,7 +67,7 @@ import {
   setEnableTags,
   setNotificationsPanelDefault,
 } from "~/stores/workspace-store";
-import { isTabletViewport } from "~/stores/viewport-store";
+import { isTauriMobile } from "~/lib/platform";
 
 type SectionId =
   | "profile"
@@ -668,7 +668,7 @@ const ThemeTile: Component<{
 const ENGINE_LABEL: Record<CompileEngine, string> = {
   "system-tex": "System TeX",
   tectonic: "Tectonic",
-  busytex: "busytex (WASM)",
+  "texlive-wasm": "TeX Live (WASM)",
 };
 
 const EditorPanel: Component = () => {
@@ -676,47 +676,16 @@ const EditorPanel: Component = () => {
     setEditorSettings({ ...editorSettings(), [key]: value });
   };
 
-  const [busytexAssetsState, setBusytexAssetsState] = createSignal<
-    "unknown" | "installed" | "missing"
-  >("unknown");
-
-  onMount(() => {
-    // HEAD-probe the busytex pipeline asset so the UI can tell users
-    // whether they still need to run `npx texlyre-busytex download-assets`.
-    void (async () => {
-      try {
-        const probe = await fetch("/core/busytex/busytex_pipeline.js", {
-          method: "HEAD",
-        });
-        setBusytexAssetsState(probe.ok ? "installed" : "missing");
-      } catch {
-        setBusytexAssetsState("missing");
-      }
-    })();
-  });
-
   return (
     <div class="space-y-3">
       <Card
         title="Compilation"
         subtitle="How your project compiles to PDF when you write."
       >
-        <Show
-          when={!isTabletViewport()}
-          fallback={
-            <Row
-              label="Engine"
-              hint="Tablet builds run TeX Live 2026 in a Web Worker via busytex — the only engine available without a native install."
-            >
-              <span class="mono text-[length:var(--ui-font-sm)] text-fg-1">
-                busytex (WASM)
-              </span>
-            </Row>
-          }
-        >
+        <Show when={!isTauriMobile()}>
           <Row
             label="Default engine"
-            hint="System TeX uses your local install; Tectonic is a self-contained Rust binary. busytex is desktop-disabled (it's the tablet fallback)."
+            hint="System TeX uses your local install; Tectonic is a self-contained Rust binary."
           >
             <SelectStub
               value={ENGINE_LABEL[compileEngine()]}
@@ -726,14 +695,6 @@ const EditorPanel: Component = () => {
               ]}
               onChange={(v) => setCompileEngine(v as CompileEngine)}
             />
-          </Row>
-        </Show>
-        <Show when={isTabletViewport() && compileEngine() === "busytex"}>
-          <Row
-            label="busytex assets"
-            hint="One-time ~120MB download of WASM + TeX Live data. Lives under public/core/busytex/."
-          >
-            <BusytexAssetsBadge state={busytexAssetsState()} />
           </Row>
         </Show>
         <Row
@@ -789,45 +750,6 @@ const EditorPanel: Component = () => {
     </div>
   );
 };
-
-const BusytexAssetsBadge: Component<{
-  state: "unknown" | "installed" | "missing";
-}> = (props) => (
-  <Show
-    when={props.state !== "unknown"}
-    fallback={
-      <span class="mono rounded-full px-2.5 py-1 text-[11px] text-fg-3" style={{ background: "var(--color-control-fill)" }}>
-        Checking…
-      </span>
-    }
-  >
-    <Show
-      when={props.state === "installed"}
-      fallback={
-        <div class="flex flex-col items-end gap-1">
-          <Pill
-            color="#FDE68A"
-            bg="rgba(245,158,11,0.12)"
-            icon={<CheckCircle size={11} />}
-          >
-            Not installed
-          </Pill>
-          <code class="mono rounded px-2 py-1 text-[11px] text-fg-2" style={{ background: "var(--color-control-fill)" }}>
-            npx texlyre-busytex download-assets ./public/core
-          </code>
-        </div>
-      }
-    >
-      <Pill
-        color="#A7F3D0"
-        bg="rgba(16,185,129,0.12)"
-        icon={<CheckCircle size={11} />}
-      >
-        Installed
-      </Pill>
-    </Show>
-  </Show>
-);
 
 const SelectStub: Component<{
   value: string;

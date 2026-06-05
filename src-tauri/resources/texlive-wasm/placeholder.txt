@@ -1,0 +1,1 @@
+Run `npx texlive-wasm download-assets ./src-tauri/resources/texlive-wasm` to populate this directory for mobile builds.

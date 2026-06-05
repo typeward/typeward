@@ -52,11 +52,6 @@ export async function createCloudBackedProject(
     projectId,
   );
 
-  const provider = cloudProviderForAccount(opts.account, {
-    projectsRoot: opts.projectsRoot,
-    projectId,
-  });
-
   // 1. Local shell — same starter content as a normal new project,
   //    just rooted inside the per-project cache directory.
   const initial = await ipc.createProject({
@@ -75,11 +70,18 @@ export async function createCloudBackedProject(
     },
   });
 
+  const provider = cloudProviderForAccount(opts.account, {
+    projectsRoot: opts.projectsRoot,
+    projectId,
+    cacheRoot: project.rootPath,
+  });
+
   const engine = new SyncEngine(provider, {
     providerId: provider.id,
     projectId,
     rootId: opts.remoteRoot.id,
     projectsRoot: opts.projectsRoot,
+    cacheRoot: project.rootPath,
   });
 
   return { project, engine };

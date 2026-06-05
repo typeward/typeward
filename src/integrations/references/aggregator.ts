@@ -6,9 +6,8 @@
  * `<project>/.typeward/citations/library.bib`.
  *
  * The path is deliberately inside the project tree (not `<app_data>`) so:
- *   1. The busytex compile walker auto-discovers it
- *      (src/providers/compile/busytex-provider.ts:208-211 enables BibTeX
- *      when any `.bib` is found).
+ *   1. The compile provider's file walker auto-discovers it
+ *      and enables BibTeX when any `.bib` is found.
  *   2. texlab / tinymist see it as a normal `.bib` in the workspace and
  *      provide `\cite{}` completions over its keys for free.
  *   3. Per-project libraries stay isolated — different projects can bind

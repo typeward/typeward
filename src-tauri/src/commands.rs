@@ -84,7 +84,7 @@ pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResu
     fs_ops::read_text(&path).map_err(err)
 }
 
-/// Read raw bytes for a project-relative file. Used by the busytex
+/// Read raw bytes for a project-relative file. Used by the WASM
 /// CompileProvider to pull binary figure assets (.png/.jpg/.pdf) into
 /// the WASM in-memory FS so `\includegraphics{...}` resolves.
 #[tauri::command]
@@ -105,7 +105,7 @@ pub fn write_project_text_file(
     fs_ops::write_text(&path, &content).map_err(err)
 }
 
-/// Persist binary bytes (e.g. a PDF emitted by the busytex WASM engine)
+/// Persist binary bytes (e.g. a PDF emitted by the WASM engine)
 /// to the given absolute path. Bypasses the fs plugin scope like the
 /// rest of our project-internal IO. Parent directories are created on
 /// demand so callers don't need a separate mkdir step.
@@ -126,7 +126,7 @@ pub fn write_project_binary_file(
 }
 
 /// Exposes the existing `parse_latex_log` diagnostic extractor over IPC
-/// so the busytex CompileProvider can produce diagnostics in the same
+/// so the WASM CompileProvider can produce diagnostics in the same
 /// shape as the desktop path without duplicating the parser in TS.
 #[tauri::command]
 pub fn parse_latex_log_cmd(log: String, entry: String) -> Vec<Diagnostic> {

@@ -9,7 +9,8 @@
     {
       "identifier": "fs:allow-read-file",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     {
@@ -33,13 +34,15 @@
     {
       "identifier": "fs:allow-read-dir",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     {
       "identifier": "fs:allow-stat",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     {
@@ -57,7 +60,8 @@
     {
       "identifier": "fs:allow-exists",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     "dialog:default",

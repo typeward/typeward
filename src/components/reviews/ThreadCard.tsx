@@ -38,6 +38,12 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
     }
   };
 
+  const handleToggleKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    props.onToggle();
+  };
+
   const relativeTime = (iso: string): string => {
     const diff = Date.now() - new Date(iso).getTime();
     const mins = Math.floor(diff / 60_000);
@@ -61,9 +67,11 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
         background: "var(--color-control-fill)",
       }}
     >
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={props.onToggle}
+        onKeyDown={handleToggleKeyDown}
         class="flex w-full items-start gap-2 px-2.5 py-2 text-left hover:bg-[var(--color-control-fill)]"
       >
         <div class="min-w-0 flex-1">
@@ -115,7 +123,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
             <ChevronUp size={12} class="text-fg-3" />
           </Show>
         </div>
-      </button>
+      </div>
 
       <Show when={props.expanded}>
         <div class="border-t border-glass-stroke px-2.5 pb-2.5">

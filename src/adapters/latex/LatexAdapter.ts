@@ -10,13 +10,11 @@ import { compileEngine } from "~/stores/settings-store";
 
 const compile = async (project: Project): Promise<CompileResult> => {
   const engine = compileEngine();
-  if (engine === "busytex") {
-    // Lazy import keeps the ~32MB texlyre-busytex bridge out of the desktop
-    // bundle when the user is on system-tex or tectonic.
-    const { compileWithBusytex } = await import(
-      "~/providers/compile/busytex-provider"
+  if (engine === "texlive-wasm") {
+    const { compileWithTexliveWasm } = await import(
+      "~/providers/compile/texlive-wasm-provider"
     );
-    return compileWithBusytex(project);
+    return compileWithTexliveWasm(project);
   }
   return ipc.compileLatex(project, engine);
 };
@@ -33,7 +31,7 @@ const commands: EditorCommand[] = [
   {
     id: "latex.compile",
     title: "Compile LaTeX",
-    subtitle: "latexmk / pdflatex via system TeX, Tectonic, or busytex (WASM)",
+    subtitle: "latexmk / pdflatex via system TeX, Tectonic, or TeX Live WASM",
     shortcut: "Mod+Enter",
     group: "Build",
     scope: "editor",

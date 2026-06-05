@@ -68,7 +68,7 @@ export interface CitationProvider extends IntegrationProvider {
    * Full BibTeX for every entry the provider exposes. The aggregator
    * concatenates these across providers, dedupes by key, and writes the
    * result into `<project>/.typeward/citations/library.bib` so texlab /
-   * tinymist / busytex see one source of truth.
+   * tinymist / the compile engine see one source of truth.
    *
    * Providers that don't have a persistent library (e.g. the DOI lookup
    * resolver) return an empty string here.

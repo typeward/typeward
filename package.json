@@ -45,7 +45,7 @@
     "pdfjs-dist": "^5.7.284",
     "solid-js": "^1.9.3",
     "tailwindcss": "^4.3.0",
-    "texlyre-busytex": "^1.1.1"
+    "texlive-wasm": "file:../texlive-wasm"
   },
   "devDependencies": {
     "@solidjs/testing-library": "^0.8.10",

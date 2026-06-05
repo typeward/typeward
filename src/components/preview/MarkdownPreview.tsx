@@ -68,11 +68,14 @@ function mathPlugin(md: MarkdownIt): void {
 }
 
 function fileUrlFromPath(path: string): string {
-  return `file://${path
-    .replace(/\\/g, "/")
+  const normalized = path.replace(/\\/g, "/");
+  const encoded = normalized
     .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/")}`;
+    .map((part, index) =>
+      index === 0 && /^[A-Za-z]:$/.test(part) ? part : encodeURIComponent(part),
+    )
+    .join("/");
+  return /^[A-Za-z]:\//.test(normalized) ? `file:///${encoded}` : `file://${encoded}`;
 }
 
 function safeRelativePath(url: string): string | null {

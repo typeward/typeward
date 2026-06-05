@@ -5,7 +5,7 @@ import type { CompileResult, Project } from "~/adapters/types";
  *   - "system-tex"   → spawns latexmk/pdflatex from the user's PATH
  *   - "tectonic"     → invokes the bundled Tectonic binary
  *   - "typst"        → typst CLI sidecar
- *   - "busytex"      → texlyre-busytex WASM (tablet only, Phase 3)
+ *   - "texlive-wasm" → texlive-wasm WASM engine (mobile only)
  *
  * Adapters delegate to a provider chosen by the project's settings; the
  * resolution rules live in src/lib/compile (not in this file).
