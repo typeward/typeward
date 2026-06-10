@@ -401,6 +401,15 @@ Open design questions for a future collab phase:
 - What does collab look like without cloud file storage? (Live-session model where one peer hosts and others join via Yjs awareness/edits, with no Supabase persistence? Bring-your-own-storage via Git/Dropbox/iCloud?)
 - What does the subscription gate? Phase 7's tier matrix (see `infrastructure/supabase/seed.sql`) is the starting point — Pro covers third-party cloud providers and hosted AI/reference integrations; Team gates shared templates and future collab.
 
+**Evaluated 2026-06-10 → postponed (decision record, so the research isn't re-done):**
+
+- **Transport decision: Supabase Realtime** (reuse the server already run for auth; broadcast for Yjs updates, presence primitive for cursors). Rejected p2p/WebRTC — "direct" still needs a signaling server *and* a TURN relay for restrictive NATs (so it's *more* new infra than reusing Supabase) and has no persistence when all peers are offline. Rejected a dedicated y-websocket server (new service to deploy) and a custom Rust relay (reinventing y-websocket).
+- **Why postponed — Supabase Realtime economics for Yjs:** Free = 200 concurrent / **2M messages/mo** / **100 msg/sec project-wide cap** / 256 KB payload; Pro = 500 / 5M then $2.50/M. **Messages are billed per recipient** (a broadcast to N peers = 1 + N messages), and Yjs is chatty (per-edit + awareness). Rough math: two people debounced to ~10 updates/s ≈ 40 msg/s ⇒ ~**14 hours of 2-person co-editing exhausts the entire free monthly quota**, and a 3-4 person room can hit the 100 msg/s cap that throttles the *whole* project. Live co-editing cost scales with `edits × participants`.
+- **Recommended phasing when it resumes (NOT full realtime first):**
+  - *Phase 1 — Presence:* who's in the project, who's viewing which file, live cursor/selection over Realtime's presence primitive (cheap, throttleable). Content keeps merging via the **already-shipped bidirectional cloud sync** (eventually consistent). Delivers the social layer Free-tier-affordably.
+  - *Phase 2 — Live co-editing:* Yjs concurrent editing of the active shared file, heavily throttled (batched ~150 ms, awareness rate-limited, active-file only), **Team-tier gated** so cost-generators pay, with message-usage monitoring. CM6 binding via `y-codemirror.next`; the open architectural problem is reconciling the Yjs doc with the local-first file model (autosave / compile / watcher / cloud-sync all read the file on disk).
+  - The CRDT-into-file-model reconciliation and a server-side persistence/snapshot story (Postgres table, RLS-gated) are the hard parts to design before Phase 2.
+
 ---
 
 ## Critical files to reference during build
