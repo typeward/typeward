@@ -82,6 +82,7 @@ pub fn run() {
             integrations::grammar::grammar_check,
             integrations::templates::templates_list,
             integrations::templates::template_instantiate,
+            integrations::templates::template_save,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

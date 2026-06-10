@@ -200,6 +200,148 @@ pub async fn template_instantiate(
     .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
 }
 
+/// Directories never captured into a saved template: our own sidecar, VCS
+/// metadata, and dependency dirs.
+const TEMPLATE_SKIP_DIRS: &[&str] = &[".typeward", ".git", ".svn", ".hg", "node_modules"];
+
+/// Capture the currently-open project as a reusable custom template under
+/// `<app_data>/templates/custom/<id>`. Files are copied verbatim (no `{{var}}`
+/// extraction — a captured project has concrete content); the author can add
+/// `variables`/`files[*].template` to the generated `template.json` by hand.
+#[tauri::command]
+pub async fn template_save(
+    app: AppHandle,
+    project: Project,
+    name: String,
+    description: String,
+) -> Result<TemplateManifest, TemplateError> {
+    let custom_root = custom_root(&app)?;
+
+    tokio::task::spawn_blocking(move || -> Result<TemplateManifest, TemplateError> {
+        let src_root = PathBuf::from(&project.root_path).canonicalize()?;
+        // root_file must be a sane project-relative path (it becomes the
+        // template's entry point and is re-validated on instantiate).
+        project::validate_project_relative_path(&project.root_file)?;
+
+        let raw_id = sanitize(&name);
+        if raw_id.is_empty() {
+            return Err(TemplateError::BadPath(
+                "template name produced an empty id".into(),
+            ));
+        }
+
+        fs::create_dir_all(&custom_root)?;
+        let dest = custom_root.join(&raw_id);
+        if dest.exists() {
+            return Err(TemplateError::AlreadyExists(dest.to_string_lossy().into()));
+        }
+        fs::create_dir_all(&dest)?;
+
+        let mut copied_any = false;
+        for entry in collect_template_files(&src_root)? {
+            let rel = entry
+                .strip_prefix(&src_root)
+                .map_err(|_| TemplateError::BadPath(entry.to_string_lossy().into()))?;
+            let dest_path = dest.join(rel);
+            if let Some(parent) = dest_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&entry, &dest_path)?;
+            copied_any = true;
+        }
+        if !copied_any {
+            let _ = fs::remove_dir_all(&dest);
+            return Err(TemplateError::BadPath(
+                "project has no files to capture".into(),
+            ));
+        }
+
+        let doc = TemplateManifestDoc {
+            id: raw_id.clone(),
+            name: name.clone(),
+            description,
+            format: project.format,
+            tags: Vec::new(),
+            thumbnail: None,
+            root_file: project.root_file.clone(),
+            variables: Vec::new(),
+            files: Vec::new(),
+            entitlement: None,
+        };
+        // The on-disk manifest carries the bare id (source is implied by the
+        // directory it lives in). serialize before qualifying the returned id.
+        fs::write(dest.join("template.json"), serde_json::to_string_pretty(&doc)?)?;
+
+        let mut returned = doc;
+        returned.id = qualify_id(TemplateSource::Custom, &returned.id);
+        Ok(TemplateManifest {
+            doc: returned,
+            source: TemplateSource::Custom,
+        })
+    })
+    .await
+    .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
+}
+
+/// Walk a project root collecting regular files to capture, skipping
+/// sidecar/VCS dirs, symlinks, and LaTeX build artifacts.
+fn collect_template_files(root: &Path) -> Result<Vec<PathBuf>, TemplateError> {
+    let mut out = Vec::new();
+    collect_template_walk(root, &mut out)?;
+    Ok(out)
+}
+
+fn collect_template_walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), TemplateError> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue; // never copy through a symlink into a template
+        }
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if file_type.is_dir() {
+            if TEMPLATE_SKIP_DIRS.contains(&name_str.as_ref()) {
+                continue;
+            }
+            collect_template_walk(&entry.path(), out)?;
+        } else if file_type.is_file() && !is_build_artifact(&name_str) {
+            out.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+/// LaTeX/compile leftovers that shouldn't pollute a captured template.
+fn is_build_artifact(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    if lower.contains(".synctex") {
+        return true; // .synctex, .synctex.gz, .synctex(busy)
+    }
+    Path::new(&lower)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| {
+            matches!(
+                ext,
+                "aux" | "log"
+                    | "out"
+                    | "toc"
+                    | "lof"
+                    | "lot"
+                    | "fls"
+                    | "fdb_latexmk"
+                    | "bbl"
+                    | "blg"
+                    | "bcf"
+                    | "nav"
+                    | "snm"
+                    | "vrb"
+            )
+        })
+        .unwrap_or(false)
+}
+
 struct LocatedTemplate {
     dir: PathBuf,
 }
@@ -445,6 +587,23 @@ mod tests {
         let vars = HashMap::new();
         assert_eq!(render("{{ not-a-key }}", &vars), "{{ not-a-key }}");
         assert_eq!(render("{ single }", &vars), "{ single }");
+    }
+
+    #[test]
+    fn build_artifacts_are_filtered_from_captured_templates() {
+        for junk in [
+            "main.aux",
+            "main.log",
+            "main.fdb_latexmk",
+            "main.synctex.gz",
+            "refs.bbl",
+            "slides.nav",
+        ] {
+            assert!(is_build_artifact(junk), "{junk} should be skipped");
+        }
+        for keep in ["main.tex", "refs.bib", "figure.pdf", "logo.png", "thesis.cls"] {
+            assert!(!is_build_artifact(keep), "{keep} should be kept");
+        }
     }
 
     #[test]

@@ -9,7 +9,7 @@ import {
 import { registerCommand, unregisterCommand } from "./registry";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
-import { paletteOpen_ } from "./palette-store";
+import { paletteOpen_, setRequestSaveTemplate } from "./palette-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
 import { addThread } from "~/stores/review-store";
@@ -53,6 +53,17 @@ const CORE_COMMANDS: EditorCommand[] = [
     scope: "global",
     run: () => {
       openNewProjectDialog();
+    },
+  },
+  {
+    id: "core.saveTemplate",
+    title: "Save project as template",
+    subtitle: "Capture the current project as a reusable custom template",
+    group: "Project",
+    scope: "global",
+    when: () => project() !== null,
+    run: () => {
+      setRequestSaveTemplate(true);
     },
   },
   {
