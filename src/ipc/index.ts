@@ -416,6 +416,13 @@ export const templateInstantiate = (
 ): Promise<Project> =>
   invoke("template_instantiate", { templateId, destParent, name, vars });
 
+export const templateSave = (
+  project: Project,
+  name: string,
+  description: string,
+): Promise<TemplateManifest> =>
+  invoke("template_save", { project, name, description });
+
 // ----- Autosave / recovery -------------------------------------------------
 
 export interface Snapshot {

@@ -23,6 +23,7 @@ import {
 } from "~/commands/keyboard";
 import { setNavigator } from "~/commands/palette-store";
 import { CommandPalette } from "~/components/CommandPalette";
+import { SaveTemplateDialog } from "~/components/templates/SaveTemplateDialog";
 import "@fontsource/inter/400.css";
 import "@fontsource/inter/500.css";
 import "@fontsource/inter/600.css";
@@ -83,6 +84,7 @@ const AppShell: Component<{ children?: any }> = (props) => {
     <>
       {props.children}
       <CommandPalette />
+      <SaveTemplateDialog />
     </>
   );
 };
