@@ -17,7 +17,7 @@ use std::process::Stdio;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
@@ -151,6 +151,17 @@ pub async fn start_lsp(
                 }
             }
         }
+        // The server exited (crash or clean EOF). Drop its handle so further
+        // `send_lsp_message` calls fail fast, and notify the frontend so it can
+        // reject in-flight requests instead of waiting out the 8s timeout.
+        if let Some(manager) = reader_app.try_state::<LspManager>() {
+            manager
+                .servers
+                .lock()
+                .expect("lsp lock poisoned")
+                .remove(&reader_id);
+        }
+        let _ = reader_app.emit(&format!("lsp:{}:closed", reader_id), ());
     });
 
     // Stderr drain — useful for surfacing engine warnings into telemetry later.

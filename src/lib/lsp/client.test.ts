@@ -3,6 +3,7 @@ import { wrap, type LanguageServerClient } from "./client";
 
 const makeTransport = () => {
   let handler: ((message: string) => void) | null = null;
+  let closeHandler: (() => void) | null = null;
   const sendMessage = vi.fn(async (_message: string) => undefined);
   const transport: LanguageServerClient = {
     serverId: "test",
@@ -13,6 +14,12 @@ const makeTransport = () => {
         handler = null;
       };
     },
+    onClose(next) {
+      closeHandler = next;
+      return () => {
+        closeHandler = null;
+      };
+    },
     stop: vi.fn(async () => undefined),
   };
   return {
@@ -20,6 +27,9 @@ const makeTransport = () => {
     transport,
     emit(message: unknown) {
       handler?.(JSON.stringify(message));
+    },
+    close() {
+      closeHandler?.();
     },
   };
 };
@@ -66,5 +76,19 @@ describe("wrap", () => {
       id: "cfg",
       result: [null, null],
     });
+  });
+
+  it("rejects in-flight requests when the server closes", async () => {
+    const { close, transport } = makeTransport();
+    const client = wrap(transport);
+
+    const inflight = client.request("textDocument/completion", {}, 8000);
+    close();
+
+    await expect(inflight).rejects.toThrow(/server exited/i);
+    // Subsequent requests fail fast instead of waiting out the timeout.
+    await expect(client.request("textDocument/hover", {})).rejects.toThrow(
+      /not running/i,
+    );
   });
 });

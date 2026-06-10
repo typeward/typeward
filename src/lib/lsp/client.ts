@@ -20,6 +20,8 @@ export interface LanguageServerClient {
   sendMessage(message: string): Promise<void>;
   /** Subscribe to inbound JSON-RPC payloads. Returns an unsubscribe fn. */
   onMessage(handler: (message: string) => void): UnlistenFn;
+  /** Subscribe to server-exit (crash or EOF). Returns an unsubscribe fn. */
+  onClose(handler: () => void): UnlistenFn;
   /** Tear down: stops the server process and detaches all listeners. */
   stop(): Promise<void>;
 }
@@ -42,6 +44,11 @@ export async function startLsp(args: StartArgs): Promise<LanguageServerClient> {
     for (const h of handlers) h(e.payload);
   });
 
+  const closeHandlers = new Set<() => void>();
+  const closeUnlistenPromise = listen<null>(`lsp:${serverId}:closed`, () => {
+    for (const h of closeHandlers) h();
+  });
+
   return {
     serverId,
     async sendMessage(message: string) {
@@ -53,11 +60,24 @@ export async function startLsp(args: StartArgs): Promise<LanguageServerClient> {
         handlers.delete(handler);
       };
     },
+    onClose(handler) {
+      closeHandlers.add(handler);
+      return () => {
+        closeHandlers.delete(handler);
+      };
+    },
     async stop() {
       handlers.clear();
-      const unlisten = await unlistenPromise;
+      closeHandlers.clear();
+      const [unlisten, closeUnlisten] = await Promise.all([
+        unlistenPromise,
+        closeUnlistenPromise,
+      ]);
       unlisten();
-      await invoke("stop_lsp", { serverId });
+      closeUnlisten();
+      // The server may already be gone (this stop() can be a reaction to the
+      // close event); ignore a NotRunning error.
+      await invoke("stop_lsp", { serverId }).catch(() => {});
     },
   };
 }
@@ -101,8 +121,18 @@ interface PendingRequest {
  */
 export function wrap(transport: LanguageServerClient): JsonRpcClient {
   let nextId = 1;
+  let closed = false;
   const pending = new Map<number | string, PendingRequest>();
   const notificationHandlers = new Map<string, Set<(params: unknown) => void>>();
+
+  const unsubClose = transport.onClose(() => {
+    closed = true;
+    for (const entry of pending.values()) {
+      clearTimeout(entry.timeout);
+      entry.reject(new Error("LSP server exited"));
+    }
+    pending.clear();
+  });
 
   transport.onMessage((raw) => {
     let msg: { id?: number | string; method?: string; result?: unknown; error?: unknown; params?: unknown };
@@ -142,6 +172,9 @@ export function wrap(transport: LanguageServerClient): JsonRpcClient {
 
   return {
     request<T>(method: string, params?: unknown, timeoutMs = 8000): Promise<T> {
+      if (closed) {
+        return Promise.reject(new Error("LSP server is not running"));
+      }
       const id = nextId++;
       const payload = JSON.stringify({ jsonrpc: "2.0", id, method, params });
       return new Promise<T>((resolve, reject) => {
@@ -178,6 +211,8 @@ export function wrap(transport: LanguageServerClient): JsonRpcClient {
       };
     },
     async stop() {
+      closed = true;
+      unsubClose();
       // Reject pending requests so callers don't hang.
       for (const entry of pending.values()) {
         clearTimeout(entry.timeout);
