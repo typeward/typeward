@@ -136,6 +136,18 @@ struct PendingFlow {
     token_url: String,
     client_id: String,
     redirect_uri: String,
+    /// Same handle the callback holds (shared `Arc`). Lets `oauth_wait` shut
+    /// the loopback server down on timeout / channel-close, instead of leaking
+    /// the bound port until process exit.
+    shutdown: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+}
+
+impl PendingFlow {
+    fn shutdown_server(&self) {
+        if let Some(tx) = self.shutdown.lock().expect("oauth shutdown lock").take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 #[derive(Default)]
@@ -281,11 +293,12 @@ pub async fn oauth_begin(
 
     let (cb_tx, cb_rx) = oneshot::channel::<Result<String, OauthError>>();
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let shutdown = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
 
     let callback_state = CallbackState {
         expected_state: state.clone(),
         tx: Arc::new(std::sync::Mutex::new(Some(cb_tx))),
-        shutdown: Arc::new(std::sync::Mutex::new(Some(shutdown_tx))),
+        shutdown: shutdown.clone(),
     };
 
     let app = Router::new()
@@ -309,6 +322,7 @@ pub async fn oauth_begin(
         token_url: req.token_url,
         client_id: req.client_id,
         redirect_uri,
+        shutdown,
     });
     manager.insert(state.clone(), flow);
 
@@ -333,12 +347,22 @@ pub async fn oauth_wait(
         .ok_or(OauthError::UnknownState)?;
 
     let code = match tokio::time::timeout(CALLBACK_TIMEOUT, rx).await {
-        Ok(Ok(result)) => result?,
+        Ok(Ok(Ok(code))) => code,
+        Ok(Ok(Err(e))) => {
+            // Callback reported an error (e.g. state mismatch). The handler
+            // already fired shutdown; just drop the flow entry.
+            manager.take(&state);
+            return Err(e);
+        }
         Ok(Err(_)) => {
+            flow.shutdown_server();
             manager.take(&state);
             return Err(OauthError::CallbackError("callback channel closed".into()));
         }
         Err(_) => {
+            // Timed out: the callback never fired, so the server is still
+            // parked on its bound port. Shut it down before dropping the flow.
+            flow.shutdown_server();
             manager.take(&state);
             return Err(OauthError::Timeout(CALLBACK_TIMEOUT.as_secs()));
         }

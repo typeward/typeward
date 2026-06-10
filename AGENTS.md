@@ -70,8 +70,9 @@ Threat model: local user is trusted; adversaries are malicious project content (
 
 **Known gaps deferred from the 2026-06-10 audit (not yet fixed — verify before relying on them):**
 - **Cloud sync conflict detection still keys off filesystem mtime.** Push is now wired (see the cloud sync engine seam) with rev-based echo suppression, but the *conflict* path in `applyChange` still compares the remote `modifiedAt` against the local file mtime. A genuine concurrent edit on both sides within ~1s can mis-resolve, and there's no per-file last-synced-rev manifest yet — that's the robust fix. Remote-delete vs local-edit and pushing local deletions are also not handled.
-- **LSP attach can lose a race** when the server handshake finishes after CodeMirror mounts (untracked `findSession` read in a keyed `<Show>`); completion requests can race the 200ms-debounced `didChange`. Both are correctness/UX, not security.
-- **Watcher has no Rust-side debounce/coalescing** and uses an unbounded channel; a compile's event burst re-reads every expanded FileTree dir. OAuth loopback server leaks its bound port on wait-timeout. HTTP response bodies have no size cap. These are bounded-impact and tracked for a follow-up pass.
+- **LSP server death isn't detected** — on child crash/EOF the reader task just breaks; the `ServerHandle` stays in the map and the next request waits the full 8s timeout (audit L1). Duplicate `autocompletion()` config (base + LSP extension) and best-effort `notify` ordering across async invokes (L2/L4) remain.
+
+**Fixed in the 2026-06-10 follow-up pass** (so they're not re-flagged): watcher now coalesces bursts on a 150ms window and drops `.typeward/`/`.git/` churn at the Rust source (frontend filter is per-path, not whole-batch); OAuth loopback server shuts down on wait-timeout (`PendingFlow.shutdown_server`); HTTP/binary response bodies are size-capped via a streaming read (`read_body_capped`); the LSP completion source flushes the pending debounced `didChange` before querying; the editor remounts when the LSP session attaches or grammar toggles (`editorKey` memo in `text-shell.tsx`).
 
 ## Stack (anchors)
 

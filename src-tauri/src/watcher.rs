@@ -85,17 +85,56 @@ pub async fn watch_project(
     let emit_app = app.clone();
     let log_id = project_id.clone();
     tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            let payload = WatcherEvent {
-                kind: classify(&event.kind),
-                paths: event
-                    .paths
-                    .into_iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect(),
+        // Coalesce bursts: a single compile writes aux/log/fls/synctex/pdf in
+        // one go (10+ raw events). Without this each one drives a separate
+        // emit -> fsVersion bump -> FileTree refetch of every expanded dir.
+        // We also drop internal-state churn (.typeward/, .git/) at the source
+        // so autosave snapshots never wake the tree.
+        loop {
+            let first = match rx.recv().await {
+                Some(e) => e,
+                None => break,
             };
-            if let Err(e) = emit_app.emit(&event_name, payload) {
-                eprintln!("[watcher:{}] emit failed: {}", log_id, e);
+            let mut events = vec![first];
+            let mut closed = false;
+            loop {
+                match tokio::time::timeout(COALESCE_WINDOW, rx.recv()).await {
+                    Ok(Some(e)) => events.push(e),
+                    Ok(None) => {
+                        closed = true;
+                        break;
+                    }
+                    Err(_) => break, // quiet gap — flush the burst
+                }
+            }
+
+            let mut seen = std::collections::HashSet::new();
+            let mut paths: Vec<String> = Vec::new();
+            let mut last_kind = String::from("any");
+            for ev in &events {
+                last_kind = classify(&ev.kind);
+                for p in &ev.paths {
+                    let s = p.to_string_lossy().into_owned();
+                    if is_internal_path(&s) {
+                        continue;
+                    }
+                    if seen.insert(s.clone()) {
+                        paths.push(s);
+                    }
+                }
+            }
+
+            if !paths.is_empty() {
+                let payload = WatcherEvent {
+                    kind: last_kind,
+                    paths,
+                };
+                if let Err(e) = emit_app.emit(&event_name, payload) {
+                    eprintln!("[watcher:{}] emit failed: {}", log_id, e);
+                }
+            }
+            if closed {
+                break;
             }
         }
     });
@@ -117,6 +156,19 @@ pub fn unwatch_project(
     } else {
         Err(WatcherError::NotWatched(project_id))
     }
+}
+
+const COALESCE_WINDOW: Duration = Duration::from_millis(150);
+
+/// True for paths under Typeward's own sidecar (`.typeward/`) or VCS metadata
+/// (`.git/`) — churn the FileTree never needs to react to, and the source of
+/// the autosave feedback loop.
+fn is_internal_path(path: &str) -> bool {
+    let norm = path.replace('\\', "/");
+    norm.contains("/.typeward/")
+        || norm.contains("/.git/")
+        || norm.ends_with("/.typeward")
+        || norm.ends_with("/.git")
 }
 
 fn classify(kind: &EventKind) -> String {

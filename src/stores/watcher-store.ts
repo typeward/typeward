@@ -36,8 +36,13 @@ async function startWatching(
     }
     currentHandle = handle;
     currentUnsubscribe = handle.onEvent((ev) => {
-      // Ignore autosave snapshots and build artifacts living under .typeward/.
-      if (ev.paths.some((p) => TYPEWARD_DIR_PATTERN.test(p))) return;
+      // Bump if the batch touches any real project file. The Rust watcher
+      // already strips `.typeward/` paths and coalesces bursts; this is the
+      // defensive second layer. (Filtering per-path, not dropping the whole
+      // batch when one path happens to be a snapshot — a coalesced event can
+      // legitimately carry both.)
+      const touchesRealFile = ev.paths.some((p) => !TYPEWARD_DIR_PATTERN.test(p));
+      if (!touchesRealFile) return;
       setFsVersion((n) => n + 1);
     });
   } catch (e) {

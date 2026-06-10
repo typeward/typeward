@@ -460,7 +460,7 @@ Automated:
 - **Vim mode binding plugin selection** — open
 - **Whether to bundle the Typst binary vs detect-system** — decide per-platform
 - **Smart per-page PDF diff** and **sync-to-cursor toggle** — original Phase 2 deferrals
-- **Cloud-storage push side wiring to autosave** (Integ Phase 2) — pulls work end-to-end; push currently happens only via the engine's explicit `pushOne()` rather than auto-flushed on the autosave debounce. To revisit when the cloud-sync flow gets real usage.
+- ~~**Cloud-storage push side wiring to autosave** (Integ Phase 2)~~ → **done 2026-06-10.** Saves (`saveActiveFile`/`saveAllDirtyFiles`) feed `notifyLocalSave` → `engine.queuePush` (1.5s debounce, 15s retry), serialized with pull, rev-keyed echo suppression. Snapshot autosave does not push. Remaining: conflict detection still mtime-based (rev-manifest is the robust fix), and local deletions / remote-delete-vs-local-edit aren't synced.
 - **Google Drive folder-chain auto-creation on upload** (Integ Phase 2.4) — currently throws if a file's parent folder isn't already in the id↔path map. Cleaner approach is needed before this is a normal user path.
 - **Conversation persistence + selection-driven AI commands** (Integ Phase 4 polish) — chat stays in memory per session; "Explain selection" / "Rewrite paragraph" haven't landed as commands yet.
 - **Save-as-template** (Integ Phase 6) — `<TemplateGallery>` reads existing custom templates, but the "capture current project as a custom template" command isn't shipped. Hand-authoring under `<app_data>/templates/custom/<id>/` works today.

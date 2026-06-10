@@ -381,6 +381,20 @@ const CenterPane: Component<{
   const tabHeight = () => (isTabletViewport() ? "h-12" : "h-9");
   const tabRowHeight = () => (isTabletViewport() ? "h-11" : "h-7");
 
+  // Key the editor on more than the file path: the keyed <Show> reads sessions
+  // and the grammar setting untracked, so an LSP handshake that completes after
+  // CodeMirror mounts — or a grammar toggle — would otherwise never attach to
+  // the open file. Folding session-readiness + grammar state into the key makes
+  // the editor remount (and re-run didOpen) exactly when they change.
+  const editorKey = createMemo<string | null>(() => {
+    const f = activeFile();
+    if (!f?.path) return null;
+    const lspLang = languageToLspLanguage(languageFor(f.relPath));
+    const lspReady = lspLang ? !!findSession(lspLang) : false;
+    const grammarOn = integrationsSettings().grammar.enabled;
+    return `${f.path}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}`;
+  });
+
   return (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
       {/* File tabs strip */}
@@ -451,7 +465,7 @@ const CenterPane: Component<{
 
       <div class="min-h-0 flex-1 overflow-hidden">
         <Show
-          when={activeFile()?.path}
+          when={editorKey()}
           keyed
           fallback={
             <div class="flex h-full items-center justify-center text-[12px] text-fg-3">
@@ -459,7 +473,7 @@ const CenterPane: Component<{
             </div>
           }
         >
-          {(_path) => {
+          {(_key) => {
             const f = activeFile()!;
             const lang = languageFor(f.relPath);
             const lspLang = languageToLspLanguage(lang);
