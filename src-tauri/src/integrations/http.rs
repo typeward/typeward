@@ -262,6 +262,33 @@ pub fn validate_outbound_request(
     Ok(())
 }
 
+// Bound how much we buffer from a response. The whole body is held in memory
+// and crosses the IPC bridge, so an unbounded read of a malicious/buggy server
+// (or an F1-style redirect target) is an OOM vector. Text responses are API
+// JSON; binary is cloud file content, so it gets a larger budget.
+const MAX_TEXT_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BINARY_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
+
+async fn read_body_capped(mut res: reqwest::Response, cap: usize) -> Result<Vec<u8>, HttpError> {
+    if let Some(len) = res.content_length() {
+        if len > cap as u64 {
+            return Err(HttpError::Body(format!(
+                "response too large: {len} bytes exceeds cap of {cap}"
+            )));
+        }
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = res.chunk().await.map_err(|e| HttpError::Body(e.to_string()))? {
+        if buf.len() + chunk.len() > cap {
+            return Err(HttpError::Body(format!(
+                "response exceeded cap of {cap} bytes"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
 async fn perform_once(
     req: &HttpRequest,
     auth: Option<&AuthRef>,
@@ -305,10 +332,8 @@ async fn perform_once(
         .iter()
         .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
-    let body = res
-        .text()
-        .await
-        .map_err(|e| HttpError::Body(e.to_string()))?;
+    let bytes = read_body_capped(res, MAX_TEXT_RESPONSE_BYTES).await?;
+    let body = String::from_utf8_lossy(&bytes).into_owned();
 
     Ok(HttpResponse {
         status,
@@ -395,11 +420,7 @@ async fn perform_once_bytes(
         .iter()
         .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
-    let bytes = res
-        .bytes()
-        .await
-        .map_err(|e| HttpError::Body(e.to_string()))?
-        .to_vec();
+    let bytes = read_body_capped(res, MAX_BINARY_RESPONSE_BYTES).await?;
 
     Ok(BinaryHttpResponse {
         status,

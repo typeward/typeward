@@ -83,11 +83,18 @@ interface LspDocOptions {
   languageId: string;
 }
 
+/** Lets the completion source force-flush the lifecycle plugin's pending
+ *  debounced didChange, so the server isn't queried against stale text. */
+interface DocSync {
+  flush: () => void;
+}
+
 function lspDocumentExtensions(opts: LspDocOptions): Extension {
+  const sync: DocSync = { flush: () => {} };
   // StateField + Effect for LSP-pushed diagnostics. linter() reads from here.
-  return [diagnosticsField, lifecyclePlugin(opts), linter((view) =>
+  return [diagnosticsField, lifecyclePlugin(opts, sync), linter((view) =>
     view.state.field(diagnosticsField),
-  ), autocompletion({ override: [completionSource(opts)] })];
+  ), autocompletion({ override: [completionSource(opts, sync)] })];
 }
 
 const setLspDiagnostics = StateEffect.define<Diagnostic[]>();
@@ -102,10 +109,29 @@ const diagnosticsField = StateField.define<Diagnostic[]>({
   },
 });
 
-function lifecyclePlugin(opts: LspDocOptions) {
+function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
   return ViewPlugin.define((view: EditorView) => {
     let version = 1;
     let debounce: ReturnType<typeof setTimeout> | undefined;
+    let pendingText: string | null = null;
+
+    const sendDidChange = (text: string): void => {
+      opts.client.notify("textDocument/didChange", {
+        textDocument: { uri: opts.uri, version: version++ },
+        // Full-content sync — keeps the wire shape simple. Texlab and friends
+        // accept this even when they advertise incremental sync.
+        contentChanges: [{ text }],
+      });
+      pendingText = null;
+    };
+    const flushPending = (): void => {
+      if (debounce) {
+        clearTimeout(debounce);
+        debounce = undefined;
+      }
+      if (pendingText !== null) sendDidChange(pendingText);
+    };
+    sync.flush = flushPending;
 
     // didOpen
     opts.client.notify("textDocument/didOpen", {
@@ -133,18 +159,16 @@ function lifecyclePlugin(opts: LspDocOptions) {
     return {
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
+        pendingText = update.state.doc.toString();
         if (debounce) clearTimeout(debounce);
         debounce = setTimeout(() => {
-          opts.client.notify("textDocument/didChange", {
-            textDocument: { uri: opts.uri, version: version++ },
-            // Full-content sync — keeps the wire shape simple. Texlab and
-            // friends accept this even when they advertise incremental sync.
-            contentChanges: [{ text: update.state.doc.toString() }],
-          });
+          debounce = undefined;
+          if (pendingText !== null) sendDidChange(pendingText);
         }, 200);
       },
       destroy() {
         if (debounce) clearTimeout(debounce);
+        sync.flush = () => {};
         unsubDiag();
         opts.client.notify("textDocument/didClose", {
           textDocument: { uri: opts.uri },
@@ -220,9 +244,13 @@ interface LspCompletionList {
   items: LspCompletionItem[];
 }
 
-function completionSource(opts: LspDocOptions) {
+function completionSource(opts: LspDocOptions, sync: DocSync) {
   return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     if (!ctx.view) return null;
+    // Push any debounced edits to the server before asking for completions,
+    // otherwise it resolves positions against text up to 200ms stale — exactly
+    // during fast typing, when completion matters most.
+    sync.flush();
     const pos = cmOffsetToLspPos(ctx.pos, ctx.view);
     let raw: LspCompletionList | LspCompletionItem[] | null;
     try {
