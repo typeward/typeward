@@ -1,18 +1,21 @@
 import type { EditorAdapter, Project } from "~/adapters/types";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
+import { notifyLocalSave } from "~/integrations/cloud/init";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
 import {
   activeFile,
   bumpPdfVersion,
+  compileState,
   lastResult,
+  markFileCleanIfUnchanged,
+  openFiles,
   project,
   requestGotoSource,
   requestPdfScroll,
   setCompileState,
   setLastResult,
-  updateActiveFile,
 } from "~/stores/editor-store";
 import { currentCursorLine } from "~/stores/editor-view-store";
 import { compileEngine } from "~/stores/settings-store";
@@ -40,8 +43,32 @@ export async function saveActiveFile(): Promise<void> {
   const file = activeFile();
   const p = project();
   if (!file || !p) return;
-  await ipc.writeProjectTextFile(p.rootPath, file.relPath, file.content);
-  updateActiveFile({ dirty: false });
+  // Snapshot content + identity before the await: if the user keeps typing or
+  // switches tabs during the write, we must only clear `dirty` on the file we
+  // actually wrote and only if its buffer still matches what hit disk.
+  const savedContent = file.content;
+  await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+  markFileCleanIfUnchanged(file.path, savedContent);
+  notifyLocalSave(p.rootPath, [file.relPath]);
+}
+
+/**
+ * Flush every dirty open buffer to disk. A multi-file LaTeX project compiles
+ * `\input{}`-ed children from disk, so saving only the active tab would
+ * compile stale content for every other edited file.
+ */
+export async function saveAllDirtyFiles(): Promise<void> {
+  const p = project();
+  if (!p) return;
+  const saved: string[] = [];
+  for (const file of openFiles()) {
+    if (!file.dirty) continue;
+    const savedContent = file.content;
+    await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+    markFileCleanIfUnchanged(file.path, savedContent);
+    saved.push(file.relPath);
+  }
+  notifyLocalSave(p.rootPath, saved);
 }
 
 /**
@@ -55,10 +82,12 @@ export async function compileActiveProject(): Promise<void> {
   if (!p) return;
   const adapter = adapterFor(p);
   if (!adapter) return;
+  // Guard against a second compile racing the first (Mod+Enter has no
+  // disabled-state the way the Recompile button does); two latexmk runs in
+  // one directory fight over aux files and corrupt the output.
+  if (compileState() === "compiling") return;
 
-  if (activeFile()?.dirty) {
-    await saveActiveFile();
-  }
+  await saveAllDirtyFiles();
   setCompileState("compiling");
   try {
     const result = await adapter.compile(p);

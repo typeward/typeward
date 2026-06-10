@@ -107,6 +107,7 @@ pub async fn ai_stream_start(
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
+        .redirect(crate::integrations::http::allowlist_redirect_policy())
         .build()
         .map_err(|e| AiError::Network(e.to_string()))?;
 

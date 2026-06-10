@@ -17,6 +17,7 @@
 
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
@@ -37,6 +38,8 @@ pub enum OverleafError {
     UnsafeEntry(String),
     #[error("no .tex or .typ file found in the zip — is this an Overleaf export?")]
     NoRootFile,
+    #[error("zip archive exceeds the import limit (decompression bomb guard)")]
+    TooLarge,
     #[error("project metadata write failed: {0}")]
     ProjectError(String),
 }
@@ -92,10 +95,21 @@ pub async fn overleaf_import_zip(
     .map_err(|e| OverleafError::Io(format!("background task failed: {e}")))?
 }
 
+// Decompression-bomb guards: a malicious Overleaf export can claim a small
+// compressed size while expanding to gigabytes. Cap total entries and total
+// uncompressed bytes written.
+const MAX_ZIP_ENTRIES: usize = 5_000;
+const MAX_ZIP_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
+
 fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), OverleafError> {
     let file = fs::File::open(zip_path)?;
     let mut archive = ZipArchive::new(file)?;
 
+    if archive.len() > MAX_ZIP_ENTRIES {
+        return Err(OverleafError::TooLarge);
+    }
+
+    let mut total_written: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let raw_name = entry
@@ -113,8 +127,15 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), OverleafError> {
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        // Bound the copy by the remaining byte budget so `io::copy` can't be
+        // tricked into writing the whole bomb before we notice.
+        let remaining = MAX_ZIP_TOTAL_BYTES.saturating_sub(total_written);
         let mut out_file = fs::File::create(&out_path)?;
-        io::copy(&mut entry, &mut out_file)?;
+        let written = io::copy(&mut entry.by_ref().take(remaining + 1), &mut out_file)?;
+        total_written = total_written.saturating_add(written);
+        if total_written > MAX_ZIP_TOTAL_BYTES {
+            return Err(OverleafError::TooLarge);
+        }
     }
     Ok(())
 }

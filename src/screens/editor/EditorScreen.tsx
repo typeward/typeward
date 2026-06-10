@@ -23,6 +23,7 @@ import {
   openFile as openFileInStore,
   project,
   resetTabs,
+  restoreFileContent,
   setProject,
 } from "~/stores/editor-store";
 import { setCursorLine } from "~/stores/editor-view-store";
@@ -191,15 +192,18 @@ const EditorScreen: Component = () => {
   const handleRestore = async (snapshots: ipc.Snapshot[]) => {
     const p = project();
     if (!p) return;
-    const f = activeFile();
-    const target =
-      snapshots.find((s) => f && s.relPath === f.relPath) ?? snapshots[0];
-    openFileInStore({
-      path: joinPath(p.rootPath, target.relPath),
-      relPath: target.relPath,
-      content: target.content,
-      dirty: true,
-    });
+    // Restore every orphaned snapshot. The most common orphan is the root
+    // file, which project load already opened as a clean tab — restoring into
+    // an existing tab must replace its content (and mark it dirty), not be
+    // discarded because the path is already open.
+    for (const snap of snapshots) {
+      restoreFileContent({
+        path: joinPath(p.rootPath, snap.relPath),
+        relPath: snap.relPath,
+        content: snap.content,
+        dirty: true,
+      });
+    }
   };
 
   return (

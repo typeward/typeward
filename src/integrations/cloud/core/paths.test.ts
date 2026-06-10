@@ -21,4 +21,14 @@ describe("normalizeRemoteRelPath", () => {
       /internal state/,
     );
   });
+
+  it("rejects Typeward internal state case-insensitively and at any depth", () => {
+    expect(() => normalizeRemoteRelPath(".Typeward/snapshots/main.tex.snap")).toThrow(
+      /internal state/,
+    );
+    expect(() => normalizeRemoteRelPath(".TYPEWARD/integrations/gdrive/idmap.json")).toThrow(
+      /internal state/,
+    );
+    expect(() => normalizeRemoteRelPath("nested/.TypeWard/cursor")).toThrow(/internal state/);
+  });
 });

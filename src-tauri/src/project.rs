@@ -233,7 +233,17 @@ pub fn validate_project_relative_path(rel_path: &str) -> Result<PathBuf, Project
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part) => {
+                // Reject components that a downstream CLI would parse as an
+                // option flag. project.rootFile flows straight into latexmk /
+                // pdflatex / tectonic / typst as a positional argument; a file
+                // named `-shell-escape` or `-output-directory=...` would
+                // otherwise be interpreted as a flag (argument injection).
+                if part.to_string_lossy().starts_with('-') {
+                    return Err(ProjectError::InvalidRelativePath(rel_path.to_string()));
+                }
+                out.push(part);
+            }
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return Err(ProjectError::InvalidRelativePath(rel_path.to_string()));
@@ -362,6 +372,24 @@ mod tests {
                 .expect_err("unsafe relative path should be rejected");
             assert!(err.to_string().contains("invalid project-relative path"));
         }
+    }
+
+    #[test]
+    fn validate_rejects_components_that_look_like_cli_flags() {
+        // A root file / project path whose component begins with `-` would be
+        // parsed as an option by latexmk/pdflatex/tectonic/typst.
+        for rel in [
+            "-shell-escape",
+            "-output-directory=/tmp",
+            "sections/-x.tex",
+            "-r.bib",
+        ] {
+            let err = validate_project_relative_path(rel)
+                .expect_err("leading-dash component should be rejected");
+            assert!(err.to_string().contains("invalid project-relative path"));
+        }
+        // Dashes elsewhere in a name remain valid.
+        assert!(validate_project_relative_path("my-paper/intro-section.tex").is_ok());
     }
 
     #[test]

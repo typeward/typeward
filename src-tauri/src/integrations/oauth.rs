@@ -350,7 +350,16 @@ pub async fn oauth_wait(
 }
 
 async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, OauthError> {
-    let client = reqwest::Client::new();
+    // The token endpoint is caller-supplied; bind it to the same outbound
+    // allowlist as every other request so it can't be aimed at loopback /
+    // private hosts (SSRF). Redirects are disabled — a token POST must not be
+    // bounced to an attacker host carrying the auth code + verifier.
+    crate::integrations::http::validate_outbound_url(&flow.token_url, None)
+        .map_err(|e| OauthError::TokenExchange(format!("blocked token endpoint: {e}")))?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
     let response = client
         .post(&flow.token_url)
         .header("Accept", "application/json")
@@ -373,14 +382,16 @@ async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, Oa
 
     if !status.is_success() {
         return Err(OauthError::TokenExchange(format!(
-            "status {} body {}",
-            status.as_u16(),
-            body
+            "token endpoint returned status {}",
+            status.as_u16()
         )));
     }
 
+    // Don't embed the raw body in the error: a 2xx token response that fails
+    // to deserialize contains access/refresh tokens, which would otherwise
+    // leak into the frontend error path and telemetry.log.
     let parsed: TokenResponse = serde_json::from_str(&body)
-        .map_err(|e| OauthError::ResponseParse(format!("{e}: {body}")))?;
+        .map_err(|e| OauthError::ResponseParse(e.to_string()))?;
 
     let expires_at = parsed.expires_in.and_then(|secs| {
         SystemTime::now()

@@ -100,6 +100,21 @@ export function initCloudSync(): void {
   });
 }
 
+/**
+ * Push local saves to the cloud. Called from the save path (`saveActiveFile`
+ * / `saveAllDirtyFiles`) after a successful write. No-ops unless the saved
+ * project is the one backed by the currently-active sync engine, so saves to
+ * plain local projects cost nothing.
+ *
+ * `cacheRoot` is the saved project's `rootPath`; `relPaths` are
+ * project-relative. NOT called from the snapshot autosave — that writes
+ * `.typeward/` sidecars, which must never sync.
+ */
+export function notifyLocalSave(cacheRoot: string, relPaths: string[]): void {
+  if (!active || active.cacheRoot !== cacheRoot || relPaths.length === 0) return;
+  active.engine.queuePush(relPaths);
+}
+
 function teardown(): void {
   if (!active) return;
   active.engine.stop();

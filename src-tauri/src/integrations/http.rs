@@ -30,6 +30,7 @@ fn client() -> &'static Client {
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .pool_idle_timeout(Some(Duration::from_secs(90)))
+            .redirect(allowlist_redirect_policy())
             .build()
             .expect("reqwest client init")
     })
@@ -120,6 +121,32 @@ pub struct BinaryHttpResponse {
     pub status: u16,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+}
+
+/// Re-runs the outbound host/scheme allowlist on every redirect hop.
+/// `validate_outbound_*` only sees the initial URL; without this a
+/// compromised or open-redirect-prone allowlisted host could 3xx the
+/// request to loopback / private / arbitrary external hosts (SSRF),
+/// defeating the entire allowlist.
+pub(crate) fn allowlist_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("too many redirects");
+        }
+        let url = attempt.url();
+        let host = url.host_str().map(|h| h.to_ascii_lowercase());
+        let allowed = match (url.scheme(), host.as_deref()) {
+            ("https", Some(h)) => allowed_https_host(h),
+            ("http", Some(h)) => is_loopback_host(h),
+            _ => false,
+        };
+        if allowed {
+            attempt.follow()
+        } else {
+            let msg = format!("redirect to non-allowlisted host blocked: {}", url.as_str());
+            attempt.error(msg)
+        }
+    })
 }
 
 fn parse_method(method: &str) -> Result<Method, HttpError> {
