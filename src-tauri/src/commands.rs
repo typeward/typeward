@@ -122,6 +122,16 @@ pub fn write_project_binary_file(
             std::fs::create_dir_all(parent).map_err(err)?;
         }
     }
+    // Refuse to write through an existing symlink: a malicious cloned repo or
+    // extracted zip can plant a symlink at a project-relative path so a later
+    // binary write (e.g. the WASM engine's PDF) lands outside the project root.
+    // `resolve_project_write_path` only canonicalizes the parent, so the leaf
+    // is checked here. The text path is already safe via atomic temp+rename.
+    if let Ok(meta) = std::fs::symlink_metadata(&path) {
+        if meta.file_type().is_symlink() {
+            return Err("refusing to write through a symlink".to_string());
+        }
+    }
     std::fs::write(path, &bytes).map_err(err)
 }
 

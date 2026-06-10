@@ -69,13 +69,31 @@ pub fn install(app: &AppHandle) {
     }));
 }
 
+/// Per-field caps so a single record can't bloat the JSONL log. `detail`
+/// often carries compile-log tails, so it gets the largest budget.
+const MAX_SUMMARY_LEN: usize = 2_000;
+const MAX_DETAIL_LEN: usize = 16_000;
+
+fn truncate_on_char_boundary(mut s: String, max: usize) -> String {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    s.push_str("…[truncated]");
+    s
+}
+
 #[tauri::command]
 pub fn record_event(kind: String, summary: String, detail: Option<String>) -> Result<(), String> {
     let event = Event {
         at: Utc::now().to_rfc3339(),
         kind,
-        summary,
-        detail,
+        summary: truncate_on_char_boundary(summary, MAX_SUMMARY_LEN),
+        detail: detail.map(|d| truncate_on_char_boundary(d, MAX_DETAIL_LEN)),
     };
     append(&event).map_err(|e| e.to_string())
 }

@@ -94,6 +94,40 @@ function openFile(file: OpenFile): void {
   setActiveIndex(openFiles().length - 1);
 }
 
+/**
+ * Mark a file clean (saved) by path, but only if its buffer still holds the
+ * exact content that was written. Guards the save race where the user keeps
+ * typing during the async write, or switches tabs before it resolves — we
+ * must not clear `dirty` on content the disk doesn't have, nor on a different
+ * tab that happens to be active when the write completes.
+ */
+function markFileCleanIfUnchanged(path: string, content: string): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.path === path);
+    if (i < 0 || prev[i].content !== content || !prev[i].dirty) return prev;
+    const next = prev.slice();
+    next[i] = { ...next[i], dirty: false };
+    return next;
+  });
+}
+
+/**
+ * Restore a snapshot's content into the editor: replace the buffer of an
+ * already-open tab (marking it dirty) or open a new tab for it. Used by crash
+ * recovery, where the orphaned file is frequently the root file that was
+ * already opened on project load.
+ */
+function restoreFileContent(file: OpenFile): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.path === file.path);
+    if (i < 0) return [...prev, { ...file, dirty: true }];
+    const next = prev.slice();
+    next[i] = { ...next[i], content: file.content, dirty: true };
+    return next;
+  });
+  if (activeIndex() < 0) setActiveIndex(0);
+}
+
 /** Close a tab by index. Adjusts activeIndex to a sibling. */
 function closeFile(index: number): void {
   setOpenFiles((prev) => prev.filter((_, i) => i !== index));
@@ -122,12 +156,14 @@ export {
   compileState,
   gotoSourceIntent,
   lastResult,
+  markFileCleanIfUnchanged,
   openFile,
   openFiles,
   pdfScrollTarget,
   pdfVersion,
   project,
   resetTabs,
+  restoreFileContent,
   setActiveIndex,
   setCompileState,
   setLastResult,

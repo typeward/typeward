@@ -83,7 +83,11 @@ export function normalizeRemoteRelPath(relPath: string): string {
   if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
     throw new Error(`Unsafe remote path '${relPath}'`);
   }
-  if (segments[0] === ".typeward") {
+  // Reject the internal sidecar dir at any depth, case-insensitively: on
+  // Windows / default macOS a remote file named `.Typeward/...` would
+  // otherwise normalize to the real sidecar and let malicious remote content
+  // overwrite snapshots, the sync cursor, or the id<->path map.
+  if (segments.some((segment) => segment.toLowerCase() === ".typeward")) {
     throw new Error(`Remote path '${relPath}' targets Typeward's internal state`);
   }
   return segments.join("/");

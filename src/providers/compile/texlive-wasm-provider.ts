@@ -32,8 +32,13 @@ const BINARY_EXTS = new Set([
   ".png", ".jpg", ".jpeg", ".pdf", ".gif", ".eps",
 ]);
 
+// `.typeward` is intentionally NOT skipped: the reference aggregator writes
+// the unified `.typeward/citations/library.bib` there and the walker must
+// pick it up for `\cite{}` to resolve on mobile. Its `build/` output is still
+// pruned by SKIP_DIRS; `snapshots/` holds only `.snap` files, which match no
+// read extension, so it's walked but contributes nothing.
 const SKIP_DIRS = new Set([
-  ".typeward", ".git", ".svn", ".hg",
+  ".git", ".svn", ".hg",
   "node_modules", "build", "out", "dist",
 ]);
 

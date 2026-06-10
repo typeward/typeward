@@ -218,6 +218,17 @@ fn locate_template(
         _ => return Err(TemplateError::NotFound(template_id.to_string())),
     };
 
+    // The id is joined onto the templates root, so a value like
+    // `../../../../some/dir` would escape it. Reject any separators or
+    // parent-dir tokens before touching the filesystem.
+    if id.is_empty()
+        || id.contains('/')
+        || id.contains('\\')
+        || id.split(|c| c == '/' || c == '\\').any(|seg| seg == "..")
+    {
+        return Err(TemplateError::NotFound(template_id.to_string()));
+    }
+
     // template paths are always `<format>/<id>` for builtins and just
     // `<id>` for customs. Try both shapes — keeps the manifest's id
     // field decoupled from the on-disk layout convention.

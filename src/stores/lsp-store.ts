@@ -77,6 +77,11 @@ async function startSession(
  */
 async function stopAllSessions(): Promise<void> {
   const current = sessions();
+  // No-op when already empty. EditorScreen calls this synchronously from a
+  // createEffect; without this guard, setSessions([]) writes a fresh array
+  // reference on every call, re-triggering the effect that reads sessions() in
+  // an infinite loop (e.g. when the editor route mounts with no project).
+  if (current.length === 0) return;
   setSessions([]);
   await Promise.all(
     current.map((s) =>
