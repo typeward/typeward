@@ -269,7 +269,10 @@ pub fn validate_outbound_request(
 const MAX_TEXT_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BINARY_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 
-async fn read_body_capped(mut res: reqwest::Response, cap: usize) -> Result<Vec<u8>, HttpError> {
+pub(crate) async fn read_body_capped(
+    mut res: reqwest::Response,
+    cap: usize,
+) -> Result<Vec<u8>, HttpError> {
     if let Some(len) = res.content_length() {
         if len > cap as u64 {
             return Err(HttpError::Body(format!(
@@ -278,7 +281,11 @@ async fn read_body_capped(mut res: reqwest::Response, cap: usize) -> Result<Vec<
         }
     }
     let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = res.chunk().await.map_err(|e| HttpError::Body(e.to_string()))? {
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .map_err(|e| HttpError::Body(e.to_string()))?
+    {
         if buf.len() + chunk.len() > cap {
             return Err(HttpError::Body(format!(
                 "response exceeded cap of {cap} bytes"

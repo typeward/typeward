@@ -207,6 +207,17 @@ fn host_of(remote_url: &str) -> Option<String> {
         .and_then(|u| u.host_str().map(|s| s.to_string()))
 }
 
+fn validate_remote_url(remote_url: &str) -> Result<(), GitError> {
+    let parsed = Url::parse(remote_url)
+        .map_err(|_| GitError::InvalidPath(format!("invalid remote URL: {remote_url}")))?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() {
+        return Err(GitError::InvalidPath(
+            "only HTTPS git remotes are supported".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
     let mut cb = RemoteCallbacks::new();
     let host = host_of(&remote_url);
@@ -487,6 +498,7 @@ pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), 
         let remote_name = remote.unwrap_or_else(|| "origin".to_string());
         let mut remote = repo.find_remote(&remote_name)?;
         let url = remote.url().unwrap_or("").to_string();
+        validate_remote_url(&url)?;
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(build_callbacks(url));
         remote.fetch::<&str>(&[], Some(&mut fetch_opts), None)?;
@@ -508,6 +520,7 @@ pub async fn git_pull(
         let repo = open_repo(&path)?;
         let mut remote = repo.find_remote(&remote_name)?;
         let url = remote.url().unwrap_or("").to_string();
+        validate_remote_url(&url)?;
 
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(build_callbacks(url));
@@ -565,6 +578,7 @@ pub async fn git_push(
         };
         let mut remote = repo.find_remote(&remote_name)?;
         let url = remote.url().unwrap_or("").to_string();
+        validate_remote_url(&url)?;
         let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
         let mut push_opts = PushOptions::new();
         push_opts.remote_callbacks(build_callbacks(url));
@@ -586,6 +600,7 @@ pub async fn git_clone(url: String, dest_path: String) -> Result<(), GitError> {
             )));
         }
         std::fs::create_dir_all(dest.parent().unwrap_or(Path::new("/")))?;
+        validate_remote_url(&url)?;
         let mut fetch_opts = FetchOptions::new();
         fetch_opts.remote_callbacks(build_callbacks(url.clone()));
         let mut builder = git2::build::RepoBuilder::new();
@@ -595,4 +610,21 @@ pub async fn git_clone(url: String, dest_path: String) -> Result<(), GitError> {
     })
     .await
     .map_err(|e| GitError::Join(e.to_string()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_url_validation_accepts_https() {
+        assert!(validate_remote_url("https://github.com/typeward/app.git").is_ok());
+    }
+
+    #[test]
+    fn remote_url_validation_rejects_file_and_ssh() {
+        assert!(validate_remote_url("file:///tmp/repo.git").is_err());
+        assert!(validate_remote_url("git@github.com:typeward/app.git").is_err());
+        assert!(validate_remote_url("ssh://git@github.com/typeward/app.git").is_err());
+    }
 }

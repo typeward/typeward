@@ -212,6 +212,7 @@ export async function syncInverseFromPdfClick(
 
   try {
     const loc = await ipc.synctexInverse({
+      projectRoot: p.rootPath,
       pdfPath: result.outputPath,
       page: pageNum,
       x,

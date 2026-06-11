@@ -14,6 +14,8 @@ use std::process::Command;
 
 use serde::Serialize;
 
+use crate::project;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ForwardLocation {
     pub page: u32,
@@ -197,14 +199,21 @@ pub struct ForwardArgs {
 
 #[tauri::command]
 pub fn synctex_forward(args: ForwardArgs) -> Result<Option<ForwardLocation>, String> {
-    let root = PathBuf::from(&args.project_root);
-    let source = root.join(&args.source_file);
-    let pdf = PathBuf::from(&args.pdf_path);
+    let root = PathBuf::from(&args.project_root)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let source = project::resolve_existing_project_path(&root, &args.source_file)
+        .map_err(|e| e.to_string())?;
+    let Some(pdf) = resolve_pdf_under_root(&root, &args.pdf_path)? else {
+        return Ok(None);
+    };
     forward(&pdf, &source, args.line)
 }
 
 #[derive(Debug, serde::Deserialize)]
 pub struct InverseArgs {
+    #[serde(rename = "projectRoot")]
+    pub project_root: String,
     #[serde(rename = "pdfPath")]
     pub pdf_path: String,
     pub page: u32,
@@ -214,8 +223,28 @@ pub struct InverseArgs {
 
 #[tauri::command]
 pub fn synctex_inverse(args: InverseArgs) -> Result<Option<InverseLocation>, String> {
-    let pdf = PathBuf::from(&args.pdf_path);
+    let root = PathBuf::from(&args.project_root)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let Some(pdf) = resolve_pdf_under_root(&root, &args.pdf_path)? else {
+        return Ok(None);
+    };
     inverse(&pdf, args.page, args.x, args.y)
+}
+
+fn resolve_pdf_under_root(root: &Path, pdf_path: &str) -> Result<Option<PathBuf>, String> {
+    let pdf = PathBuf::from(pdf_path);
+    if !pdf.exists() {
+        return Ok(None);
+    }
+    let pdf = pdf.canonicalize().map_err(|e| e.to_string())?;
+    if !pdf.starts_with(root) {
+        return Err(format!("PDF path escapes project root: {}", pdf.display()));
+    }
+    if pdf.extension().and_then(|s| s.to_str()) != Some("pdf") {
+        return Err(format!("SyncTeX target is not a PDF: {}", pdf.display()));
+    }
+    Ok(Some(pdf))
 }
 
 #[cfg(test)]
@@ -261,5 +290,20 @@ mod tests {
     fn inverse_missing_input_returns_none() {
         let text = "SyncTeX result begin\nLine:42\nSyncTeX result end\n";
         assert!(parse_inverse_result(text).is_none());
+    }
+
+    #[test]
+    fn resolve_pdf_under_root_rejects_non_pdf_targets() {
+        let mut root = std::env::temp_dir();
+        root.push(format!("typeward-synctex-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let not_pdf = root.join("main.txt");
+        std::fs::write(&not_pdf, "not a pdf").unwrap();
+        let root = root.canonicalize().unwrap();
+
+        let err = resolve_pdf_under_root(&root, &not_pdf.to_string_lossy()).unwrap_err();
+
+        assert!(err.contains("not a PDF"));
     }
 }

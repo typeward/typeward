@@ -170,6 +170,7 @@ export const synctexForward = (args: {
   invoke("synctex_forward", { args });
 
 export const synctexInverse = (args: {
+  projectRoot: string;
   pdfPath: string;
   page: number;
   x: number;

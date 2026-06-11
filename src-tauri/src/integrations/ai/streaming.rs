@@ -21,6 +21,10 @@ use tokio::sync::oneshot;
 use crate::integrations::credentials;
 use crate::integrations::http::{validate_outbound_request, AuthRef};
 
+const MAX_AI_ERROR_BODY_BYTES: usize = 64 * 1024;
+const MAX_STREAM_BUFFER_BYTES: usize = 2 * 1024 * 1024;
+const MAX_STREAM_ID_LEN: usize = 80;
+
 /// What flavor of stream encoding the provider speaks. Each variant
 /// gets its own line/event parser in [`parse_event`].
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -76,6 +80,10 @@ pub enum AiError {
     InvalidMethod(String),
     #[error("blocked outbound request: {0}")]
     BlockedRequest(String),
+    #[error("invalid stream id: {0}")]
+    InvalidStreamId(String),
+    #[error("stream already running: {0}")]
+    DuplicateStream(String),
     #[error("network error: {0}")]
     Network(String),
     #[error("credential lookup failed: {0}")]
@@ -98,6 +106,7 @@ pub async fn ai_stream_start(
     app: AppHandle,
     manager: tauri::State<'_, Arc<AiStreamManager>>,
 ) -> Result<(), AiError> {
+    validate_stream_id(&req.stream_id)?;
     let method = req
         .method
         .parse::<reqwest::Method>()
@@ -107,6 +116,7 @@ pub async fn ai_stream_start(
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(std::time::Duration::from_secs(10))
         .redirect(crate::integrations::http::allowlist_redirect_policy())
         .build()
         .map_err(|e| AiError::Network(e.to_string()))?;
@@ -131,11 +141,13 @@ pub async fn ai_stream_start(
     builder = builder.body(req.body.clone());
 
     let (abort_tx, abort_rx) = oneshot::channel::<()>();
-    manager
-        .handles
-        .lock()
-        .expect("ai stream lock")
-        .insert(req.stream_id.clone(), abort_tx);
+    {
+        let mut handles = manager.handles.lock().expect("ai stream lock");
+        if handles.contains_key(&req.stream_id) {
+            return Err(AiError::DuplicateStream(req.stream_id));
+        }
+        handles.insert(req.stream_id.clone(), abort_tx);
+    }
 
     let stream_id = req.stream_id.clone();
     let format = req.format;
@@ -192,6 +204,18 @@ fn event_name(stream_id: &str) -> String {
     format!("ai-stream:{stream_id}")
 }
 
+fn validate_stream_id(stream_id: &str) -> Result<(), AiError> {
+    if stream_id.is_empty()
+        || stream_id.len() > MAX_STREAM_ID_LEN
+        || !stream_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+    {
+        return Err(AiError::InvalidStreamId(stream_id.to_string()));
+    }
+    Ok(())
+}
+
 /// Pump bytes through the right parser, emit deltas as Tauri events.
 /// Returns `Err` on terminal failure; ok on graceful end.
 async fn run_stream(
@@ -207,7 +231,9 @@ async fn run_stream(
         .map_err(|e| format!("send failed: {e}"))?;
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
+        let body = read_text_capped(response, MAX_AI_ERROR_BODY_BYTES)
+            .await
+            .unwrap_or_else(|e| format!("failed to read error body: {e}"));
         return Err(format!("status {} body {}", status.as_u16(), body));
     }
 
@@ -231,6 +257,11 @@ async fn run_stream(
                     }
                 };
                 if let Ok(text) = std::str::from_utf8(&chunk) {
+                    if buffer.len() + text.len() > MAX_STREAM_BUFFER_BYTES {
+                        return Err(format!(
+                            "stream event exceeded cap of {MAX_STREAM_BUFFER_BYTES} bytes"
+                        ));
+                    }
                     buffer.push_str(text);
                 }
                 while let Some(end) = next_event_end(&buffer, format) {
@@ -243,6 +274,24 @@ async fn run_stream(
             }
         }
     }
+}
+
+async fn read_text_capped(mut response: reqwest::Response, cap: usize) -> Result<String, String> {
+    if let Some(len) = response.content_length() {
+        if len > cap as u64 {
+            return Err(format!(
+                "response too large: {len} bytes exceeds cap of {cap}"
+            ));
+        }
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if out.len() + chunk.len() > cap {
+            return Err(format!("response exceeded cap of {cap} bytes"));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 fn emit_delta(app: &AppHandle, stream_id: &str, delta: &str) {
@@ -423,5 +472,17 @@ mod tests {
             next_event_end("{\"a\":1}\n{\"b\":2}", AiStreamFormat::OllamaNdjson),
             Some(8),
         );
+    }
+
+    #[test]
+    fn stream_id_validation_allows_stable_ascii_ids() {
+        assert!(validate_stream_id("chat_123-abc").is_ok());
+    }
+
+    #[test]
+    fn stream_id_validation_rejects_event_name_metacharacters() {
+        assert!(validate_stream_id("").is_err());
+        assert!(validate_stream_id("chat:123").is_err());
+        assert!(validate_stream_id("chat/123").is_err());
     }
 }

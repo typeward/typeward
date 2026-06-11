@@ -39,6 +39,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_TOKEN_RESPONSE_BYTES: usize = 1024 * 1024;
 const CALLBACK_HTML_SUCCESS: &str = "<!doctype html><html><head><title>Typeward</title>\
 <style>body{font-family:system-ui;background:#0A0B0F;color:#E5E7EB;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{text-align:center}</style>\
 </head><body><div><h1>Signed in.</h1><p>You can close this tab and return to Typeward.</p></div></body></html>";
@@ -228,6 +229,71 @@ fn build_auth_url(
     Ok(url.to_string())
 }
 
+#[derive(Clone, Copy)]
+enum OauthEndpointKind {
+    Authorization,
+    Token,
+}
+
+fn validate_oauth_endpoint(raw: &str, kind: OauthEndpointKind) -> Result<(), OauthError> {
+    let parsed = url::Url::parse(raw).map_err(|e| match kind {
+        OauthEndpointKind::Authorization => OauthError::InvalidAuthUrl(e.to_string()),
+        OauthEndpointKind::Token => OauthError::TokenExchange(e.to_string()),
+    })?;
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    let path = parsed.path();
+    let allowed = match kind {
+        OauthEndpointKind::Authorization => {
+            matches!(
+                (host.as_str(), path),
+                ("www.dropbox.com", "/oauth2/authorize")
+                    | ("accounts.google.com", "/o/oauth2/v2/auth")
+                    | ("api.mendeley.com", "/oauth/authorize")
+            ) || (host == "login.microsoftonline.com" && path.ends_with("/oauth2/v2.0/authorize"))
+        }
+        OauthEndpointKind::Token => {
+            matches!(
+                (host.as_str(), path),
+                ("api.dropboxapi.com", "/oauth2/token")
+                    | ("oauth2.googleapis.com", "/token")
+                    | ("api.mendeley.com", "/oauth/token")
+            ) || (host == "login.microsoftonline.com" && path.ends_with("/oauth2/v2.0/token"))
+        }
+    };
+
+    if parsed.scheme() == "https" && allowed {
+        Ok(())
+    } else {
+        let msg = format!("blocked OAuth endpoint: {raw}");
+        Err(match kind {
+            OauthEndpointKind::Authorization => OauthError::InvalidAuthUrl(msg),
+            OauthEndpointKind::Token => OauthError::TokenExchange(msg),
+        })
+    }
+}
+
+fn validate_extra_auth_params(params: &HashMap<String, String>) -> Result<(), OauthError> {
+    const RESERVED: &[&str] = &[
+        "response_type",
+        "client_id",
+        "redirect_uri",
+        "state",
+        "code_challenge",
+        "code_challenge_method",
+        "scope",
+    ];
+    for key in params.keys() {
+        let normalized = key.trim().to_ascii_lowercase();
+        if normalized.is_empty() || normalized.len() > 80 || RESERVED.contains(&normalized.as_str())
+        {
+            return Err(OauthError::InvalidAuthUrl(format!(
+                "reserved or invalid OAuth parameter: {key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 async fn callback_handler(
     State(state): State<CallbackState>,
     Query(params): Query<CallbackQuery>,
@@ -269,6 +335,10 @@ pub async fn oauth_begin(
     req: OauthBeginRequest,
     manager: tauri::State<'_, OauthManager>,
 ) -> Result<OauthBeginResponse, OauthError> {
+    validate_oauth_endpoint(&req.auth_url, OauthEndpointKind::Authorization)?;
+    validate_oauth_endpoint(&req.token_url, OauthEndpointKind::Token)?;
+    validate_extra_auth_params(&req.extra_auth_params)?;
+
     let state = generate_state();
     let (code_verifier, code_challenge) = generate_pkce();
 
@@ -374,14 +444,12 @@ pub async fn oauth_wait(
 }
 
 async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, OauthError> {
-    // The token endpoint is caller-supplied; bind it to the same outbound
-    // allowlist as every other request so it can't be aimed at loopback /
-    // private hosts (SSRF). Redirects are disabled — a token POST must not be
-    // bounced to an attacker host carrying the auth code + verifier.
-    crate::integrations::http::validate_outbound_url(&flow.token_url, None)
-        .map_err(|e| OauthError::TokenExchange(format!("blocked token endpoint: {e}")))?;
+    // Redirects are disabled: a token POST must not be bounced to an attacker
+    // host carrying the auth code + verifier.
+    validate_oauth_endpoint(&flow.token_url, OauthEndpointKind::Token)?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
     let response = client
@@ -399,10 +467,6 @@ async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, Oa
         .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
 
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
 
     if !status.is_success() {
         return Err(OauthError::TokenExchange(format!(
@@ -414,8 +478,12 @@ async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, Oa
     // Don't embed the raw body in the error: a 2xx token response that fails
     // to deserialize contains access/refresh tokens, which would otherwise
     // leak into the frontend error path and telemetry.log.
-    let parsed: TokenResponse = serde_json::from_str(&body)
-        .map_err(|e| OauthError::ResponseParse(e.to_string()))?;
+    let body = crate::integrations::http::read_body_capped(response, MAX_TOKEN_RESPONSE_BYTES)
+        .await
+        .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
+    let body = String::from_utf8(body).map_err(|e| OauthError::ResponseParse(e.to_string()))?;
+    let parsed: TokenResponse =
+        serde_json::from_str(&body).map_err(|e| OauthError::ResponseParse(e.to_string()))?;
 
     let expires_at = parsed.expires_in.and_then(|secs| {
         SystemTime::now()
@@ -508,6 +576,42 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, OauthError::InvalidAuthUrl(_)));
+    }
+
+    #[test]
+    fn oauth_endpoint_allowlist_accepts_known_providers() {
+        assert!(validate_oauth_endpoint(
+            "https://www.dropbox.com/oauth2/authorize",
+            OauthEndpointKind::Authorization,
+        )
+        .is_ok());
+        assert!(validate_oauth_endpoint(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            OauthEndpointKind::Token,
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn oauth_endpoint_allowlist_blocks_unknown_hosts_and_plain_http() {
+        assert!(validate_oauth_endpoint(
+            "https://example.com/oauth2/authorize",
+            OauthEndpointKind::Authorization,
+        )
+        .is_err());
+        assert!(validate_oauth_endpoint(
+            "http://oauth2.googleapis.com/token",
+            OauthEndpointKind::Token,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn extra_auth_params_cannot_override_pkce_core_fields() {
+        let params = HashMap::from([("redirect_uri".into(), "https://evil.test".into())]);
+        assert!(validate_extra_auth_params(&params).is_err());
+        let params = HashMap::from([("prompt".into(), "consent".into())]);
+        assert!(validate_extra_auth_params(&params).is_ok());
     }
 
     #[test]

@@ -63,6 +63,10 @@ export function idMapPathForCacheRoot(cacheRoot: string, providerId: string): st
   return providerStatePath(cacheRoot, providerId, "idmap.json");
 }
 
+export function syncStatePathForCacheRoot(cacheRoot: string, providerId: string): string {
+  return providerStatePath(cacheRoot, providerId, "sync-state.json");
+}
+
 function providerStatePath(cacheRoot: string, providerId: string, fileName: string): string {
   return joinPath(cacheRoot, ".typeward", "integrations", providerId, fileName);
 }

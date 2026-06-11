@@ -93,9 +93,16 @@ fn walk(
 ) -> Result<(), AutosaveError> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
         let path = entry.path();
-        if path.is_dir() {
+        if file_type.is_dir() {
             walk(&path, snapshot_root, project_root, out)?;
+            continue;
+        }
+        if !file_type.is_file() {
             continue;
         }
         if path.extension().and_then(|s| s.to_str()) != Some("snap") {
@@ -143,4 +150,40 @@ fn mtime_ms(path: &Path) -> std::io::Result<i64> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     Ok(duration.as_millis() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "typeward-autosave-test-{}-{}",
+            std::process::id(),
+            id
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_orphans_skips_symlinked_snapshots() {
+        let root = temp_dir();
+        let snapshots = snapshot_dir(&root);
+        fs::create_dir_all(&snapshots).unwrap();
+        let outside = root.join("outside.txt");
+        fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, snapshots.join("main.tex.snap")).unwrap();
+
+        let snapshots = list_orphans(&root).unwrap();
+
+        assert!(snapshots.is_empty());
+    }
 }
