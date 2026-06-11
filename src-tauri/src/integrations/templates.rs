@@ -151,6 +151,11 @@ pub async fn template_instantiate(
 
         let parent = PathBuf::from(&dest_parent);
         let safe_name = sanitize(&name);
+        if safe_name.is_empty() {
+            return Err(TemplateError::BadPath(
+                "project name produced an empty folder name".into(),
+            ));
+        }
         let dest = parent.join(&safe_name);
         if dest.exists() {
             return Err(TemplateError::AlreadyExists(dest.to_string_lossy().into()));
@@ -270,7 +275,10 @@ pub async fn template_save(
         };
         // The on-disk manifest carries the bare id (source is implied by the
         // directory it lives in). serialize before qualifying the returned id.
-        fs::write(dest.join("template.json"), serde_json::to_string_pretty(&doc)?)?;
+        fs::write(
+            dest.join("template.json"),
+            serde_json::to_string_pretty(&doc)?,
+        )?;
 
         let mut returned = doc;
         returned.id = qualify_id(TemplateSource::Custom, &returned.id);
@@ -324,7 +332,8 @@ fn is_build_artifact(file_name: &str) -> bool {
         .map(|ext| {
             matches!(
                 ext,
-                "aux" | "log"
+                "aux"
+                    | "log"
                     | "out"
                     | "toc"
                     | "lof"
@@ -443,6 +452,11 @@ fn qualify_id(source: TemplateSource, raw: &str) -> String {
 fn read_manifest(template_dir: &Path) -> Result<TemplateManifestDoc, TemplateError> {
     let raw = fs::read_to_string(template_dir.join("template.json"))?;
     let doc: TemplateManifestDoc = serde_json::from_str(&raw)?;
+    project::validate_project_relative_path(&doc.root_file)?;
+    for file in &doc.files {
+        sanitize_relative(&file.path)
+            .ok_or_else(|| TemplateError::UnsafePath(file.path.clone()))?;
+    }
     Ok(doc)
 }
 
@@ -455,6 +469,12 @@ fn copy_or_render(
 ) -> Result<(), TemplateError> {
     let src_path = src_root.join(rel);
     let dest_path = dest_root.join(rel);
+    let meta = fs::symlink_metadata(&src_path)?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err(TemplateError::UnsafePath(
+            rel.to_string_lossy().into_owned(),
+        ));
+    }
     if let Some(parent) = dest_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -507,9 +527,17 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), TemplateError> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if entry.file_type()?.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            let name = entry.file_name();
+            if is_template_internal_segment(&name) {
+                continue;
+            }
             walk(&path, out)?;
-        } else {
+        } else if file_type.is_file() {
             out.push(path);
         }
     }
@@ -531,19 +559,22 @@ fn sanitize(name: &str) -> String {
 }
 
 fn sanitize_relative(input: &str) -> Option<PathBuf> {
-    let mut out = PathBuf::new();
-    for component in Path::new(input).components() {
-        match component {
-            Component::Normal(part) => out.push(part),
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+    let out = project::validate_project_relative_path(input).ok()?;
+    for component in out.components() {
+        if let Component::Normal(part) = component {
+            if is_template_internal_segment(part) {
+                return None;
+            }
         }
     }
-    if out.as_os_str().is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    Some(out)
+}
+
+fn is_template_internal_segment(part: &std::ffi::OsStr) -> bool {
+    let value = part.to_string_lossy();
+    TEMPLATE_SKIP_DIRS
+        .iter()
+        .any(|skip| value.eq_ignore_ascii_case(skip))
 }
 
 fn builtin_root(app: &AppHandle) -> Result<PathBuf, TemplateError> {
@@ -601,7 +632,13 @@ mod tests {
         ] {
             assert!(is_build_artifact(junk), "{junk} should be skipped");
         }
-        for keep in ["main.tex", "refs.bib", "figure.pdf", "logo.png", "thesis.cls"] {
+        for keep in [
+            "main.tex",
+            "refs.bib",
+            "figure.pdf",
+            "logo.png",
+            "thesis.cls",
+        ] {
             assert!(!is_build_artifact(keep), "{keep} should be kept");
         }
     }
@@ -611,5 +648,12 @@ mod tests {
         assert!(sanitize_relative("../outside.tex").is_none());
         assert!(sanitize_relative("/abs/path").is_none());
         assert!(sanitize_relative("ok/sub.tex").is_some());
+    }
+
+    #[test]
+    fn sanitize_relative_rejects_project_internal_and_cli_flag_paths() {
+        assert!(sanitize_relative(".typeward/project.json").is_none());
+        assert!(sanitize_relative("nested/.TypeWard/cursor").is_none());
+        assert!(sanitize_relative("-shell-escape.tex").is_none());
     }
 }

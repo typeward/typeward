@@ -21,12 +21,13 @@ import {
 
 import type { CloudFsProvider, DeltaChange, RemoteFile } from "~/integrations/types";
 
-import { decideConflict } from "./conflict";
+import { decideConflict, suffixWithConflict } from "./conflict";
 import {
   cachePathForRemoteRel,
   cursorPathForCacheRoot,
   normalizeRemoteRelPath,
   projectCacheRoot,
+  syncStatePathForCacheRoot,
 } from "./paths";
 import {
   getSyncStatus,
@@ -58,11 +59,26 @@ const DEFAULT_POLL_MS = 60_000;
 const PUSH_DEBOUNCE_MS = 1_500;
 const PUSH_RETRY_MS = 15_000;
 
+interface SyncedFileState {
+  id: string;
+  relPath: string;
+  rev?: string;
+  hash: string;
+  size: number;
+  mtimeMs: number;
+}
+
+interface SyncStateManifest {
+  version: 1;
+  files: Record<string, SyncedFileState>;
+}
+
 export class SyncEngine {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pushTimer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
   private cursor: string | undefined;
+  private syncState: SyncStateManifest | undefined;
   /**
    * Serializes every pass (pull + push) so they never interleave on the
    * shared cursor/cache. `pullNow`, the poll tick, and push drains all chain
@@ -92,6 +108,7 @@ export class SyncEngine {
     if (this.running) return;
     this.running = true;
     await this.ensureCursorLoaded();
+    await this.ensureSyncStateLoaded();
     void this.tick();
   }
 
@@ -110,6 +127,7 @@ export class SyncEngine {
 
   async pullNow(): Promise<PullPassResult> {
     await this.ensureCursorLoaded();
+    await this.ensureSyncStateLoaded();
     return this.runExclusive(() => this.pullPass());
   }
 
@@ -191,9 +209,13 @@ export class SyncEngine {
     const batch = [...this.pendingPush];
     this.pendingPush.clear();
     setSyncPhase(this.opts.providerId, this.opts.projectId, "pushing");
+    await this.ensureSyncStateLoaded();
     for (const rel of batch) {
       const abs = cachePathForRemoteRel(this.cacheRoot(), rel);
-      if (!(await safeExists(abs))) continue; // gone before we got to it
+      if (!(await safeExists(abs))) {
+        await this.pushDeletionIfTracked(rel);
+        continue;
+      }
       try {
         const remote = await pushOne(this.provider, {
           rootId: this.opts.rootId,
@@ -201,6 +223,7 @@ export class SyncEngine {
           sourceAbsPath: abs,
         });
         if (remote.rev) this.pushedRevs.set(rel, remote.rev);
+        await this.recordSyncedFile(rel, remote, abs);
       } catch (err) {
         // Re-queue this path and abort the batch; drainPush handles retry.
         this.pendingPush.add(rel);
@@ -250,13 +273,32 @@ export class SyncEngine {
   }
 
   private async applyChange(change: DeltaChange): Promise<string | undefined> {
+    await this.ensureSyncStateLoaded();
     if (change.kind === "removed") {
-      const abs = cachePathForRemoteRel(this.cacheRoot(), change.relPath);
-      try {
+      const normRel = normalizeRemoteRelPath(change.relPath);
+      const abs = cachePathForRemoteRel(this.cacheRoot(), normRel);
+      const localExists = await safeExists(abs);
+      const synced = this.syncState?.files[normRel];
+      if (localExists && synced && !(await localMatchesState(abs, synced))) {
+        const conflictAbs = cachePathForRemoteRel(
+          this.cacheRoot(),
+          suffixWithConflict(normRel, Date.now()),
+        );
+        await mkdirParents(conflictAbs);
+        const localBytes = await readFile(abs);
+        await writeFile(conflictAbs, localBytes);
         await remove(abs);
-      } catch {
-        // Already gone — ignore.
+        await this.removeSyncedFile(normRel);
+        return normRel;
       }
+      if (localExists) {
+        try {
+          await remove(abs);
+        } catch {
+          // Already gone — ignore.
+        }
+      }
+      await this.removeSyncedFile(normRel);
       return undefined;
     }
 
@@ -280,12 +322,15 @@ export class SyncEngine {
     const localExists = await safeExists(abs);
 
     if (localExists) {
-      const local = await stat(abs);
-      const remoteMtime = change.file.modifiedAt
-        ? Date.parse(change.file.modifiedAt)
-        : 0;
-      const localMtime = local.mtime ? local.mtime.getTime() : 0;
-      if (remoteMtime && localMtime && Math.abs(remoteMtime - localMtime) > 1000) {
+      const synced = this.syncState?.files[normRel];
+      const remoteChanged = !synced?.rev || !change.file.rev || synced.rev !== change.file.rev;
+      const localChanged = synced ? !(await localMatchesState(abs, synced)) : undefined;
+      if (remoteChanged && localChanged === true) {
+        const local = await stat(abs);
+        const remoteMtime = change.file.modifiedAt
+          ? Date.parse(change.file.modifiedAt)
+          : 0;
+        const localMtime = local.mtime ? local.mtime.getTime() : 0;
         const decision = decideConflict(change.file.relPath, localMtime, remoteMtime);
         if (decision.winner === "local") {
           // Local wins → write the remote copy to the conflict path so
@@ -300,11 +345,31 @@ export class SyncEngine {
         await mkdirParents(sidecarAbs);
         const localBytes = await readFile(abs);
         await writeFile(sidecarAbs, localBytes);
+      } else if (localChanged === undefined) {
+        const local = await stat(abs);
+        const remoteMtime = change.file.modifiedAt
+          ? Date.parse(change.file.modifiedAt)
+          : 0;
+        const localMtime = local.mtime ? local.mtime.getTime() : 0;
+        if (remoteMtime && localMtime && Math.abs(remoteMtime - localMtime) > 1000) {
+          const decision = decideConflict(change.file.relPath, localMtime, remoteMtime);
+          if (decision.winner === "local") {
+            const conflictAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
+            await mkdirParents(conflictAbs);
+            await this.provider.downloadFile(change.file, conflictAbs);
+            return change.file.relPath;
+          }
+          const sidecarAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
+          await mkdirParents(sidecarAbs);
+          const localBytes = await readFile(abs);
+          await writeFile(sidecarAbs, localBytes);
+        }
       }
     }
 
     await mkdirParents(abs);
     await this.provider.downloadFile(change.file, abs);
+    await this.recordSyncedFile(normRel, change.file, abs);
     return undefined;
   }
 
@@ -323,6 +388,89 @@ export class SyncEngine {
     await mkdirParents(path);
     await writeTextFile(path, value);
   }
+
+  private async ensureSyncStateLoaded(): Promise<void> {
+    if (this.syncState) return;
+    const path = syncStatePathForCacheRoot(this.cacheRoot(), this.opts.providerId);
+    try {
+      const raw = (await readTextFile(path)).trim();
+      if (!raw) throw new Error("empty sync state");
+      const parsed = JSON.parse(raw) as SyncStateManifest;
+      this.syncState = parsed.version === 1 && parsed.files ? parsed : emptySyncState();
+    } catch {
+      this.syncState = emptySyncState();
+    }
+  }
+
+  private async persistSyncState(): Promise<void> {
+    if (!this.syncState) return;
+    const path = syncStatePathForCacheRoot(this.cacheRoot(), this.opts.providerId);
+    await mkdirParents(path);
+    await writeTextFile(path, JSON.stringify(this.syncState, null, 2));
+  }
+
+  private async recordSyncedFile(
+    rel: string,
+    remote: RemoteFile,
+    absPath: string,
+  ): Promise<void> {
+    await this.ensureSyncStateLoaded();
+    const normRel = normalizeRemoteRelPath(rel);
+    const signature = await fileSignature(absPath);
+    this.syncState!.files[normRel] = {
+      id: remote.id,
+      relPath: normRel,
+      rev: remote.rev,
+      ...signature,
+    };
+    await this.persistSyncState();
+  }
+
+  private async removeSyncedFile(rel: string): Promise<void> {
+    await this.ensureSyncStateLoaded();
+    delete this.syncState!.files[normalizeRemoteRelPath(rel)];
+    await this.persistSyncState();
+  }
+
+  private async pushDeletionIfTracked(rel: string): Promise<void> {
+    await this.ensureSyncStateLoaded();
+    const normRel = normalizeRemoteRelPath(rel);
+    const synced = this.syncState!.files[normRel];
+    if (!synced) return;
+    await this.provider.deleteRemoteFile(this.opts.rootId, {
+      id: synced.id,
+      relPath: normRel,
+      rev: synced.rev,
+    });
+    await this.removeSyncedFile(normRel);
+  }
+}
+
+function emptySyncState(): SyncStateManifest {
+  return { version: 1, files: {} };
+}
+
+async function fileSignature(absPath: string): Promise<Pick<SyncedFileState, "hash" | "size" | "mtimeMs">> {
+  const [bytes, metadata] = await Promise.all([readFile(absPath), stat(absPath)]);
+  return {
+    hash: hashBytes(bytes),
+    size: bytes.byteLength,
+    mtimeMs: metadata.mtime ? metadata.mtime.getTime() : 0,
+  };
+}
+
+async function localMatchesState(absPath: string, state: SyncedFileState): Promise<boolean> {
+  const signature = await fileSignature(absPath);
+  return signature.hash === state.hash && signature.size === state.size;
+}
+
+function hashBytes(bytes: Uint8Array): string {
+  let hash = 0x811c9dc5;
+  for (const byte of bytes) {
+    hash ^= byte;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 async function mkdirParents(absPath: string): Promise<void> {

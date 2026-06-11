@@ -103,6 +103,8 @@ pub enum ProjectError {
     NotADirectory(String),
     #[error("invalid project-relative path: {0}")]
     InvalidRelativePath(String),
+    #[error("invalid project name: {0}")]
+    InvalidProjectName(String),
     #[error("project path escapes root: {0}")]
     PathEscapesRoot(String),
 }
@@ -130,6 +132,7 @@ pub fn read_project(root: &Path) -> Result<Project, ProjectError> {
 }
 
 pub fn write_project(project: &Project) -> Result<(), ProjectError> {
+    validate_project_relative_path(&project.root_file)?;
     let root = Path::new(&project.root_path);
     let sidecar = sidecar_dir(root);
     fs::create_dir_all(&sidecar)?;
@@ -185,6 +188,9 @@ pub fn create_project(
     format: ProjectFormat,
 ) -> Result<Project, ProjectError> {
     let safe_name = sanitize_folder_name(name);
+    if safe_name.is_empty() {
+        return Err(ProjectError::InvalidProjectName(name.to_string()));
+    }
     let root = parent.join(&safe_name);
     if root.exists() {
         return Err(ProjectError::AlreadyExists(root.to_string_lossy().into()));
@@ -338,6 +344,27 @@ mod tests {
     fn sanitize_folder_name_strips_unsafe_chars() {
         assert_eq!(sanitize_folder_name("My Project!"), "My-Project");
         assert_eq!(sanitize_folder_name("foo/bar"), "foo-bar");
+    }
+
+    #[test]
+    fn create_project_rejects_empty_sanitized_name() {
+        let dir = temp_dir();
+        let err = create_project(&dir, " !!! ", ProjectFormat::Latex).unwrap_err();
+        assert!(matches!(err, ProjectError::InvalidProjectName(_)));
+    }
+
+    #[test]
+    fn write_project_rejects_unsafe_root_file() {
+        let dir = temp_dir();
+        let project = Project {
+            root_path: dir.to_string_lossy().to_string(),
+            root_file: "-shell-escape.tex".into(),
+            format: ProjectFormat::Latex,
+            name: "Bad".into(),
+            integrations: ProjectIntegrations::default(),
+        };
+        let err = write_project(&project).unwrap_err();
+        assert!(matches!(err, ProjectError::InvalidRelativePath(_)));
     }
 
     #[test]

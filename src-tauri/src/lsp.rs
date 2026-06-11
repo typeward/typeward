@@ -23,6 +23,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 
+const MAX_LSP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+
 #[derive(Default)]
 pub struct LspManager {
     servers: Mutex<HashMap<String, ServerHandle>>,
@@ -256,6 +258,12 @@ async fn read_framed<R: tokio::io::AsyncBufRead + Unpin>(
             "LSP message missing Content-Length",
         )
     })?;
+    if len > MAX_LSP_MESSAGE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("LSP message exceeds {MAX_LSP_MESSAGE_BYTES} byte cap"),
+        ));
+    }
 
     let mut buf = vec![0u8; len];
     reader.read_exact(&mut buf).await?;

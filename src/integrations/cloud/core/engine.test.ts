@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@tauri-apps/plugin-fs", () => ({
   exists: vi.fn(async (p: string) => !p.includes("new-from-remote")),
   mkdir: vi.fn(async () => {}),
-  readFile: vi.fn(async () => new Uint8Array()),
+  readFile: vi.fn(async () => new TextEncoder().encode("local changed")),
   readTextFile: vi.fn(async () => ""),
   remove: vi.fn(async () => {}),
   stat: vi.fn(async () => ({ mtime: new Date(0) })),
@@ -14,6 +14,7 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   writeTextFile: vi.fn(async () => {}),
 }));
 
+import { readTextFile, remove, writeFile } from "@tauri-apps/plugin-fs";
 import type {
   CloudFsProvider,
   DeltaResult,
@@ -150,6 +151,77 @@ describe("SyncEngine push", () => {
     await engine.pullNow();
 
     expect(provider.downloadFile).toHaveBeenCalledTimes(1);
+    engine.stop();
+  });
+
+  it("detects concurrent edits by synced hash even when mtimes match", async () => {
+    vi.mocked(readTextFile).mockImplementation(async (path: string | URL) => {
+      if (!String(path).includes("sync-state.json")) return "";
+      return JSON.stringify({
+        version: 1,
+        files: {
+          "intro.tex": {
+            id: "id-intro.tex",
+            relPath: "intro.tex",
+            rev: "rev-base",
+            hash: "00000000",
+            size: 5,
+            mtimeMs: 0,
+          },
+        },
+      });
+    });
+    const provider = makeProvider([
+      {
+        changes: [{ kind: "modified", file: remoteFile("intro.tex", "rev-remote") }],
+        nextCursor: "c1",
+      },
+    ]);
+    const engine = makeEngine(provider);
+
+    const result = await engine.pullNow();
+
+    expect(result.conflicts).toEqual(["intro.tex"]);
+    expect(provider.downloadFile).toHaveBeenCalledTimes(1);
+    expect(provider.downloadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ relPath: "intro.tex" }),
+      expect.stringContaining(".conflict-"),
+    );
+    engine.stop();
+  });
+
+  it("preserves a locally edited file when the remote side deletes it", async () => {
+    vi.mocked(readTextFile).mockImplementation(async (path: string | URL) => {
+      if (!String(path).includes("sync-state.json")) return "";
+      return JSON.stringify({
+        version: 1,
+        files: {
+          "intro.tex": {
+            id: "id-intro.tex",
+            relPath: "intro.tex",
+            rev: "rev-base",
+            hash: "00000000",
+            size: 5,
+            mtimeMs: 0,
+          },
+        },
+      });
+    });
+    const provider = makeProvider([
+      {
+        changes: [{ kind: "removed", relPath: "intro.tex", id: "id-intro.tex" }],
+        nextCursor: "c1",
+      },
+    ]);
+    const engine = makeEngine(provider);
+
+    const result = await engine.pullNow();
+
+    expect(result.conflicts).toEqual(["intro.tex"]);
+    const [conflictPath, conflictBytes] = vi.mocked(writeFile).mock.calls[0];
+    expect(conflictPath).toContain(".conflict-");
+    expect(ArrayBuffer.isView(conflictBytes)).toBe(true);
+    expect(remove).toHaveBeenCalledWith(expect.stringContaining("intro.tex"));
     engine.stop();
   });
 });

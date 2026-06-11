@@ -34,6 +34,8 @@ pub enum OverleafError {
     Zip(String),
     #[error("destination already exists: {0}")]
     AlreadyExists(String),
+    #[error("invalid project name: {0}")]
+    InvalidName(String),
     #[error("zip entry path is unsafe (escapes dest): {0}")]
     UnsafeEntry(String),
     #[error("no .tex or .typ file found in the zip — is this an Overleaf export?")]
@@ -71,6 +73,9 @@ pub async fn overleaf_import_zip(
     tokio::task::spawn_blocking(move || -> Result<Project, OverleafError> {
         let parent = PathBuf::from(&parent_dir);
         let safe_name = sanitize(&name);
+        if safe_name.is_empty() {
+            return Err(OverleafError::InvalidName(name));
+        }
         let dest = parent.join(&safe_name);
         if dest.exists() {
             return Err(OverleafError::AlreadyExists(dest.to_string_lossy().into()));
@@ -112,6 +117,9 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), OverleafError> {
     let mut total_written: u64 = 0;
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
+        if is_zip_symlink(&entry) {
+            return Err(OverleafError::UnsafeEntry(entry.name().to_string()));
+        }
         let raw_name = entry
             .enclosed_name()
             .map(|p| p.to_path_buf())
@@ -146,7 +154,16 @@ fn sanitize_relative(input: &Path) -> Option<PathBuf> {
     let mut out = PathBuf::new();
     for component in input.components() {
         match component {
-            Component::Normal(part) => out.push(part),
+            Component::Normal(part) => {
+                let value = part.to_string_lossy();
+                if value.starts_with('-')
+                    || value.eq_ignore_ascii_case(".typeward")
+                    || value.eq_ignore_ascii_case(".git")
+                {
+                    return None;
+                }
+                out.push(part);
+            }
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
                 return None;
@@ -158,6 +175,15 @@ fn sanitize_relative(input: &Path) -> Option<PathBuf> {
     } else {
         Some(out)
     }
+}
+
+fn is_zip_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
+    const S_IFMT: u32 = 0o170000;
+    const S_IFLNK: u32 = 0o120000;
+    entry
+        .unix_mode()
+        .map(|mode| mode & S_IFMT == S_IFLNK)
+        .unwrap_or(false)
 }
 
 fn sanitize(name: &str) -> String {
@@ -204,4 +230,22 @@ fn find_by_ext(dir: &Path, ext: &str) -> Result<Option<String>, OverleafError> {
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_relative_rejects_internal_and_cli_flag_entries() {
+        assert!(sanitize_relative(Path::new(".typeward/project.json")).is_none());
+        assert!(sanitize_relative(Path::new(".git/config")).is_none());
+        assert!(sanitize_relative(Path::new("-shell-escape.tex")).is_none());
+        assert!(sanitize_relative(Path::new("sections/intro.tex")).is_some());
+    }
+
+    #[test]
+    fn sanitize_project_name_can_be_empty_for_punctuation_only() {
+        assert!(sanitize(" !!! ").is_empty());
+    }
 }
