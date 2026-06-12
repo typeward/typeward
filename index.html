@@ -5,13 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Typeward</title>
     <style>
-      /* Painted before any external CSS loads — avoids a white flash while the
-       * bundle is being fetched/parsed. Values mirror the Aurora token defaults. */
+      /* Painted before any external CSS loads — avoids a flash while the
+       * bundle is being fetched/parsed. Defaults mirror the Daylight tokens
+       * (the app default); src/boot-theme.ts re-tints the vars from the
+       * persisted theme for everyone else. */
       html, body, #root {
         margin: 0;
         height: 100%;
-        background: #0a0b0f;
-        color: #e6e8ec;
+        background: var(--boot-bg, #f8f4ea);
+        color: var(--boot-fg, #22211e);
       }
       #boot-splash {
         position: fixed;
@@ -21,7 +23,7 @@
         justify-content: center;
         font: 500 14px/1 -apple-system, "Segoe UI", Roboto, sans-serif;
         letter-spacing: 0.04em;
-        color: #6b7280;
+        color: var(--boot-dim, #8e8678);
         pointer-events: none;
       }
       #boot-splash::after {
@@ -29,8 +31,8 @@
         width: 16px;
         height: 16px;
         margin-left: 10px;
-        border: 2px solid rgba(255, 255, 255, 0.08);
-        border-top-color: #9ca3af;
+        border: 2px solid var(--boot-ring, rgba(34, 33, 30, 0.12));
+        border-top-color: var(--boot-dim, #8e8678);
         border-radius: 50%;
         animation: boot-spin 0.9s linear infinite;
       }
@@ -41,6 +43,7 @@
     <div id="root">
       <div id="boot-splash">Typeward</div>
     </div>
+    <script type="module" src="/src/boot-theme.ts"></script>
     <script type="module" src="/src/index.tsx"></script>
   </body>
 </html>

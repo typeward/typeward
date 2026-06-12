@@ -1,20 +1,25 @@
 /*
  * Accent palettes. Swapped via [data-accent="..."] on <html>.
- * The default (--color-accent-1, --color-accent-2 in tokens.css) matches the
- * Violet-Cyan palette the design files use throughout.
+ * No data-accent attribute means the active theme's own accent applies
+ * (Daylight/Lamplight ship brass-amber, Aurora violet/cyan, ...). These
+ * blocks load after the theme files, so an explicit choice wins — and each
+ * resets --color-accent-fg since all four palettes carry white text fine.
  */
 
 [data-accent="amber-rose"] {
   --color-accent-1: #f59e0b;
   --color-accent-2: #f43f5e;
+  --color-accent-fg: #ffffff;
 }
 
 [data-accent="emerald-teal"] {
   --color-accent-1: #10b981;
   --color-accent-2: #14b8a6;
+  --color-accent-fg: #ffffff;
 }
 
 [data-accent="indigo-pink"] {
   --color-accent-1: #6366f1;
   --color-accent-2: #ec4899;
+  --color-accent-fg: #ffffff;
 }
