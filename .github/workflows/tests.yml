@@ -1,0 +1,92 @@
+# Frontend + Rust test suite. Runs on every push/PR to main so regressions
+# surface before a manual build is ever dispatched.
+#
+# Same sibling-checkout layout as build.yml: package.json depends on
+# `texlive-wasm: file:../texlive-wasm`, so the app checks out into `app/`
+# and the sibling into `texlive-wasm/` (built before `npm ci`).
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Typecheck + Vitest
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Checkout texlive-wasm sibling
+        uses: actions/checkout@v4
+        with:
+          repository: typeward/texlive-wasm
+          path: texlive-wasm
+          token: ${{ secrets.SIBLING_REPO_TOKEN || github.token }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Build texlive-wasm sibling
+        working-directory: texlive-wasm
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install npm deps
+        working-directory: app
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: app
+        run: npm run typecheck
+
+      - name: Vitest
+        working-directory: app
+        run: npm test
+
+  rust:
+    name: Cargo tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Cargo test
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml

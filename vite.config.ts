@@ -1,5 +1,5 @@
 /// <reference types="vitest" />
-import { defineConfig } from "vite";
+import { defaultClientConditions, defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
@@ -7,16 +7,24 @@ import { fileURLToPath, URL } from "node:url";
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
-  plugins: [solid(), tailwindcss()],
+  // hot:false under Vitest — solid-refresh's virtual module ("/@solid-refresh")
+  // can't be loaded by the vitest module runner and kills .tsx test suites.
+  plugins: [solid({ hot: !process.env.VITEST }), tailwindcss()],
   resolve: {
     alias: {
       "~": fileURLToPath(new URL("./src", import.meta.url)),
     },
     // Force Solid's development runtime when running under Vitest. Without dev
     // conditions, signal subscribers get tree-shaken and effects don't re-run
-    // in jsdom. Production builds (`vite build`) skip this branch and keep
-    // Vite's normal `production` resolution.
-    conditions: process.env.VITEST ? ["development", "browser"] : undefined,
+    // in jsdom. Vite 6 REPLACES the default conditions instead of appending,
+    // so splice "development" into the defaults rather than dropping `module`
+    // etc. Production builds skip this branch entirely.
+    conditions: process.env.VITEST
+      ? [
+          ...defaultClientConditions.filter((c) => c !== "development|production"),
+          "development",
+        ]
+      : undefined,
   },
 
   // Tauri expects a fixed port; fail if it's not available
@@ -36,6 +44,13 @@ export default defineConfig({
       // Tauri/Cargo files are watched by Tauri, not Vite
       ignored: ["**/src-tauri/**"],
     },
+  },
+
+  // texlive-wasm spawns its Web Worker via new URL("assets/worker-*.js",
+  // import.meta.url). Dev prebundling would relocate the module into
+  // .vite/deps and break that relative resolution — serve it as-is instead.
+  optimizeDeps: {
+    exclude: ["texlive-wasm"],
   },
 
   // Env vars prefixed with VITE_ are exposed to the client; TAURI_ENV_* come from Tauri
