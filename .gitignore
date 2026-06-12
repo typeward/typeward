@@ -40,3 +40,7 @@ coverage/
 # Keep .gitkeep so the directory exists for `externalBin` resolution.
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
+
+# Supabase backend moved to the dedicated typeward/infrastructure repo (sibling
+# folder ../infrastructure). Guard against a stale copy landing back on main.
+infrastructure/
