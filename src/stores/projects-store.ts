@@ -6,7 +6,6 @@ import { projectsRoot } from "~/stores/settings-store";
 const [projects, setProjects] = createSignal<Project[]>([]);
 const [loading, setLoading] = createSignal<boolean>(false);
 const [error, setError] = createSignal<string | null>(null);
-const [active, setActive] = createSignal<Project | null>(null);
 
 async function refresh() {
   setLoading(true);
@@ -37,19 +36,10 @@ async function create(input: {
   return project;
 }
 
-async function open(path: string): Promise<Project> {
-  const project = await ipc.openProject(path);
-  setActive(project);
-  return project;
-}
-
 export {
-  active,
   create,
   error,
   loading,
-  open,
   projects,
   refresh,
-  setActive,
 };

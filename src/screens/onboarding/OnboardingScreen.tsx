@@ -6,18 +6,23 @@ import {
   Check,
   Cpu,
   Download,
-  FolderSearch,
   Loader2,
   Package,
   RefreshCw,
   Shield,
   Sigma,
 } from "lucide-solid";
-import type { Component, JSX } from "solid-js";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { Component } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import * as ipc from "~/ipc";
 import { setCompileEngine, setOnboarded } from "~/stores/settings-store";
+
+// Pandoc is probed by the Rust detector but unused since Markdown-as-project
+// was dropped — don't show it or count it as "missing".
+const RELEVANT_ENGINES = (engines: ipc.EngineProbe["engines"]) =>
+  engines.filter((e) => e.name !== "pandoc");
 
 type StepId = "welcome" | "formats" | "engines" | "install";
 const STEP_ORDER: StepId[] = ["welcome", "formats", "engines", "install"];
@@ -40,7 +45,7 @@ const FORMATS: FormatOption[] = [
     name: "LaTeX",
     glyph: "τ",
     desc: "Mathematical typesetting · papers, theses",
-    color: "#A78BFA",
+    color: "var(--format-latex)",
     size: "4.2 GB",
     engine: "TeX Live · pdflatex / xelatex / lualatex",
     recommended: true,
@@ -50,7 +55,7 @@ const FORMATS: FormatOption[] = [
     name: "Typst",
     glyph: "§",
     desc: "Modern compile-fast alternative to LaTeX",
-    color: "#67E8F9",
+    color: "var(--format-typst)",
     size: "62 MB",
     engine: "typst CLI · v0.13",
     recommended: true,
@@ -66,8 +71,6 @@ const OnboardingScreen: Component = () => {
   const [probe, setProbe] = createSignal<ipc.EngineProbe | null>(null);
   const [probing, setProbing] = createSignal(false);
   const [probeError, setProbeError] = createSignal<string | null>(null);
-  const [installing, setInstalling] = createSignal<Set<string>>(new Set());
-  const [installed, setInstalled] = createSignal<Set<string>>(new Set());
 
   const stepIndex = createMemo(() => STEP_ORDER.indexOf(step()));
 
@@ -105,11 +108,22 @@ const OnboardingScreen: Component = () => {
   };
 
   const finish = () => {
-    // Heuristic: if any LaTeX engine was detected, default to system-tex; else
-    // assume the user chose to install Tectonic via the install step.
-    setCompileEngine(probe()?.anyLatexAvailable ? "system-tex" : "tectonic");
-    setOnboarded(true);
-    navigate("/projects");
+    void (async () => {
+      // The engine probe normally runs on step 3 — but the welcome step's
+      // skip button calls finish() directly, and defaulting to Tectonic on a
+      // machine with a full TeX Live install would be wrong. Probe first.
+      let p = probe();
+      if (!p) {
+        try {
+          p = await ipc.detectTex();
+        } catch {
+          // Detection unavailable — fall back to the bundled engine.
+        }
+      }
+      setCompileEngine(p?.anyLatexAvailable ? "system-tex" : "tectonic");
+      setOnboarded(true);
+      navigate("/projects");
+    })();
   };
 
   return (
@@ -147,26 +161,7 @@ const OnboardingScreen: Component = () => {
                 />
               </Match>
               <Match when={step() === "install"}>
-                <InstallPane
-                  picked={picked()}
-                  installing={installing()}
-                  installed={installed()}
-                  onInstallAll={async () => {
-                    // Phase 1: there's no real binary installer yet. Simulate
-                    // the visual flow by progressively marking items installed.
-                    const targets = ["typst"];
-                    for (const id of targets) {
-                      setInstalling((s) => new Set(s).add(id));
-                      await new Promise((r) => setTimeout(r, 600));
-                      setInstalled((s) => new Set(s).add(id));
-                      setInstalling((s) => {
-                        const next = new Set(s);
-                        next.delete(id);
-                        return next;
-                      });
-                    }
-                  }}
-                />
+                <InstallPane picked={picked()} probe={probe()} />
               </Match>
             </SolidSwitch>
           </div>
@@ -194,9 +189,10 @@ export default OnboardingScreen;
 const StepBar: Component<{ step: number }> = (props) => (
   <div class="flex h-[56px] flex-shrink-0 items-center border-b border-glass-stroke px-[22px]">
     <div
-      class="flex h-6 w-6 items-center justify-center rounded-[7px] text-[11px] font-bold text-white"
+      class="flex h-6 w-6 items-center justify-center rounded-[7px] text-[11px] font-bold"
       style={{
         background: "linear-gradient(135deg, var(--color-accent-2) 0%, var(--color-accent-1) 100%)",
+        color: "var(--color-accent-fg)",
       }}
     >
       τ
@@ -221,7 +217,7 @@ const StepBar: Component<{ step: number }> = (props) => (
                     ? "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))"
                     : done()
                       ? "var(--color-accent-2)"
-                      : "rgba(255,255,255,0.10)",
+                      : "var(--color-control-stroke)",
                 }}
               />
               <Show when={i() < STEP_ORDER.length - 1}>
@@ -270,11 +266,12 @@ const Footer: Component<{
       case "engines": {
         const probe = props.probe;
         if (!probe) return <span>Scanning your PATH…</span>;
-        const ready = probe.engines.filter((e) => e.installed).length;
-        return <span>{ready} ready · {probe.engines.length - ready} missing</span>;
+        const engines = RELEVANT_ENGINES(probe.engines);
+        const ready = engines.filter((e) => e.installed).length;
+        return <span>{ready} ready · {engines.length - ready} missing</span>;
       }
       case "install":
-        return <span>You can keep using your computer while engines install.</span>;
+        return <span>Engines can be changed anytime in Settings → Editor.</span>;
     }
   });
 
@@ -291,7 +288,7 @@ const Footer: Component<{
     >
       <div class="text-[12px] text-fg-2">{leftText()}</div>
       <div class="ml-auto flex items-center gap-2">
-        <Show when={props.stepIndex > 0 && props.step !== "install"}>
+        <Show when={props.stepIndex > 0}>
           <button
             type="button"
             onClick={props.onBack}
@@ -307,17 +304,13 @@ const Footer: Component<{
             onClick={props.onFinish}
             class="h-8 rounded-lg border border-glass-stroke px-3.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
-            Continue without account
+            Skip setup
           </button>
         </Show>
         <button
           type="button"
           onClick={props.step === "install" ? props.onFinish : props.onNext}
-          class="flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-[13px] font-semibold text-white accent-grad"
-          style={{
-            "box-shadow":
-              "0 0 0 1px rgb(139 92 246 / 0.4), 0 8px 28px rgb(139 92 246 / 0.3)",
-          }}
+          class="glow-accent flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-[13px] font-semibold accent-grad"
         >
           {primaryLabel()}
           <ArrowRight size={12} stroke-width={2.2} />
@@ -363,15 +356,15 @@ const WelcomePane: Component = () => (
                 i() === 0 || i() === 4
                   ? "var(--color-accent-1)"
                   : i() === 2
-                    ? "#fff"
+                    ? "var(--color-fg-1)"
                     : "var(--color-accent-2)",
               opacity: g.op,
               transform: `rotate(${g.rot}deg)`,
               "font-weight": g.weight ?? 400,
               "text-shadow":
                 i() === 2
-                  ? "0 0 30px rgba(255,255,255,0.45)"
-                  : "0 0 30px rgba(139,92,246,0.45)",
+                  ? "0 0 30px color-mix(in srgb, var(--color-fg-1) 45%, transparent)"
+                  : "0 0 30px color-mix(in srgb, var(--color-accent-1) 45%, transparent)",
             }}
           >
             {g.t}
@@ -400,8 +393,8 @@ const WelcomePane: Component = () => (
           <div
             class="flex h-7 items-center gap-1.5 rounded-[14px] px-2.5 text-[12px] text-fg-2"
             style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.06)",
+              background: "var(--color-control-fill)",
+              border: "1px solid var(--color-control-stroke)",
             }}
           >
             <b.icon size={12} style={{ color: "var(--color-accent-2)" }} />
@@ -426,8 +419,8 @@ const FormatsPane: Component<{
       What do you write?
     </h2>
     <p class="m-0 mb-5 text-[13px] text-fg-2">
-      Pick any combination — we'll only install what you need. You can add more
-      later.
+      Pick what you write — the next step checks your machine for the right
+      engines. You can add more later.
     </p>
 
     <div class="grid grid-cols-2 gap-2.5">
@@ -440,18 +433,18 @@ const FormatsPane: Component<{
               onClick={() => props.onToggle(f.id)}
               class="relative cursor-pointer rounded-xl p-3.5 text-left transition-all"
               style={{
-                background: on() ? "rgba(255,255,255,0.04)" : "rgba(255,255,255,0.02)",
+                background: on() ? "var(--color-control-fill)" : "var(--color-glass-soft-fill)",
                 border: on()
-                  ? "1px solid rgba(139,92,246,0.45)"
-                  : "1px solid rgba(255,255,255,0.06)",
+                  ? "1px solid color-mix(in srgb, var(--color-accent-1) 45%, transparent)"
+                  : "1px solid var(--color-control-stroke)",
                 "box-shadow": on()
-                  ? "0 0 0 1px rgba(139,92,246,0.2), 0 8px 24px rgba(139,92,246,0.1)"
+                  ? "0 0 0 1px color-mix(in srgb, var(--color-accent-1) 20%, transparent), 0 8px 24px color-mix(in srgb, var(--color-accent-1) 10%, transparent)"
                   : "none",
               }}
             >
               <Show when={f.recommended}>
                 <div
-                  class="absolute right-3 -top-[7px] rounded-md px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.06em] text-white accent-grad"
+                  class="absolute right-3 -top-[7px] rounded-md px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.06em] accent-grad"
                 >
                   Recommended
                 </div>
@@ -460,8 +453,8 @@ const FormatsPane: Component<{
                 <div
                   class="flex h-[38px] w-[38px] items-center justify-center rounded-[9px] italic font-semibold"
                   style={{
-                    background: `linear-gradient(135deg, ${f.color}33, ${f.color}11)`,
-                    border: `1px solid ${f.color}33`,
+                    background: `linear-gradient(135deg, color-mix(in srgb, ${f.color} 20%, transparent), color-mix(in srgb, ${f.color} 7%, transparent))`,
+                    border: `1px solid color-mix(in srgb, ${f.color} 20%, transparent)`,
                     "font-family": "'Times New Roman', serif",
                     "font-size": "20px",
                     color: f.color,
@@ -479,21 +472,20 @@ const FormatsPane: Component<{
                     on()
                       ? { background: "linear-gradient(135deg, var(--color-accent-1), var(--color-accent-2))" }
                       : {
-                          border: "1.5px solid rgba(255,255,255,0.18)",
+                          border: "1.5px solid var(--color-control-stroke)",
                         }
                   }
                 >
                   <Show when={on()}>
-                    <Check size={10} stroke-width={3} class="text-white" />
+                    <Check size={10} stroke-width={3} style={{ color: "var(--color-accent-fg)" }} />
                   </Show>
                 </div>
               </div>
               <div
-                class="mono mt-2.5 flex items-center gap-2 border-t border-white/[0.05] pt-2 text-[11px] text-fg-3"
+                class="mono mt-2.5 flex items-center gap-2 border-t border-glass-stroke pt-2 text-[11px] text-fg-3"
               >
                 <Package size={10} />
                 <span class="flex-1 truncate">{f.engine}</span>
-                <span>{f.size}</span>
               </div>
             </button>
           );
@@ -508,13 +500,13 @@ const FormatsPane: Component<{
 // =================================================================
 
 const ENGINE_META: Record<string, { glyph: string; color: string; label: string; sub: string }> = {
-  pdflatex: { glyph: "τ", color: "#A78BFA", label: "pdfLaTeX", sub: "Used for LaTeX" },
-  xelatex: { glyph: "τ", color: "#A78BFA", label: "XeLaTeX", sub: "Unicode-aware LaTeX" },
-  lualatex: { glyph: "τ", color: "#A78BFA", label: "LuaLaTeX", sub: "LaTeX with Lua scripting" },
-  latexmk: { glyph: "λ", color: "#A78BFA", label: "latexmk", sub: "Build manager for LaTeX" },
-  tectonic: { glyph: "T", color: "#22D3EE", label: "Tectonic", sub: "Lightweight TeX engine" },
-  typst: { glyph: "§", color: "#67E8F9", label: "Typst", sub: "Modern typesetter" },
-  pandoc: { glyph: "#", color: "#F0ABFC", label: "Pandoc", sub: "Universal document converter" },
+  pdflatex: { glyph: "τ", color: "var(--format-latex)", label: "pdfLaTeX", sub: "Used for LaTeX" },
+  xelatex: { glyph: "τ", color: "var(--format-latex)", label: "XeLaTeX", sub: "Unicode-aware LaTeX" },
+  lualatex: { glyph: "τ", color: "var(--format-latex)", label: "LuaLaTeX", sub: "LaTeX with Lua scripting" },
+  latexmk: { glyph: "λ", color: "var(--format-latex)", label: "latexmk", sub: "Build manager for LaTeX" },
+  tectonic: { glyph: "T", color: "var(--color-accent-2)", label: "Tectonic", sub: "Lightweight TeX engine" },
+  typst: { glyph: "§", color: "var(--format-typst)", label: "Typst", sub: "Modern typesetter" },
+  pandoc: { glyph: "#", color: "var(--color-fg-3)", label: "Pandoc", sub: "Universal document converter" },
 };
 
 const EnginesPane: Component<{
@@ -532,8 +524,8 @@ const EnginesPane: Component<{
           class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
           style={{
             background:
-              "linear-gradient(135deg, rgba(139,92,246,0.2), rgba(34,211,238,0.13))",
-            border: "1px solid rgba(139,92,246,0.2)",
+              "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
+            border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
           }}
         >
           <Cpu size={16} style={{ color: "var(--color-accent-1)" }} />
@@ -550,10 +542,10 @@ const EnginesPane: Component<{
           type="button"
           onClick={() => props.onProbe()}
           disabled={props.probing}
-          class="flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[11px] text-fg-2 hover:bg-white/[0.04]"
+          class="flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[11px] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
           style={{
-            background: "rgba(255,255,255,0.04)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            background: "var(--color-control-fill)",
+            border: "1px solid var(--color-control-stroke)",
           }}
         >
           <RefreshCw size={10} class={props.probing ? "animate-spin" : ""} />
@@ -572,9 +564,9 @@ const EnginesPane: Component<{
         <div
           class="rounded-md p-3 text-[12px]"
           style={{
-            background: "rgba(244,63,94,0.06)",
-            border: "1px solid rgba(244,63,94,0.18)",
-            color: "#FCA5A5",
+            background: "color-mix(in srgb, var(--color-err) 6%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--color-err) 18%, transparent)",
+            color: "var(--color-err)",
           }}
         >
           {props.error}
@@ -583,11 +575,11 @@ const EnginesPane: Component<{
 
       <Show when={props.probe}>
         <div class="flex flex-col gap-2">
-          <For each={props.probe!.engines}>
+          <For each={RELEVANT_ENGINES(props.probe!.engines)}>
             {(e) => {
               const meta = ENGINE_META[e.name] ?? {
                 glyph: e.name[0]?.toUpperCase() ?? "?",
-                color: "#9CA3AF",
+                color: "var(--color-fg-3)",
                 label: e.name,
                 sub: "",
               };
@@ -596,16 +588,16 @@ const EnginesPane: Component<{
                 <div
                   class="relative flex items-center gap-3 rounded-[11px] py-3 pl-[14px] pr-3.5"
                   style={{
-                    background: "rgba(255,255,255,0.025)",
-                    border: "1px solid rgba(255,255,255,0.05)",
-                    "border-left": `2px solid ${ok ? "#10B981" : "var(--color-accent-1)"}`,
+                    background: "var(--color-glass-soft-fill)",
+                    border: "1px solid var(--color-glass-stroke)",
+                    "border-left": `2px solid ${ok ? "var(--color-ok)" : "var(--color-accent-1)"}`,
                   }}
                 >
                   <div
                     class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg italic font-semibold"
                     style={{
-                      background: `linear-gradient(135deg, ${meta.color}33, ${meta.color}11)`,
-                      border: `1px solid ${meta.color}33`,
+                      background: `linear-gradient(135deg, color-mix(in srgb, ${meta.color} 20%, transparent), color-mix(in srgb, ${meta.color} 7%, transparent))`,
+                      border: `1px solid color-mix(in srgb, ${meta.color} 20%, transparent)`,
                       "font-family": "'Times New Roman', serif",
                       "font-size": "17px",
                       color: meta.color,
@@ -620,7 +612,7 @@ const EnginesPane: Component<{
                     </div>
                     <div
                       class="mono mt-0.5 truncate text-[11px]"
-                      style={{ color: ok ? "var(--color-fg-2)" : "#FCA5A5" }}
+                      style={{ color: ok ? "var(--color-fg-2)" : "var(--color-err)" }}
                     >
                       {ok ? (e.version ?? e.path ?? "found") : `${e.name} not on PATH`}
                     </div>
@@ -628,24 +620,17 @@ const EnginesPane: Component<{
                   <Show
                     when={ok}
                     fallback={
-                      <div class="flex gap-1.5">
-                        <button
-                          type="button"
-                          class="flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[11px] text-fg-1 hover:bg-white/[0.06]"
-                          style={{
-                            background: "rgba(255,255,255,0.04)",
-                            border: "1px solid rgba(255,255,255,0.08)",
-                          }}
-                        >
-                          <FolderSearch size={10} />
-                          Locate manually
-                        </button>
-                      </div>
+                      <span class="text-[11px] text-fg-3">
+                        Install it, then Re-scan
+                      </span>
                     }
                   >
                     <div
                       class="flex items-center gap-1.5 rounded-[14px] px-2.5 py-1 text-[11px] font-medium"
-                      style={{ background: "rgba(16,185,129,0.10)", color: "#A7F3D0" }}
+                      style={{
+                        background: "color-mix(in srgb, var(--color-ok) 12%, transparent)",
+                        color: "var(--color-ok)",
+                      }}
                     >
                       <Check size={12} stroke-width={2.5} />
                       Ready
@@ -661,17 +646,22 @@ const EnginesPane: Component<{
           <div
             class="mt-3 flex items-start gap-2.5 rounded-[9px] px-3 py-2.5"
             style={{
-              background: "rgba(245,158,11,0.06)",
-              border: "1px solid rgba(245,158,11,0.18)",
+              background: "color-mix(in srgb, var(--color-warn) 8%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--color-warn) 25%, transparent)",
             }}
           >
-            <AlertTriangle size={14} class="mt-0.5" style={{ color: "#FBBF24" }} />
-            <div class="text-[12px] leading-[1.5]" style={{ color: "#FDE68A" }}>
-              <span class="font-semibold">No LaTeX engine detected — </span>
+            <AlertTriangle size={14} class="mt-0.5" style={{ color: "var(--color-warn)" }} />
+            <div class="text-[12px] leading-[1.5] text-fg-2">
+              <span class="font-semibold text-fg-1">No LaTeX engine detected — </span>
               You can install TeX Live from{" "}
-              <span class="mono" style={{ color: "#FCD34D" }}>
+              <button
+                type="button"
+                onClick={() => void openUrl("https://tug.org/texlive/")}
+                class="mono underline underline-offset-2"
+                style={{ color: "var(--color-warn)" }}
+              >
                 tug.org
-              </span>
+              </button>
               , or use Typeward's bundled Tectonic engine. Either choice can be
               changed later in Settings.
             </div>
@@ -688,30 +678,37 @@ const EnginesPane: Component<{
 
 const InstallPane: Component<{
   picked: Set<FormatOption["id"]>;
-  installing: Set<string>;
-  installed: Set<string>;
-  onInstallAll: () => Promise<void>;
+  probe: ipc.EngineProbe | null;
 }> = (props) => {
-  const tasks = createMemo(() => [
-    {
-      id: "tex",
-      name: "TeX Live (system or Tectonic)",
-      size: "—",
-      sub: "Auto-detected · system TeX preferred when available",
-      done: true,
-    },
-    {
-      id: "typst",
-      name: "Typst CLI",
-      size: "62 MB",
-      sub: "Phase 1 stub: real binary fetch lands shortly",
-      done: props.installed.has("typst"),
-      live: props.installing.has("typst"),
-    },
-  ]);
-
-  onMount(() => {
-    void props.onInstallAll();
+  // No runtime installer exists — Tectonic ships bundled and Typst is a
+  // user install detected on PATH. This pane is an honest summary of what
+  // each picked format will use, not a fake progress screen.
+  const items = createMemo(() => {
+    const out: Array<{ id: string; name: string; sub: string; ready: boolean }> = [];
+    if (props.picked.has("latex")) {
+      const systemTex = props.probe?.anyLatexAvailable ?? false;
+      out.push({
+        id: "latex",
+        name: "LaTeX",
+        sub: systemTex
+          ? "System TeX detected — Typeward will use it."
+          : "No system TeX found — Typeward's bundled Tectonic engine will be used. Nothing to download.",
+        ready: true,
+      });
+    }
+    if (props.picked.has("typst")) {
+      const typstReady =
+        props.probe?.engines.some((e) => e.name === "typst" && e.installed) ?? false;
+      out.push({
+        id: "typst",
+        name: "Typst",
+        sub: typstReady
+          ? "typst CLI detected on PATH — ready."
+          : "Install the typst CLI from typst.app — Typeward detects it on PATH automatically.",
+        ready: typstReady,
+      });
+    }
+    return out;
   });
 
   return (
@@ -721,101 +718,58 @@ const InstallPane: Component<{
           class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
           style={{
             background:
-              "linear-gradient(135deg, rgba(139,92,246,0.2), rgba(34,211,238,0.13))",
-            border: "1px solid rgba(139,92,246,0.2)",
+              "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
+            border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
           }}
         >
           <Download size={16} style={{ color: "var(--color-accent-1)" }} />
         </div>
         <div>
           <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
-            Setting things up…
+            You're set
           </h2>
           <p class="m-0 text-[12px] leading-[1.5] text-fg-2">
-            Hang tight. You can keep using your computer — we'll let you know
-            when it's done.
+            Here's what each format will compile with. Engines can be changed
+            anytime in Settings → Editor.
           </p>
         </div>
       </div>
 
       <div class="flex flex-col gap-2">
-        <For each={tasks()}>
+        <For each={items()}>
           {(t) => (
             <div
-              class="rounded-[11px] px-3.5 py-3"
+              class="flex items-center gap-2.5 rounded-[11px] px-3.5 py-3"
               style={{
-                background: "rgba(255,255,255,0.025)",
-                border: "1px solid rgba(255,255,255,0.05)",
+                background: "var(--color-glass-soft-fill)",
+                border: "1px solid var(--color-glass-stroke)",
               }}
             >
-              <div class="flex items-center gap-2.5">
-                <div
-                  class="flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-full"
-                  style={
-                    t.done
-                      ? {
-                          background: "rgba(16,185,129,0.15)",
-                          border: "1px solid rgba(16,185,129,0.4)",
-                        }
-                      : t.live
-                        ? {
-                            background: "rgba(139,92,246,0.13)",
-                            border: "1px solid rgba(139,92,246,0.4)",
-                          }
-                        : {
-                            background: "rgba(255,255,255,0.05)",
-                            border: "1px solid rgba(255,255,255,0.08)",
-                          }
-                  }
+              <div
+                class="flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-full"
+                style={
+                  t.ready
+                    ? {
+                        background: "color-mix(in srgb, var(--color-ok) 15%, transparent)",
+                        border: "1px solid color-mix(in srgb, var(--color-ok) 40%, transparent)",
+                      }
+                    : {
+                        background: "color-mix(in srgb, var(--color-warn) 12%, transparent)",
+                        border: "1px solid color-mix(in srgb, var(--color-warn) 35%, transparent)",
+                      }
+                }
+              >
+                <Show
+                  when={t.ready}
+                  fallback={<AlertTriangle size={11} style={{ color: "var(--color-warn)" }} />}
                 >
-                  <Show when={t.done}>
-                    <Check size={12} stroke-width={2.5} style={{ color: "#34D399" }} />
-                  </Show>
-                  <Show when={t.live}>
-                    <span
-                      class="pulse h-[7px] w-[7px] rounded-full"
-                      style={{ background: "var(--color-accent-1)" }}
-                    />
-                  </Show>
-                  <Show when={!t.done && !t.live}>
-                    <span
-                      class="h-[5px] w-[5px] rounded-full"
-                      style={{ background: "#6B7280" }}
-                    />
-                  </Show>
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-baseline gap-2">
-                    <span class="text-[13px] font-semibold text-fg-1">{t.name}</span>
-                    <span class="mono text-[11px] text-fg-3">{t.size}</span>
-                    <Show when={t.live}>
-                      <span
-                        class="mono ml-auto text-[11px]"
-                        style={{ color: "var(--color-accent-2)" }}
-                      >
-                        installing…
-                      </span>
-                    </Show>
-                    <Show when={t.done}>
-                      <span class="ml-auto text-[11px]" style={{ color: "#A7F3D0" }}>
-                        Done
-                      </span>
-                    </Show>
-                  </div>
-                  <div class="mt-0.5 text-[11px] text-fg-2">{t.sub}</div>
-                </div>
+                  <Check size={12} stroke-width={2.5} style={{ color: "var(--color-ok)" }} />
+                </Show>
               </div>
-              <Show when={t.live}>
-                <div
-                  class="mt-2.5 h-1 overflow-hidden rounded"
-                  style={{ background: "rgba(255,255,255,0.05)" }}
-                >
-                  <div
-                    class="h-full rounded accent-grad shimmer"
-                    style={{ width: "60%" }}
-                  />
-                </div>
-              </Show>
+              <div class="min-w-0 flex-1">
+                <span class="text-[13px] font-semibold text-fg-1">{t.name}</span>
+                <div class="mt-0.5 text-[11px] text-fg-2">{t.sub}</div>
+              </div>
             </div>
           )}
         </For>
@@ -823,7 +777,3 @@ const InstallPane: Component<{
     </div>
   );
 };
-
-// Silence the "unused" warning on a helper component we may revisit.
-const _Unused: JSX.Element | null = null;
-void _Unused;

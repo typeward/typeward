@@ -21,7 +21,6 @@ import type { Component, JSX } from "solid-js";
 import { Show, createResource, createSignal, For } from "solid-js";
 
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
-import { UpgradePrompt } from "~/components/entitlement/UpgradePrompt";
 import { Button } from "~/components/primitives/Button";
 import { Switch } from "~/components/forms/Switch";
 import { assertEntitlement } from "~/integrations/entitlements";
@@ -32,11 +31,12 @@ import {
   setCredential,
 } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
+import { createOllamaProvider } from "~/integrations/ai/ollama";
 import {
   connectMendeley,
   disconnectMendeley,
 } from "~/integrations/references/mendeley";
-import { probeBetterBibTex } from "~/integrations/references/zotero";
+import { probeBetterBibTex, probeZoteroLocalApi } from "~/integrations/references/zotero";
 import {
   connectGithub,
   disconnectGithub,
@@ -57,14 +57,33 @@ import {
 import { detectICloudDrive } from "~/integrations/cloud/icloud";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 
-export const IntegrationsPanel: Component = () => {
+export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
+
+/**
+ * One card per integration category. The Settings nav exposes each as its
+ * own subcategory under "Integrations"; without `section` (legacy/all)
+ * every card stacks like the original single panel.
+ */
+export const IntegrationsPanel: Component<{ section?: IntegrationsSection }> = (
+  props,
+) => {
   return (
     <div class="flex flex-col gap-3">
-      <ReferencesCard />
-      <CloudStorageCard />
-      <VcsCard />
-      <AiCard />
-      <GrammarCard />
+      <Show when={!props.section || props.section === "references"}>
+        <ReferencesCard />
+      </Show>
+      <Show when={!props.section || props.section === "cloud"}>
+        <CloudStorageCard />
+      </Show>
+      <Show when={!props.section || props.section === "vcs"}>
+        <VcsCard />
+      </Show>
+      <Show when={!props.section || props.section === "ai"}>
+        <AiCard />
+      </Show>
+      <Show when={!props.section || props.section === "grammar"}>
+        <GrammarCard />
+      </Show>
     </div>
   );
 };
@@ -80,28 +99,10 @@ const ReferencesCard: Component = () => {
       subtitle="Connect a reference manager to autocomplete \\cite{…} keys and append the aggregated library to the project's .bib."
     >
       <BetterBibTexRow />
-      <FeatureGate
-        feature="integrations.references.zotero.web"
-        fallback={
-          <LockedProviderRow
-            name="Zotero Web API"
-            hint="Read-only Zotero Web API sync."
-            feature="integrations.references.zotero.web"
-          />
-        }
-      >
+      <FeatureGate feature="integrations.references.zotero.web">
         <ZoteroWebRow />
       </FeatureGate>
-      <FeatureGate
-        feature="integrations.references.mendeley"
-        fallback={
-          <LockedProviderRow
-            name="Mendeley"
-            hint="OAuth-backed Mendeley import for legacy libraries."
-            feature="integrations.references.mendeley"
-          />
-        }
-      >
+      <FeatureGate feature="integrations.references.mendeley">
         <MendeleyRow />
       </FeatureGate>
       <JabRefRow />
@@ -110,7 +111,14 @@ const ReferencesCard: Component = () => {
 };
 
 const BetterBibTexRow: Component = () => {
-  const [probe] = createResource(async () => probeBetterBibTex());
+  // "Ready" if either local path answers — Better BibTeX or plain
+  // Zotero 7's built-in API. `bbt` decides whether the library-id field
+  // (a BBT concept) is shown.
+  const [probe] = createResource(async () => {
+    const bbt = await probeBetterBibTex();
+    if (bbt) return { reachable: true, bbt: true };
+    return { reachable: await probeZoteroLocalApi(), bbt: false };
+  });
   const settings = () => integrationsSettings().references.betterBibTex;
 
   const toggle = (enabled: boolean) => {
@@ -137,28 +145,44 @@ const BetterBibTexRow: Component = () => {
 
   return (
     <ProviderRow
-      name="Zotero (Better BibTeX)"
-      hint="Local-only HTTP via the Better BibTeX Zotero plugin. No login needed; Zotero just has to be running with the plugin installed."
-      status={probe() === undefined ? "checking" : probe() ? "ready" : "unreachable"}
+      name="Zotero (local)"
+      hint="Talks to the Zotero app on this machine — no login. Works with plain Zotero 7 (enable 'Allow other applications…' under Settings → Advanced); the Better BibTeX plugin is optional and adds nicer citation keys."
+      status={
+        probe() === undefined
+          ? "checking"
+          : probe()!.reachable
+            ? "ready"
+            : "unreachable"
+      }
       controls={
         <Switch
           checked={settings().enabled}
           onChange={(checked) => toggle(checked)}
-          disabled={!probe()}
+          disabled={!probe()?.reachable}
         />
       }
     >
-      <Show when={settings().enabled && probe()}>
+      <Show when={settings().enabled && probe()?.reachable}>
         <div class="mt-3 flex items-center gap-2 text-[12px] text-fg-2">
-          <span>Library id</span>
-          <input
-            type="number"
-            min={1}
-            value={settings().libraryId}
-            onInput={(e) => setLibraryId(e.currentTarget.value)}
-            class="glass-inset h-7 w-20 rounded-md px-2 font-mono text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
-          <span class="text-fg-3">1 = personal library; group libraries use higher ids.</span>
+          <Show
+            when={probe()?.bbt}
+            fallback={
+              <span class="text-fg-3">
+                Using Zotero's built-in API (personal library). Install Better
+                BibTeX for stable, human-readable citation keys.
+              </span>
+            }
+          >
+            <span>Library id</span>
+            <input
+              type="number"
+              min={1}
+              value={settings().libraryId}
+              onInput={(e) => setLibraryId(e.currentTarget.value)}
+              class="glass-inset h-7 w-20 rounded-md px-2 font-mono text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            />
+            <span class="text-fg-3">1 = personal library; group libraries use higher ids.</span>
+          </Show>
         </div>
       </Show>
     </ProviderRow>
@@ -467,16 +491,7 @@ const CloudStorageCard: Component = () => {
     >
       <For each={CLOUD_PROVIDERS}>
         {(provider) => (
-          <FeatureGate
-            feature={provider.feature}
-            fallback={
-              <LockedProviderRow
-                name={provider.name}
-                hint={provider.hint}
-                feature={provider.feature}
-              />
-            }
-          >
+          <FeatureGate feature={provider.feature}>
             <CloudProviderRow provider={provider} />
           </FeatureGate>
         )}
@@ -778,7 +793,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
     id: "ollama",
     name: "Ollama (local)",
     feature: "integrations.ai.ollama",
-    hint: "Runs against a local `ollama serve` daemon. No key — just point at the right base URL if you've moved it off the default port.",
+    hint: "Local models via the Ollama app — auto-detected, nothing to configure. Install from ollama.com, pull a model, and it shows up here.",
   },
 ];
 
@@ -792,21 +807,33 @@ const AiCard: Component = () => {
     });
   };
 
+  const setEnabled = (enabled: boolean) => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      ai: { ...ai(), enabled },
+    });
+  };
+
   return (
     <Card
-      title="AI providers"
-      subtitle="Claude, ChatGPT, Gemini, and a local Ollama daemon. Pick one as the active provider; the editor's AI panel routes through it."
+      title="AI"
+      subtitle="Optional assistant chat in the editor, routed through the provider you pick. Turn it off to hide every AI surface — no provider runs, nothing leaves the machine."
     >
-      <For each={AI_PROVIDERS}>
-        {(p) => (
-          <FeatureGate
-            feature={p.feature}
-            fallback={<LockedProviderRow name={p.name} hint={p.hint} feature={p.feature} />}
-          >
-            <AiProviderRow provider={p} onActivate={setActive} />
-          </FeatureGate>
-        )}
-      </For>
+      <ProviderRow
+        name="AI assistant"
+        hint="Master switch. Off removes the chat panel and its toolbar button from the editor and deactivates the provider below."
+        status={ai().enabled ? "ready" : "unconfigured"}
+        controls={<Switch checked={ai().enabled} onChange={setEnabled} />}
+      />
+      <Show when={ai().enabled}>
+        <For each={AI_PROVIDERS}>
+          {(p) => (
+            <FeatureGate feature={p.feature}>
+              <AiProviderRow provider={p} onActivate={setActive} />
+            </FeatureGate>
+          )}
+        </For>
+      </Show>
     </Card>
   );
 };
@@ -829,10 +856,31 @@ const AiProviderRow: Component<{
     },
   );
 
+  // Ollama is zero-config: probe the daemon (settings override or the
+  // default localhost:11434) and list its models, instead of pretending
+  // it's "ready" while nothing is running.
+  const [ollamaProbe, { refetch: refetchOllama }] = createResource(
+    () => (props.provider.id === "ollama" ? (ai().ollamaBaseUrl ?? "") : null),
+    async (base) => {
+      if (base === null) return null;
+      const provider = createOllamaProvider(base || undefined);
+      try {
+        const models = await provider.models();
+        return { ok: true as const, models: models.map((m) => m.id) };
+      } catch {
+        return { ok: false as const, models: [] as string[] };
+      }
+    },
+  );
+
   const isActive = () => ai().activeProvider === props.provider.id;
 
   const status = (): ProviderStatus => {
-    if (props.provider.id === "ollama") return "ready";
+    if (props.provider.id === "ollama") {
+      const probe = ollamaProbe();
+      if (probe === undefined || probe === null) return "checking";
+      return probe.ok ? "ready" : "unreachable";
+    }
     return hasKey() ? "ready" : "unconfigured";
   };
 
@@ -946,17 +994,68 @@ const AiProviderRow: Component<{
         </div>
       </Show>
       <Show when={props.provider.id === "ollama"}>
-        <div class="mt-3 flex items-center gap-2 text-[12px] text-fg-2">
-          <span>Base URL</span>
-          <input
-            type="text"
-            value={baseUrlInput()}
-            onInput={(e) => setBaseUrlInput(e.currentTarget.value)}
-            onBlur={persistOllamaBaseUrl}
-            placeholder="http://localhost:11434"
-            class="glass-inset h-7 flex-1 rounded-md px-2.5 font-mono text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
-        </div>
+        <Show
+          when={ollamaProbe()?.ok}
+          fallback={
+            <div class="mt-3 flex flex-col gap-2 text-[12px] text-fg-2">
+              <Show when={ollamaProbe() && !ollamaProbe()!.ok}>
+                <div class="text-fg-3">
+                  Ollama isn't running. Install it from{" "}
+                  <span class="mono text-fg-2">ollama.com</span>, pull a model
+                  (e.g. <span class="mono text-fg-2">ollama pull gemma3</span>),
+                  and it's detected automatically — no setup needed.
+                  <button
+                    type="button"
+                    onClick={() => void refetchOllama()}
+                    class="ml-2 text-[var(--color-accent-1)] hover:underline"
+                  >
+                    Re-check
+                  </button>
+                </div>
+                {/* Only useful when the daemon runs somewhere non-default. */}
+                <div class="flex items-center gap-2">
+                  <span class="text-fg-3">Custom URL (optional)</span>
+                  <input
+                    type="text"
+                    value={baseUrlInput()}
+                    onInput={(e) => setBaseUrlInput(e.currentTarget.value)}
+                    onBlur={persistOllamaBaseUrl}
+                    placeholder="http://localhost:11434"
+                    class="glass-inset h-7 flex-1 rounded-md px-2.5 font-mono text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+                  />
+                </div>
+              </Show>
+            </div>
+          }
+        >
+          <div class="mt-3 flex items-center gap-2 text-[12px] text-fg-3">
+            <span>
+              Detected
+              <Show when={ai().ollamaBaseUrl}>
+                {" "}at <span class="mono">{ai().ollamaBaseUrl}</span>
+              </Show>
+              {" "}·{" "}
+              <span class="text-fg-2">
+                {ollamaProbe()!.models.length} model
+                {ollamaProbe()!.models.length === 1 ? "" : "s"}
+              </span>
+              <Show when={ollamaProbe()!.models.length > 0}>
+                {" "}
+                <span class="mono">
+                  ({ollamaProbe()!.models.slice(0, 3).join(", ")}
+                  {ollamaProbe()!.models.length > 3 ? ", …" : ""})
+                </span>
+              </Show>
+            </span>
+            <button
+              type="button"
+              onClick={() => void refetchOllama()}
+              class="ml-auto text-[var(--color-accent-1)] hover:underline"
+            >
+              Refresh
+            </button>
+          </div>
+        </Show>
       </Show>
       <Show when={error()}>
         <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
@@ -1056,19 +1155,19 @@ const STATUS_TEXT: Record<ProviderStatus, string> = {
 };
 
 const STATUS_BG: Record<ProviderStatus, string> = {
-  ready: "rgba(34, 197, 94, 0.16)",
+  ready: "color-mix(in srgb, var(--color-ok) 14%, transparent)",
   unconfigured: "var(--color-control-fill)",
-  unreachable: "rgba(248, 113, 113, 0.16)",
+  unreachable: "color-mix(in srgb, var(--color-err) 14%, transparent)",
   checking: "var(--color-control-fill)",
-  error: "rgba(248, 113, 113, 0.16)",
+  error: "color-mix(in srgb, var(--color-err) 14%, transparent)",
 };
 
 const STATUS_FG: Record<ProviderStatus, string> = {
-  ready: "rgb(74, 222, 128)",
+  ready: "var(--color-ok)",
   unconfigured: "var(--color-fg-3)",
-  unreachable: "rgb(248, 113, 113)",
+  unreachable: "var(--color-err)",
   checking: "var(--color-fg-3)",
-  error: "rgb(248, 113, 113)",
+  error: "var(--color-err)",
 };
 
 const ProviderRow: Component<{
@@ -1078,7 +1177,7 @@ const ProviderRow: Component<{
   controls: JSX.Element;
   children?: JSX.Element;
 }> = (props) => (
-  <div class="border-t border-white/[0.04] px-5 py-4 first:border-t-0">
+  <div class="border-t border-glass-stroke px-5 py-4 first:border-t-0">
     <div class="flex items-start gap-4">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
@@ -1105,23 +1204,6 @@ const ProviderRow: Component<{
     </div>
     {props.children}
   </div>
-);
-
-const LockedProviderRow: Component<{
-  name: string;
-  hint: string;
-  feature: EntitlementKey;
-}> = (props) => (
-  <ProviderRow
-    name={props.name}
-    hint={props.hint}
-    status="unconfigured"
-    controls={<span class="text-[11px] text-fg-3 italic">Locked</span>}
-  >
-    <div class="mt-3">
-      <UpgradePrompt feature={props.feature} />
-    </div>
-  </ProviderRow>
 );
 
 // Local Card kept inline so this panel doesn't depend on

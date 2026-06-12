@@ -20,6 +20,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 
 import type { CloudFsProvider, DeltaChange, RemoteFile } from "~/integrations/types";
+import { recordError } from "~/lib/telemetry";
 
 import { decideConflict, suffixWithConflict } from "./conflict";
 import {
@@ -251,9 +252,19 @@ export class SyncEngine {
     for (;;) {
       const result = await this.provider.delta(this.opts.rootId, this.cursor);
       for (const change of result.changes) {
-        const conflicted = await this.applyChange(change);
-        if (conflicted) conflicts.push(conflicted);
-        else applied++;
+        try {
+          const conflicted = await this.applyChange(change);
+          if (conflicted) conflicts.push(conflicted);
+          else applied++;
+        } catch (e) {
+          // One unsafe/malformed remote entry (e.g. a file literally named
+          // ".typeward" or carrying traversal segments) must not wedge the
+          // page: refusing the write is correct, but aborting before
+          // persistCursor would retry the same page forever and stall sync
+          // for the whole project. Skip it and move on.
+          const rel = change.kind === "removed" ? change.relPath : change.file.relPath;
+          recordError("cloud-sync", `skipped unsafe remote entry ${rel}`, e);
+        }
       }
       this.cursor = result.nextCursor;
       nextCursor = result.nextCursor;
@@ -306,12 +317,10 @@ export class SyncEngine {
     // just pushed as a remote change, but its rev matches what uploadFile
     // returned and the bytes are identical to local — applying it would write
     // a junk conflict sidecar on every save.
-    let normRel: string;
-    try {
-      normRel = normalizeRemoteRelPath(change.file.relPath);
-    } catch {
-      normRel = change.file.relPath;
-    }
+    // An unsafe path throws here and is skipped by pullPass's per-change
+    // catch — falling back to the unnormalized string would thread an
+    // unvalidated path into the sync-state writes below.
+    const normRel = normalizeRemoteRelPath(change.file.relPath);
     const pushedRev = this.pushedRevs.get(normRel);
     if (pushedRev && change.file.rev && change.file.rev === pushedRev) {
       this.pushedRevs.delete(normRel);

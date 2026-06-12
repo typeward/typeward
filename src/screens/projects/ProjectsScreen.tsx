@@ -1,24 +1,17 @@
 import { useNavigate } from "@solidjs/router";
 import {
-  Archive,
   BookMarked,
   ChevronDown,
-  Clock,
   Compass,
   FlaskConical,
   Folder as FolderIcon,
   FolderOpen,
-  GitBranch,
   GraduationCap,
   LayoutGrid,
   List,
-  MoreHorizontal,
   Plus,
-  Star,
   Tag,
-  Trash,
   Upload,
-  Users,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from "solid-js";
@@ -39,8 +32,9 @@ import { TopBar } from "~/components/layout/TopBar";
 import { Dialog } from "~/components/primitives/Dialog";
 import { Button } from "~/components/primitives/Button";
 import { KbdHint } from "~/components/primitives/KbdHint";
-import { ComposerHero } from "~/components/projects/ComposerHero";
-import { NotificationsPanel } from "~/components/projects/NotificationsPanel";
+import { NotificationsPanel, unreadCount } from "~/components/projects/NotificationsPanel";
+import { currentTier } from "~/integrations/entitlements";
+import { installDismiss } from "~/lib/dismiss";
 import { openPalette } from "~/commands/actions";
 import {
   requestNewProject_,
@@ -55,6 +49,7 @@ import {
 } from "~/stores/projects-store";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
+  dashboardEnabled,
   defaultSort,
   defaultView,
   enableSpaces,
@@ -62,11 +57,11 @@ import {
   notificationsPanelDefault,
   type ProjectsSort,
   type ProjectsView,
+  setDashboardEnabled,
   setDefaultSort,
   setDefaultView,
 } from "~/stores/workspace-store";
-import { WidgetsMenu } from "~/widgets/WidgetsMenu";
-import { WidgetsShelf } from "~/widgets/WidgetsShelf";
+import { DashboardPanel } from "~/widgets/DashboardPanel";
 
 // =================================================================
 // Display metadata helpers — disk only carries name + format today;
@@ -85,12 +80,16 @@ const FORMAT_ACCENT: Record<ProjectFormat, string> = {
 };
 
 const SORT_LABEL: Record<ProjectsSort, string> = {
-  "last-opened": "Last opened",
+  "last-opened": "Default order",
   created: "Created",
   name: "Name",
   modified: "Modified",
   format: "Format",
 };
+
+// Created/Modified need disk metadata the Rust listing doesn't carry yet —
+// only offer sorts that actually do something.
+const AVAILABLE_SORTS: readonly ProjectsSort[] = ["last-opened", "name", "format"];
 
 // =================================================================
 // Screen root
@@ -136,7 +135,7 @@ const ProjectsScreen: Component = () => {
 
       <div class="relative z-10 flex h-full flex-col">
         <TopBar
-          notifications={0}
+          notifications={unreadCount()}
           onOpenPalette={() => openPalette()}
           onToggleNotifications={() => setNotifOpen((v) => !v)}
           onOpenSettings={() => {
@@ -152,14 +151,24 @@ const ProjectsScreen: Component = () => {
           />
 
           <div class="flex min-w-0 flex-1 flex-col gap-2">
-            <ComposerHero
-              onCompose={() => setDialogOpen(true)}
-              onOpenProject={(p) =>
-                navigate(`/editor?path=${encodeURIComponent(p)}`)
-              }
-            />
+            {/* Library header — the library IS the screen now; the old
+                ComposerHero (AI compose preview) was demoted out entirely.
+                The opt-in Dashboard panel below carries activity + cards. */}
+            <div class="flex items-end justify-between px-2 pt-3">
+              <div>
+                <h1 class="text-[24px] font-semibold leading-tight tracking-tight text-fg-1">
+                  Library
+                </h1>
+                <div class="mono mt-0.5 text-[length:var(--ui-font-xs)] text-fg-3">
+                  {projects().length} project{projects().length === 1 ? "" : "s"} ·
+                  local-first
+                </div>
+              </div>
+            </div>
             <Toolbar />
-            <WidgetsShelf />
+            <Show when={dashboardEnabled()}>
+              <DashboardPanel />
+            </Show>
 
             <div class="mt-1 flex-1 overflow-auto scroll px-1 pb-2">
               <Show when={projectsError()}>
@@ -191,9 +200,11 @@ const ProjectsScreen: Component = () => {
                     onNew={() => setDialogOpen(true)}
                   />
                 </Show>
-                <div class="mono py-6 text-center text-[11px] text-fg-4">
-                  — end of {projects().length} project{projects().length === 1 ? "" : "s"} —
-                </div>
+                <Show when={projects().length > 0}>
+                  <div class="mono py-6 text-center text-[11px] text-fg-4">
+                    — end of {projects().length} project{projects().length === 1 ? "" : "s"} —
+                  </div>
+                </Show>
               </Show>
             </div>
           </div>
@@ -233,27 +244,25 @@ interface SidebarItem {
 const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
   props,
 ) => {
+  const navigate = useNavigate();
+  // Only views that exist. Recently-opened/Starred/Archive/Trash were dead
+  // nav with no backing data — they return when their features do.
   const librarySection = (): SidebarItem[] => [
     { id: "all", label: "All projects", icon: FolderIcon, count: props.totalCount, active: true },
-    { id: "recent", label: "Recently opened", icon: Clock },
-    { id: "starred", label: "Starred", icon: Star },
-    { id: "shared", label: "Shared with me", icon: Users },
-    { id: "archive", label: "Archive", icon: Archive },
-    { id: "trash", label: "Trash", icon: Trash },
   ];
 
   const spacesSection = (): SidebarItem[] => [
-    { id: "sp1", label: "Stochastic Lab", icon: FlaskConical, dot: "#8B5CF6" },
-    { id: "sp2", label: "Thesis 2026", icon: GraduationCap, dot: "#22D3EE" },
-    { id: "sp3", label: "Conference Drafts", icon: Compass, dot: "#F59E0B" },
-    { id: "sp4", label: "Reading group", icon: BookMarked, dot: "#10B981" },
+    { id: "sp1", label: "Stochastic Lab", icon: FlaskConical, dot: "var(--color-accent-1)" },
+    { id: "sp2", label: "Thesis 2026", icon: GraduationCap, dot: "var(--color-accent-2)" },
+    { id: "sp3", label: "Conference Drafts", icon: Compass, dot: "var(--color-warn)" },
+    { id: "sp4", label: "Reading group", icon: BookMarked, dot: "var(--color-ok)" },
   ];
 
   const tagsSection = (): SidebarItem[] => [
-    { id: "t1", label: "icml-2026", icon: Tag, tint: "#A78BFA" },
-    { id: "t2", label: "neurips-2025", icon: Tag, tint: "#67E8F9" },
-    { id: "t3", label: "in-review", icon: Tag, tint: "#FBBF24" },
-    { id: "t4", label: "archived", icon: Tag, tint: "#9CA3AF" },
+    { id: "t1", label: "icml-2026", icon: Tag, tint: "var(--color-accent-1)" },
+    { id: "t2", label: "neurips-2025", icon: Tag, tint: "var(--color-accent-2)" },
+    { id: "t3", label: "in-review", icon: Tag, tint: "var(--color-warn)" },
+    { id: "t4", label: "archived", icon: Tag, tint: "var(--color-fg-3)" },
   ];
 
   return (
@@ -265,7 +274,7 @@ const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
         <button
           type="button"
           onClick={props.onNewProject}
-          class="lift glow-violet relative flex h-9 w-full items-center justify-center gap-2 rounded-lg accent-grad text-[length:var(--ui-font-sm)] font-semibold text-white"
+          class="lift glow-accent relative flex h-9 w-full items-center justify-center gap-2 rounded-lg accent-grad text-[length:var(--ui-font-sm)] font-semibold"
         >
           <Plus size={14} stroke-width={2.4} />
           <span>New project</span>
@@ -274,7 +283,11 @@ const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
           </span>
         </button>
         <div class="mt-2 grid grid-cols-1 gap-1.5">
-          <SidebarMiniButton icon={<Upload size={11} style={{ opacity: 0.7 }} />}>
+          {/* Clone + Overleaf import live in the New-project dialog. */}
+          <SidebarMiniButton
+            icon={<Upload size={11} style={{ opacity: 0.7 }} />}
+            onClick={props.onNewProject}
+          >
             Import
           </SidebarMiniButton>
         </div>
@@ -283,10 +296,10 @@ const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
       <div class="flex-1 space-y-3.5 overflow-auto scroll p-2">
         <SidebarGroup label="Library" items={librarySection()} />
         <Show when={enableSpaces()}>
-          <SidebarGroup label="Spaces" items={spacesSection()} hasAdd />
+          <SidebarGroup label="Spaces · sample" items={spacesSection()} />
         </Show>
         <Show when={enableTags()}>
-          <SidebarGroup label="Tags" items={tagsSection()} />
+          <SidebarGroup label="Tags · sample" items={tagsSection()} />
         </Show>
       </div>
 
@@ -294,12 +307,16 @@ const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
       <div class="border-t border-glass-stroke p-3">
         <button
           type="button"
+          onClick={() => {
+            setPreviousRoute("/projects");
+            navigate("/settings");
+          }}
           class="lift glass-soft flex h-7 w-full items-center justify-center gap-1.5 rounded-md text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
         >
           <span class="h-1.5 w-1.5 rounded-full" style={{ background: "var(--color-accent-1)" }} />
-          <span>Free plan</span>
+          <span class="capitalize">{currentTier()} plan</span>
           <span class="mono text-fg-4">·</span>
-          <span class="text-fg-3">Upgrade</span>
+          <span class="text-fg-3">Manage</span>
         </button>
       </div>
     </div>
@@ -309,19 +326,10 @@ const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
 const SidebarGroup: Component<{
   label: string;
   items: SidebarItem[];
-  hasAdd?: boolean;
 }> = (props) => (
   <div>
     <div class="label-xs mb-1.5 flex items-center justify-between px-2 text-fg-3">
       <span>{props.label}</span>
-      <Show when={props.hasAdd}>
-        <button
-          type="button"
-          class="flex h-4 w-4 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)]"
-        >
-          <Plus size={10} style={{ opacity: 0.6 }} />
-        </button>
-      </Show>
     </div>
     <For each={props.items}>
       {(item) => (
@@ -356,9 +364,11 @@ const SidebarGroup: Component<{
 const SidebarMiniButton: Component<{
   icon: JSX.Element;
   children: JSX.Element;
+  onClick?: () => void;
 }> = (props) => (
   <button
     type="button"
+    onClick={() => props.onClick?.()}
     class="lift glass-soft flex items-center justify-center gap-1.5 rounded-md text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
     style={{ height: "var(--ui-row-sm)" }}
   >
@@ -368,17 +378,35 @@ const SidebarMiniButton: Component<{
 );
 
 // =================================================================
-// Toolbar — Widgets / Sort / View
+// Toolbar — Dashboard / Sort / View
 // =================================================================
 
 const Toolbar: Component = () => {
   const [sortOpen, setSortOpen] = createSignal(false);
+  let sortRef: HTMLDivElement | undefined;
+  installDismiss(() => sortRef, sortOpen, () => setSortOpen(false));
   return (
     <div class="flex items-center gap-2 px-1 pt-1">
-      <WidgetsMenu />
+      <button
+        type="button"
+        onClick={() => setDashboardEnabled(!dashboardEnabled())}
+        class={`lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-sm)] hover:bg-[var(--color-control-fill)] ${
+          dashboardEnabled() ? "text-fg-1" : "text-fg-2"
+        }`}
+        title={dashboardEnabled() ? "Hide the dashboard panel" : "Show activity and cards above the grid"}
+      >
+        <LayoutGrid
+          size={12}
+          style={{
+            opacity: 0.7,
+            color: dashboardEnabled() ? "var(--color-accent-1)" : undefined,
+          }}
+        />
+        <span>Dashboard</span>
+      </button>
 
       <div class="ml-auto flex items-center gap-1.5">
-        <div class="relative">
+        <div class="relative" ref={sortRef}>
           <button
             type="button"
             onClick={() => setSortOpen((v) => !v)}
@@ -393,9 +421,8 @@ const Toolbar: Component = () => {
             <div
               class="glass absolute right-0 top-full z-30 mt-1 w-[180px] rounded-lg"
               style={{ padding: "6px", background: "var(--color-popover-bg)" }}
-              onMouseLeave={() => setSortOpen(false)}
             >
-              <For each={Object.keys(SORT_LABEL) as ProjectsSort[]}>
+              <For each={AVAILABLE_SORTS}>
                 {(key) => {
                   const active = () => defaultSort() === key;
                   return (
@@ -529,7 +556,7 @@ const NewProjectTile: Component<{ onClick: () => void }> = (props) => (
       padding: "var(--ui-pad-card)",
     }}
   >
-    <div class="glow-violet flex h-12 w-12 items-center justify-center rounded-2xl accent-grad">
+    <div class="glow-accent flex h-12 w-12 items-center justify-center rounded-2xl accent-grad">
       <Plus size={18} stroke-width={2.4} />
     </div>
     <div class="text-center">
@@ -568,19 +595,6 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
         >
           {FORMAT_LABEL[props.project.format]}
         </span>
-        <div class="flex items-center gap-1">
-          <span
-            class="flex h-5 w-5 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)]"
-            title="Star"
-          >
-            <Star size={11} class="text-fg-3" />
-          </span>
-          <span
-            class="flex h-5 w-5 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)]"
-          >
-            <MoreHorizontal size={11} class="text-fg-3" />
-          </span>
-        </div>
       </div>
 
       <div
@@ -602,10 +616,6 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
           <span class="truncate" style={{ "max-width": "120px" }}>
             {props.project.rootFile}
           </span>
-        </span>
-        <span class="flex items-center gap-1">
-          <GitBranch size={10} style={{ opacity: 0.6 }} />
-          main
         </span>
       </div>
     </button>
@@ -953,7 +963,7 @@ const NewProjectDialog: Component<{
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
             placeholder="My thesis"
-            class="glass-inset rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-4 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
           />
         </label>
 

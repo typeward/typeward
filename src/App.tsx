@@ -17,6 +17,7 @@ import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
 import { initSupabaseEntitlements } from "~/integrations/supabase/entitlements-source";
 import { startSupabaseSession } from "~/integrations/supabase/session";
+import { initCustomThemes } from "~/themes/custom-themes";
 import {
   installGlobalShortcuts,
   uninstallGlobalShortcuts,
@@ -40,6 +41,7 @@ initSupabaseEntitlements();
 initReferenceProviders();
 initCloudSync();
 initAiProviders();
+initCustomThemes();
 
 /**
  * Default `/` route. After settings load, if the user hasn't completed

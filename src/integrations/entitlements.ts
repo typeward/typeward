@@ -47,8 +47,7 @@ export function useEntitlement(key: EntitlementKey): () => boolean {
  * sites). Returns true if the user is currently entitled; false otherwise.
  *
  * Use `assertEntitlement` instead when you want to short-circuit a command
- * with a thrown error so the surrounding palette/keyboard handler can
- * render an UpgradePrompt fallback.
+ * with a thrown error the surrounding handler can surface.
  */
 export function hasEntitlement(key: EntitlementKey): boolean {
   return currentSource().has(key);

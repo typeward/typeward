@@ -54,9 +54,12 @@ export const NotificationsPanel: Component<{
         opacity: props.open ? "1" : "0",
         "pointer-events": props.open ? "auto" : "none",
         "box-shadow":
-          "0 24px 80px rgb(0 0 0 / 0.45), 0 0 0 1px var(--color-glass-stroke)",
+          "var(--shadow-glass-drop), 0 0 0 1px var(--color-glass-stroke)",
       }}
       aria-hidden={!props.open}
+      // Hidden via transform/opacity, so its buttons would still be in the
+      // tab order without inert (aria-hidden + focusable is a WCAG failure).
+      inert={!props.open}
     >
       <div class="flex h-[44px] flex-shrink-0 items-center gap-2 border-b border-glass-stroke px-3">
         <Bell size={14} style={{ color: "var(--color-accent-1)" }} />

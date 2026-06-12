@@ -16,6 +16,7 @@ import type { Component } from "solid-js";
 import { Show, createResource, createSignal } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
+import { describeIpcError } from "~/integrations/auth/chunked";
 import {
   getSupabaseClient,
   supabaseEnabled,
@@ -82,7 +83,9 @@ const SignInCard: Component = () => {
       setEmail("");
       setPassword("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // describeIpcError: Tauri IPC rejections are serialized error enums
+      // (objects) — String() would render them as "[object Object]".
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -212,15 +215,15 @@ const PlanBadge: Component<{ plan: string }> = (props) => {
         : "Free";
   const bg = () =>
     props.plan === "pro"
-      ? "rgba(139, 92, 246, 0.16)"
+      ? "color-mix(in srgb, var(--color-accent-1) 16%, transparent)"
       : props.plan === "team"
-        ? "rgba(34, 197, 94, 0.16)"
+        ? "color-mix(in srgb, var(--color-ok) 16%, transparent)"
         : "var(--color-control-fill)";
   const color = () =>
     props.plan === "pro"
-      ? "rgb(167, 139, 250)"
+      ? "var(--color-accent-1)"
       : props.plan === "team"
-        ? "rgb(74, 222, 128)"
+        ? "var(--color-ok)"
         : "var(--color-fg-3)";
 
   return (

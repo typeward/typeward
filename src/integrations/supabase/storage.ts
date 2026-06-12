@@ -18,10 +18,10 @@
  */
 
 import {
-  deleteCredential,
-  getCredential,
-  setCredential,
-} from "~/integrations/auth/credentials";
+  deleteChunkedCredential,
+  getChunkedCredential,
+  setChunkedCredential,
+} from "~/integrations/auth/chunked";
 
 const SERVICE = "supabase.session";
 
@@ -29,15 +29,18 @@ function sanitizeAccount(key: string): string {
   return key.replace(/[\\/]/g, "_");
 }
 
+// Chunked storage is load-bearing here: the session bundle is 2–4 KB and
+// Windows Credential Manager caps a single blob at 2560 bytes — un-chunked
+// writes fail and sign-in dies *after* a successful GoTrue login.
 export const keyringSupabaseStorage = {
   async getItem(key: string): Promise<string | null> {
-    return await getCredential({ service: SERVICE, account: sanitizeAccount(key) });
+    return await getChunkedCredential(SERVICE, sanitizeAccount(key));
   },
   async setItem(key: string, value: string): Promise<void> {
     if (!value) return; // keyring rejects empty secrets; treat empty set as remove.
-    await setCredential({ service: SERVICE, account: sanitizeAccount(key) }, value);
+    await setChunkedCredential(SERVICE, sanitizeAccount(key), value);
   },
   async removeItem(key: string): Promise<void> {
-    await deleteCredential({ service: SERVICE, account: sanitizeAccount(key) });
+    await deleteChunkedCredential(SERVICE, sanitizeAccount(key));
   },
 };
