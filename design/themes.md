@@ -2,102 +2,131 @@
 
 ## Built-in themes
 
+Exactly four themes since the 2026-06-11 "Desk Lamp" redesign.
+**Daylight is the app default.**
+
 | Theme | Base | Source design file | Notes |
 |---|---|---|---|
-| **Aurora** | dark | `tokens.css` defaults | Original violet/cyan glass aesthetic |
-| **Obsidian** | dark | `themes/obsidian.css` | Solid dark, no glass translucency |
-| **Graphite** | dark | `themes/graphite.css` | Mid-gray with lighter fg |
-| **Paper** | light | `design_files/themes/Typeward Light.html` | **Replaces** the existing `paper.css` styling with the Light prototype's values |
-| **Catppuccin** | dark | `design_files/themes/Typeward Catppuccin.html` | Mocha variant; pastel pink/peach accents |
-| **Dracula** | dark | `design_files/themes/Typeward Dracula.html` | Purple-pink accent |
-| **Gruvbox** | dark | `design_files/themes/Typeward Gruvbox.html` | Warm earth tones |
-| **Mono** | dark | `design_files/themes/Typeward Mono.html` | High-contrast monochrome |
-| **Nord** | dark | `design_files/themes/Typeward Nord.html` | Cool blue |
-| **Solarized Light** | light | `design_files/themes/Typeward Solarized Light.html` | Cream + selectivity |
-| **Tokyo Night** | dark | `design_files/themes/Typeward Tokyo Night.html` | Indigo / electric blue |
+| **Daylight** | light | `design_files/t1/Typeward.html` (light tokens) + `design_files/sample_identity.txt` / `sample.png` | **Default.** Warm ivory `#F8F4EA`, charcoal ink `#22211E`, near-black primary actions `#101210` (near-flat `.accent-grad` — "no loud gradients"), aged-brass `#B79A5C` text selection, seal-red `#A84935` errors, paper-gray `#D8D0C2` hairlines. No saturated tech colors in chrome; blue only in code syntax |
+| **Lamplight** | dark | `design_files/t1/Typeward.html` (dark tokens) | The "lights out" room: warm black `#0D0C0A`, parchment text, amber `#E8A34D`, lamp-glow ambient |
+| **Aurora** | dark | `tokens.css` defaults | Original violet/cyan glass aesthetic. Still the `:root` token baseline (no `data-theme` attribute) |
+| **Paper** | light | `design_files/old/themes/Typeward Light.html` | Cool white/slate light theme |
+
+Obsidian and Graphite were retired in the Desk Lamp redesign; the seven
+community ports (Catppuccin, Dracula, Gruvbox, Mono, Nord, Solarized Light,
+Tokyo Night) were removed the same day per user direction (HTML prototypes
+remain in `design_files/old/themes/` if any ever come back). Persisted
+selections of removed themes fall back to Daylight via `theme-store`'s
+`read()` validation. `LIGHT_THEMES` in `theme-store.ts` lists the
+light-surface themes for embedded-surface decisions (Markdown preview).
 
 When custom themes are **enabled**, the built-in theme + accent pickers gray out
 (per user spec). The first custom theme becomes the active one until the user
 picks differently.
 
+## Per-theme token groups
+
+Beyond surface/fg tokens, every theme file defines:
+
+- `--syntax-cmd/env/math/comment/bracket/attr` — CodeMirror highlight palette
+  (`CodeMirror.tsx` reads these, so source colors re-skin per theme; the lamp
+  themes use t1's code colors, light themes use deep variants).
+- `--color-accent-fg` — text/icon color on accent surfaces. `.accent-grad`
+  sets `color: var(--color-accent-fg)`: Daylight uses ivory on its ink
+  button, Lamplight flips to ink on its light amber. Explicit `data-accent`
+  palettes reset it to white.
+- `--color-glass-soft-fill` — `.glass-soft` body tint (light themes invert it
+  to a faint ink wash).
+- `--color-text-selection` — CodeMirror + global `::selection` highlight.
+  Defaults to an accent wash; Daylight overrides with brass so selection
+  reads like a highlighter pass on paper (its ink accent would render gray).
+
+## Display typography (added 2026-06-11, reverted same day)
+
+A Source Serif 4 display-type pass (Library heading, onboarding headings,
+dialog titles) was tried and **reverted per user direction** — the app is
+all-Inter again. To re-apply: `npm i @fontsource/source-serif-4`, import
+500/600 weights in `src/App.tsx`, add `--font-display: "Source Serif 4",
+Georgia, "Times New Roman", serif;` to the tokens.css `@theme` block, and
+put the `font-display` utility on: Projects "Library" h1, onboarding h1 +
+pane h2s, the Dialog primitive title, and the NoProject card (bump each
+1–2px — serifs run optically smaller than Inter).
+
 ## Accents
 
-Four accent palettes (Violet-Cyan, Amber-Rose, Emerald-Teal, Indigo-Pink) layer
-on top of any built-in theme. Custom themes embed their own accent — when a
-custom theme is selected, the accent picker is also grayed out.
+The first picker entry is **"Theme default"** — it removes `data-accent`, so
+the active theme's native accent applies (brass on the lamp themes,
+violet/cyan on Aurora). Three explicit palettes (Amber-Rose, Emerald-Teal,
+Indigo-Pink) layer on top of any theme. Custom themes embed their own accent —
+when a custom theme is selected, the accent picker is also grayed out.
 
-## Custom themes
+## Custom themes — shipped 2026-06-12
 
-User-defined themes live as JSON files in the app data directory:
+User-defined themes are JSON files in `<app_data_dir>/themes/` — one file per
+theme, the file stem is the theme id (letters, digits, `-`, `_`). The folder
+is created on demand; Settings → Appearance → Custom themes has **Open
+folder**, **Create sample**, and **Reload** buttons. The sample
+(`harbor.json`, "Harbor" — a deep-sea teal dark theme on the Lamplight base)
+is the working reference: it overrides every token group an author typically
+wants.
 
-```
-<app_data_dir>/typeward/themes/
-├── readme.txt        ← auto-generated explainer + token reference
-├── neon-violet.json
-└── solarized-mod.json
-```
-
-The folder is created on first boot. A `readme.txt` ships with the full token
-reference so users know what's customizable.
-
-### JSON schema
+### File format
 
 ```json
 {
-  "$schema": "https://typeward.app/schemas/theme-v1.json",
-  "name": "Neon Violet",
-  "base": "dark",
+  "name": "Harbor",
+  "base": "lamplight",
   "tokens": {
-    "--color-bg-base": "#0a0014",
-    "--color-fg-1": "#f0e0ff",
-    "--color-fg-2": "#a890c0",
-    "--color-fg-3": "#806090",
-    "--color-fg-4": "#503060",
-    "--color-glass-fill": "rgb(255 255 255 / 0.035)",
-    "--color-glass-stroke": "rgb(255 255 255 / 0.08)",
-    "--color-accent-1": "#c026d3",
-    "--color-accent-2": "#06b6d4",
-    "--color-ok": "#10b981",
-    "--color-warn": "#f59e0b",
-    "--color-err": "#f43f5e"
+    "--color-bg-base": "#0b1418",
+    "--color-accent-1": "#5ec4c0",
+    "...": "any --token the built-in themes define"
   }
 }
 ```
 
-### Fields
+- `name` (required): display name, 1–64 chars.
+- `base` (required): one of `daylight` / `lamplight` / `aurora` / `paper`.
+  Every token the file doesn't override falls through to the base, and the
+  base drives light/dark decisions downstream (Markdown preview prose, boot
+  splash tint, shadow tokens).
+- `tokens`: map of CSS custom property → value. Max 200 tokens; keys must
+  match `--[a-z0-9-]+`; values are capped at 256 chars and reject `;{}<>\`
+  (style-injection guard — see below).
 
-- `name` (required, string): Display name. Must be unique across all theme JSONs.
-- `base` (required, `"dark"` | `"light"`): Drives default shadow tokens + a few
-  helpers that need to know whether the surface is light or dark.
-- `tokens` (required, object): CSS custom property name → value. Any subset is
-  fine; unspecified tokens fall through to `base` defaults (dark or paper).
+### Loading & applying
 
-### Loading
+- `custom_themes_list` IPC (`src-tauri/src/themes.rs`) scans the folder,
+  validates each file, and returns themes + per-file warnings (typo'd token,
+  bad base, symlink, oversized file). Warnings render in the Settings card so
+  a broken file never silently disappears.
+- The frontend runtime (`src/themes/custom-themes.ts`, mounted from
+  `App.tsx` via `initCustomThemes()`) applies the active theme: it sets the
+  built-in base via `setTheme(base)`, sets `data-custom-theme="<id>"` on
+  `<html>`, and injects a `<style>` whose `html[data-custom-theme]` selector
+  out-specifies the `[data-theme]` blocks.
+- No file watcher — edits are picked up via the explicit **Reload** button
+  (deliberate: a watcher on app_data is more machinery than the loop needs).
+- If the active theme's file disappears, the base/built-in theme shows and
+  the Settings card explains; the selection is kept in case the file returns.
+- Persistence: `ui.customThemesEnabled` + `ui.activeCustomTheme` in
+  settings.json. While a custom theme is active the built-in theme and accent
+  pickers gray out (the theme embeds its own accent).
 
-- Rust watches `<app_data_dir>/typeward/themes/` via the same `notify`-based
-  watcher infrastructure used for projects (`src-tauri/src/watcher.rs`).
-- On change, emit `themes-changed` event. Frontend `theme-store` rebuilds the
-  custom theme list and re-applies the active theme if it was the one that
-  changed.
-- Validation: any malformed JSON is skipped with a telemetry warning. The
-  active theme falls back to the default if the user's selection becomes
-  invalid (e.g. they deleted the file).
+### Security note
 
-### UI flow
+Token values end up inside an injected style element, so Rust rejects values
+containing `;` `{` `}` `<` `>` `\` or control characters and the frontend
+re-checks before injection. The local user is trusted, but "paste this theme"
+instructions floating around shouldn't become a CSS-injection vector.
 
-In Settings → Appearance → Custom Themes:
+### Authoring tips
 
-1. Toggle: **Enable custom themes** (default off).
-2. When on: built-in theme + accent grids gray out. Below them, a grid of
-   discovered custom themes appears. Click to activate.
-3. **Open themes folder** button (uses `tauri-plugin-shell` open) so users can
-   add/edit files in their editor of choice.
-4. **Reload** button forces a re-scan (in case the watcher missed something).
-
-### Authoring tips (surfaced in `readme.txt`)
-
-- Start by copying an existing built-in theme JSON (we ship them as references).
-- Test against the editor screen first — that has the most surface variety.
+- Start from the sample: Create sample → Open folder → copy `harbor.json`,
+  rename it, recolor.
+- Test against the editor screen first — it has the most surface variety.
 - Foreground tokens (`--color-fg-1` … `--color-fg-4`) should monotonically
   descend in contrast against `--color-bg-base`. Skipping levels makes the UI
   feel patchy.
+- Set `--color-accent-fg` whenever you change `--color-accent-1/2` — it's the
+  text color sitting on accent surfaces, and an unreadable Recompile button is
+  the most common authoring mistake.

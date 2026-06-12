@@ -1,80 +1,77 @@
-# Widgets shelf — Projects screen
+# Dashboard panel — Projects screen
 
-The center column on the Projects screen has an optional "widget shelf" between
-the top toolbar (Widgets dropdown + search + sort + view toggle) and the project
-grid. The shelf is **hidden by default** — only shows when ≥1 widget is enabled.
+The center column on the Projects screen has an optional **Dashboard** panel
+between the toolbar and the project grid. It replaced the free-floating
+widget shelf (2026-06-12): instead of loose cards appearing when individually
+enabled, there is now one cohesive panel the user turns on or off as a whole,
+with the cards living inside it.
 
-> **Note (2026-05-15):** Compose + Recent activity were originally widgets but
-> got promoted back to the full-width `ComposerHero` panel above the toolbar
-> (the original layout). The widget shelf is now strictly for *additional*
-> optional surfaces — all widgets in the catalog start disabled.
+> History: the original layout had a full-width `ComposerHero` (AI compose
+> preview + activity metrics) above the toolbar. That was deleted 2026-06-11
+> (the library grid is the hero). The dashboard panel is its lightweight,
+> opt-in successor — activity metrics without the AI composer.
 
 ## Activation
 
-1. Click the **Widgets** button (replaces the old "Import" button in toolbar).
-2. Dropdown lists every widget with a toggle. State persists per-user.
-3. As soon as one widget is enabled, the shelf appears below the toolbar.
-4. Disable all of them and the shelf collapses again.
+1. Click **Dashboard** in the toolbar (leftmost, replaces the old Widgets
+   dropdown). The toggle persists (`workspace.dashboardEnabled`).
+2. The panel renders a fixed **Activity** card first, then every enabled
+   card. The panel's **Customize** menu toggles individual cards
+   (persisted under the legacy `workspace.widgets` map).
+3. The panel's **×** hides the whole thing again.
 
-## First-round catalog
+## Layout & interaction
 
-Each widget is a self-contained card (`glass-soft` background, density-aware
-padding). The shelf is a horizontally scrolling row when widgets overflow.
+- One `glass-soft` container with a header row (label · "drag cards to
+  rearrange" hint · Customize · ×).
+- Cards are 300×190 `card-bg-soft` tiles in a horizontally scrolling row;
+  vertical stack on tablet.
+- **Drag & drop reorder** (desktop only): cards are HTML5-draggable; the
+  order persists as `workspace.dashboardOrder` (unknown ids ignored, new
+  cards append in registry order). The Activity card is fixed first and not
+  draggable. Tablet relies on registry order — touch DnD is deliberately
+  out of scope.
 
-| Widget | Description | Status |
+## Cards
+
+| Card | Description | Status |
 |---|---|---|
-| ~~**Compose**~~ | ~~Prompt → new project~~ | **promoted to ComposerHero** (lives above toolbar, not a widget) |
-| ~~**Recent activity**~~ | ~~Timeline of recent edits~~ | **promoted to ComposerHero**'s right-side activity card |
-| **Pinned notes** | A small editable scratchpad. One per user, persists. Markdown rendered. | new |
-| **Focus timer** | Pomodoro: 25/5/15 default, customizable. Counts down + chimes. | new |
-| **Word count goal** | Daily/weekly target across all projects. Progress ring. | new |
-| **Snippets library** | Frequently-used LaTeX/Typst/Markdown snippets, click-to-copy. | new |
-| **Calendar / deadlines** | Project deadlines + system calendar peek. | new (stub) |
-| **AI suggest** | One-line "What would you like to write today?" → suggests project from prompt. | new (stub, needs AI work) |
-| **Quick stats** | Compile count this week, words this week, time spent. | new |
-| **References queue** | A scratch list of papers / URLs to read later. | new |
+| **Activity** (fixed) | Project count, per-format chips, "Continue <last project>" jump-back button. Absorbed the old Library-summary widget. | shipped |
+| **Recent projects** | Last 5 projects, click to open. | shipped |
+| **Pinned notes** | Editable scratchpad, persisted in localStorage. | shipped |
+| **Focus timer** | Pomodoro 25/5/15 with start/pause/reset. State survives navigation (module-scope); no chime yet. | shipped |
 
-## Status legend
+All registered cards default to enabled — the panel itself is the opt-in
+(default off), so first activation shows a full panel rather than an empty
+strip. Future cards from the old wishlist (word-count goal, snippets,
+calendar, references queue, quick stats) come back only when their backing
+features exist.
 
-- **port** = code exists, factor out into widget shape
-- **new** = build from scratch, no AI deps
-- **new (stub)** = build the shell, return placeholder content until backing
-  feature lands
+## Card contract
 
-## Widget contract
-
-Each widget exports:
+Cards register through `src/widgets/registry.ts` (unchanged `WidgetDef`
+interface; the dashboard reads the same registry the shelf did):
 
 ```ts
-interface Widget {
+interface WidgetDef {
   id: string;                   // stable, used in settings persistence
   title: string;
+  description: string;          // shown in the Customize menu
   defaultEnabled: boolean;
-  icon: () => JSX.Element;
-  Render: Component<{ density: Density }>;
-  /** Used to sort widgets in the shelf. Lower = leftmost. */
-  order: number;
+  icon: (size?: number) => JSX.Element;
+  Render: Component;            // body only; the panel provides card chrome
+  order: number;                // fallback order before the user drags
 }
 ```
 
-Widgets register through `src/widgets/registry.ts`. The shelf reads the
-registry + the user's enable map and renders accordingly.
+Implementation: `src/widgets/DashboardPanel.tsx` (panel + Activity card +
+Customize menu + DnD), `src/widgets/builtins.tsx` (card catalog).
+`WidgetsShelf.tsx` / `WidgetsMenu.tsx` were deleted with the shelf.
 
-## v0 shipping set
+## Persistence
 
-Compose + Recent activity now live in the full-width ComposerHero, not the
-widget shelf. Of the optional widgets, only **Pinned notes** is functional;
-the rest are registered as "Coming soon" stubs so users can see the catalog.
-All start disabled — users opt in via the Widgets dropdown.
-
-## Layout
-
-- Single horizontal row when ≤3 widgets enabled.
-- Horizontal scroll on overflow (mouse wheel + scrollbar; touch swipe on tablet).
-- Each widget min-width 280px, max-width 420px. Heights match the tallest
-  widget in the row (CSS grid `grid-template-rows: 1fr`).
-
-## Tablet adaptations
-
-- Shelf collapses to a vertical stack (above the project grid).
-- Widget heights become independent, each min-height 180px.
+| Key (settings.json `workspace`) | Meaning |
+|---|---|
+| `dashboardEnabled` | Panel on/off (default off) |
+| `dashboardOrder` | User-arranged card id order |
+| `widgets` | Per-card enable map (legacy name kept so pre-dashboard toggles carry over) |

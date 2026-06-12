@@ -23,19 +23,34 @@ Approved plan: `~/.claude/plans/research-and-completely-plan-resilient-brook.md`
 | Integ Phase | State | Summary |
 |---|---|---|
 | 0 — Foundations | **complete** (2026-05-22; hardened 2026-05-24) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + scoped capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), free-tier entitlement fallback (`<FeatureGate>` + `<UpgradePrompt>`), `runOauthFlow` driver. HTTP IPC is host allowlisted; `authRef` is host-bound. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). |
-| 1 — References | **complete** (2026-05-22) | Zotero (Better BibTeX local probe + Web API key), Mendeley (OAuth PKCE; flagged maintenance-mode), JabRef (file-based), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which texlive-wasm + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. |
+| 1 — References | **complete** (2026-05-22; Zotero local-API fallback 2026-06-11) | Zotero local (Better BibTeX probe, falling back to Zotero 7's built-in local API — BBT no longer required), Zotero Web (API key), Mendeley (OAuth PKCE; flagged maintenance-mode), JabRef (file-based), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which texlive-wasm + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. |
 | 2 — Cloud storage | **complete** (2026-05-22; hardened 2026-05-24) | Dropbox (longpoll cursor), OneDrive (Graph `delta` with root-relative path stripping), Google Drive (`changes.list` + ID↔path map, `drive.file` scope). iCloud Drive is OS-mediated on macOS (no third-party API). Generic sync engine + local cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/`, conflict resolution writes `<name>.conflict-<ISO>.<ext>` siblings. Remote paths are normalized before cache IO and `.typeward/` targets are rejected. CloudPickerDialog (new-project Cloud branch) + SyncStatusBadge + ConflictResolverDialog. |
 | 3 — Git / GitHub / Overleaf | **complete** (2026-05-22; hardened 2026-05-24) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only and refuses dirty worktrees. SSH out of scope for now. |
 | 4 — AI providers | **complete** (2026-05-22; hardened 2026-05-24) | One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter `aiStream`. Four providers (Claude / ChatGPT / Gemini / Ollama) share the same `AiProvider` shape; one active at a time and entitlement-gated. OpenAI / Anthropic / Gemini keys attach in Rust via `authRef`; status UI uses `credential_exists`. |
 | 5 — Grammar | **complete** (2026-05-23) | Harper via `harper-core` — Rust-native, in-process, zero network. `grammar_check` IPC + CM6 `@codemirror/lint` linter (400ms debounce, 3 quick-fix actions per lint). Gated on `integrations.grammar.enabled` so off = zero IPC. American English only for now. |
 | 6 — Templates | **complete** (2026-05-23) | Manifest-driven (`template.json` with `variables[]` + `files[]`), Handlebars-subset `{{var}}` substitution. 4 built-in templates shipped under `src-tauri/resources/templates/`: latex/article, latex/ieee-conference, latex/beamer, typst/typst-article. `<TemplateGallery>` two-stage dialog wired into new-project flow. Custom templates load from `<app_data>/templates/custom/<id>/`. |
-| 7 — Supabase auth + entitlements | **substantively complete** (2026-05-23; hardened 2026-05-24) | Auth + subscription-driven feature gating only — no license keys, no file storage, no realtime collab. **7.1** `infrastructure/supabase/` with two migrations (plans / subscriptions / profiles / entitlements_map / signup trigger / `get_entitlements()` RPC + shared_templates), `seed.sql` with the free/pro/team catalog + ~20-key entitlement matrix, `seed_test_users.sql` staging seed. **7.2** `@supabase/supabase-js` ^2.106 with a keyring-backed storage adapter (sessions live in `typeward.supabase.session` keyring slots, not localStorage). Reactive `supabaseSession()` signal driven by `onAuthStateChange`. **7.3** AccountSection in Settings (email/password sign-in, plan badge), SubscriptionBadge in TopBar reads `currentTier()`. **7.4** `initSupabaseEntitlements()` swaps the free fallback for a real source on sign-in, with a 7-day-TTL keyring-cached snapshot for offline and stale-result guards after sign-out/account switches. Paid Settings rows, registries, AI activation, and cloud sync startup are gated. **7.5** staging push (`supabase db push` + seeds) is user-driven against `aepfxzsnhjonzevwglgr`. **7.6** Stripe webhook edge function pending — schema already carries `stripe_subscription_id` / `stripe_customer_id` for the webhook to upsert via service-role. |
+| 7 — Supabase auth + entitlements | **complete except Stripe webhook** (2026-05-23; hardened 2026-05-24; staging pushed 2026-06-11) | Auth + subscription-driven feature gating only — no license keys, no file storage, no realtime collab. **7.1** `supabase/` migrations (plans / subscriptions / profiles / entitlements_map / signup trigger / `get_entitlements()` RPC + shared_templates), `seed.sql` with the free/pro/team catalog + ~20-key entitlement matrix, `seed_test_users.sql` staging seed — now living in the dedicated `typeward/infrastructure` repo (sibling checkout `../infrastructure`, moved out 2026-06-12). **7.2** `@supabase/supabase-js` ^2.106 with a keyring-backed storage adapter (sessions live in `typeward.supabase.session` keyring slots, not localStorage; chunked on the frontend because Windows Credential Manager caps blobs at 2560 bytes). Reactive `supabaseSession()` signal driven by `onAuthStateChange`. **7.3** AccountSection in Settings (email/password sign-in, plan badge), SubscriptionBadge in TopBar reads `currentTier()`. **7.4** `initSupabaseEntitlements()` swaps the free fallback for a real source on sign-in, with a 7-day-TTL keyring-cached snapshot for offline and stale-result guards after sign-out/account switches. Paid Settings rows, registries, AI activation, and cloud sync startup are gated. **7.5** staging push DONE 2026-06-11 against `aepfxzsnhjonzevwglgr` (migrations + seeds + test@test.cz → Pro + advisor-driven grant hardening). **7.6** Stripe webhook edge function pending — schema already carries `stripe_subscription_id` / `stripe_customer_id` for the webhook to upsert via service-role. |
+
+### UI/UX overhaul + finish-the-wiring program (2026-06-11 → 2026-06-12)
+
+Detailed per-pass record in `design/STATUS.md` rows G–M; theme spec in `design/themes.md`; widget roster in `design/widgets.md`. Summary:
+
+- **Desk Lamp re-theme** — theme roster cut to exactly four: **Daylight** (new default; t1 light tuned to `design_files/sample_identity.txt` — ivory paper, charcoal ink, near-black primary, brass selection, seal-red errors), **Lamplight** (t1 dark, amber accent), **Aurora** (`tokens.css` baseline), **Paper**. Obsidian/Graphite deleted. New token groups: per-theme `--syntax-*` (CodeMirror colors), `--color-accent-fg` (text on accent surfaces), `--color-text-selection`. Boot splash re-tints from the persisted theme via `src/boot-theme.ts` (external file — CSP forbids inline scripts). A serif display-type experiment was reverted on user direction; the re-apply recipe is preserved in `design/themes.md`.
+- **Full app review + remediation** — 5-dimension review (visual / architecture / security / UX / build); all high and most medium findings fixed, including the 2026-06-11 security hardening pass (see CLAUDE.md security invariants).
+- **Projects screen composition** — ComposerHero deleted; the library grid is the hero. Widget shelf curated to 4 functional opt-in widgets (recent projects, library summary, persisted pinned notes, real Pomodoro focus timer); all stubs removed.
+- **Editor wiring** — focus mode (Mod+Shift+F), vim mode option (`@replit/codemirror-vim` via compartment + settings toggle), auto-compile-on-save option, `stopOnFirstError` → `-halt-on-error`, real exports (compiled-PDF save-as + `export_project_zip` source bundle), double-click PDF inverse search (replaces the toolbar-button/crosshair UX; shift+click retained), dirty-close confirm, in-sidebar new-file creation, SCM tab gated on `.git` presence, Refs tab gated on configured reference providers, selection-visibility fix.
+- **Settings restructure** — nav categories Account / Workspace / Integrations with per-provider subsections (`IntegrationsPanel` takes a `section` prop), live Reset-app-data (`reset_settings` IPC), shortcuts panel driven by the command registry, `validEnum` load-boundary validation for persisted enums.
+- **Supabase login fix** — the "[object Object]" sign-in failure was the Windows Credential Manager 2560-byte blob cap breaking session persistence; fixed with chunked keyring storage (`src/integrations/auth/chunked.ts`). Staging DB fully provisioned (7.5).
+- **Integration friction** — Zotero no longer requires Better BibTeX (Zotero 7 built-in local API fallback, paginated BibTeX export); Ollama auto-probes `127.0.0.1:11434` and lists installed models, with the custom-URL field only shown when unreachable.
+- **Repo/CI hygiene** — `infrastructure/` moved to the dedicated sibling repo; CI builds the `texlive-wasm` sibling before the app (`build.yml`), new `tests.yml` (typecheck + vitest + cargo test); `.gitattributes` line-ending normalization.
+- **2026-06-12 follow-up** (`design/STATUS.md` row N) — locked paid features hide entirely on lower plans (FeatureGate renders nothing; UpgradePrompt deleted); `integrations.ai.enabled` master switch hides every AI surface and deactivates providers when off; **custom themes shipped** (the formerly deferred JSON loader): `src-tauri/src/themes.rs` validates `<app_data>/themes/*.json`, `src/themes/custom-themes.ts` layers tokens over a built-in base, Settings has the full authoring loop (Open folder / Create sample / Reload) with the "Harbor" sample as reference; the widget shelf became the opt-in **Dashboard panel** (fixed Activity card + drag-reorderable cards, persisted enable/order).
+- **Deliberately deferred** (honestly badged "soon" in the UI; build only on explicit request): notifications system, pandoc docx/html exports, PDF annotation flattening, Stripe webhook (7.6), tablet layouts for Projects/Settings screens.
 
 ---
 
 ## Context
 
-Multiplatform editor app ("Typeward") similar to Overleaf, format-agnostic: LaTeX and Typst, with live `.md` file preview. (Jupyter / `.ipynb`, Quarto, Markdown-as-project, and R Markdown / notebook experience were all dropped — see "Scope narrowing — 2026-05-20" below.) Targets desktop (Win/Mac/Linux) and tablets (iPadOS, Android tablets — no phones). Designs already exist in `design_files/` (HTML/CSS/JS prototypes from claude.ai/design): glassmorphism aesthetic, custom Tailwind utilities + CSS custom properties, four built-in themes (Aurora/Obsidian/Graphite/Paper) and four accent palettes. Ships local-first; cloud sync, accounts, and real-time collaboration are future phases. Approach: skeleton → pixel-perfect UI/UX with real desktop compile (vertical slice) → multi-format → tablet → cloud/collab.
+Multiplatform editor app ("Typeward") similar to Overleaf, format-agnostic: LaTeX and Typst, with live `.md` file preview. (Jupyter / `.ipynb`, Quarto, Markdown-as-project, and R Markdown / notebook experience were all dropped — see "Scope narrowing — 2026-05-20" below.) Targets desktop (Win/Mac/Linux) and tablets (iPadOS, Android tablets — no phones). Designs already exist in `design_files/` (HTML/CSS/JS prototypes from claude.ai/design): glassmorphism aesthetic, custom Tailwind utilities + CSS custom properties, four built-in themes and four accent palettes. (The original Aurora/Obsidian/Graphite/Paper roster was replaced 2026-06-11 by the Desk Lamp system — Daylight default / Lamplight / Aurora / Paper, per `design_files/t1`+`t2` and `sample_identity.txt`; see the UI/UX overhaul section above.) Ships local-first; cloud sync, accounts, and real-time collaboration are future phases. Approach: skeleton → pixel-perfect UI/UX with real desktop compile (vertical slice) → multi-format → tablet → cloud/collab.
 
 ---
 
@@ -166,9 +181,9 @@ src/                          # Solid frontend
     pdf/                      # PDF.js viewer with retained scroll/zoom + SyncTeX (Phase 2)
     layout/                   # ResizablePanes, Tabs, Sidebar
   themes/
-    tokens.css                # Default tokens (Aurora)
-    obsidian.css, graphite.css, paper.css
-    accents.ts                # 4 accent palettes
+    tokens.css                # Baseline tokens (Aurora — no data-theme attr)
+    themes/daylight.css, lamplight.css, paper.css   # Daylight is the default
+    accents.css               # 4 accent palettes
     theme-store.ts
   commands/                   # CommandRegistry — toolbar actions, palette, keybindings
   stores/                     # Solid stores (project, editor, settings, autosave)
@@ -228,7 +243,7 @@ What landed:
 - npm package install + `cargo check` clean (Tauri 2.11, Solid 1.9, Vite 6, TypeScript 5.7)
 - Tailwind v4 wired through `@tailwindcss/vite` (CSS-config, no `tailwind.config.js`)
 - Kobalte, lucide-solid, corvu, @solidjs/router installed
-- Theme system: `:root` tokens via `@theme` (Aurora default) + `[data-theme]` overrides for Obsidian/Graphite/Paper + `[data-accent]` for the four palettes
+- Theme system: `:root` tokens via `@theme` (Aurora default) + `[data-theme]` overrides for Obsidian/Graphite/Paper + `[data-accent]` for the four palettes *(roster replaced 2026-06-11 — Daylight default / Lamplight / Aurora / Paper; see the UI/UX overhaul section)*
 - `theme-store.ts` — Solid signals → `<html>` attrs → localStorage
 - Vitest with jsdom, dev-conditions gated on `VITEST` env var (avoids polluting production builds with Solid's dev runtime). 4 passing tests cover theme/accent state + DOM application + persistence.
 - `cargo test` baseline (1 smoke test) wired in `src-tauri/src/lib.rs`
@@ -299,7 +314,7 @@ Original breakdown follows for reference:
 - Editor view handle: `src/stores/editor-view-store.ts` keeps an imperative reference to the active CodeMirror `EditorView` in module scope (not Solid reactive — actions fire from outside Solid's render context). Exposes `currentCursorLine()` and `setCursorLine(line)`.
 - PdfViewer:
   - New `scrollTarget` prop (page + y in PDF pts + generation). When generation changes, the viewer scrolls smoothly and pulses a gradient ribbon at the target Y (`@keyframes synctex-pulse` in utilities.css).
-  - New `onPageClick(page, x, y)` prop. Fires on **shift+click**; click-coords are translated from CSS pixels back to PDF points by dividing by the current zoom scale — exactly what `synctex edit` expects.
+  - New `onPageClick(page, x, y)` prop. Fires on **shift+click** *(2026-06-11: double-click became the primary gesture; shift+click retained)*; click-coords are translated from CSS pixels back to PDF points by dividing by the current zoom scale — exactly what `synctex edit` expects.
 - Editor store gains `pdfScrollTarget` + `gotoSourceIntent` signals with `requestPdfScroll(page, y)` and `requestGotoSource(relPath, line)` mutators. Each carries a strictly-increasing `generation` so re-firing the same target re-triggers effects.
 - Actions: `syncForwardFromCursor()` reads cursor → IPC → bumps pdfScrollTarget. `syncInverseFromPdfClick(page, x, y)` calls IPC and routes the absolute source path back through `pathRelativeTo()` (case-insensitive comparison on Windows) into `requestGotoSource()`.
 - LatexAdapter registers a second command: `latex.syncForward` with Mod+J, scope `editor`, in the Navigation group. It shows up in the palette only while a LaTeX project is open.
@@ -399,7 +414,7 @@ Originally deferred 2026-05-13 with the framing "Supabase auth + realtime collab
 Open design questions for a future collab phase:
 
 - What does collab look like without cloud file storage? (Live-session model where one peer hosts and others join via Yjs awareness/edits, with no Supabase persistence? Bring-your-own-storage via Git/Dropbox/iCloud?)
-- What does the subscription gate? Phase 7's tier matrix (see `infrastructure/supabase/seed.sql`) is the starting point — Pro covers third-party cloud providers and hosted AI/reference integrations; Team gates shared templates and future collab.
+- What does the subscription gate? Phase 7's tier matrix (see `../infrastructure/supabase/seed.sql`) is the starting point — Pro covers third-party cloud providers and hosted AI/reference integrations; Team gates shared templates and future collab.
 
 **Evaluated 2026-06-10 → postponed (decision record, so the research isn't re-done):**
 
@@ -439,7 +454,7 @@ End-to-end manual check on desktop:
 6. Type `\begin{equa` → texlab autocompletes `\begin{equation}`; warnings underline as expected
 7. Click Compile → see compile log, PDF appears in right pane
 8. Edit → recompile → PDF updates
-9. Open Settings → switch theme to Obsidian → all surfaces re-skin instantly
+9. Open Settings → switch theme to Lamplight → all surfaces re-skin instantly
 10. Switch accent palette → gradients, focus rings, active states all update
 11. Resize the three panes → smooth, persists across reload
 
@@ -466,10 +481,10 @@ Automated:
 
 ## Open items deliberately deferred
 
-- **Vim mode binding plugin selection** — open
+- ~~**Vim mode binding plugin selection**~~ → **done 2026-06-11.** `@replit/codemirror-vim` behind a Settings → Editor toggle, loaded via a CM6 compartment so toggling doesn't remount the editor.
 - **Whether to bundle the Typst binary vs detect-system** — decide per-platform
 - **Smart per-page PDF diff** and **sync-to-cursor toggle** — original Phase 2 deferrals
-- ~~**Cloud-storage push side wiring to autosave** (Integ Phase 2)~~ → **done 2026-06-10.** Saves (`saveActiveFile`/`saveAllDirtyFiles`) feed `notifyLocalSave` → `engine.queuePush` (1.5s debounce, 15s retry), serialized with pull, rev-keyed echo suppression. Snapshot autosave does not push. Remaining: conflict detection still mtime-based (rev-manifest is the robust fix), and local deletions / remote-delete-vs-local-edit aren't synced.
+- ~~**Cloud-storage push side wiring to autosave** (Integ Phase 2)~~ → **done 2026-06-10; conflict hardening 2026-06-11.** Saves (`saveActiveFile`/`saveAllDirtyFiles`) feed `notifyLocalSave` → `engine.queuePush` (1.5s debounce, 15s retry), serialized with pull, rev-keyed echo suppression. Snapshot autosave does not push. A per-file `sync-state.json` manifest (provider rev + local content hash) now drives conflict detection, deletion push, and remote-delete-vs-local-edit preservation; only the two-sided-conflict *winner* decision is still mtime-based (the loser is always kept as a `.conflict-*` sidecar).
 - **Google Drive folder-chain auto-creation on upload** (Integ Phase 2.4) — currently throws if a file's parent folder isn't already in the id↔path map. Cleaner approach is needed before this is a normal user path.
 - **Conversation persistence + selection-driven AI commands** (Integ Phase 4 polish) — chat stays in memory per session; "Explain selection" / "Rewrite paragraph" haven't landed as commands yet.
 - ~~**Save-as-template** (Integ Phase 6)~~ → **done 2026-06-10.** `template_save` IPC captures the open project into `<app_data>/templates/custom/<id>/` (excludes `.typeward/`/`.git/`, symlinks, and LaTeX build junk; copies the rest verbatim and writes a `template.json`). Reachable via the "Save project as template" command → `<SaveTemplateDialog>` (mounted at App root). Variable extraction is still manual — authors add `variables`/`files[*].template` to the generated manifest by hand.
@@ -477,7 +492,7 @@ Automated:
 - **SSH transport for git** — HTTPS + PAT covers the integration phase's scope; SSH agent forwarding + host verification is its own UX surface.
 - **iPadOS target + UIDocumentPicker for iCloud Drive** — both wait for the Tauri iOS target to be exercised.
 - **Stripe webhook edge function** (Integ Phase 7.6) — lands once Stripe products + prices exist. Schema already carries `stripe_subscription_id` / `stripe_customer_id` for the webhook to upsert via service-role; until then `subscriptions` rows are inserted by hand in Supabase Studio or via `seed_test_users.sql`.
-- **Staging push** (Integ Phase 7.5) — `supabase db push` against `aepfxzsnhjonzevwglgr` is user-driven; the migrations and seeds are committed, waiting to be applied.
+- ~~**Staging push** (Integ Phase 7.5)~~ → **done 2026-06-11.** Migrations + seeds applied to `aepfxzsnhjonzevwglgr` via the Supabase MCP; test@test.cz signs in with the Pro plan badge. Future pushes follow the CLI flow in `../infrastructure/README.md`.
 
 Resolved by the integrations program:
 
