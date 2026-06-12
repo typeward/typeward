@@ -1,0 +1,1388 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8"></meta>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"></meta>
+<title>Typeward — A quieter place for serious writing.</title>
+<meta name="description" content="Typeward is a local-first LaTeX editor. No cloud. No timeouts. No compromise."></meta>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='8' y='10' width='16' height='16' fill='%231C1917'/%3E%3C/svg%3E"></link>
+<script>
+(function(){
+  try{
+    var t = localStorage.getItem('typeward-theme');
+    if(!t){ t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
+    document.documentElement.setAttribute('data-theme', t);
+  }catch(e){}
+  document.documentElement.classList.add('js');
+})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com"></link>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"></link>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"></link>
+<style>
+/* ============================================================
+   TYPEWARD — "The Desk Lamp"
+   One page, two rooms: a scholar's desk in daylight,
+   and the same desk after the lights go out.
+   ============================================================ */
+
+:root{
+  --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+/* ---------- Theme tokens ---------- */
+html[data-theme="light"]{
+  --bg:        #FAF6EE;
+  --bg2:       #F3EDE0;
+  --fg:        #1C1917;
+  --fg60:      rgba(28,25,23,0.60);
+  --fg35:      rgba(28,25,23,0.35);
+  --line:      rgba(28,25,23,0.15);
+  --faint:     rgba(28,25,23,0.08);
+  --accent:    #B07818;
+  --code-blue: #2456A6;
+  --code-green:#3D7A4A;
+  --code-red:  #A63B3B;
+  --sel:       rgba(176,120,24,0.22);
+  --btn-bg:    #1C1917;
+  --btn-fg:    #FAF6EE;
+  --btn-r:     6px;
+  --nav-bg:    rgba(250,246,238,0.8);
+  --win-chrome:#F3EDE0;
+  --win-bg:    #FDFBF5;
+  --win-line:  rgba(28,25,23,0.12);
+  --win-shadow: 0 30px 70px rgba(28,25,23,0.10), 0 8px 22px rgba(28,25,23,0.06);
+  --sheet-bg:  #F6F0E3;
+  --sheet-line:rgba(28,25,23,0.10);
+  --grain-o:   0.10;
+  --glow-o:    0;
+  --card-bg:   transparent;
+  --card-border: rgba(28,25,23,0.15);
+  --card-r:    2px;
+  --card-blur: 0px;
+  --ghost-bg:  transparent;
+}
+html[data-theme="dark"]{
+  --bg:        #0D0C0A;
+  --bg2:       #14120E;
+  --fg:        #EDE6D8;
+  --fg60:      rgba(237,230,216,0.60);
+  --fg35:      rgba(237,230,216,0.35);
+  --line:      rgba(237,230,216,0.10);
+  --faint:     rgba(237,230,216,0.05);
+  --accent:    #E8A34D;
+  --ember-deep:#C2691E;
+  --code-blue: #8FB0E8;
+  --code-green:#94C2A0;
+  --code-red:  #D9907E;
+  --sel:       rgba(232,163,77,0.30);
+  --btn-bg:    #E8A34D;
+  --btn-fg:    #16120D;
+  --btn-r:     999px;
+  --nav-bg:    rgba(13,12,10,0.72);
+  --win-chrome:#16130F;
+  --win-bg:    #121009;
+  --win-line:  rgba(237,230,216,0.10);
+  --win-shadow: 0 36px 90px rgba(0,0,0,0.55), 0 0 80px rgba(232,163,77,0.07);
+  --sheet-bg:  #15120D;
+  --sheet-line:rgba(237,230,216,0.07);
+  --grain-o:   0.16;
+  --glow-o:    1;
+  --card-bg:   rgba(255,255,255,0.045);
+  --card-border: rgba(255,255,255,0.09);
+  --card-r:    16px;
+  --card-blur: 22px;
+  --ghost-bg:  rgba(255,255,255,0.05);
+}
+
+/* ---------- Base ---------- */
+*, *::before, *::after{ box-sizing:border-box; }
+html{ scroll-behavior:smooth; }
+body{
+  margin:0;
+  font-family:var(--serif);
+  font-size:17px;
+  line-height:1.65;
+  background:var(--bg);
+  color:var(--fg);
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+::selection{ background:var(--sel); }
+a{ color:inherit; text-decoration:none; }
+p{ margin:0 0 1em; text-wrap:pretty; }
+h1,h2,h3{ font-weight:500; margin:0; text-wrap:balance; }
+button{ font:inherit; color:inherit; background:none; border:none; padding:0; cursor:pointer; }
+:focus-visible{ outline:2px solid var(--accent); outline-offset:3px; }
+
+/* color cross-fade only while switching themes */
+html.theme-anim body,
+html.theme-anim main *:not(svg):not(path):not(line):not(circle):not(text){
+  transition: background-color .4s ease, color .4s ease, border-color .4s ease, box-shadow .4s ease;
+}
+
+/* the "lights" — page brightness dip during the lamp transition */
+#page{ position:relative; z-index:1; transition: filter .55s ease; }
+html.dimming #page{ filter: brightness(0.35) saturate(0.6); transition: filter .3s ease-in; }
+
+.wrap{ max-width:1280px; margin:0 auto; padding:0 48px; position:relative; }
+
+/* ---------- Fixed furniture: grid, grain, crop marks, margin rule ---------- */
+#dotgrid{
+  position:fixed; inset:0; z-index:0; pointer-events:none;
+  background-image: radial-gradient(var(--faint) 1px, transparent 1px);
+  background-size: 24px 24px;
+  opacity:.5;
+}
+#grain{
+  position:fixed; inset:-50px; z-index:60; pointer-events:none;
+  opacity: var(--grain-o);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.5 0 0 0 0 0.45 0 0 0 0 0.38 0 0 0 0.5 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.crop{ position:fixed; width:14px; height:14px; z-index:55; pointer-events:none; }
+.crop::before, .crop::after{ content:""; position:absolute; background:var(--fg35); }
+.crop::before{ width:14px; height:1px; }
+.crop::after{ width:1px; height:14px; }
+.crop.tl{ top:10px; left:10px; }
+.crop.tr{ top:10px; right:10px; transform:scaleX(-1); }
+.crop.bl{ bottom:10px; left:10px; transform:scaleY(-1); }
+.crop.br{ bottom:10px; right:10px; transform:scale(-1); }
+.crop::before{ top:0; left:0; } .crop::after{ top:0; left:0; }
+
+#margin-rule{
+  position:fixed; top:0; bottom:0; left:72px; width:9px; z-index:2; pointer-events:none;
+  border-left:1px solid var(--line);
+  background-image: repeating-linear-gradient(to bottom, var(--line) 0 1px, transparent 1px 48px);
+  background-size: 6px 48px;
+  background-repeat: repeat-y;
+  background-position: 0 24px;
+}
+#margin-rule::before, #margin-rule::after{
+  content:"×"; position:absolute; left:-5px; font-family:var(--mono);
+  font-size:10px; color:var(--fg35); background:var(--bg);
+  line-height:1; padding:3px 0;
+}
+#margin-rule::before{ top:88px; }
+#margin-rule::after{ bottom:24px; }
+
+/* the ambient lamp glow from the top of the viewport (dark only) */
+#lampglow{
+  position:fixed; top:-10vh; left:30%; right:-10%; height:75vh; z-index:40;
+  pointer-events:none; mix-blend-mode:screen;
+  background:
+    radial-gradient(55% 65% at 62% 0%, rgba(232,163,77,0.30), transparent 70%),
+    radial-gradient(30% 45% at 62% 0%, rgba(194,105,30,0.25), transparent 70%);
+  opacity: var(--glow-o);
+  transition: opacity .6s ease;
+  transform-origin: 62% 0%;
+}
+html.blooming #lampglow{ animation: bloom .6s ease-out; }
+@keyframes bloom{
+  from{ opacity:0; transform:scale(0.96); }
+  to  { opacity:var(--glow-o); transform:scale(1); }
+}
+
+/* registration marks */
+.regmark{
+  position:absolute; font-family:var(--mono); font-size:10px;
+  color:var(--fg); opacity:.22; letter-spacing:.6em; pointer-events:none;
+  user-select:none;
+}
+
+/* margin annotation rail */
+.margin-note{
+  position:absolute; left:-138px; width:78px; top:0;
+  text-align:right; font-size:10.5px; line-height:1.7;
+  color:var(--fg35); letter-spacing:.04em;
+  font-style:italic;
+}
+.margin-note .sc{ font-style:normal; text-transform:uppercase; letter-spacing:.14em; font-size:10px; }
+
+/* ---------- Small-caps label ---------- */
+.label{
+  font-family:var(--serif); font-style:normal;
+  text-transform:uppercase; font-size:11px; letter-spacing:.16em;
+  color:var(--fg60); font-weight:500;
+}
+.latex-logo{ letter-spacing:.02em; }
+.latex-logo sup{ font-size:.78em; vertical-align:.18em; margin:0 -.12em 0 -.06em; }
+.latex-logo sub{ font-size:.78em; vertical-align:-.18em; margin:0 -.1em 0 -.04em; }
+
+/* ---------- Buttons ---------- */
+.btn{
+  display:inline-flex; align-items:center; gap:10px;
+  font-family:var(--serif); font-size:16.5px; font-weight:500;
+  padding:13px 26px; border-radius:var(--btn-r);
+  border:1px solid transparent;
+  transition: transform .15s ease, box-shadow .25s ease, background-color .2s ease, border-color .2s ease;
+  cursor:pointer; white-space:nowrap;
+}
+.btn-primary{ background:var(--btn-bg); color:var(--btn-fg); }
+.btn-primary:hover{ transform:translateY(-1px); }
+html[data-theme="dark"] .btn-primary:hover{ box-shadow:0 0 28px rgba(232,163,77,0.35); }
+html[data-theme="light"] .btn-primary:hover{ box-shadow:0 6px 18px rgba(28,25,23,0.18); }
+.btn-secondary{
+  border-color:var(--line); color:var(--fg); background:var(--ghost-bg);
+}
+html[data-theme="dark"] .btn-secondary{ backdrop-filter: blur(10px); }
+.btn-secondary:hover{ border-color:var(--fg60); }
+.btn-sm{ padding:9px 20px; font-size:15px; }
+.btn .arrow{ display:inline-block; transition:transform .2s ease; }
+.btn:hover .arrow{ transform:translateX(3px); }
+
+/* ---------- Header ---------- */
+header{
+  position:sticky; top:0; z-index:50;
+  border-bottom:1px solid var(--line);
+  transition: background-color .3s ease, backdrop-filter .3s ease;
+}
+header.scrolled{ background:var(--nav-bg); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+.header-in{
+  display:flex; align-items:center; gap:34px;
+  height:78px; max-width:1280px; margin:0 auto; padding:0 48px;
+}
+.logo{ font-size:27px; font-weight:600; letter-spacing:-.01em; margin-right:auto; }
+nav{ display:flex; gap:30px; align-items:center; }
+nav a{ font-size:15.5px; color:var(--fg60); transition:color .2s ease; position:relative; }
+nav a:hover{ color:var(--fg); }
+.vsep{ width:1px; height:22px; background:var(--line); }
+
+/* ---------- The pull-cord ---------- */
+#cord{
+  position:relative; align-self:flex-start;
+  width:34px; height:64px; margin-left:-4px;
+  display:flex; justify-content:center;
+  cursor:pointer;
+}
+#cord svg{ overflow:visible; transition:transform .15s ease; }
+#cord:hover svg{ transform:translateY(2px); }
+#cord.pulling svg{ animation:cordpull .45s cubic-bezier(.34,1.6,.5,1); }
+@keyframes cordpull{
+  0%{ transform:translateY(0); }
+  35%{ transform:translateY(6px); }
+  100%{ transform:translateY(0); }
+}
+#cord .cord-line{ stroke:var(--fg60); stroke-width:1.25; }
+#cord .cord-ring{ stroke:var(--fg60); stroke-width:1.25; fill:none; transition:fill .3s ease, stroke .3s ease; }
+#cord:hover .cord-ring{ stroke:var(--fg); }
+html[data-theme="dark"] #cord .cord-ring{ stroke:var(--accent); fill:rgba(232,163,77,0.15); }
+html[data-theme="dark"] #cord .cord-line{ stroke:var(--fg35); }
+#cord .cord-tip{ font-family:var(--mono); font-size:9px; fill:var(--fg35); opacity:0; transition:opacity .2s ease; }
+#cord:hover .cord-tip{ opacity:1; }
+
+/* ============================================================
+   HERO
+   ============================================================ */
+.hero{ position:relative; overflow:hidden; padding:84px 0 96px; }
+.hero-grid{
+  display:grid; grid-template-columns: minmax(420px, 500px) 1fr;
+  gap:64px; align-items:start;
+}
+.hero-copy{ padding-top:36px; position:relative; z-index:3; }
+.eyebrow{ margin-bottom:26px; display:block; }
+
+.headline{
+  font-size:clamp(40px, 5.5vw, 64px);
+  line-height:1.12; font-weight:500; letter-spacing:-.015em;
+  min-height:2.28em;
+}
+.headline .w{ white-space:nowrap; display:inline; }
+.headline .c.sel{ background:var(--sel); }
+html[data-theme="light"] .headline .c.new{ box-shadow: inset 0 -3px 0 var(--accent); transition: box-shadow .6s ease .4s; }
+html[data-theme="light"] .headline .tw:has(.u.on) .c.new{ box-shadow:none; }
+html[data-theme="dark"] .headline .c.new{ color:var(--accent); text-shadow:0 0 14px rgba(232,163,77,0.38); }
+.headline .tw{ position:relative; }
+.headline .tw .u{
+  position:absolute; left:0; right:0; bottom:-7px; height:2px;
+  background:var(--accent); transform:scaleX(0); transform-origin:left;
+  transition:transform .7s cubic-bezier(.5,0,.2,1);
+}
+.headline .tw .u.on{ transform:scaleX(1); }
+.caret{
+  display:inline-block; width:2px; height:.92em; margin-left:2px;
+  background:var(--fg); vertical-align:-.12em;
+  animation:blink 1.06s step-end infinite;
+  transition:opacity .5s ease;
+}
+.caret.done{ animation:blink .53s step-end 4; }
+.caret.gone{ opacity:0; }
+@keyframes blink{ 0%,100%{ opacity:1; } 50%{ opacity:0; } }
+
+.hero-divider{
+  display:flex; align-items:center; gap:10px; margin:30px 0 28px;
+  color:var(--accent);
+}
+.hero-divider .ast{ font-size:18px; line-height:1; }
+.hero-divider .rule{ width:96px; height:1px; background:var(--line); }
+
+.sub{ font-size:22px; font-style:italic; color:var(--fg); margin-bottom:14px; }
+.lede{ font-size:17px; color:var(--fg60); max-width:42ch; margin-bottom:34px; }
+
+.cta-row{ display:flex; gap:14px; align-items:center; margin-bottom:18px; }
+.platform{
+  font-family:var(--mono); font-size:11.5px; color:var(--fg35);
+  letter-spacing:.02em; margin-bottom:0;
+}
+
+/* staggered post-typing reveal */
+html.js .hero-stagger{ opacity:0; transform:translateY(12px); transition:opacity .6s ease, transform .6s ease; }
+html.js .hero-stagger.in{ opacity:1; transform:none; }
+
+/* Euclid construction */
+.euclid{ margin-top:54px; }
+.euclid svg{ display:block; overflow:visible; }
+.euclid .stroke{ stroke:var(--fg); stroke-width:1.25; fill:none; opacity:.30; }
+.euclid .stroke.dashed{ stroke-dasharray:4 5; opacity:.25; }
+.euclid .pt{ fill:var(--fg); opacity:.45; }
+.euclid text{ font-family:var(--serif); font-style:italic; font-size:13px; fill:var(--fg60); }
+
+/* ---------- The desk: stacked papers + editor window ---------- */
+.desk{ position:relative; min-height:660px; z-index:2; }
+.sheet{
+  position:absolute; background:var(--sheet-bg);
+  border:1px solid var(--sheet-line);
+  box-shadow: 0 14px 40px rgba(28,25,23,0.06);
+  padding:36px 30px;
+  font-style:italic; color:var(--fg35); font-size:13.5px; line-height:2.1;
+  overflow:hidden;
+}
+html[data-theme="dark"] .sheet{ box-shadow: 0 14px 40px rgba(0,0,0,0.4); }
+.sheet-1{ width:480px; height:560px; right:-64px; top:-8px; transform:rotate(3.5deg); }
+.sheet-2{ width:440px; height:520px; right:120px; top:30px; transform:rotate(-5deg); }
+.sheet .corner{ position:absolute; top:18px; right:22px; font-size:11px; font-style:italic; }
+.sheet .pageno{ position:absolute; bottom:18px; left:0; right:0; text-align:center; font-size:11px; }
+.sheet .qed{ position:absolute; bottom:52px; right:28px; font-size:12px; }
+.sheet .scrawl{ opacity:.7; }
+
+.window{
+  position:relative; z-index:3; margin-top:64px;
+  border:1px solid var(--win-line); border-radius:10px;
+  background:var(--win-bg);
+  box-shadow:var(--win-shadow);
+  overflow:hidden;
+  font-family:var(--mono); font-size:11.5px;
+}
+.titlebar{
+  display:flex; align-items:center; height:40px;
+  background:var(--win-chrome); border-bottom:1px solid var(--win-line);
+  padding:0 14px; gap:10px;
+}
+.dots{ display:flex; gap:7px; }
+.dot{ width:11px; height:11px; border-radius:50%; }
+.dot.r{ background:#E0564B; } .dot.y{ background:#E0A33E; } .dot.g{ background:#5FA855; }
+html[data-theme="dark"] .dot{ filter:saturate(.75) brightness(.85); }
+.tab{
+  display:flex; align-items:center; gap:7px; margin-left:14px;
+  font-size:11px; color:var(--fg60);
+  background:var(--win-bg); border:1px solid var(--win-line); border-bottom:none;
+  border-radius:6px 6px 0 0; padding:5px 14px; align-self:flex-end;
+}
+.titlebar .pdf-label{ margin-left:auto; font-size:11px; color:var(--fg35); display:flex; gap:14px; }
+
+.panes{ display:grid; grid-template-columns: 1.12fr 1fr; min-height:470px; }
+.code-pane{ padding:14px 0; border-right:1px solid var(--win-line); overflow:hidden; }
+.codeline{ display:flex; line-height:1.78; white-space:pre; }
+.codeline .ln{
+  width:34px; flex:none; text-align:right; padding-right:12px;
+  color:var(--fg35); opacity:.7; user-select:none; font-size:10.5px; line-height:inherit;
+  padding-top:1px;
+}
+.codeline code{ font-family:var(--mono); font-size:11.5px; color:var(--fg60); }
+.tok-cmd{ color:var(--code-blue); }
+.tok-env{ color:var(--code-green); }
+.tok-math{ color:var(--code-red); }
+
+/* The PDF page: always cream — a lit manuscript in a dark room */
+.pdf-pane{
+  background:#FBF7EF; color:#1C1917; position:relative;
+  font-family:var(--serif); padding:32px 24px; font-size:12.5px; line-height:1.6;
+}
+html[data-theme="dark"] .pdf-pane{ box-shadow: -1px 0 0 rgba(0,0,0,.4), 0 0 60px rgba(232,163,77,0.10) inset; }
+.pdf-title{ text-align:center; font-size:18px; font-weight:500; margin-bottom:4px; }
+.pdf-date{ text-align:center; font-size:11.5px; margin-bottom:18px; }
+.pdf-sec{ font-weight:600; font-size:13px; margin:14px 0 6px; }
+.pdf-pane p{ margin:0 0 8px; }
+.pdf-math{ font-style:italic; }
+.pdf-eq{ display:flex; align-items:center; justify-content:center; gap:12px; margin:14px 0; font-style:italic; font-size:13px; white-space:nowrap; }
+.pdf-eq .eqno{ font-style:normal; font-size:11px; margin-left:auto; }
+.pdf-eq .int{ font-size:24px; font-style:normal; position:relative; top:-1px; }
+.pdf-eq sup, .pdf-eq sub{ font-size:9px; font-style:normal; }
+.pdf-pageno{ position:absolute; bottom:14px; left:0; right:0; text-align:center; font-size:11px; }
+.commdiag{ display:block; margin:10px auto; }
+.commdiag text{ font-family:var(--serif); font-size:13px; fill:#1C1917; }
+.commdiag .fn{ font-style:italic; font-size:11px; }
+.commdiag line, .commdiag path{ stroke:#1C1917; stroke-width:1; fill:none; }
+
+/* compile-on-scroll states */
+html.js .pdf-render{ opacity:0; transition:opacity .8s ease; }
+html.js .compiled .pdf-render{ opacity:1; }
+.pdf-skeleton{ position:absolute; inset:32px 24px; display:flex; flex-direction:column; gap:9px; opacity:1; transition:opacity .3s ease; }
+.compiled .pdf-skeleton{ opacity:0; pointer-events:none; }
+html:not(.js) .pdf-skeleton{ display:none; }
+.skel{ height:9px; background:rgba(28,25,23,0.07); border-radius:2px; }
+.skel.t{ height:14px; width:60%; margin:0 auto 10px; }
+.skel.w80{ width:80%; } .skel.w60{ width:60%; } .skel.w90{ width:90%; } .skel.w40{ width:40%; }
+
+.statusbar{
+  display:flex; align-items:center; height:30px; padding:0 14px;
+  border-top:1px solid var(--win-line); background:var(--win-chrome);
+  font-size:10.5px; color:var(--fg35); gap:16px;
+}
+.statusbar .right{ margin-left:auto; display:flex; gap:14px; align-items:center; }
+.status-dot{ width:7px; height:7px; border-radius:50%; background:var(--fg35); transition:background .3s ease, box-shadow .3s ease; }
+.status-dot.busy{ background:var(--accent); animation:pulse 1s ease infinite; }
+.status-dot.ok{ background:#5FA855; }
+html[data-theme="dark"] .status-dot.ok{ box-shadow:0 0 8px rgba(95,168,85,.6); }
+@keyframes pulse{ 50%{ opacity:.4; } }
+
+/* ---------- The beam (dark hero) ---------- */
+.beam{
+  position:absolute; top:-12%; bottom:-6%; right:16%; width:430px;
+  z-index:1; pointer-events:none; opacity:0; visibility:hidden;
+}
+html[data-theme="dark"] .beam{
+  opacity:1; visibility:visible;
+  animation: breathe 12s ease-in-out infinite;
+}
+html.blooming[data-theme="dark"] .beam{ animation: beambloom .55s ease-out, breathe 12s ease-in-out .55s infinite; }
+@keyframes beambloom{ from{ opacity:0; transform:scale(.96); } to{ opacity:1; transform:scale(1); } }
+@keyframes breathe{ 0%,100%{ opacity:.9; } 50%{ opacity:1.0; } }
+.beam-wide{
+  position:absolute; inset:0;
+  background:linear-gradient(180deg, rgba(194,105,30,0.55) 0%, rgba(232,163,77,0.34) 36%, rgba(232,163,77,0.10) 68%, transparent 92%);
+  filter:blur(95px); opacity:.55;
+}
+.beam-core{
+  position:absolute; top:0; bottom:14%; left:50%; width:110px; margin-left:-55px;
+  background:linear-gradient(180deg, rgba(255,205,140,0.75) 0%, rgba(232,163,77,0.40) 45%, transparent 88%);
+  filter:blur(34px); opacity:.6;
+}
+.beam-pool{
+  position:absolute; top:-60px; left:50%; width:520px; height:340px; margin-left:-260px;
+  background:radial-gradient(50% 50% at 50% 30%, rgba(232,163,77,0.5), transparent 70%);
+  filter:blur(60px); opacity:.5;
+}
+
+/* ============================================================
+   SECTIONS
+   ============================================================ */
+section{ position:relative; }
+.section-pad{ padding:104px 0; }
+.section-rule{ height:1px; background:var(--line); transform:scaleX(0); transform-origin:left; transition:transform 1s cubic-bezier(.4,0,.2,1); }
+.section-rule.drawn{ transform:scaleX(1); }
+html:not(.js) .section-rule{ transform:scaleX(1); }
+
+.sec-head{ display:flex; align-items:baseline; gap:18px; margin-bottom:18px; }
+.sec-num{ font-weight:600; font-size:24px; }
+.sec-title{ font-weight:600; font-size:clamp(28px, 3vw, 36px); letter-spacing:-.01em; }
+
+/* generic scroll reveal */
+html.js .reveal{ opacity:0; transform:translateY(12px); transition:opacity .7s ease, transform .7s ease; }
+html.js .reveal.in{ opacity:1; transform:none; }
+
+/* ---------- Feature strip ---------- */
+.strip{ border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+.strip-grid{ display:grid; grid-template-columns:repeat(3, 1fr); }
+.strip-item{ display:flex; gap:18px; padding:38px 36px; align-items:flex-start; }
+.strip-item + .strip-item{ border-left:1px solid var(--line); }
+.strip-item svg{ flex:none; margin-top:4px; }
+.strip-item .stroke{ stroke:var(--fg); stroke-width:1.25; fill:none; opacity:.65; }
+.strip-item .dashed{ stroke-dasharray:2 3; }
+.strip-item h3{ font-size:17.5px; font-weight:600; margin-bottom:3px; }
+.strip-item p{ font-size:15px; color:var(--fg60); margin:0; max-width:30ch; }
+
+/* ---------- Philosophy: amsthm ---------- */
+.philosophy .abstract{
+  max-width:620px; margin:0 0 52px;
+}
+.abstract .ab-label{ font-weight:600; font-style:normal; }
+.abstract p{ font-size:16.5px; color:var(--fg60); text-align:justify; hyphens:auto; }
+.thm-block{ max-width:680px; margin-bottom:30px; }
+.thm-block .thm-head{ font-weight:600; font-style:normal; }
+.thm-block .thm-name{ font-weight:400; font-style:normal; }
+.thm-body{ font-style:italic; }
+.thm-block.def .thm-body{ font-style:normal; }
+.proof{ max-width:680px; font-style:normal; }
+.proof .proof-label{ font-style:italic; }
+.tombstone{
+  display:inline-block; width:9px; height:9px; margin-left:8px;
+  border:1.4px solid var(--fg); vertical-align:baseline;
+  background:transparent; transition:background .8s ease .2s;
+}
+.tombstone.filled{ background:var(--fg); }
+html:not(.js) .tombstone{ background:var(--fg); }
+
+/* ---------- Performance figure ---------- */
+.figure{ margin:46px auto 0; max-width:760px; }
+.figure svg{ display:block; width:100%; height:auto; overflow:visible; }
+.fig-caption{
+  margin-top:20px; font-size:14.5px; color:var(--fg60); text-align:center;
+}
+.fig-caption .figno{ font-weight:600; color:var(--fg); }
+.figure .ax{ stroke:var(--fg60); stroke-width:1.25; fill:none; }
+.figure .tick{ stroke:var(--fg35); stroke-width:1; }
+.figure .ticklabel{ font-family:var(--mono); font-size:10.5px; fill:var(--fg35); }
+.figure .axlabel{ font-family:var(--serif); font-style:italic; font-size:13.5px; fill:var(--fg60); }
+.figure .timeout{ stroke:var(--fg35); stroke-width:1; stroke-dasharray:5 5; }
+.figure .timeout-label{ font-family:var(--mono); font-size:10.5px; fill:var(--fg35); }
+.figure .curve{ fill:none; stroke-width:1.6; }
+.figure .curve.overleaf{ stroke:var(--fg35); }
+.figure .curve.typeward{ stroke:var(--accent); }
+.figure .mark{ font-family:var(--serif); font-size:15px; }
+.figure .mark.bad{ fill:var(--code-red); }
+.figure .mark.good{ fill:var(--accent); }
+.figure .curvelabel{ font-family:var(--serif); font-style:italic; font-size:13px; fill:var(--fg60); }
+.figure .curvelabel.tw{ fill:var(--accent); }
+html.js .fig-fade{ opacity:0; transition:opacity .6s ease; }
+html.js .fig-fade.in{ opacity:1; }
+
+/* ---------- Features grid ---------- */
+.features{ position:relative; }
+.features::before{
+  content:""; position:absolute; top:-10%; left:18%; width:64%; height:120%;
+  background:radial-gradient(45% 40% at 50% 38%, rgba(232,163,77,0.16), transparent 70%);
+  filter:blur(70px); opacity:var(--glow-o); pointer-events:none;
+  transition:opacity .6s ease;
+}
+.cards{
+  display:grid; grid-template-columns:repeat(3, 1fr); gap:22px;
+  margin-top:46px; position:relative; z-index:1;
+}
+.card{
+  background:var(--card-bg);
+  border:1px solid var(--card-border);
+  border-radius:var(--card-r);
+  padding:28px 26px 26px;
+  position:relative;
+  -webkit-backdrop-filter:blur(var(--card-blur)) saturate(130%);
+  backdrop-filter:blur(var(--card-blur)) saturate(130%);
+  transition:border-color .3s ease, transform .3s ease;
+}
+html[data-theme="light"] .card{ border-left:none; border-right:none; border-bottom:none; border-top-color:var(--fg35); padding-left:0; padding-right:18px; }
+html[data-theme="dark"] .card:hover{ border-color:rgba(255,255,255,0.18); transform:translateY(-2px); }
+.card .lemma{
+  font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+  color:var(--fg35); display:flex; align-items:center; gap:8px; margin-bottom:34px;
+  text-transform:uppercase;
+}
+.card .lemma .rm{ font-size:10px; letter-spacing:0; }
+.card h3{ font-size:19px; font-weight:600; margin-bottom:8px; }
+.card p{ font-size:15px; color:var(--fg60); margin:0; }
+
+/* ---------- Pricing: Table 1, booktabs ---------- */
+.pricing .table-caption{
+  text-align:center; font-size:15.5px; margin:40px 0 22px; color:var(--fg60);
+}
+.pricing .table-caption .tabno{ font-weight:600; color:var(--fg); }
+.table-scroll{ overflow-x:auto; }
+.booktabs-wrap{
+  max-width:820px; margin:0 auto; position:relative;
+  border-radius:var(--card-r);
+}
+html[data-theme="dark"] .booktabs-wrap{
+  background:var(--card-bg); border:1px solid var(--card-border);
+  -webkit-backdrop-filter:blur(var(--card-blur)) saturate(130%);
+  backdrop-filter:blur(var(--card-blur)) saturate(130%);
+  padding:18px 34px 8px;
+}
+table.booktabs{
+  width:100%; border-collapse:collapse; font-size:16px;
+  font-variant-numeric:tabular-nums;
+}
+.booktabs .bt-rule td{ padding:0; border:none; }
+.booktabs .bt-rule .rule-bar{ height:1.6px; background:var(--fg); transform:scaleX(0); transform-origin:left; transition:transform .9s cubic-bezier(.4,0,.2,1); }
+.booktabs .bt-rule .rule-bar.drawn{ transform:scaleX(1); }
+html:not(.js) .booktabs .rule-bar{ transform:scaleX(1); }
+.booktabs th{
+  font-weight:600; text-align:center; padding:14px 18px 12px; font-size:16.5px;
+  border-bottom:1px solid var(--fg60);
+}
+.booktabs th:first-child{ text-align:left; }
+.booktabs td{ padding:11px 18px; text-align:center; color:var(--fg60); }
+.booktabs td:first-child{ text-align:left; color:var(--fg); }
+.booktabs .yes{ color:var(--accent); }
+.booktabs .no{ color:var(--fg35); }
+.booktabs .price{ font-weight:600; color:var(--fg); font-size:18px; }
+.booktabs .price small{ font-weight:400; font-size:12.5px; color:var(--fg60); display:block; font-style:italic; }
+.table-foot{
+  max-width:820px; margin:14px auto 0; font-size:13.5px; color:var(--fg60); font-style:italic;
+  padding:0 4px;
+}
+html[data-theme="dark"] .table-foot{ padding:0 36px; }
+.pricing-cta{ display:flex; justify-content:center; gap:14px; margin-top:44px; align-items:center; }
+.pricing-cta .or{ font-style:italic; color:var(--fg35); font-size:15px; }
+
+/* ---------- Footer: References ---------- */
+footer{ border-top:1px solid var(--line); padding:90px 0 70px; position:relative; }
+.refs-title{ font-size:26px; font-weight:600; margin-bottom:28px; }
+.refs{ list-style:none; margin:0; padding:0; max-width:680px; }
+.refs li{
+  display:grid; grid-template-columns:44px 1fr; gap:6px;
+  font-size:15.5px; color:var(--fg60); margin-bottom:12px;
+}
+.refs .refno{ color:var(--fg35); }
+.refs em{ font-style:italic; }
+.refs .you{ color:var(--fg); }
+.colophon{
+  margin-top:56px; padding-top:28px; border-top:1px solid var(--line);
+  display:flex; justify-content:space-between; gap:24px; align-items:baseline;
+  font-size:13px; color:var(--fg35); flex-wrap:wrap;
+}
+.qed-final{
+  text-align:center; margin-top:64px; font-size:15px; color:var(--fg60);
+  letter-spacing:.08em;
+}
+.qed-final .tombstone{ margin-left:10px; }
+
+/* ============================================================
+   RESPONSIVE
+   ============================================================ */
+@media (min-width:1024px){
+  #page{ padding-left:128px; }
+  header .header-in{ padding-left:0; }
+}
+@media (max-width:1023.5px){
+  #margin-rule, .margin-note, .crop{ display:none; }
+  .hero-grid{ grid-template-columns:1fr; gap:40px; }
+  .desk{ min-height:0; margin-top:30px; }
+  .sheet{ display:none; }
+  .window{ margin-top:0; max-width:720px; }
+  .headline{ min-height:0; }
+  nav{ display:none; }
+  .strip-grid{ grid-template-columns:1fr; }
+  .strip-item + .strip-item{ border-left:none; border-top:1px solid var(--line); }
+  .cards{ grid-template-columns:1fr 1fr; }
+  .beam{ right:0; width:50vw; }
+}
+@media (max-width:680px){
+  .wrap{ padding:0 24px; }
+  .header-in{ padding:0 24px; }
+  .cards{ grid-template-columns:1fr; }
+  .panes{ grid-template-columns:1fr; }
+  .code-pane{ display:none; }
+  .cta-row{ flex-wrap:wrap; }
+  .section-pad{ padding:72px 0; }
+}
+
+/* ============================================================
+   REDUCED MOTION — every draw becomes instant, the beam holds still
+   ============================================================ */
+@media (prefers-reduced-motion: reduce){
+  html{ scroll-behavior:auto; }
+  *, *::before, *::after{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
+  html[data-theme="dark"] .beam{ animation:none; }
+}
+</style>
+</head>
+<body>
+<div id="dotgrid"></div>
+<div id="grain"></div>
+<div class="crop tl"></div><div class="crop tr"></div><div class="crop bl"></div><div class="crop br"></div>
+<div id="margin-rule"></div>
+<div id="lampglow"></div>
+
+<div id="page">
+
+<header id="top">
+  <div class="header-in">
+    <a class="logo" href="#top">Typeward</a>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#philosophy">Philosophy</a>
+      <a href="#performance">Performance</a>
+      <a href="#pricing">Pricing</a>
+    </nav>
+    <span class="vsep"></span>
+    <a class="btn btn-primary btn-sm" href="#pricing">Get Typeward</a>
+    <button id="cord" aria-label="Toggle the lights" title="the lights">
+      <svg width="34" height="64" viewBox="0 0 34 64" aria-hidden="true">
+        <line class="cord-line" x1="17" y1="0" x2="17" y2="41"></line>
+        <circle class="cord-ring" cx="17" cy="47.5" r="5.5"></circle>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<main>
+
+<!-- ============ 1 · HERO ============ -->
+<section class="hero" id="intro" data-screen-label="Hero">
+  <div class="beam" aria-hidden="true">
+    <div class="beam-wide"></div>
+    <div class="beam-core"></div>
+    <div class="beam-pool"></div>
+  </div>
+  <div class="wrap hero-grid">
+    <span class="margin-note" style="top:48px;"><span class="sc">1</span><br><span class="sc">Intro.</span></span>
+    <span class="margin-note" style="top:380px;">marg.<br>2.54 cm</span>
+    <span class="margin-note" style="top:640px;">fig.<br>1.1</span>
+    <span class="regmark" style="top:24px; right:48px;">+&#8201;&#9671;&#8201;&#10005;</span>
+    <div class="hero-copy">
+      <span class="label eyebrow">A local-first <span class="latex-logo">L<sup>a</sup>T<sub>e</sub>X</span> editor</span>
+      <h1 class="headline" id="headline" aria-label="It's time to move Typeward.">
+        <span id="typed">It&#8217;s time to move <span class="w tw">Typeward.</span></span><span class="caret" id="caret" aria-hidden="true"></span>
+      </h1>
+      <div class="hero-divider" aria-hidden="true"><span class="ast">&#10043;</span><span class="rule"></span></div>
+      <p class="sub hero-stagger">A quieter place for serious writing.</p>
+      <p class="lede hero-stagger">No cloud. No timeouts. No compromise. Your machine, your manuscript, your rules.</p>
+      <div class="cta-row hero-stagger">
+        <a class="btn btn-primary" href="#pricing">Start writing <span class="arrow">&#8594;</span></a>
+        <a class="btn btn-secondary" href="#features">View the editor</a>
+      </div>
+      <p class="platform hero-stagger">macOS 12+ &#183; Windows &#183; Linux &#8212; a 14&#8201;MB download. No account. Obviously.</p>
+
+      <div class="euclid hero-stagger" aria-hidden="true">
+        <svg class="self-draw" width="420" height="220" viewBox="0 0 420 220">
+          <path class="stroke" d="M 40 28 A 150 150 0 0 1 152 196"></path>
+          <path class="stroke" d="M 250 60 A 130 130 0 0 0 96 142"></path>
+          <line class="stroke dashed" x1="62" y1="46" x2="248" y2="30"></line>
+          <line class="stroke" x1="248" y1="30" x2="196" y2="158"></line>
+          <line class="stroke dashed" x1="62" y1="46" x2="196" y2="158"></line>
+          <circle class="stroke" cx="330" cy="138" r="9"></circle>
+          <line class="stroke" x1="312" y1="138" x2="348" y2="138"></line>
+          <line class="stroke" x1="330" y1="120" x2="330" y2="156"></line>
+          <line class="stroke dashed" x1="356" y1="138" x2="418" y2="138"></line>
+          <circle class="pt" cx="62" cy="46" r="2"></circle>
+          <circle class="pt" cx="248" cy="30" r="2"></circle>
+          <circle class="pt" cx="196" cy="158" r="2"></circle>
+          <text x="48" y="40">A</text>
+          <text x="254" y="24">B</text>
+          <text x="184" y="178">C</text>
+        </svg>
+      </div>
+    </div>
+
+    <div class="desk">
+      <div class="sheet sheet-1" aria-hidden="true">
+        <span class="corner">p. 17</span>
+        <p class="scrawl">&#8230;whence the bound is tight. For the<br>general case, write</p>
+        <p class="scrawl" style="text-align:center; font-size:15px;">&#8747;<sub>&#947;</sub>&#8201;f(z)&#8201;dz &#61; 2&#960;i &#8721; Res(f, a<sub>k</sub>)</p>
+        <p class="scrawl">and proceed by induction on the genus.<br>The margin, for once, is sufficient.</p>
+        <span class="qed">Q.E.D.</span>
+        <span class="pageno">&#8212; 23 &#8212;</span>
+      </div>
+      <div class="sheet sheet-2" aria-hidden="true">
+        <span class="corner">Thm. 2.3</span>
+        <p class="scrawl">Let X be compact, Hausdorff, and<br>unbothered. Then every net in X<br>has a convergent subnet.</p>
+        <p class="scrawl" style="font-size:12px;">(draft &#8212; do not cite)</p>
+      </div>
+
+      <div class="window" id="editor" aria-label="The Typeward editor">
+        <div class="titlebar">
+          <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+          <span class="tab">&#9636; study.tex</span>
+          <span class="pdf-label"><span>PDF &#8964;</span><span>&#8801;</span><span>&#8981;</span><span>&#8943;</span></span>
+        </div>
+        <div class="panes">
+          <div class="code-pane" aria-hidden="true">
+            <div class="codeline"><span class="ln">1</span><code><span class="tok-cmd">\documentclass</span>{article}</code></div>
+            <div class="codeline"><span class="ln">2</span><code><span class="tok-cmd">\usepackage</span>{amsmath,amssymb}</code></div>
+            <div class="codeline"><span class="ln">3</span><code><span class="tok-cmd">\usepackage</span>{tikz-cd}</code></div>
+            <div class="codeline"><span class="ln">4</span><code><span class="tok-cmd">\usepackage</span>{geometry}</code></div>
+            <div class="codeline"><span class="ln">5</span><code><span class="tok-cmd">\geometry</span>{margin=2.54cm}</code></div>
+            <div class="codeline"><span class="ln">6</span><code> </code></div>
+            <div class="codeline"><span class="ln">7</span><code><span class="tok-cmd">\title</span>{A Study in Simplicity}</code></div>
+            <div class="codeline"><span class="ln">8</span><code><span class="tok-cmd">\author</span>{ }</code></div>
+            <div class="codeline"><span class="ln">9</span><code><span class="tok-cmd">\date</span>{<span class="tok-cmd">\today</span>}</code></div>
+            <div class="codeline"><span class="ln">10</span><code> </code></div>
+            <div class="codeline"><span class="ln">11</span><code><span class="tok-cmd">\begin</span>{<span class="tok-env">document</span>}</code></div>
+            <div class="codeline"><span class="ln">12</span><code><span class="tok-cmd">\maketitle</span></code></div>
+            <div class="codeline"><span class="ln">13</span><code> </code></div>
+            <div class="codeline"><span class="ln">14</span><code><span class="tok-cmd">\section</span>{Introduction}</code></div>
+            <div class="codeline"><span class="ln">15</span><code>We seek clarity in both</code></div>
+            <div class="codeline"><span class="ln">16</span><code>language and structure.</code></div>
+            <div class="codeline"><span class="ln">17</span><code>Consider the diagram</code></div>
+            <div class="codeline"><span class="ln">18</span><code><span class="tok-cmd">\begin</span>{<span class="tok-env">tikzcd</span>}</code></div>
+            <div class="codeline"><span class="ln">19</span><code>A <span class="tok-cmd">\arrow</span>[r,"f"] &amp; B <span class="tok-cmd">\arrow</span>[d,"h"] <span class="tok-cmd">\\</span></code></div>
+            <div class="codeline"><span class="ln">20</span><code>C <span class="tok-cmd">\arrow</span>[r,"k"'] &amp; D</code></div>
+            <div class="codeline"><span class="ln">21</span><code><span class="tok-cmd">\end</span>{<span class="tok-env">tikzcd</span>}</code></div>
+            <div class="codeline"><span class="ln">22</span><code> </code></div>
+            <div class="codeline"><span class="ln">23</span><code>which expresses <span class="tok-math">$h\circ f = k\circ g$</span>.</code></div>
+            <div class="codeline"><span class="ln">24</span><code> </code></div>
+            <div class="codeline"><span class="ln">25</span><code><span class="tok-cmd">\begin</span>{<span class="tok-env">equation</span>}</code></div>
+            <div class="codeline"><span class="ln">26</span><code><span class="tok-cmd">\int</span>_a^b f(x)<span class="tok-cmd">\,</span>dx = F(b) - F(a)</code></div>
+            <div class="codeline"><span class="ln">27</span><code><span class="tok-cmd">\end</span>{<span class="tok-env">equation</span>}</code></div>
+            <div class="codeline"><span class="ln">28</span><code> </code></div>
+            <div class="codeline"><span class="ln">29</span><code><span class="tok-cmd">\end</span>{<span class="tok-env">document</span>}</code></div>
+          </div>
+          <div class="pdf-pane" id="pdf-pane">
+            <div class="pdf-skeleton" aria-hidden="true">
+              <div class="skel t"></div>
+              <div class="skel w40" style="margin:0 auto 14px;"></div>
+              <div class="skel w90"></div>
+              <div class="skel w80"></div>
+              <div class="skel w60" style="margin-bottom:18px;"></div>
+              <div class="skel w40" style="margin:0 auto;"></div>
+              <div class="skel w40" style="margin:0 auto 18px;"></div>
+              <div class="skel w90"></div>
+              <div class="skel w80"></div>
+            </div>
+            <div class="pdf-render">
+              <p class="pdf-title">A Study in Simplicity</p>
+              <p class="pdf-date">June 10, 2026</p>
+              <p class="pdf-sec">1&#8195;Introduction</p>
+              <p>We seek clarity in both language and structure. Consider the commutative diagram</p>
+              <svg class="commdiag" width="168" height="108" viewBox="0 0 168 108" aria-hidden="true">
+                <defs>
+                  <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <path d="M 0.5 0.5 L 7.5 4 L 0.5 7.5" fill="none" stroke="#1C1917" stroke-width="1"></path>
+                  </marker>
+                </defs>
+                <text x="28" y="26">A</text>
+                <text x="132" y="26">B</text>
+                <text x="28" y="98">C</text>
+                <text x="131" y="98">D</text>
+                <line x1="44" y1="21" x2="122" y2="21" marker-end="url(#arr)"></line>
+                <line x1="33" y1="34" x2="33" y2="82" marker-end="url(#arr)"></line>
+                <line x1="137" y1="34" x2="137" y2="82" marker-end="url(#arr)"></line>
+                <line x1="44" y1="93" x2="120" y2="93" marker-end="url(#arr)"></line>
+                <text class="fn" x="80" y="14">f</text>
+                <text class="fn" x="20" y="62">g</text>
+                <text class="fn" x="144" y="62">h</text>
+                <text class="fn" x="80" y="106">k</text>
+              </svg>
+              <p>which expresses <span class="pdf-math">h&#8201;&#8728;&#8201;f &#61; k&#8201;&#8728;&#8201;g</span>.</p>
+              <div class="pdf-eq">
+                <span><span class="int">&#8747;</span><sub>a</sub><sup>b</sup>&#8201;f(x)&#8201;dx &#61; F(b) &#8722; F(a)</span>
+                <span class="eqno">(1)</span>
+              </div>
+              <p class="pdf-pageno">1</p>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>Line 20, Col 1</span>
+          <span class="right">
+            <span>UTF-8</span>
+            <span>LaTeX</span>
+            <span id="compile-text">ready</span>
+            <span class="status-dot" id="compile-dot"></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ Feature strip ============ -->
+<section class="strip" data-screen-label="Feature strip">
+  <div class="wrap strip-grid">
+    <div class="strip-item reveal">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+        <circle class="stroke dashed" cx="13" cy="13" r="10"></circle>
+        <circle class="stroke" cx="13" cy="13" r="4.5"></circle>
+        <circle cx="13" cy="13" r="1.2" fill="currentColor" opacity=".65"></circle>
+      </svg>
+      <div>
+        <h3>Distraction-free</h3>
+        <p>A calm interface for deep work and sustained focus.</p>
+      </div>
+    </div>
+    <div class="strip-item reveal">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+        <path class="stroke" d="M 3.5 8 V 19.5 a 1.5 1.5 0 0 0 1.5 1.5 h 16 a 1.5 1.5 0 0 0 1.5 -1.5 V 10.5 a 1.5 1.5 0 0 0 -1.5 -1.5 H 13 L 10.8 6.5 H 5 A 1.5 1.5 0 0 0 3.5 8 Z"></path>
+        <line class="stroke" x1="3.5" y1="12" x2="22.5" y2="12"></line>
+      </svg>
+      <div>
+        <h3>Local files</h3>
+        <p>Your work stays on your machine. Always under your control.</p>
+      </div>
+    </div>
+    <div class="strip-item reveal">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+        <path class="stroke" d="M 4 3.5 V 21 H 22"></path>
+        <path class="stroke" d="M 5.5 18 C 9.5 17.5 10 7.5 13.5 7.5 S 18 15 21 13"></path>
+        <line class="stroke dashed" x1="13.5" y1="7.5" x2="13.5" y2="21"></line>
+      </svg>
+      <div>
+        <h3>Beautiful diagrams</h3>
+        <p>TikZ at your fingertips. Precise, scalable, and elegant.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2 · Philosophy ============ -->
+<section class="philosophy section-pad" id="philosophy" data-screen-label="Philosophy">
+  <div class="wrap">
+    <span class="margin-note" style="top:0;"><span class="sc">2</span><br><span class="sc">Phil.</span></span>
+    <span class="margin-note" style="top:430px;">Thm. 4.2</span>
+    <span class="regmark" style="top:-14px; right:48px;">&#10005;</span>
+    <div class="section-rule" style="margin-bottom:64px;"></div>
+    <div class="sec-head reveal">
+      <span class="sec-num">2</span>
+      <h2 class="sec-title">Philosophy</h2>
+    </div>
+    <div class="abstract reveal">
+      <p><span class="ab-label">Abstract.</span>&#8195;We present Typeward, a local-first editor for LaTeX. Documents compile on the author&#8217;s machine, in seconds, without consulting anyone. We find this arrangement strictly preferable to the alternative; a proof is given below.</p>
+    </div>
+    <div class="thm-block def reveal">
+      <p><span class="thm-head">Definition 1</span> <span class="thm-name">(Local-first).</span> <span class="thm-body">A document is local-first if it exists, in its entirety, as a plain file on hardware its author owns.</span></p>
+    </div>
+    <div class="thm-block reveal">
+      <p><span class="thm-head">Theorem 4.2</span> <span class="thm-name">(Privacy).</span> <span class="thm-body">Data that never leaves your machine cannot be leaked, mined, or sold from anyone else&#8217;s.</span></p>
+    </div>
+    <div class="proof reveal">
+      <p><span class="proof-label">Proof.</span> Immediate. The reader may verify by unplugging the router; Typeward will not notice.<span class="tombstone" data-tombstone="1"></span></p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3 · Performance ============ -->
+<section class="performance section-pad" id="performance" data-screen-label="Performance">
+  <div class="wrap">
+    <span class="margin-note" style="top:0;"><span class="sc">3</span><br><span class="sc">Perf.</span></span>
+    <span class="margin-note" style="top:420px;">fig. 1</span>
+    <div class="section-rule" style="margin-bottom:64px;"></div>
+    <div class="sec-head reveal">
+      <span class="sec-num">3</span>
+      <h2 class="sec-title">Performance</h2>
+    </div>
+    <p class="reveal" style="max-width:62ch; color:var(--fg60);">Cloud compilers queue your manuscript behind everyone else&#8217;s. Typeward compiles incrementally, on hardware you already own; the median build of a 200-page document completes in 2.3 seconds. The tail of Figure&#8201;1 speaks for itself.</p>
+
+    <figure class="figure" id="fig1" style="margin-left:0;">
+      <svg viewBox="0 0 680 400" role="img" aria-label="Chart: Overleaf compile time grows with document length and hits a 20 second timeout; Typeward stays flat at 2.3 seconds.">
+        <g class="fig-axes">
+          <path class="ax draw-path" d="M 60 40 L 60 340 L 650 340"></path>
+        </g>
+        <g class="fig-ticks fig-fade">
+          <line class="tick" x1="207.5" y1="340" x2="207.5" y2="345"></line>
+          <line class="tick" x1="355" y1="340" x2="355" y2="345"></line>
+          <line class="tick" x1="502.5" y1="340" x2="502.5" y2="345"></line>
+          <line class="tick" x1="650" y1="340" x2="650" y2="345"></line>
+          <line class="tick" x1="55" y1="280" x2="60" y2="280"></line>
+          <line class="tick" x1="55" y1="220" x2="60" y2="220"></line>
+          <line class="tick" x1="55" y1="160" x2="60" y2="160"></line>
+          <line class="tick" x1="55" y1="100" x2="60" y2="100"></line>
+          <line class="tick" x1="55" y1="40" x2="60" y2="40"></line>
+          <text class="ticklabel" x="60" y="358" text-anchor="middle">0</text>
+          <text class="ticklabel" x="207.5" y="358" text-anchor="middle">100</text>
+          <text class="ticklabel" x="355" y="358" text-anchor="middle">200</text>
+          <text class="ticklabel" x="502.5" y="358" text-anchor="middle">300</text>
+          <text class="ticklabel" x="650" y="358" text-anchor="middle">400</text>
+          <text class="ticklabel" x="48" y="344" text-anchor="end">0</text>
+          <text class="ticklabel" x="48" y="284" text-anchor="end">5</text>
+          <text class="ticklabel" x="48" y="224" text-anchor="end">10</text>
+          <text class="ticklabel" x="48" y="164" text-anchor="end">15</text>
+          <text class="ticklabel" x="48" y="104" text-anchor="end">20</text>
+          <text class="ticklabel" x="48" y="44" text-anchor="end">25</text>
+          <text class="axlabel" x="355" y="384" text-anchor="middle">document length (pages)</text>
+          <text class="axlabel" x="24" y="190" text-anchor="middle" transform="rotate(-90 24 190)">compile time (s)</text>
+        </g>
+        <g class="fig-timeout fig-fade">
+          <line class="timeout" x1="60" y1="100" x2="650" y2="100"></line>
+          <text class="timeout-label" x="646" y="90" text-anchor="end">timeout &#8212; 20 s</text>
+        </g>
+        <path class="curve overleaf draw-path" d="M 60 332 C 180 322 300 296 390 240 C 440 208 472 156 490 104"></path>
+        <path class="curve typeward draw-path" d="M 60 330 C 200 320 380 314 650 312"></path>
+        <g class="fig-marks fig-fade">
+          <text class="mark bad" x="496" y="100">&#10007;</text>
+          <text class="curvelabel" x="330" y="270">Overleaf, free tier</text>
+          <text class="mark good" x="622" y="302" text-anchor="end">&#10003;</text>
+          <text class="curvelabel tw" x="612" y="302" text-anchor="end">Typeward &#8212; 2.3 s&#8195;</text>
+        </g>
+      </svg>
+      <figcaption class="fig-caption reveal"><span class="figno">Figure 1:</span> Compile time as a function of document length, <span style="font-style:italic;">n</span>&#8201;&#61;&#8201;200 documents per point. The dashed rule denotes the cloud compiler&#8217;s patience.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============ 4 · Features ============ -->
+<section class="features section-pad" id="features" data-screen-label="Features">
+  <div class="wrap">
+    <span class="margin-note" style="top:0;"><span class="sc">4</span><br><span class="sc">Feat.</span></span>
+    <span class="margin-note" style="top:380px;">Lem. 4.1&#8211;4.6</span>
+    <span class="regmark" style="top:-14px; right:48px;">+&#8201;&#9671;</span>
+    <div class="section-rule" style="margin-bottom:64px;"></div>
+    <div class="sec-head reveal">
+      <span class="sec-num">4</span>
+      <h2 class="sec-title">Features</h2>
+    </div>
+    <p class="reveal" style="max-width:58ch; color:var(--fg60);">Each of the following is stated without proof. Download the editor; the proofs are left as an exercise for the reader.</p>
+    <div class="cards">
+      <div class="card reveal">
+        <span class="lemma"><span class="rm">+</span> Lemma 4.1</span>
+        <h3>Incremental compile</h3>
+        <p>Only what changed is re-typeset. The preview keeps pace with your cursor, not with your patience.</p>
+      </div>
+      <div class="card reveal">
+        <span class="lemma"><span class="rm">&#9671;</span> Lemma 4.2</span>
+        <h3>TikZ, live</h3>
+        <p>Diagrams render as you type them &#8212; compass-and-straightedge geometry, with an undo stack.</p>
+      </div>
+      <div class="card reveal">
+        <span class="lemma"><span class="rm">&#10005;</span> Lemma 4.3</span>
+        <h3>Plain files</h3>
+        <p>A project is a folder of .tex files on disk. Git approves. So will you, in ten years.</p>
+      </div>
+      <div class="card reveal">
+        <span class="lemma"><span class="rm">&#9671;</span> Lemma 4.4</span>
+        <h3>Entirely offline</h3>
+        <p>Airplane mode is a supported configuration. So is a cabin with no Wi-Fi and a deadline.</p>
+      </div>
+      <div class="card reveal">
+        <span class="lemma"><span class="rm">+</span> Lemma 4.5</span>
+        <h3>Native keybindings</h3>
+        <p>Vim and Emacs emulation, both first-class. We decline to take sides.</p>
+      </div>
+      <div class="card reveal">
+        <span class="lemma"><span class="rm">&#10005;</span> Lemma 4.6</span>
+        <h3>One-keystroke export</h3>
+        <p>PDF/A for the archive, a clean bundle for arXiv. &#8984;E, and it is someone else&#8217;s problem.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5 · Pricing ============ -->
+<section class="pricing section-pad" id="pricing" data-screen-label="Pricing">
+  <div class="wrap">
+    <span class="margin-note" style="top:0;"><span class="sc">5</span><br><span class="sc">Price</span></span>
+    <span class="margin-note" style="top:300px;">Tab. 1</span>
+    <div class="section-rule" style="margin-bottom:64px;"></div>
+    <div class="sec-head reveal">
+      <span class="sec-num">5</span>
+      <h2 class="sec-title">Pricing</h2>
+    </div>
+    <p class="reveal" style="max-width:58ch; color:var(--fg60);">Typeward is software you buy once and own, in the manner of furniture, or a good pen.</p>
+    <p class="table-caption reveal"><span class="tabno">Table 1:</span> Editions of Typeward.</p>
+    <div class="booktabs-wrap reveal">
+      <div class="table-scroll">
+        <table class="booktabs">
+          <thead>
+            <tr class="bt-rule"><td colspan="4"><div class="rule-bar"></div></td></tr>
+            <tr>
+              <th></th>
+              <th>Free</th>
+              <th>Pro<span style="color:var(--accent);">*</span></th>
+              <th>Department</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Price</td>
+              <td class="price">$0</td>
+              <td class="price">$59 <small>once, forever</small></td>
+              <td class="price">$49 <small>per seat, once</small></td>
+            </tr>
+            <tr><td>Local compile</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td></tr>
+            <tr><td>TikZ live preview</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td></tr>
+            <tr><td>Incremental builds</td><td class="no">&#8212;</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td></tr>
+            <tr><td>Git integration</td><td class="no">&#8212;</td><td class="yes">&#10003;</td><td class="yes">&#10003;</td></tr>
+            <tr><td>Priority support</td><td class="no">&#8212;</td><td class="no">&#8212;</td><td class="yes">&#10003;</td></tr>
+            <tr><td>Updates</td><td>1 year</td><td>Forever</td><td>Forever</td></tr>
+            <tr class="bt-rule"><td colspan="4"><div class="rule-bar"></div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="table-foot reveal">*&#8201;Most popular. Overleaf charges $98/yr for less.</p>
+    <div class="pricing-cta reveal">
+      <a class="btn btn-primary" href="#top">Get Typeward Pro <span class="arrow">&#8594;</span></a>
+      <span class="or">or,</span>
+      <a class="btn btn-secondary" href="#top">start free</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ References ============ -->
+<footer data-screen-label="References">
+  <div class="wrap">
+    <span class="margin-note" style="top:90px;"><span class="sc">Ref.</span></span>
+    <span class="regmark" style="top:24px; right:48px;">&#9671;</span>
+    <h2 class="refs-title reveal">References</h2>
+    <ol class="refs reveal">
+      <li><span class="refno">[1]</span><span>The Tectonic Project, &#8220;Tectonic: a complete, self-contained TeX/LaTeX engine,&#8221; 2025.</span></li>
+      <li><span class="refno">[2]</span><span>D. E. Knuth, <em>The TeXbook</em>. Addison&#8211;Wesley, 1986.</span></li>
+      <li><span class="refno">[3]</span><span>L. Lamport, <em>LaTeX: A Document Preparation System</em>, 2nd ed. Addison&#8211;Wesley, 1994.</span></li>
+      <li><span class="refno">[4]</span><span>T. Tantau, <em>The TikZ and PGF Packages</em>, manual for version 3.1.10, 2023.</span></li>
+      <li><span class="refno">[5]</span><span class="you">You, &#8220;Your thesis, finally compiling in peace,&#8221; <em>forthcoming</em>.</span></li>
+    </ol>
+    <div class="colophon">
+      <span>Set in Source Serif 4 &amp; JetBrains Mono. Diagrams drawn with TikZ, more or less.</span>
+      <span>No analytics &#8212; the only observer on this page is an IntersectionObserver. &#169; 2026 Typeward.</span>
+    </div>
+    <p class="qed-final">Q.E.D.<span class="tombstone" data-tombstone="1"></span></p>
+  </div>
+</footer>
+
+</div><!-- /#page -->
+<script>
+(function(){
+'use strict';
+
+var RM = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var html = document.documentElement;
+
+function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+/* ============ The lamp: pull-cord theme toggle ============ */
+var cord = document.getElementById('cord');
+var switching = false;
+
+function persistTheme(t){ try{ localStorage.setItem('typeward-theme', t); }catch(e){} }
+
+function syncCordAria(){
+  cord.setAttribute('aria-pressed', html.getAttribute('data-theme') === 'dark' ? 'true' : 'false');
+}
+syncCordAria();
+
+cord.addEventListener('click', function(){
+  if (switching) return;
+  var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+
+  cord.classList.remove('pulling');
+  void cord.offsetWidth;
+  cord.classList.add('pulling');
+  setTimeout(function(){ cord.classList.remove('pulling'); }, 500);
+
+  if (RM){
+    html.setAttribute('data-theme', next);
+    persistTheme(next); syncCordAria();
+    return;
+  }
+
+  switching = true;
+  /* 1. the room goes dark */
+  html.classList.add('dimming');
+  setTimeout(function(){
+    /* 2. swap the tokens while dim; the lamp blooms */
+    html.classList.add('theme-anim');
+    html.setAttribute('data-theme', next);
+    html.classList.add('blooming');
+    persistTheme(next); syncCordAria();
+    /* 3. brightness lifts */
+    setTimeout(function(){ html.classList.remove('dimming'); }, 140);
+    setTimeout(function(){
+      html.classList.remove('theme-anim');
+      html.classList.remove('blooming');
+      switching = false;
+    }, 1000);
+  }, 300);
+});
+
+/* ============ Sticky header ============ */
+var header = document.querySelector('header');
+function onScroll(){ header.classList.toggle('scrolled', window.scrollY > 8); }
+window.addEventListener('scroll', onScroll, { passive:true });
+onScroll();
+
+/* ============ SVG line-drawing helpers ============ */
+function prepShapes(svg){
+  var shapes = [];
+  svg.querySelectorAll('path, line, circle').forEach(function(el){
+    if (!el.getTotalLength) return;
+    var len;
+    try{ len = el.getTotalLength(); }catch(e){ return; }
+    if (!len) return;
+    if (el.classList.contains('dashed') || el.classList.contains('pt')){
+      el.style.opacity = '0';
+      shapes.push({ el:el, fade:true });
+    } else {
+      el.style.strokeDasharray = len;
+      el.style.strokeDashoffset = len;
+      shapes.push({ el:el, fade:false });
+    }
+  });
+  return shapes;
+}
+function drawShapes(shapes, step, dur){
+  shapes.forEach(function(s, i){
+    var d = i * step;
+    if (s.fade){
+      s.el.style.transition = 'opacity .8s ease ' + d + 'ms';
+      s.el.style.opacity = '';
+      if (getComputedStyle(s.el).opacity === '0') s.el.style.opacity = '1';
+    } else {
+      s.el.style.transition = 'stroke-dashoffset ' + dur + 'ms cubic-bezier(.4,0,.2,1) ' + d + 'ms';
+      s.el.style.strokeDashoffset = '0';
+    }
+  });
+}
+
+/* ============ Hero: the typing correction ============ */
+var typed = document.getElementById('typed');
+var caret = document.getElementById('caret');
+var heroStagger = Array.prototype.slice.call(document.querySelectorAll('.hero-stagger'));
+var euclidSvg = document.querySelector('.euclid svg');
+var euclidShapes = null;
+
+function revealHero(){
+  heroStagger.forEach(function(el, i){
+    el.style.transitionDelay = (i * 80) + 'ms';
+    el.classList.add('in');
+  });
+  if (euclidShapes){
+    setTimeout(function(){ drawShapes(euclidShapes, 300, 1100); }, 450);
+  }
+}
+
+function makeWord(text, cls){
+  var w = document.createElement('span');
+  w.className = 'w' + (cls ? ' ' + cls : '');
+  for (var i = 0; i < text.length; i++){
+    var c = document.createElement('span');
+    c.className = 'c';
+    c.textContent = text[i];
+    w.appendChild(c);
+  }
+  return w;
+}
+
+async function typeIntoWord(w, text, cls, ms, before){
+  for (var i = 0; i < text.length; i++){
+    var c = document.createElement('span');
+    c.className = 'c' + (cls ? ' ' + cls : '');
+    c.textContent = text[i];
+    if (before !== undefined){ w.insertBefore(c, w.children[before + i] || null); }
+    else { w.appendChild(c); }
+    await wait(ms);
+  }
+}
+
+async function runHeadline(){
+  if (RM){
+    caret.classList.add('gone');
+    revealHero();
+    return;
+  }
+  typed.innerHTML = '';
+  var words = ["It\u2019s", "time", "to", "move"];
+  var word;
+
+  await wait(420);
+  for (var wi = 0; wi < words.length; wi++){
+    word = makeWord('', '');
+    typed.appendChild(word);
+    await typeIntoWord(word, words[wi], '', 70);
+    typed.appendChild(document.createTextNode(' '));
+  }
+  var last = makeWord('', '');
+  typed.appendChild(last);
+  await typeIntoWord(last, 'forward.', '', 70);
+
+  /* pause; select "for"; delete; correct */
+  await wait(720);
+  for (var s = 0; s < 3; s++){ last.children[s].classList.add('sel'); await wait(70); }
+  await wait(560);
+  for (var d = 0; d < 3; d++){ last.removeChild(last.children[0]); }
+  await wait(300);
+  await typeIntoWord(last, 'Type', 'new', 95, 0);
+
+  /* the proofreader's underline beneath "Typeward." */
+  await wait(260);
+  last.classList.add('tw');
+  var u = document.createElement('span');
+  u.className = 'u';
+  last.appendChild(u);
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){ u.classList.add('on'); }); });
+  await wait(800);
+
+  caret.classList.add('done');
+  revealHero();
+  await wait(2100);
+  caret.classList.add('gone');
+}
+
+/* ============ Scroll observers ============ */
+function onIntersect(els, cb, threshold, margin){
+  if (!('IntersectionObserver' in window) || RM){
+    els.forEach(function(el){ cb(el); });
+    return;
+  }
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting){ cb(e.target); io.unobserve(e.target); }
+    });
+  }, { threshold: threshold, rootMargin: margin || '0px 0px -40px 0px' });
+  els.forEach(function(el){ io.observe(el); });
+}
+
+var $$ = function(sel){ return Array.prototype.slice.call(document.querySelectorAll(sel)); };
+
+/* fade-up reveals (staggered within .cards) */
+$$('.cards').forEach(function(grid){
+  Array.prototype.slice.call(grid.children).forEach(function(card, i){
+    card.style.transitionDelay = (i * 80) + 'ms';
+  });
+});
+onIntersect($$('.reveal'), function(el){ el.classList.add('in'); }, 0.15);
+
+/* hairline rules + booktabs rules draw in */
+onIntersect($$('.section-rule, .rule-bar'), function(el){ el.classList.add('drawn'); }, 0.5, '0px 0px -20px 0px');
+
+/* theorem tombstones fill */
+onIntersect($$('[data-tombstone]'), function(el){ el.classList.add('filled'); }, 0.9, '0px');
+
+/* ============ Figure 1: axes, ticks, curves, verdicts ============ */
+var fig = document.getElementById('fig1');
+if (fig){
+  var axes = fig.querySelector('.fig-axes .draw-path');
+  var curveO = fig.querySelector('.curve.overleaf');
+  var curveT = fig.querySelector('.curve.typeward');
+  var figShapes = null;
+  if (!RM){
+    figShapes = [axes, curveO, curveT].map(function(el){
+      var len = el.getTotalLength();
+      el.style.strokeDasharray = len;
+      el.style.strokeDashoffset = len;
+      return { el: el, len: len };
+    });
+  }
+  onIntersect([fig], function(){
+    if (RM){
+      $$('.fig-fade').forEach(function(g){ g.classList.add('in'); });
+      return;
+    }
+    figShapes[0].el.style.transition = 'stroke-dashoffset .8s ease';
+    figShapes[0].el.style.strokeDashoffset = '0';
+    setTimeout(function(){ fig.querySelector('.fig-ticks').classList.add('in'); }, 350);
+    setTimeout(function(){ fig.querySelector('.fig-timeout').classList.add('in'); }, 750);
+    setTimeout(function(){
+      figShapes[1].el.style.transition = 'stroke-dashoffset 1.7s cubic-bezier(.45,0,.3,1)';
+      figShapes[1].el.style.strokeDashoffset = '0';
+    }, 1000);
+    setTimeout(function(){
+      figShapes[2].el.style.transition = 'stroke-dashoffset 1.7s cubic-bezier(.45,0,.3,1)';
+      figShapes[2].el.style.strokeDashoffset = '0';
+    }, 1250);
+    setTimeout(function(){ fig.querySelector('.fig-marks').classList.add('in'); }, 2700);
+  }, 0.4, '0px 0px -60px 0px');
+}
+
+/* ============ The editor compiles ============ */
+var editor = document.getElementById('editor');
+var pdfPane = document.getElementById('pdf-pane');
+var compileText = document.getElementById('compile-text');
+var compileDot = document.getElementById('compile-dot');
+if (editor){
+  onIntersect([editor], async function(){
+    if (RM){
+      pdfPane.classList.add('compiled');
+      compileText.textContent = '2.3 s';
+      compileDot.classList.add('ok');
+      return;
+    }
+    await wait(600);
+    compileText.textContent = 'compiling\u2026';
+    compileDot.classList.add('busy');
+    await wait(1500);
+    compileDot.classList.remove('busy');
+    compileDot.classList.add('ok');
+    compileText.textContent = '2.3 s';
+    pdfPane.classList.add('compiled');
+  }, 0.25, '0px');
+}
+
+/* ============ Boot ============ */
+if (!RM && euclidSvg){ euclidShapes = prepShapes(euclidSvg); }
+runHeadline();
+
+})();
+</script>
+</body>
+</html>

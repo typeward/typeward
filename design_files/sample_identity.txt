@@ -1,0 +1,259 @@
+Typeward Design Identity
+
+Quiet technical editorial for local-first LaTeX writing.
+
+Typeward feels like a serious writing room: calm, precise, scholarly, and quietly powerful. The design blends the warmth of printed academic pages with the clarity of modern software. It should feel less like a loud SaaS tool and more like a beautifully typeset workspace for researchers, mathematicians, engineers, and writers who care about structure.
+
+Core idea
+
+A local-first LaTeX editor where writing, diagrams, and typesetting live together in one calm workspace.
+
+The identity is built around three emotional qualities:
+
+Calm — generous whitespace, soft paper texture, restrained contrast.
+Precision — margin rules, grid systems, diagrams, equation marks, TikZ-like linework.
+Craft — serif typography, paper layering, subtle shadows, editorial composition.
+
+Visual personality
+
+Typeward should feel:
+
+Scholarly, but not old-fashioned.
+Technical, but not cold.
+Minimal, but not empty.
+Local-first, private, and trustworthy.
+Designed for deep focus rather than growth-hacking energy.
+
+A good shorthand:
+
+“A modern academic writing desk, rebuilt as software.”
+
+Color palette
+
+The palette is warm, quiet, and paper-based.
+
+Primary background
+Warm ivory / paper cream
+#F8F4EA / #FBF8EF
+
+Primary text
+Ink black / charcoal
+#171716 / #22211E
+
+Secondary text
+Muted graphite / warm gray
+#6E685F
+
+Hairlines and borders
+Soft paper gray
+#D8D0C2
+
+Accent
+Deep ink button / near-black
+#101210
+
+Warm accent
+Aged brass / muted gold
+#B79A5C
+
+Seal accent
+Muted red stamp
+#A84935
+
+The palette should avoid saturated tech colors. Blue may appear only inside code syntax or diagrams, not as the main brand color.
+
+Typography
+Brand and headlines
+
+Use an elegant, high-contrast serif. It should feel literary and academic, with strong curves and calm authority.
+
+Good directions:
+
+Editorial serif
+Book typography
+Academic journal tone
+Slightly old-world, but clean
+
+Examples of suitable type direction:
+
+Canela-like
+Editorial New-like
+Cormorant Garamond-like
+Tiempos-like
+Freight Text-like
+
+Headlines should be large, spacious, and confident.
+
+Example headline style:
+
+A quieter place
+for serious writing.
+
+The line breaks should feel composed, almost like a title page.
+
+Body copy
+
+Use the same serif or a calmer text serif. Body copy should feel like a book paragraph, not a SaaS paragraph.
+
+Tone: measured, intelligent, concise.
+
+Interface/code
+
+Use a clean monospaced font for editor content.
+
+Direction:
+
+SF Mono-like
+JetBrains Mono-like
+IBM Plex Mono-like
+
+Code syntax should be subtle, not neon.
+
+Layout system
+
+The layout borrows from book design and LaTeX documents.
+
+Key layout traits:
+
+Strong left margin system
+Fine vertical guide lines
+Small marginal annotations
+Section markers like INTRO., fig. 1.1, marg. 2.54 cm
+Large editorial headline block on the left
+Product/editor mockup on the right
+Bottom feature row acting like scholarly footnotes
+
+The composition should feel measured and grid-based. Nothing should feel randomly placed.
+
+Use generous spacing. The design should breathe.
+
+Graphic language
+
+The visual system is inspired by LaTeX, TikZ, geometry, and printed academic matter.
+
+Use subtle background details such as:
+
+TikZ node diagrams
+Commutative diagrams
+Coordinate axes
+Dashed construction lines
+Margin rules
+Page numbers
+Theorem/page labels
+Faint graph sketches
+Red editorial seal marks
+Paper sheets and printed pages
+
+These details should stay quiet and supportive. They should never compete with the headline or product mockup.
+
+Product mockup style
+
+The editor UI should look precise but soft.
+
+Characteristics:
+
+Split source editor + PDF preview
+Light macOS-style window
+Rounded corners, but not overly playful
+Thin dividers
+Soft paper-like preview pane
+Subtle shadows
+Code pane with LaTeX/TikZ syntax
+PDF pane with clean typeset output
+
+The product should visually communicate:
+
+“Write on the left. See the finished page on the right.”
+
+The compiled preview is central to the identity. Typeward is not just a text editor; it is a place where source becomes publication-quality form.
+
+Icon style
+
+Icons should be:
+
+Thin line icons
+Geometric
+Slightly academic
+Minimal and precise
+
+Avoid bubbly SaaS icons. Prefer diagrams, folders, axes, targets, panes, and page symbols.
+
+Example icon themes:
+
+Folder for local files
+Target/circle for focus
+Axis/plot for TikZ
+Split-pane icon for editor + preview
+Lock/laptop for local-first privacy
+Button style
+
+Buttons should feel tactile and editorial.
+
+Primary button:
+
+Near-black fill
+Soft radius
+White or ivory text
+Simple arrow
+
+Secondary button:
+
+Light background
+Fine border
+Charcoal text
+
+No loud gradients. No oversized pill buttons. The interaction should feel refined.
+
+Brand voice
+
+Typeward speaks with calm confidence.
+
+Voice qualities:
+
+Precise
+Quiet
+Thoughtful
+Literate
+Trustworthy
+Serious but not stiff
+
+Good copy examples:
+
+A quieter place for serious writing.
+
+Your work stays on your machine.
+
+Write papers, notes, and diagrams in a focused local workspace.
+
+The calm of typesetting. The precision of TikZ.
+
+Local files. Beautiful output. No cloud required.
+
+Avoid:
+
+“10x your writing”
+“AI-powered magic”
+“Ship faster”
+“The ultimate productivity hack”
+Positioning statement
+
+Typeward is a local-first LaTeX editor for people who write serious documents, draw precise diagrams, and care about beautiful output.
+
+It is for users who want focus, control, and typesetting quality without surrendering their work to the cloud.
+
+Design keywords
+
+Local-first
+LaTeX-native
+TikZ-aware
+Quiet workspace
+Academic elegance
+Paper texture
+Precise diagrams
+Typeset calm
+Private by default
+Source to page
+
+One-line identity
+
+Typeward is a calm, local-first LaTeX editor with the soul of a printed academic page and the precision of TikZ.

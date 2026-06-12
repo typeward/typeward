@@ -1,0 +1,1372 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Typeward — A local-first LaTeX editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================
+   TYPEWARD — The Desk Lamp
+   Two themes, one metaphor. Light = daylight study.
+   Dark = lights out, lit by a single amber lamp.
+   ============================================================ */
+
+/* ---------- THEME TOKENS ---------- */
+:root,
+[data-theme="light"] {
+  --bg:        #FAF6EE;
+  --bg-2:      #F3EDE0;
+  --text:      #1C1917;
+  --text-60:   rgba(28,25,23,0.60);
+  --text-35:   rgba(28,25,23,0.35);
+  --text-15:   rgba(28,25,23,0.15);
+  --text-08:   rgba(28,25,23,0.08);
+  --accent:    #B07818;
+  --accent-soft: rgba(176,120,24,0.16);
+  --code-blue: #2456A6;
+  --code-green:#3D7A4A;
+  --code-red:  #A6442B;
+  --code-comment: rgba(28,25,23,0.40);
+
+  --btn-bg:    #1C1917;
+  --btn-text:  #FAF6EE;
+  --btn-radius: 6px;
+
+  --surface:   #F3EDE0;
+  --surface-border: rgba(28,25,23,0.12);
+  --card-radius: 4px;
+
+  --paper-pdf: #FCFAF4;
+  --chrome:    #ECE5D6;
+  --chrome-line: rgba(28,25,23,0.10);
+
+  --grain-opacity: 0.16;
+  --nav-blur-bg: rgba(250,246,238,0.82);
+
+  --shadow-mockup: 0 30px 80px -28px rgba(28,25,23,0.20), 0 8px 24px -12px rgba(28,25,23,0.10);
+  --beam-opacity: 0;
+}
+
+[data-theme="dark"] {
+  --bg:        #0D0C0A;
+  --bg-2:      #14120E;
+  --text:      #EDE6D8;
+  --text-60:   rgba(237,230,216,0.60);
+  --text-35:   rgba(237,230,216,0.35);
+  --text-15:   rgba(237,230,216,0.10);
+  --text-08:   rgba(237,230,216,0.055);
+  --accent:    #E8A34D;
+  --ember-deep:#C2691E;
+  --accent-soft: rgba(232,163,77,0.18);
+  --code-blue: #7FA8E8;
+  --code-green:#7FC08C;
+  --code-red:  #E0856B;
+  --code-comment: rgba(237,230,216,0.38);
+
+  --btn-bg:    #E8A34D;
+  --btn-text:  #14120E;
+  --btn-radius: 100px;
+
+  --surface:   rgba(255,255,255,0.045);
+  --surface-border: rgba(255,255,255,0.09);
+  --card-radius: 16px;
+
+  --paper-pdf: #F7F1E6;
+  --chrome:    #17150F;
+  --chrome-line: rgba(237,230,216,0.10);
+
+  --grain-opacity: 0.26;
+  --nav-blur-bg: rgba(13,12,10,0.72);
+
+  --shadow-mockup: 0 40px 120px -30px rgba(0,0,0,0.8), 0 0 60px -10px rgba(232,163,77,0.10);
+  --beam-opacity: 1;
+}
+
+/* ---------- RESET / BASE ---------- */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
+
+body {
+  font-family: "Source Serif 4", Georgia, serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1.65;
+  font-weight: 400;
+  overflow-x: hidden;
+  position: relative;
+  transition: background-color 0.45s ease, color 0.45s ease;
+  font-variant-ligatures: common-ligatures;
+  text-rendering: optimizeLegibility;
+}
+
+/* the room dimming + relighting during the lamp transition */
+html.transitioning body { filter: brightness(0.62) saturate(0.7); transition: filter 0.3s ease; }
+html { transition: none; }
+
+::selection { background: var(--accent-soft); color: var(--text); }
+
+a { color: inherit; text-decoration: none; }
+
+/* ---------- BACKGROUND LAYERS ---------- */
+/* faint dotted help-lines grid */
+.bg-grid {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: radial-gradient(var(--text-08) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: -1px -1px;
+  transition: background-image 0.45s ease;
+}
+/* grain */
+.bg-grain {
+  position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  transition: opacity 0.45s ease;
+}
+
+/* ---------- THE LAMP BEAM (dark theme) ---------- */
+.lamp-beam {
+  position: fixed;
+  top: -12vh; right: 14vw;
+  width: 46vw; height: 130vh;
+  pointer-events: none; z-index: 0;
+  opacity: var(--beam-opacity);
+  transition: opacity 0.5s ease;
+  will-change: opacity, transform;
+}
+.lamp-beam .beam-core {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(60% 38% at 52% 4%, rgba(255,225,170,0.55), rgba(232,163,77,0.0) 70%),
+    linear-gradient(176deg, rgba(232,163,77,0.42) 0%, rgba(194,105,30,0.22) 34%, rgba(232,163,77,0.05) 64%, transparent 86%);
+  filter: blur(90px);
+  opacity: 0.5;
+}
+.lamp-beam .beam-narrow {
+  position: absolute; top: -6vh; left: 44%;
+  width: 9vw; height: 120vh;
+  background: linear-gradient(178deg, rgba(255,233,190,0.5), rgba(232,163,77,0.14) 40%, transparent 78%);
+  filter: blur(46px);
+  transform: rotate(2deg);
+}
+@media (prefers-reduced-motion: no-preference) {
+  [data-theme="dark"] .lamp-beam { animation: beam-breathe 12s ease-in-out infinite; }
+}
+@keyframes beam-breathe {
+  0%, 100% { opacity: 0.9; }
+  50%      { opacity: 1; }
+}
+/* a fainter second pool behind the features section */
+.lamp-pool {
+  position: absolute; z-index: 0; pointer-events: none;
+  width: 70%; height: 600px; left: 50%; top: 10%;
+  transform: translateX(-50%);
+  background: radial-gradient(50% 50% at 50% 50%, rgba(232,163,77,0.16), transparent 70%);
+  filter: blur(80px);
+  opacity: var(--beam-opacity);
+  transition: opacity 0.5s ease;
+}
+
+/* ---------- CROP MARKS ---------- */
+.crop { position: fixed; width: 22px; height: 22px; z-index: 3; pointer-events: none; opacity: 0.5; }
+.crop::before, .crop::after { content: ""; position: absolute; background: var(--text-35); transition: background-color 0.45s ease; }
+.crop::before { width: 22px; height: 1px; }
+.crop::after  { width: 1px; height: 22px; }
+.crop.tl { top: 20px; left: 20px; }
+.crop.tr { top: 20px; right: 20px; }
+.crop.tr::before { right: 0; } .crop.tr::after { right: 0; }
+.crop.bl { bottom: 20px; left: 20px; }
+.crop.bl::before { bottom: 0; } .crop.bl::after { bottom: 0; }
+.crop.br { bottom: 20px; right: 20px; }
+.crop.br::before { bottom: 0; right: 0; } .crop.br::after { bottom: 0; right: 0; }
+
+/* ---------- MARGIN RULE + ANNOTATION RAIL ---------- */
+.margin-rail {
+  position: absolute; top: 0; left: 38px; bottom: 0; width: 1px;
+  background: linear-gradient(var(--text-15), var(--text-15));
+  z-index: 2; pointer-events: none;
+}
+.rail-ticks { position: absolute; top: 96px; bottom: 80px; left: 38px; width: 8px; z-index: 2; pointer-events: none; }
+.rail-x { position: absolute; left: 34px; font-family: "JetBrains Mono", monospace; font-size: 9px; color: var(--text-35); }
+.rail-x.top { top: 78px; } .rail-x.bot { bottom: 64px; }
+
+.marg-note {
+  position: absolute; left: 18px; width: 64px;
+  font-size: 10px; line-height: 1.4; color: var(--text-35);
+  text-align: left; font-style: italic; z-index: 2; pointer-events: none;
+}
+.marg-note .lab {
+  display: block; font-style: normal; font-variant: small-caps;
+  letter-spacing: 0.08em; font-weight: 600; color: var(--text-35);
+  font-size: 10px;
+}
+
+/* registration marks */
+.reg {
+  position: absolute; font-family: "JetBrains Mono", monospace;
+  font-size: 11px; color: var(--text-35); opacity: 0.5; z-index: 2; pointer-events: none;
+  letter-spacing: 0.3em;
+}
+
+/* ---------- LAYOUT ---------- */
+.wrap { position: relative; z-index: 2; max-width: 1280px; margin: 0 auto; padding: 0 64px; }
+section { position: relative; z-index: 2; }
+
+/* small-caps technical label */
+.eyebrow, .smallcap {
+  font-variant: small-caps;
+  text-transform: lowercase;
+  letter-spacing: 0.16em;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-60);
+}
+.smallcap.upper { text-transform: uppercase; font-variant: normal; }
+
+/* LaTeX logotype */
+.latex { font-style: normal; white-space: nowrap; }
+.latex sup { font-size: 0.72em; vertical-align: 0.42em; margin: 0 -0.32em 0 -0.12em; }
+.latex sub { font-size: 0.9em; vertical-align: -0.22em; margin: 0 -0.06em; }
+
+/* ---------- HEADER ---------- */
+header {
+  position: sticky; top: 0; z-index: 40;
+  border-bottom: 1px solid var(--text-15);
+  transition: background-color 0.4s ease, border-color 0.45s ease, backdrop-filter 0.4s ease;
+}
+header.scrolled {
+  background: var(--nav-blur-bg);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.nav { display: flex; align-items: center; gap: 0; height: 84px; padding: 0 64px; max-width: 1408px; margin: 0 auto; position: relative; }
+.brand { font-size: 26px; font-weight: 500; letter-spacing: -0.01em; margin-right: auto; }
+.nav-links { display: flex; align-items: center; gap: 40px; }
+.nav-links a { font-size: 16px; color: var(--text-60); transition: color 0.2s ease; }
+.nav-links a:hover { color: var(--text); }
+.nav-sep { width: 1px; height: 26px; background: var(--text-15); margin: 0 34px; }
+.btn {
+  font-family: inherit; font-size: 15px; cursor: pointer; border: none;
+  display: inline-flex; align-items: center; gap: 10px; transition: all 0.2s ease;
+}
+.btn-primary {
+  background: var(--btn-bg); color: var(--btn-text);
+  padding: 13px 24px; border-radius: var(--btn-radius); font-weight: 500;
+}
+[data-theme="dark"] .btn-primary:hover { box-shadow: 0 0 24px -2px rgba(232,163,77,0.5); transform: translateY(-1px); }
+[data-theme="light"] .btn-primary:hover { transform: translateY(-1px); }
+.btn-ghost {
+  background: transparent; color: var(--text); padding: 13px 22px;
+  border: 1px solid var(--text-15); border-radius: var(--btn-radius); font-weight: 500;
+}
+.btn-ghost:hover { border-color: var(--text-35); }
+
+/* ---------- PULL-CORD LAMP TOGGLE ---------- */
+.cord-wrap {
+  position: relative; width: 30px; height: 70px; margin-left: 30px;
+  cursor: pointer; flex: none;
+  display: flex; justify-content: center;
+}
+.cord-svg { overflow: visible; transition: transform 0.42s cubic-bezier(.18,1.3,.4,1); transform-origin: top center; }
+.cord-wrap.pull .cord-svg { transform: translateY(6px); }
+.cord-line { stroke: var(--text-35); stroke-width: 1.25; transition: stroke 0.45s ease; }
+.cord-ring { stroke: var(--text-35); stroke-width: 1.25; fill: none; transition: stroke 0.45s ease; }
+[data-theme="dark"] .cord-line, [data-theme="dark"] .cord-ring { stroke: var(--accent); }
+.cord-wrap:hover .cord-line, .cord-wrap:hover .cord-ring { stroke: var(--accent); }
+.cord-cap { font-family: "JetBrains Mono", monospace; font-size: 8px; fill: var(--text-35); }
+
+/* ---------- HERO ---------- */
+.hero { padding: 84px 0 70px; }
+.hero-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.06fr); gap: 40px; align-items: start; }
+.hero-left { padding-top: 30px; max-width: 560px; }
+.hero-eyebrow { margin-bottom: 26px; }
+.hero h1 {
+  font-size: clamp(40px, 5.4vw, 64px); font-weight: 500; line-height: 1.04;
+  letter-spacing: -0.015em; min-height: 2.1em;
+}
+.hero h1 .word { position: relative; white-space: nowrap; }
+.hero h1 .sel { background: var(--accent-soft); border-radius: 1px; }
+.hero h1 .newword { color: var(--accent); position: relative; }
+[data-theme="dark"] .hero h1 .newword { text-shadow: 0 0 22px rgba(232,163,77,0.45); }
+.hero h1 .typeward-underline {
+  position: absolute; left: 0; bottom: -0.06em; height: 2px; width: 0;
+  background: var(--accent);
+}
+.caret {
+  display: inline-block; width: 2px; height: 0.92em; background: var(--text);
+  margin-left: 1px; vertical-align: -0.08em; transition: background-color 0.45s ease;
+}
+.caret.blink { animation: caret-blink 1s steps(1) infinite; }
+.caret.hidden { opacity: 0; }
+@keyframes caret-blink { 0%,50% { opacity: 1; } 50.01%,100% { opacity: 0; } }
+
+.hero-divider { display: flex; align-items: center; gap: 14px; margin: 30px 0 26px; max-width: 240px; }
+.hero-divider .star { color: var(--accent); font-size: 15px; line-height: 1; }
+.hero-divider .rule { flex: 1; height: 1px; background: var(--text-15); }
+
+.hero-sub { font-size: 18px; line-height: 1.6; color: var(--text-60); max-width: 460px; }
+.hero-sub .em { color: var(--text); font-style: italic; }
+
+.hero-cta { display: flex; gap: 16px; margin: 34px 0 24px; flex-wrap: wrap; }
+.hero-platform { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--text-35); letter-spacing: 0.02em; }
+.hero-platform b { color: var(--text-60); font-weight: 500; }
+
+/* staggered reveal */
+.stagger { opacity: 0; transform: translateY(12px); }
+.stagger.in { opacity: 1; transform: none; transition: opacity 0.6s ease, transform 0.6s ease; }
+
+/* ---------- HERO RIGHT: editor + stacked papers ---------- */
+.hero-right { position: relative; min-height: 580px; }
+.papers { position: absolute; inset: 0; z-index: 1; }
+.sheet {
+  position: absolute; background: #F6F0E3; border: 1px solid rgba(28,25,23,0.08);
+  border-radius: 3px; box-shadow: 0 18px 40px -24px rgba(28,25,23,0.30);
+}
+[data-theme="dark"] .sheet { background: #2A2620; border-color: rgba(237,230,216,0.06); box-shadow: 0 24px 60px -30px rgba(0,0,0,0.7); opacity: 0.85; }
+.sheet .corner-note { position: absolute; font-family: "Source Serif 4", serif; font-style: italic; font-size: 12px; color: var(--text-35); }
+.sheet .scribble { position: absolute; opacity: 0.5; }
+.sheet1 { width: 360px; height: 460px; top: 24px; right: -14px; transform: rotate(3.2deg); }
+.sheet2 { width: 380px; height: 470px; top: 8px; right: 30px; transform: rotate(-2deg); }
+.sheet3 { width: 370px; height: 450px; top: 40px; right: 80px; transform: rotate(1.4deg); }
+
+/* editor window */
+.editor {
+  position: relative; z-index: 3; margin-left: 6px; margin-top: 18px;
+  background: var(--chrome); border-radius: 12px; overflow: hidden;
+  box-shadow: var(--shadow-mockup);
+  border: 1px solid var(--chrome-line);
+  transition: box-shadow 0.45s ease, background-color 0.45s ease, border-color 0.45s ease;
+}
+.ed-titlebar {
+  display: flex; align-items: center; height: 42px; padding: 0 14px;
+  border-bottom: 1px solid var(--chrome-line); position: relative;
+}
+.dots { display: flex; gap: 8px; }
+.dot { width: 12px; height: 12px; border-radius: 50%; }
+.dot.r { background: #E0685E; } .dot.y { background: #E5B642; } .dot.g { background: #54B05A; }
+[data-theme="dark"] .dot { opacity: 0.85; }
+.ed-tab {
+  display: flex; align-items: center; gap: 7px; margin-left: 22px;
+  font-family: "JetBrains Mono", monospace; font-size: 12.5px; color: var(--text-60);
+}
+.ed-tab svg { opacity: 0.6; }
+.ed-tools { margin-left: auto; display: flex; align-items: center; gap: 16px; color: var(--text-35); }
+.ed-tools .pdf-pill { font-family: "JetBrains Mono", monospace; font-size: 11px; display: flex; align-items: center; gap: 6px; color: var(--text-60); }
+.ed-tools svg { display: block; }
+
+.ed-body { display: grid; grid-template-columns: 1fr 1fr; min-height: 470px; }
+.ed-source {
+  background: var(--bg-2); padding: 14px 0 14px 0; font-family: "JetBrains Mono", monospace;
+  font-size: 12px; line-height: 1.62; border-right: 1px solid var(--chrome-line);
+  transition: background-color 0.45s ease;
+}
+[data-theme="dark"] .ed-source { background: #100E0A; }
+.code-line { display: grid; grid-template-columns: 36px 1fr; white-space: pre; }
+.ln { color: var(--text-35); text-align: right; padding-right: 14px; -webkit-user-select: none; user-select: none; }
+.tok-cmd { color: var(--code-blue); }
+.tok-env { color: var(--code-green); }
+.tok-str { color: var(--code-red); }
+.tok-com { color: var(--code-comment); }
+.cur-line { background: var(--accent-soft); }
+
+/* PDF pane — stays cream in dark (the money shot) */
+.ed-pdf { background: var(--paper-pdf); color: #1C1917; padding: 30px 34px 22px; position: relative; transition: background-color 0.45s ease; }
+[data-theme="dark"] .ed-pdf { box-shadow: inset 0 0 60px rgba(255,210,140,0.08); }
+.pdf-title { text-align: center; font-size: 19px; font-weight: 600; margin-bottom: 14px; }
+.pdf-date { text-align: center; font-size: 13px; margin-bottom: 22px; }
+.pdf-h { font-size: 15px; font-weight: 600; margin: 4px 0 8px; }
+.pdf-h .num { margin-right: 12px; }
+.pdf-body { font-size: 13px; line-height: 1.5; }
+.pdf-diagram { display: flex; justify-content: center; margin: 16px 0; }
+.pdf-eq { display: flex; align-items: center; justify-content: center; gap: 0; margin: 18px 0 8px; position: relative; font-size: 16px; }
+.pdf-eq .eqnum { position: absolute; right: 0; font-size: 13px; }
+.pdf-pageno { text-align: center; font-size: 12px; color: rgba(28,25,23,0.5); margin-top: 26px; }
+
+/* compile skeleton overlay */
+.pdf-skeleton { position: absolute; inset: 0; background: var(--paper-pdf); padding: 34px; display: flex; flex-direction: column; gap: 13px; z-index: 4; transition: opacity 0.6s ease; }
+.sk { height: 11px; background: rgba(28,25,23,0.07); border-radius: 2px; }
+.sk.w-60 { width: 60%; margin: 0 auto; height: 16px; }
+.sk.w-30 { width: 30%; margin: 0 auto; }
+.sk.w-90 { width: 90%; } .sk.w-80 { width: 80%; } .sk.w-70 { width: 70%; }
+.sk.box { height: 90px; background: rgba(28,25,23,0.05); margin: 8px 0; }
+.pdf-revealed { opacity: 0; transition: opacity 0.7s ease; }
+.editor.compiled .pdf-skeleton { opacity: 0; pointer-events: none; }
+.editor.compiled .pdf-revealed { opacity: 1; }
+
+.ed-status {
+  display: flex; align-items: center; height: 30px; padding: 0 16px;
+  font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--text-35);
+  border-top: 1px solid var(--chrome-line); gap: 18px;
+}
+.ed-status .right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #E5B642; transition: background-color 0.4s ease; }
+.editor.compiled .status-dot { background: #54B05A; }
+.status-time { color: var(--text-35); }
+.editor.compiled .status-time { color: var(--code-green); }
+
+/* hero compass construction */
+.compass-construction { margin-top: 36px; max-width: 460px; }
+.compass-construction svg { width: 100%; height: auto; overflow: visible; }
+.draw-path { stroke: var(--text-35); fill: none; stroke-width: 1.4; transition: stroke 0.45s ease; }
+.draw-path.dashed { stroke-dasharray: 4 4; }
+.compass-construction .lbl { font-family: "Source Serif 4", serif; font-style: italic; font-size: 14px; fill: var(--text-60); }
+.compass-construction .pt { fill: var(--text); }
+
+/* line-draw mechanism */
+.line-draw { stroke-dasharray: var(--len); stroke-dashoffset: var(--len); }
+.line-draw.drawn { stroke-dashoffset: 0; transition: stroke-dashoffset 1.4s ease; }
+
+/* ---------- FEATURE STRIP ---------- */
+.strip { border-top: 1px solid var(--text-15); border-bottom: 1px solid var(--text-15); margin-top: 30px; }
+.strip-inner { display: grid; grid-template-columns: repeat(3, 1fr); }
+.strip-item { display: flex; gap: 18px; padding: 34px 40px; position: relative; }
+.strip-item + .strip-item::before { content: ""; position: absolute; left: 0; top: 26px; bottom: 26px; width: 1px; background: var(--text-15); }
+.strip-icon { flex: none; color: var(--text-60); }
+.strip-icon svg { display: block; }
+.strip-item h3 { font-size: 17px; font-weight: 600; margin-bottom: 5px; }
+.strip-item p { font-size: 14.5px; color: var(--text-60); line-height: 1.55; }
+
+/* ---------- SECTION HEADINGS ---------- */
+.section-head { margin-bottom: 44px; max-width: 720px; }
+.section-head .eyebrow { display: block; margin-bottom: 18px; color: var(--accent); }
+.section-head h2 { font-size: clamp(30px, 3.6vw, 44px); font-weight: 500; letter-spacing: -0.01em; line-height: 1.1; }
+.section-head p { font-size: 18px; color: var(--text-60); margin-top: 18px; line-height: 1.6; }
+
+.section { padding: 100px 0; }
+.section-rule { height: 1px; background: var(--text-15); }
+
+/* ---------- PHILOSOPHY: amsthm blocks ---------- */
+.philosophy { position: relative; }
+.abstract {
+  max-width: 760px; margin: 0 auto 60px; text-align: justify; hyphens: auto;
+  font-size: 16px; line-height: 1.7; color: var(--text-60);
+  padding: 0 30px; border-left: 1px solid var(--text-15); border-right: 1px solid var(--text-15);
+}
+.abstract .ab-label { display: block; text-align: center; font-variant: small-caps; letter-spacing: 0.14em; font-weight: 600; color: var(--text); margin-bottom: 12px; font-size: 13px; }
+.abstract .em { font-style: italic; color: var(--text); }
+
+.thm-grid { display: grid; gap: 26px; max-width: 860px; margin: 0 auto; }
+.thm {
+  background: var(--surface); border: 1px solid var(--surface-border);
+  border-radius: var(--card-radius); padding: 26px 30px; position: relative;
+  transition: background-color 0.45s ease, border-color 0.45s ease;
+}
+[data-theme="dark"] .thm { -webkit-backdrop-filter: blur(22px) saturate(130%); backdrop-filter: blur(22px) saturate(130%); }
+.thm .thm-head { font-weight: 600; font-size: 16px; margin-bottom: 8px; }
+.thm .thm-head .tag { font-style: italic; }
+.thm .thm-head .num { color: var(--text-35); font-weight: 400; }
+.thm .thm-body { font-size: 15.5px; line-height: 1.6; color: var(--text-60); }
+.thm .thm-body .em { font-style: italic; color: var(--text); }
+.thm.proof { background: transparent; border: none; border-radius: 0; padding: 18px 30px; }
+.thm.proof .thm-head .tag { font-style: italic; color: var(--text-60); font-weight: 500; }
+.thm.proof .thm-body { display: inline; }
+.tombstone {
+  display: inline-block; width: 11px; height: 11px; margin-left: 6px;
+  border: 1.4px solid var(--text); vertical-align: -1px;
+  background: linear-gradient(var(--text), var(--text)) no-repeat;
+  background-size: 0% 100%;
+}
+.tombstone.filled { background-size: 100% 100%; transition: background-size 0.8s ease; }
+.thm .marg-tag { position: absolute; right: -78px; top: 26px; width: 60px; font-size: 10px; font-style: italic; color: var(--text-35); }
+
+/* ---------- PERFORMANCE: Figure 1 ---------- */
+.perf-grid { display: grid; grid-template-columns: 1fr 1.05fr; gap: 64px; align-items: center; }
+.figure-wrap { background: var(--surface); border: 1px solid var(--surface-border); border-radius: var(--card-radius); padding: 30px 30px 22px; transition: background-color 0.45s ease, border-color 0.45s ease; }
+[data-theme="dark"] .figure-wrap { -webkit-backdrop-filter: blur(22px) saturate(130%); backdrop-filter: blur(22px) saturate(130%); }
+.figure-wrap svg { width: 100%; height: auto; overflow: visible; }
+.fig-axis { stroke: var(--text-35); stroke-width: 1.25; fill: none; }
+.fig-tick { stroke: var(--text-35); stroke-width: 1; }
+.fig-ticklabel, .fig-axislabel { font-family: "Source Serif 4", serif; font-size: 12px; fill: var(--text-60); font-style: italic; }
+.fig-grid { stroke: var(--text-08); stroke-width: 1; }
+.fig-timeout { stroke: var(--code-red); stroke-width: 1.25; stroke-dasharray: 5 4; fill: none; }
+.fig-curve-bad { stroke: var(--code-red); stroke-width: 1.75; fill: none; }
+.fig-curve-good { stroke: var(--accent); stroke-width: 1.75; fill: none; }
+.fig-mark { font-family: "JetBrains Mono", monospace; font-size: 15px; }
+.fig-mark.bad { fill: var(--code-red); } .fig-mark.good { fill: var(--code-green); }
+.fig-anno { font-family: "Source Serif 4", serif; font-style: italic; font-size: 12.5px; fill: var(--text-60); }
+.fig-caption { font-size: 13px; color: var(--text-60); margin-top: 14px; text-align: center; font-style: italic; }
+.fig-caption b { font-style: normal; font-weight: 600; color: var(--text); }
+.perf-points { list-style: none; }
+.perf-points li { padding: 18px 0; border-top: 1px solid var(--text-15); display: grid; grid-template-columns: 70px 1fr; gap: 18px; align-items: baseline; }
+.perf-points li:last-child { border-bottom: 1px solid var(--text-15); }
+.perf-points .pp-num { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--accent); padding-top: 2px; }
+.perf-points h4 { font-size: 17px; font-weight: 600; margin-bottom: 4px; }
+.perf-points p { font-size: 15px; color: var(--text-60); line-height: 1.55; }
+
+/* ---------- FEATURES GRID ---------- */
+.feat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+.feat-card {
+  background: var(--surface); border: 1px solid var(--surface-border);
+  border-radius: var(--card-radius); padding: 28px 26px 30px; position: relative;
+  min-height: 240px; display: flex; flex-direction: column;
+  transition: background-color 0.45s ease, border-color 0.45s ease, transform 0.3s ease;
+}
+[data-theme="dark"] .feat-card { -webkit-backdrop-filter: blur(22px) saturate(130%); backdrop-filter: blur(22px) saturate(130%); box-shadow: 0 30px 60px -40px rgba(0,0,0,0.6); }
+.feat-card:hover { transform: translateY(-3px); }
+[data-theme="dark"] .feat-card:hover { border-color: rgba(232,163,77,0.3); }
+.feat-card .corner-lab { font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--text-35); font-variant: small-caps; letter-spacing: 0.06em; margin-bottom: 22px; display: flex; justify-content: space-between; }
+.feat-card .feat-icon { color: var(--accent); margin-bottom: 16px; }
+.feat-card h3 { font-size: 19px; font-weight: 600; margin-bottom: 9px; letter-spacing: -0.01em; }
+.feat-card p { font-size: 14.5px; color: var(--text-60); line-height: 1.55; margin-top: auto; }
+
+/* ---------- PRICING: booktabs Table 1 ---------- */
+.pricing { text-align: center; }
+.table-scroll { overflow-x: auto; margin: 0 auto; max-width: 920px; }
+.booktabs { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 16px; }
+.booktabs caption { caption-side: top; font-style: italic; font-size: 14px; color: var(--text-60); margin-bottom: 20px; padding-bottom: 4px; }
+.booktabs caption b { font-style: normal; font-weight: 600; color: var(--text); }
+.booktabs th, .booktabs td { padding: 16px 22px; text-align: left; }
+.booktabs thead th { font-weight: 600; font-size: 16px; }
+.booktabs thead th.col { text-align: center; }
+.booktabs .toprule td, .booktabs .toprule th { border-top: 2.5px solid var(--text); }
+.booktabs .midrule td, .booktabs .midrule th { border-top: 1px solid var(--text-15); }
+.booktabs .botrule td, .booktabs .botrule th { border-bottom: 2.5px solid var(--text); }
+.booktabs tbody td { color: var(--text-60); }
+.booktabs tbody td.feat-name { color: var(--text); font-style: italic; }
+.booktabs td.col { text-align: center; }
+.booktabs .price { font-size: 15px; }
+.booktabs .price b { font-size: 22px; font-weight: 600; color: var(--text); font-style: normal; }
+.booktabs .pro { position: relative; }
+.booktabs th.pro { color: var(--accent); }
+.book-rule { transform-origin: left; }
+.table-foot { font-size: 13px; color: var(--text-35); font-style: italic; margin-top: 18px; text-align: left; max-width: 920px; margin-left: auto; margin-right: auto; }
+.pricing-cta { margin-top: 40px; display: flex; gap: 16px; justify-content: center; }
+
+/* ---------- FOOTER: References ---------- */
+footer { border-top: 1px solid var(--text-15); padding: 80px 0 50px; margin-top: 40px; position: relative; }
+.refs { display: grid; grid-template-columns: 1.4fr 1fr; gap: 60px; max-width: 1000px; }
+.refs h4 { font-variant: small-caps; letter-spacing: 0.12em; font-size: 14px; font-weight: 600; margin-bottom: 22px; color: var(--text); }
+.ref-list { list-style: none; }
+.ref-list li { display: grid; grid-template-columns: 34px 1fr; font-size: 14px; line-height: 1.55; color: var(--text-60); margin-bottom: 14px; }
+.ref-list .ref-n { color: var(--text-35); font-family: "JetBrains Mono", monospace; font-size: 12px; }
+.ref-list .ref-title { font-style: italic; color: var(--text); }
+.foot-nav { display: flex; flex-direction: column; gap: 12px; }
+.foot-nav a { font-size: 15px; color: var(--text-60); transition: color 0.2s ease; }
+.foot-nav a:hover { color: var(--accent); }
+.colophon { margin-top: 56px; padding-top: 26px; border-top: 1px solid var(--text-15); font-size: 12.5px; color: var(--text-35); font-style: italic; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.qed { text-align: center; margin-top: 50px; font-size: 16px; color: var(--text-60); font-style: italic; letter-spacing: 0.04em; }
+.qed .tomb { display: inline-block; width: 9px; height: 9px; background: var(--text); margin-left: 8px; vertical-align: 0; }
+
+/* ---------- RESPONSIVE ---------- */
+@media (max-width: 1024px) {
+  .margin-rail, .rail-ticks, .rail-x, .marg-note, .reg, .crop { display: none; }
+  .wrap { padding: 0 28px; }
+  .nav { padding: 0 28px; }
+  .hero-grid { grid-template-columns: 1fr; gap: 50px; }
+  .hero-right { min-height: 520px; }
+  .perf-grid { grid-template-columns: 1fr; gap: 40px; }
+  .feat-grid { grid-template-columns: 1fr 1fr; }
+  .nav-links { display: none; }
+  .nav-sep { display: none; }
+}
+@media (max-width: 680px) {
+  body { font-size: 16px; }
+  .strip-inner { grid-template-columns: 1fr; }
+  .strip-item + .strip-item::before { display: none; }
+  .strip-item { border-top: 1px solid var(--text-15); }
+  .strip-item:first-child { border-top: none; }
+  .feat-grid { grid-template-columns: 1fr; }
+  .refs { grid-template-columns: 1fr; gap: 36px; }
+  .section { padding: 70px 0; }
+  .hero-right { min-height: 440px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  .line-draw { stroke-dashoffset: 0 !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="lamp-beam"><div class="beam-core"></div><div class="beam-narrow"></div></div>
+<div class="bg-grain"></div>
+
+<!-- crop marks -->
+<div class="crop tl"></div><div class="crop tr"></div><div class="crop bl"></div><div class="crop br"></div>
+
+<!-- margin rule + rail -->
+<div class="margin-rail"></div>
+<div class="rail-ticks" id="railTicks"></div>
+<div class="rail-x top">&times;</div>
+<div class="rail-x bot">&times;</div>
+<div class="marg-note" style="top:150px;"><span class="lab">1 Intro.</span></div>
+<div class="marg-note" style="top:430px;">marg.<br/>2.54 cm</div>
+<div class="marg-note" style="top:660px;"><span class="lab">fig. 1.1</span></div>
+<div class="reg" style="top:120px; right:42px;">+ &#9671; &times;</div>
+
+<!-- ================= HEADER ================= -->
+<header id="header">
+  <nav class="nav">
+    <a href="#top" class="brand">Typeward</a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#philosophy">Philosophy</a>
+      <a href="#offline">Offline</a>
+      <a href="#performance">Docs</a>
+      <a href="#pricing">Pricing</a>
+    </div>
+    <div class="nav-sep"></div>
+    <button class="btn btn-primary">Get Typeward</button>
+    <!-- pull-cord lamp toggle -->
+    <div class="cord-wrap" id="cord" role="button" tabindex="0" aria-label="Toggle desk lamp (light / dark)">
+      <svg class="cord-svg" width="22" height="64" viewBox="0 0 22 64">
+        <line class="cord-line" x1="11" y1="0" x2="11" y2="48"></line>
+        <circle class="cord-ring" cx="11" cy="55" r="6.5"></circle>
+      </svg>
+    </div>
+  </nav>
+</header>
+
+<a id="top"></a>
+
+<!-- ================= HERO ================= -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-left">
+      <div class="hero-eyebrow eyebrow">A local-first <span class="latex">L<sup>A</sup>T<sub>E</sub>X</span> editor</div>
+      <h1 id="headline"><span class="caret blink" id="caret"></span></h1>
+
+      <div class="hero-divider stagger" id="heroDivider">
+        <span class="star">&#10043;</span><span class="rule"></span>
+      </div>
+
+      <p class="hero-sub stagger" id="heroSub">A quieter place for serious writing. <span class="em">No cloud. No timeouts. No compromise</span> — your machine, your manuscript, your rules.</p>
+
+      <div class="hero-cta stagger" id="heroCta">
+        <button class="btn btn-primary">Start writing &nbsp;&rarr;</button>
+        <button class="btn btn-ghost">View the editor</button>
+      </div>
+
+      <div class="hero-platform stagger" id="heroPlatform">
+        <b>v2.4</b> &nbsp;·&nbsp; macOS &nbsp;·&nbsp; Windows &nbsp;·&nbsp; Linux &nbsp;·&nbsp; <b>14.2 MB</b>, no account
+      </div>
+
+      <!-- self-drawing compass construction -->
+      <div class="compass-construction" id="compass" aria-hidden="true">
+        <svg viewBox="0 0 460 180">
+          <!-- baseline -->
+          <path class="draw-path line-draw" d="M 40 130 L 360 130"></path>
+          <!-- arc from A -->
+          <path class="draw-path line-draw" d="M 60 60 A 110 110 0 0 1 250 60"></path>
+          <!-- arc from B -->
+          <path class="draw-path line-draw" d="M 130 30 A 110 110 0 0 1 320 110"></path>
+          <!-- triangle -->
+          <path class="draw-path line-draw" d="M 70 130 L 175 50 L 250 130"></path>
+          <!-- dashed helpers -->
+          <path class="draw-path dashed line-draw" d="M 175 50 L 175 130"></path>
+          <path class="draw-path dashed line-draw" d="M 250 130 L 340 95"></path>
+          <!-- crosshair -->
+          <circle class="draw-path line-draw" cx="340" cy="95" r="11"></circle>
+          <path class="draw-path line-draw" d="M 340 78 L 340 112 M 323 95 L 357 95"></path>
+          <!-- points -->
+          <circle class="pt" cx="70" cy="130" r="2.6"></circle>
+          <circle class="pt" cx="175" cy="50" r="2.6"></circle>
+          <circle class="pt" cx="250" cy="130" r="2.6"></circle>
+          <text class="lbl" x="58" y="148">A</text>
+          <text class="lbl" x="170" y="40">B</text>
+          <text class="lbl" x="252" y="148">C</text>
+        </svg>
+      </div>
+    </div>
+
+    <!-- editor + papers -->
+    <div class="hero-right">
+      <div class="papers" aria-hidden="true">
+        <div class="sheet sheet1">
+          <div class="corner-note" style="top:14px; left:16px;">Thm. 2.3</div>
+        </div>
+        <div class="sheet sheet2">
+          <div class="corner-note" style="top:14px; right:18px;">p. 17</div>
+          <svg class="scribble" style="top:60px; right:30px;" width="90" height="120" viewBox="0 0 90 120">
+            <path d="M10 20 q20 -14 40 2 t30 -2" stroke="rgba(28,25,23,0.3)" fill="none" stroke-width="1"/>
+            <path d="M8 50 h60 M8 66 h44 M8 82 h54" stroke="rgba(28,25,23,0.22)" stroke-width="1"/>
+            <path d="M30 96 l16 -16 l16 16" stroke="rgba(28,25,23,0.28)" fill="none" stroke-width="1"/>
+          </svg>
+        </div>
+        <div class="sheet sheet3"></div>
+      </div>
+
+      <div class="editor" id="editor">
+        <div class="ed-titlebar">
+          <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+          <div class="ed-tab">
+            <svg width="11" height="13" viewBox="0 0 11 13"><path d="M1 1h6l3 3v8H1z" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+            study.tex
+          </div>
+          <div class="ed-tools">
+            <span class="pdf-pill">
+              <svg width="13" height="11" viewBox="0 0 13 11"><rect x="0.5" y="0.5" width="12" height="10" rx="1.5" fill="none" stroke="currentColor"/></svg>
+              PDF &#9662;
+            </span>
+            <svg width="15" height="13" viewBox="0 0 15 13"><rect x="0.5" y="0.5" width="14" height="12" rx="1.5" fill="none" stroke="currentColor"/><line x1="5" y1="0.5" x2="5" y2="12.5" stroke="currentColor"/></svg>
+            <svg width="14" height="12" viewBox="0 0 14 12"><path d="M1 2h12M1 6h12M1 10h12" stroke="currentColor"/></svg>
+            <svg width="13" height="13" viewBox="0 0 13 13"><circle cx="5.5" cy="5.5" r="4.5" fill="none" stroke="currentColor"/><line x1="9" y1="9" x2="12.5" y2="12.5" stroke="currentColor"/></svg>
+            <svg width="14" height="4" viewBox="0 0 14 4"><circle cx="2" cy="2" r="1.4" fill="currentColor"/><circle cx="7" cy="2" r="1.4" fill="currentColor"/><circle cx="12" cy="2" r="1.4" fill="currentColor"/></svg>
+          </div>
+        </div>
+        <div class="ed-body">
+          <div class="ed-source" id="edSource"></div>
+          <div class="ed-pdf">
+            <div class="pdf-revealed">
+              <div class="pdf-title">A Study in Simplicity</div>
+              <div class="pdf-date">May 26, 2025</div>
+              <div class="pdf-h"><span class="num">1</span>Introduction</div>
+              <p class="pdf-body">We seek clarity in both language and structure. Consider the commutative diagram</p>
+              <div class="pdf-diagram">
+                <svg width="190" height="120" viewBox="0 0 190 120">
+                  <text x="14" y="30" font-family="Source Serif 4" font-size="18">A</text>
+                  <text x="166" y="30" font-family="Source Serif 4" font-size="18">B</text>
+                  <text x="14" y="108" font-family="Source Serif 4" font-size="18">C</text>
+                  <text x="166" y="108" font-family="Source Serif 4" font-size="18">D</text>
+                  <line x1="34" y1="24" x2="158" y2="24" stroke="#1C1917" stroke-width="1"/>
+                  <path d="M158 24 l-7 -3 v6 z" fill="#1C1917"/>
+                  <line x1="160" y1="40" x2="160" y2="92" stroke="#1C1917" stroke-width="1"/>
+                  <path d="M160 92 l-3 -7 h6 z" fill="#1C1917"/>
+                  <line x1="22" y1="40" x2="22" y2="92" stroke="#1C1917" stroke-width="1"/>
+                  <path d="M22 92 l-3 -7 h6 z" fill="#1C1917"/>
+                  <line x1="34" y1="100" x2="158" y2="100" stroke="#1C1917" stroke-width="1"/>
+                  <path d="M158 100 l-7 -3 v6 z" fill="#1C1917"/>
+                  <text x="90" y="18" font-family="Source Serif 4" font-style="italic" font-size="15">f</text>
+                  <text x="166" y="70" font-family="Source Serif 4" font-style="italic" font-size="15">h</text>
+                  <text x="8" y="70" font-family="Source Serif 4" font-style="italic" font-size="15">g</text>
+                  <text x="90" y="116" font-family="Source Serif 4" font-style="italic" font-size="15">k</text>
+                </svg>
+              </div>
+              <p class="pdf-body" style="text-align:center; font-style:italic;">which expresses h &#8728; f = k &#8728; g.</p>
+              <div class="pdf-eq">
+                <span>&#8747;<sub style="font-style:italic">a</sub><sup style="font-style:italic">b</sup> <i>f</i>(<i>x</i>) <i>dx</i> = <i>F</i>(<i>b</i>) &minus; <i>F</i>(<i>a</i>)</span>
+                <span class="eqnum">(1)</span>
+              </div>
+              <div class="pdf-pageno">1</div>
+            </div>
+            <div class="pdf-skeleton" id="pdfSkeleton">
+              <div class="sk w-60"></div>
+              <div class="sk w-30"></div>
+              <div class="sk w-90" style="margin-top:14px"></div>
+              <div class="sk w-80"></div>
+              <div class="sk box"></div>
+              <div class="sk w-70"></div>
+              <div class="sk w-90"></div>
+            </div>
+          </div>
+        </div>
+        <div class="ed-status">
+          <span>Line 20, Col 1</span>
+          <div class="right">
+            <span>UTF-8</span>
+            <span>LaTeX</span>
+            <span class="status-time" id="statusTime">compiling…</span>
+            <span class="status-dot" id="statusDot"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- feature strip -->
+  <div class="strip" id="features">
+    <div class="wrap">
+      <div class="strip-inner">
+        <div class="strip-item">
+          <div class="strip-icon">
+            <svg width="34" height="34" viewBox="0 0 34 34" fill="none"><circle cx="17" cy="17" r="13" stroke="currentColor" stroke-width="1.3"/><circle cx="17" cy="17" r="6" stroke="currentColor" stroke-width="1.3"/><circle cx="17" cy="17" r="1.6" fill="currentColor"/></svg>
+          </div>
+          <div>
+            <h3>Distraction-free</h3>
+            <p>A calm interface for deep work and sustained focus.</p>
+          </div>
+        </div>
+        <div class="strip-item">
+          <div class="strip-icon">
+            <svg width="34" height="30" viewBox="0 0 34 30" fill="none"><path d="M2 6 a2 2 0 0 1 2 -2 h9 l3 4 h14 a2 2 0 0 1 2 2 v14 a2 2 0 0 1 -2 2 H4 a2 2 0 0 1 -2 -2 z" stroke="currentColor" stroke-width="1.3"/></svg>
+          </div>
+          <div>
+            <h3>Local files</h3>
+            <p>Your work stays on your machine. Always under your control.</p>
+          </div>
+        </div>
+        <div class="strip-item">
+          <div class="strip-icon">
+            <svg width="34" height="30" viewBox="0 0 34 30" fill="none"><path d="M3 26 V4 M3 26 H32" stroke="currentColor" stroke-width="1.3"/><path d="M3 22 C 10 22 11 8 17 8 C 23 8 24 18 31 18" stroke="currentColor" stroke-width="1.3"/></svg>
+          </div>
+          <div>
+            <h3>Beautiful diagrams</h3>
+            <p>TikZ at your fingertips. Precise, scalable, and elegant.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PHILOSOPHY ================= -->
+<section class="section philosophy" id="philosophy">
+  <div class="wrap">
+    <div class="section-head" style="text-align:center; margin-left:auto; margin-right:auto;">
+      <span class="eyebrow">&sect; 2 &nbsp; On Privacy</span>
+      <h2>The quiet case for keeping your work close.</h2>
+    </div>
+
+    <div class="abstract">
+      <span class="ab-label">Abstract</span>
+      We consider the writing environment as a closed system. The author's text, figures, and revisions need never leave the machine on which they are composed. <span class="em">Where cloud editors introduce latency, surveillance, and the quiet anxiety of a server that might disappear,</span> a local-first tool returns the document to its rightful owner. We argue, with proof, that calm and control are not opposed to capability.
+    </div>
+
+    <div class="thm-grid">
+      <div class="thm" id="thm-def">
+        <div class="marg-tag">Def. 2.1</div>
+        <div class="thm-head"><span class="tag">Definition 2.1</span> <span class="num">(Local-first).</span></div>
+        <div class="thm-body">An editor is <span class="em">local-first</span> if every document it produces is readable, editable, and complete on the author's own disk, without a network connection and without permission from any third party.</div>
+      </div>
+      <div class="thm" id="thm-thm">
+        <div class="marg-tag">Thm. 4.2</div>
+        <div class="thm-head"><span class="tag">Theorem 4.2</span> <span class="num">(Calm preserved).</span></div>
+        <div class="thm-body">If a tool stores plain <code>.tex</code> files locally and compiles on the author's hardware, then it introduces <span class="em">no</span> external dependency, <span class="em">no</span> queue, and <span class="em">no</span> outage into the act of writing.</div>
+      </div>
+      <div class="thm proof" id="thm-proof">
+        <div class="thm-head"><span class="tag">Proof.</span></div>
+        <span class="thm-body">By construction. The source is a folder of text. The compiler is a single binary. Each is owned by the author and answers to nothing else. The conditions of Definition 2.1 are met directly, and there is nothing left to depend on.<span class="tombstone" id="tombstone1"></span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><div class="section-rule line-draw" data-rule></div></div>
+
+<!-- ================= PERFORMANCE ================= -->
+<section class="section" id="performance">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">&sect; 3 &nbsp; Performance</span>
+      <h2>Compiles before you finish your thought.</h2>
+      <p>No build queue. No "your document is 14th in line." Typeward runs the Tectonic engine directly on your hardware, so the page renders the instant you stop typing.</p>
+    </div>
+
+    <div class="perf-grid">
+      <div class="figure-wrap" id="figure">
+        <svg viewBox="0 0 460 320">
+          <!-- gridlines -->
+          <line class="fig-grid" x1="60" y1="240" x2="430" y2="240"/>
+          <line class="fig-grid" x1="60" y1="170" x2="430" y2="170"/>
+          <line class="fig-grid" x1="60" y1="100" x2="430" y2="100"/>
+          <!-- axes -->
+          <path class="fig-axis line-draw" d="M60 40 L60 270"/>
+          <path class="fig-axis line-draw" d="M60 270 L430 270"/>
+          <!-- ticks + labels -->
+          <line class="fig-tick" x1="56" y1="240" x2="60" y2="240"/>
+          <line class="fig-tick" x1="56" y1="170" x2="60" y2="170"/>
+          <line class="fig-tick" x1="56" y1="100" x2="60" y2="100"/>
+          <text class="fig-ticklabel" x="50" y="244" text-anchor="end">5</text>
+          <text class="fig-ticklabel" x="50" y="174" text-anchor="end">10</text>
+          <text class="fig-ticklabel" x="50" y="104" text-anchor="end">20</text>
+          <text class="fig-axislabel" x="18" y="160" text-anchor="middle" transform="rotate(-90 18 160)">compile time (s)</text>
+          <text class="fig-axislabel" x="245" y="298" text-anchor="middle">document length (pages)</text>
+          <text class="fig-ticklabel" x="150" y="288" text-anchor="middle">50</text>
+          <text class="fig-ticklabel" x="430" y="288" text-anchor="middle">200</text>
+          <!-- timeout line -->
+          <path class="fig-timeout" d="M60 100 L430 100"/>
+          <text class="fig-anno" x="424" y="92" text-anchor="end" fill="var(--code-red)">timeout 20 s</text>
+          <!-- bad curve (overleaf) -->
+          <path class="fig-curve-bad line-draw" id="curveBad" d="M60 252 C 170 248, 250 220, 300 160 C 330 124, 345 108, 360 100"/>
+          <text class="fig-mark bad" id="markBad" x="356" y="92" opacity="0">&#10007;</text>
+          <text class="fig-anno" x="300" y="150" fill="var(--code-red)">Overleaf</text>
+          <!-- good curve (typeward) -->
+          <path class="fig-curve-good line-draw" id="curveGood" d="M60 254 C 160 252, 280 250, 430 247"/>
+          <text class="fig-mark good" id="markGood" x="438" y="252" opacity="0">&#10003;</text>
+          <text class="fig-anno" x="270" y="240" fill="var(--accent)">Typeward — 2.3 s</text>
+        </svg>
+        <div class="fig-caption"><b>Figure 1:</b> Compile time vs. document length. Cloud build times grow until they hit the timeout; local compilation stays flat.</div>
+      </div>
+
+      <ul class="perf-points">
+        <li>
+          <span class="pp-num">3.1</span>
+          <div><h4>No queue, ever</h4><p>Your document compiles the moment you save — it is never waiting behind anyone else's.</p></div>
+        </li>
+        <li>
+          <span class="pp-num">3.2</span>
+          <div><h4>Incremental builds</h4><p>Only what changed is recompiled. A one-line edit to a 200-page thesis renders in milliseconds.</p></div>
+        </li>
+        <li>
+          <span class="pp-num">3.3</span>
+          <div><h4>Offline by default</h4><p>On a plane, in a library, off the grid — the compiler is already on your disk. Nothing to reach for.</p></div>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><div class="section-rule line-draw" data-rule></div></div>
+
+<!-- ================= FEATURES GRID ================= -->
+<section class="section" id="offline">
+  <div class="lamp-pool" aria-hidden="true"></div>
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">&sect; 4 &nbsp; Features</span>
+      <h2>Everything the document needs. Nothing it doesn't.</h2>
+    </div>
+
+    <div class="feat-grid">
+      <div class="feat-card">
+        <div class="corner-lab"><span>Lemma 4.1</span><span>&#43;</span></div>
+        <div class="feat-icon"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M4 24 V4 M4 24 H24" stroke="currentColor" stroke-width="1.4"/><path d="M4 19 C 9 19 10 7 14 7 C 18 7 19 14 24 14" stroke="currentColor" stroke-width="1.4"/></svg></div>
+        <h3>TikZ &amp; pgfplots</h3>
+        <p>Draw commutative diagrams, plots, and figures in code — and watch them render in real time.</p>
+      </div>
+      <div class="feat-card">
+        <div class="corner-lab"><span>Lemma 4.2</span><span>&#9671;</span></div>
+        <div class="feat-icon"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><rect x="4" y="4" width="20" height="20" rx="2" stroke="currentColor" stroke-width="1.4"/><path d="M9 14 l3 3 l7 -7" stroke="currentColor" stroke-width="1.4"/></svg></div>
+        <h3>Live preview</h3>
+        <p>Source on the left, typeset PDF on the right. Your eye never leaves the page taking shape.</p>
+      </div>
+      <div class="feat-card">
+        <div class="corner-lab"><span>Lemma 4.3</span><span>&times;</span></div>
+        <div class="feat-icon"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 3 l11 6 v10 l-11 6 l-11 -6 V9 z" stroke="currentColor" stroke-width="1.4"/><path d="M14 3 v22 M3 9 l11 6 l11 -6" stroke="currentColor" stroke-width="1.2"/></svg></div>
+        <h3>Git-native</h3>
+        <p>Plain <code>.tex</code> files mean version control just works. Branch your thesis like you branch code.</p>
+      </div>
+      <div class="feat-card">
+        <div class="corner-lab"><span>Lemma 4.4</span><span>&#43;</span></div>
+        <div class="feat-icon"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><circle cx="14" cy="14" r="11" stroke="currentColor" stroke-width="1.4"/><path d="M14 7 v7 l5 3" stroke="currentColor" stroke-width="1.4"/></svg></div>
+        <h3>Instant compile</h3>
+        <p>The Tectonic engine, bundled. No TeX Live install, no missing packages, no setup afternoon lost.</p>
+      </div>
+      <div class="feat-card">
+        <div class="corner-lab"><span>Lemma 4.5</span><span>&#9671;</span></div>
+        <div class="feat-icon"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M6 4 h12 l4 4 v16 H6 z" stroke="currentColor" stroke-width="1.4"/><path d="M18 4 v4 h4 M10 14 h8 M10 18 h8" stroke="currentColor" stroke-width="1.2"/></svg></div>
+        <h3>BibTeX &amp; biblatex</h3>
+        <p>Citations, cross-references, and a bibliography that orders itself. Footnotes that stay put.</p>
+      </div>
+      <div class="feat-card">
+        <div class="corner-lab"><span>Lemma 4.6</span><span>&times;</span></div>
+        <div class="feat-icon"><svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 2 a6 6 0 0 1 6 6 v4 a6 6 0 0 1 -12 0 V8 a6 6 0 0 1 6 -6z" stroke="currentColor" stroke-width="1.4"/><path d="M5 13 a9 9 0 0 0 18 0 M14 22 v4 M9 26 h10" stroke="currentColor" stroke-width="1.4"/></svg></div>
+        <h3>Focus mode</h3>
+        <p>Dim everything but the sentence you are writing. The room goes dark; the lamp stays on the line.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="wrap"><div class="section-rule line-draw" data-rule></div></div>
+
+<!-- ================= PRICING ================= -->
+<section class="section pricing" id="pricing">
+  <div class="wrap">
+    <div class="section-head" style="text-align:center; margin-left:auto; margin-right:auto;">
+      <span class="eyebrow">&sect; 5 &nbsp; Pricing</span>
+      <h2>One purchase. Yours to keep.</h2>
+    </div>
+
+    <div class="table-scroll">
+      <table class="booktabs">
+        <caption><b>Table 1:</b> Plans compared. All figures in USD.</caption>
+        <thead>
+          <tr class="toprule">
+            <th>Feature</th>
+            <th class="col">Free</th>
+            <th class="col pro">Pro<span style="vertical-align:super; font-size:0.7em">*</span></th>
+            <th class="col">Team</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="midrule">
+            <td class="feat-name">Price</td>
+            <td class="col price"><b>$0</b></td>
+            <td class="col price"><b>$49</b><br/>once</td>
+            <td class="col price"><b>$39</b>/seat</td>
+          </tr>
+          <tr>
+            <td class="feat-name">Local compiler</td>
+            <td class="col">&#10003;</td><td class="col">&#10003;</td><td class="col">&#10003;</td>
+          </tr>
+          <tr>
+            <td class="feat-name">Documents</td>
+            <td class="col">3</td><td class="col">&#8734;</td><td class="col">&#8734;</td>
+          </tr>
+          <tr>
+            <td class="feat-name">TikZ &amp; pgfplots</td>
+            <td class="col">&#10003;</td><td class="col">&#10003;</td><td class="col">&#10003;</td>
+          </tr>
+          <tr>
+            <td class="feat-name">Git integration</td>
+            <td class="col">&mdash;</td><td class="col">&#10003;</td><td class="col">&#10003;</td>
+          </tr>
+          <tr>
+            <td class="feat-name">Shared libraries</td>
+            <td class="col">&mdash;</td><td class="col">&mdash;</td><td class="col">&#10003;</td>
+          </tr>
+          <tr class="botrule">
+            <td class="feat-name">Updates</td>
+            <td class="col">&#10003;</td><td class="col">lifetime</td><td class="col">lifetime</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="table-foot">*Most popular. A one-time purchase, no subscription. Overleaf charges $98/yr for less.</p>
+
+    <div class="pricing-cta">
+      <button class="btn btn-primary">Get Typeward Pro &nbsp;&rarr;</button>
+      <button class="btn btn-ghost">Download the free tier</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FOOTER ================= -->
+<footer>
+  <div class="wrap">
+    <div class="refs">
+      <div>
+        <h4>References</h4>
+        <ul class="ref-list">
+          <li><span class="ref-n">[1]</span><span>The Tectonic Project. <span class="ref-title">Tectonic: a modern, self-contained TeX/LaTeX engine.</span> 2024.</span></li>
+          <li><span class="ref-n">[2]</span><span>D. E. Knuth. <span class="ref-title">The TeXbook.</span> Addison-Wesley, 1984.</span></li>
+          <li><span class="ref-n">[3]</span><span>L. Lamport. <span class="ref-title">LaTeX: A Document Preparation System.</span> 2nd ed., 1994.</span></li>
+          <li><span class="ref-n">[4]</span><span>M. Kleppmann et al. <span class="ref-title">Local-first software.</span> Onward!, 2019.</span></li>
+          <li><span class="ref-n">[5]</span><span>You. <span class="ref-title">Your thesis, finally compiling in peace.</span> Forthcoming.</span></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Typeward</h4>
+        <nav class="foot-nav">
+          <a href="#features">Features</a>
+          <a href="#philosophy">Philosophy</a>
+          <a href="#performance">Performance</a>
+          <a href="#pricing">Pricing</a>
+          <a href="#top">Download</a>
+        </nav>
+      </div>
+    </div>
+    <div class="colophon">
+      <span>Set in Source Serif 4 &amp; JetBrains Mono. Typeset locally, of course.</span>
+      <span>&copy; 2026 Typeward. No cloud was harmed.</span>
+    </div>
+    <div class="qed">Q.E.D.<span class="tomb"></span></div>
+  </div>
+</footer>
+
+<script>
+/* ============================================================
+   THEME — the desk lamp
+   ============================================================ */
+(function () {
+  var html = document.documentElement;
+  var KEY = 'typeward-theme';
+  var stored = null;
+  try { stored = localStorage.getItem(KEY); } catch (e) {}
+  var initial = stored || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  html.setAttribute('data-theme', initial);
+
+  var cord = document.getElementById('cord');
+  function setTheme(theme, animate) {
+    if (animate) {
+      html.classList.add('transitioning');
+      // dim the room, then swap tokens, then relight
+      var swapDelay = theme === 'dark' ? 200 : 80;
+      setTimeout(function () { html.setAttribute('data-theme', theme); }, swapDelay);
+      setTimeout(function () { html.classList.remove('transitioning'); }, 640);
+    } else {
+      html.setAttribute('data-theme', theme);
+    }
+    try { localStorage.setItem(KEY, theme); } catch (e) {}
+  }
+  function toggle() {
+    var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    cord.classList.add('pull');
+    setTimeout(function () { cord.classList.remove('pull'); }, 440);
+    setTheme(next, true);
+  }
+  cord.addEventListener('click', toggle);
+  cord.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+})();
+
+/* ============================================================
+   HEADER scroll state
+   ============================================================ */
+(function () {
+  var header = document.getElementById('header');
+  function onScroll() { header.classList.toggle('scrolled', window.scrollY > 8); }
+  onScroll();
+  window.addEventListener('scroll', onScroll, { passive: true });
+})();
+
+/* ============================================================
+   MARGIN RAIL ticks
+   ============================================================ */
+(function () {
+  var rail = document.getElementById('railTicks');
+  if (!rail) return;
+  var h = Math.max(document.body.scrollHeight, 2400);
+  var html = '';
+  for (var y = 0; y < h - 200; y += 48) {
+    html += '<div style="position:absolute;top:' + y + 'px;left:0;width:5px;height:1px;background:var(--text-15);"></div>';
+  }
+  rail.innerHTML = html;
+})();
+
+/* ============================================================
+   THE EDITOR SOURCE (study.tex)
+   ============================================================ */
+(function () {
+  var lines = [
+    ['\\documentclass', '{article}', 'cmd'],
+    ['\\usepackage', '{amsmath,amssymb}', 'cmd'],
+    ['\\usepackage', '{tikz-cd}', 'cmd'],
+    ['\\usepackage', '{geometry}', 'cmd'],
+    ['\\geometry', '{margin=2.54cm}', 'cmd'],
+    ['', '', 'blank'],
+    ['\\title', '{A Study in Simplicity}', 'cmd'],
+    ['\\author', '{ }', 'cmd'],
+    ['\\date', '{\\today}', 'cmd'],
+    ['', '', 'blank'],
+    ['\\begin', '{document}', 'env'],
+    ['\\maketitle', '', 'cmd'],
+    ['', '', 'blank'],
+    ['\\section', '{Introduction}', 'cmd'],
+    ['We seek clarity in both language and', '', 'text'],
+    ['structure. Consider the commutative diagram', '', 'text'],
+    ['', '', 'blank'],
+    ['\\begin', '{tikzcd}', 'env'],
+    ['A \\arrow[r,"f"] \\arrow[d,"g"] & B \\arrow[d,"h"]', '', 'arrow'],
+    ['C \\arrow[r,"k"] & D', '', 'arrow'],
+    ['\\end', '{tikzcd}', 'env'],
+    ['', '', 'blank'],
+    ['which expresses $h\\circ f = k\\circ g$.', '', 'text'],
+    ['', '', 'blank'],
+    ['\\begin', '{equation}', 'env'],
+    ['\\int_a^b f(x)\\,dx = F(b) - F(a)', '', 'mathline'],
+    ['\\end', '{equation}', 'env'],
+    ['', '', 'blank'],
+    ['\\end', '{document}', 'env']
+  ];
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function render(parts) {
+    var cmd = parts[0], arg = parts[1], type = parts[2];
+    if (type === 'blank') return '&nbsp;';
+    if (type === 'cmd') return '<span class="tok-cmd">' + esc(cmd) + '</span>' + '<span class="tok-env">' + esc(arg) + '</span>';
+    if (type === 'env') return '<span class="tok-cmd">' + esc(cmd) + '</span>' + '<span class="tok-env">' + esc(arg) + '</span>';
+    if (type === 'arrow') {
+      // colour \arrow commands blue, strings red
+      var html = esc(cmd)
+        .replace(/\\arrow/g, '<span class="tok-cmd">\\arrow</span>')
+        .replace(/&quot;([^&]*)&quot;/g, '<span class="tok-str">"$1"</span>');
+      return html;
+    }
+    if (type === 'mathline') {
+      return esc(cmd).replace(/\\int|\\,|\\b/g, function (m) { return '<span class="tok-cmd">' + m + '</span>'; });
+    }
+    return esc(cmd);
+  }
+  var src = document.getElementById('edSource');
+  var out = '';
+  for (var i = 0; i < lines.length; i++) {
+    var cls = (i === 18) ? 'code-line cur-line' : 'code-line';
+    out += '<div class="' + cls + '"><span class="ln">' + (i + 1) + '</span><span>' + render(lines[i]) + '</span></div>';
+  }
+  src.innerHTML = out;
+})();
+
+/* ============================================================
+   HERO TYPING ANIMATION
+   "It's time to move forward." -> "It's time to move Typeward."
+   ============================================================ */
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var headline = document.getElementById('headline');
+  var caret = document.getElementById('caret');
+  var prefix = "It's time to move ";
+
+  function staggerIn() {
+    var els = ['heroDivider', 'heroSub', 'heroCta', 'heroPlatform'];
+    els.forEach(function (id, i) {
+      var el = document.getElementById(id);
+      setTimeout(function () { el.classList.add('in'); }, 200 + i * 90);
+    });
+  }
+
+  if (reduce) {
+    headline.innerHTML = "It's time to move <span class=\"word\">Type<span class=\"newword\">ward</span></span>.";
+    // simpler: final state
+    headline.innerHTML = "It's time to move <span class=\"word\"><span class=\"newword\">Type</span>ward<span class=\"typeward-underline\" style=\"width:100%\"></span></span>.";
+    staggerIn();
+    return;
+  }
+
+  // build structure: [prefix span][word span][period]
+  var preSpan = document.createElement('span');
+  var wordSpan = document.createElement('span');
+  wordSpan.className = 'word';
+  var periodSpan = document.createElement('span');
+  periodSpan.textContent = '';
+  headline.innerHTML = '';
+  headline.appendChild(preSpan);
+  headline.appendChild(wordSpan);
+  headline.appendChild(periodSpan);
+  headline.appendChild(caret);
+  caret.classList.remove('blink');
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function moveCaretAfter(node) { headline.insertBefore(caret, node.nextSibling); }
+
+  async function typeInto(el, text, speed) {
+    headline.insertBefore(caret, el.nextSibling);
+    for (var i = 0; i < text.length; i++) {
+      el.textContent += text[i];
+      await sleep(speed + Math.random() * 30);
+    }
+  }
+
+  async function run() {
+    await sleep(450);
+    // type prefix
+    await typeInto(preSpan, prefix, 48);
+    // type the word "forward"
+    await typeInto(wordSpan, 'forward', 70);
+    periodSpan.textContent = '.';
+    moveCaretAfter(periodSpan);
+    caret.classList.add('blink');
+    await sleep(750);
+    caret.classList.remove('blink');
+
+    // select "for"
+    wordSpan.innerHTML = '<span class="sel">for</span>ward';
+    moveCaretAfter(wordSpan);
+    await sleep(600);
+
+    // delete selection -> "ward"
+    wordSpan.innerHTML = 'ward';
+    headline.insertBefore(caret, wordSpan); // caret before ward
+    await sleep(260);
+
+    // type "Type" in accent before "ward"
+    wordSpan.innerHTML = '<span class="newword"></span>ward';
+    var nw = wordSpan.querySelector('.newword');
+    headline.insertBefore(caret, wordSpan.nextSibling);
+    var typeWord = 'Type';
+    for (var i = 0; i < typeWord.length; i++) {
+      nw.textContent += typeWord[i];
+      await sleep(95 + Math.random() * 40);
+    }
+    moveCaretAfter(periodSpan);
+    await sleep(180);
+
+    // draw underline beneath "Typeward"
+    var ul = document.createElement('span');
+    ul.className = 'typeward-underline';
+    wordSpan.style.position = 'relative';
+    wordSpan.appendChild(ul);
+    ul.getBoundingClientRect();
+    ul.style.transition = 'width 0.55s ease';
+    ul.style.width = '100%';
+    await sleep(650);
+
+    // caret blinks twice then fades
+    caret.classList.add('blink');
+    await sleep(2000);
+    caret.classList.add('hidden');
+
+    staggerIn();
+  }
+  // start staggering subtitle a touch after the correction completes
+  run();
+  // ensure subtitle shows even if timing is long
+  setTimeout(staggerIn, 6500);
+})();
+
+/* ============================================================
+   INTERSECTION OBSERVERS — line draws, compile, chart, tombstone
+   ============================================================ */
+(function () {
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // set up line-draw lengths
+  function prepDraw(path) {
+    try {
+      var len = path.getTotalLength ? path.getTotalLength() : 400;
+      path.style.setProperty('--len', len);
+    } catch (e) { path.style.setProperty('--len', 400); }
+  }
+  document.querySelectorAll('.line-draw').forEach(prepDraw);
+
+  function drawNow(el) {
+    if (reduce) { el.classList.add('drawn'); return; }
+    el.classList.add('drawn');
+  }
+
+  // generic observer factory
+  function observe(selector, cb, opts) {
+    var els = (typeof selector === 'string') ? document.querySelectorAll(selector) : selector;
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { cb(e.target); io.unobserve(e.target); }
+      });
+    }, opts || { threshold: 0.3 });
+    els.forEach(function (el) { io.observe(el); });
+  }
+
+  // compass construction self-draws on load (it's near the top)
+  (function () {
+    var compass = document.getElementById('compass');
+    if (!compass) return;
+    var paths = compass.querySelectorAll('.line-draw');
+    function go() {
+      paths.forEach(function (p, i) {
+        setTimeout(function () { p.classList.add('drawn'); }, reduce ? 0 : 400 + i * 320);
+      });
+    }
+    observe([compass], go, { threshold: 0.2 });
+  })();
+
+  // section rules
+  observe('.section-rule', function (el) {
+    el.style.setProperty('--len', el.offsetWidth);
+    el.style.width = '0';
+    el.style.background = 'var(--text-15)';
+    el.style.height = '1px';
+    el.style.transition = reduce ? 'none' : 'width 1.1s ease';
+    requestAnimationFrame(function () { el.style.width = '100%'; });
+  });
+
+  // editor compile
+  observe([document.getElementById('editor')], function (el) {
+    var time = document.getElementById('statusTime');
+    setTimeout(function () {
+      el.classList.add('compiled');
+      time.textContent = '2.3 s';
+    }, reduce ? 0 : 700);
+  }, { threshold: 0.25 });
+
+  // tombstone
+  observe([document.getElementById('tombstone1')], function (el) {
+    setTimeout(function () { el.classList.add('filled'); }, reduce ? 0 : 200);
+  }, { threshold: 0.6 });
+
+  // figure 1 chart
+  observe([document.getElementById('figure')], function () {
+    var axes = document.querySelectorAll('#figure .fig-axis');
+    axes.forEach(function (p, i) { setTimeout(function () { p.classList.add('drawn'); }, i * 200); });
+    var bad = document.getElementById('curveBad');
+    var good = document.getElementById('curveGood');
+    setTimeout(function () { bad.classList.add('drawn'); }, reduce ? 0 : 500);
+    setTimeout(function () { good.classList.add('drawn'); }, reduce ? 0 : 700);
+    setTimeout(function () {
+      var mb = document.getElementById('markBad'), mg = document.getElementById('markGood');
+      mb.style.transition = 'opacity 0.4s ease'; mg.style.transition = 'opacity 0.4s ease';
+      mb.style.opacity = 1; mg.style.opacity = 1;
+    }, reduce ? 0 : 2000);
+  }, { threshold: 0.3 });
+
+  // generic text fade-up for headings/cards
+  var fadeEls = document.querySelectorAll('.section-head, .thm, .feat-card, .perf-points li, .strip-item, .abstract, .booktabs, .refs');
+  fadeEls.forEach(function (el) { el.classList.add('stagger'); });
+  observe(fadeEls, function (el) { el.classList.add('in'); }, { threshold: 0.15 });
+})();
+</script>
+</body>
+</html>
