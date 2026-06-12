@@ -4,6 +4,13 @@
 # (workflow_dispatch). No pushes, no PRs — CI minutes only burn when
 # you explicitly ask for a build.
 #
+# Layout note: package.json depends on `texlive-wasm: file:../texlive-wasm`,
+# so this repo is checked out into `app/` and the sibling repo into
+# `texlive-wasm/` (built before `npm ci` — without its dist/, both Vite and
+# tsc fail to resolve the package). If typeward/texlive-wasm is private, add
+# a `SIBLING_REPO_TOKEN` repo secret (PAT with repo read) — the default
+# GITHUB_TOKEN can't read other private repos.
+#
 # Per platform we install the right dev deps, fetch the Tectonic
 # sidecar binary (gitignored; `npm run fetch:tectonic` resolves it for
 # the host triple), build a release bundle via `npm run tauri build`,
@@ -58,25 +65,25 @@ jobs:
             target: aarch64-apple-darwin
             artifact: typeward-macos-arm64
             paths: |
-              src-tauri/target/release/bundle/dmg/*.dmg
-              src-tauri/target/release/bundle/macos/*.app.tar.gz
+              app/src-tauri/target/release/bundle/dmg/*.dmg
+              app/src-tauri/target/release/bundle/macos/*.app.tar.gz
           - label: Windows (x64)
             runner: windows-latest
             os: windows
             target: x86_64-pc-windows-msvc
             artifact: typeward-windows-x64
             paths: |
-              src-tauri/target/release/bundle/msi/*.msi
-              src-tauri/target/release/bundle/nsis/*.exe
+              app/src-tauri/target/release/bundle/msi/*.msi
+              app/src-tauri/target/release/bundle/nsis/*.exe
           - label: Linux (x64)
             runner: ubuntu-24.04
             os: linux
             target: x86_64-unknown-linux-gnu
             artifact: typeward-linux-x64
             paths: |
-              src-tauri/target/release/bundle/deb/*.deb
-              src-tauri/target/release/bundle/appimage/*.AppImage
-              src-tauri/target/release/bundle/rpm/*.rpm
+              app/src-tauri/target/release/bundle/deb/*.deb
+              app/src-tauri/target/release/bundle/appimage/*.AppImage
+              app/src-tauri/target/release/bundle/rpm/*.rpm
 
     steps:
       - name: Skip if not in requested platform list
@@ -91,9 +98,19 @@ jobs:
             echo "::notice::Skipping ${{ matrix.label }} — not in requested list ($requested)."
           fi
 
-      - name: Checkout
+      - name: Checkout app
         if: steps.gate.outputs.build == 'true'
         uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Checkout texlive-wasm sibling
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: typeward/texlive-wasm
+          path: texlive-wasm
+          token: ${{ secrets.SIBLING_REPO_TOKEN || github.token }}
 
       - name: Set up Node
         if: steps.gate.outputs.build == 'true'
@@ -101,6 +118,7 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
+          cache-dependency-path: app/package-lock.json
 
       - name: Set up Rust
         if: steps.gate.outputs.build == 'true'
@@ -112,7 +130,7 @@ jobs:
         if: steps.gate.outputs.build == 'true'
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri -> target
+          workspaces: app/src-tauri -> target
           # The Tectonic sidecar binary lives under src-tauri/binaries/
           # and isn't part of the cargo target dir, so the default
           # cache key still works.
@@ -130,23 +148,33 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
+      - name: Build texlive-wasm sibling
+        if: steps.gate.outputs.build == 'true'
+        working-directory: texlive-wasm
+        run: |
+          npm ci
+          npm run build
+
       - name: Install npm deps
         if: steps.gate.outputs.build == 'true'
+        working-directory: app
         run: npm ci
 
       - name: Fetch Tectonic sidecar
         if: steps.gate.outputs.build == 'true'
         shell: bash
+        working-directory: app
         run: npm run fetch:tectonic
 
       - name: Symlink Tectonic for the gnu triple (Linux)
         if: steps.gate.outputs.build == 'true' && matrix.os == 'linux'
         run: |
-          cd src-tauri/binaries
+          cd app/src-tauri/binaries
           ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
 
       - name: Build release bundle
         if: steps.gate.outputs.build == 'true'
+        working-directory: app
         env:
           # Secrets propagate to the Vite build at compile time. Empty
           # values are fine — the client returns null and the app stays
