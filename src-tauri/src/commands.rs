@@ -179,19 +179,27 @@ pub async fn compile_latex(
     app: tauri::AppHandle,
     project: Project,
     engine: Option<String>,
+    halt_on_error: Option<bool>,
 ) -> CmdResult<CompileResult> {
     let started = Instant::now();
     let (root, root_file) = checked_project_root_and_file(&project)?;
 
     let engine = engine.unwrap_or_else(|| "system-tex".into());
+    // Halting was historically hardcoded — keep it the default. Turning it
+    // off lets the engine push past errors and collect every diagnostic in
+    // one pass (often with a partial PDF). Tectonic always halts; the flag
+    // only applies to the system-tex path.
+    let halt = halt_on_error.unwrap_or(true);
     let (log, success) = match engine.as_str() {
         "tectonic" => run_tectonic(&app, &root_file, &root).await?,
         _ => {
             let root_for_cmd = root.clone();
             let root_file_for_cmd = root_file.clone();
-            tokio::task::spawn_blocking(move || run_system_tex(&root_file_for_cmd, &root_for_cmd))
-                .await
-                .map_err(err)??
+            tokio::task::spawn_blocking(move || {
+                run_system_tex(&root_file_for_cmd, &root_for_cmd, halt)
+            })
+            .await
+            .map_err(err)??
         }
     };
 
@@ -212,7 +220,7 @@ pub async fn compile_latex(
     })
 }
 
-fn run_system_tex(root_file: &str, root: &Path) -> Result<(String, bool), String> {
+fn run_system_tex(root_file: &str, root: &Path, halt_on_error: bool) -> Result<(String, bool), String> {
     let mut accumulated_log = String::new();
 
     // Prefer latexmk (handles multiple passes, bibliography). If it isn't on
@@ -220,16 +228,14 @@ fn run_system_tex(root_file: &str, root: &Path) -> Result<(String, bool), String
     // back to a direct pdflatex invocation. MiKTeX on Windows sometimes ships
     // latexmk without a usable Perl, so the fallback is important.
     if which::which("latexmk").is_ok() {
-        let latexmk_args = [
-            "-pdf",
-            "-synctex=1",
-            "-interaction=nonstopmode",
-            "-halt-on-error",
-            root_file,
-        ];
+        let mut latexmk_args = vec!["-pdf", "-synctex=1", "-interaction=nonstopmode"];
+        if halt_on_error {
+            latexmk_args.push("-halt-on-error");
+        }
+        latexmk_args.push(root_file);
         accumulated_log.push_str(&format!("$ latexmk {}\n", latexmk_args.join(" ")));
         match Command::new("latexmk")
-            .args(latexmk_args)
+            .args(&latexmk_args)
             .current_dir(root)
             .output()
         {
@@ -258,15 +264,14 @@ fn run_system_tex(root_file: &str, root: &Path) -> Result<(String, bool), String
         return Ok((accumulated_log, false));
     }
 
-    let pdflatex_args = [
-        "-synctex=1",
-        "-interaction=nonstopmode",
-        "-halt-on-error",
-        root_file,
-    ];
+    let mut pdflatex_args = vec!["-synctex=1", "-interaction=nonstopmode"];
+    if halt_on_error {
+        pdflatex_args.push("-halt-on-error");
+    }
+    pdflatex_args.push(root_file);
     accumulated_log.push_str(&format!("\n$ pdflatex {}\n", pdflatex_args.join(" ")));
     let output = Command::new("pdflatex")
-        .args(pdflatex_args)
+        .args(&pdflatex_args)
         .current_dir(root)
         .output()
         .map_err(|e| {
@@ -487,6 +492,50 @@ pub fn load_settings(app: tauri::AppHandle) -> CmdResult<Settings> {
 #[tauri::command]
 pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()> {
     settings::save(&app, &settings).map_err(err)
+}
+
+/// Settings → Security → "Reset local app data". Overwrites settings.json
+/// with the defaults; the frontend clears localStorage and reloads. Project
+/// files on disk are untouched.
+#[tauri::command]
+pub fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
+    settings::save(&app, &Settings::default()).map_err(err)
+}
+
+/// Zip the project sources for sharing. Reuses the template-capture walk
+/// (skips `.git`/`.typeward`/`node_modules`, symlinks, LaTeX build junk) and
+/// writes into the project's own sidecar so no new arbitrary-destination
+/// write primitive is added — the frontend copies the bundle to the user's
+/// chosen location through the dialog-scoped fs plugin.
+#[tauri::command]
+pub async fn export_project_zip(project: Project) -> CmdResult<String> {
+    let (root, _) = checked_project_root_and_file(&project)?;
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let files = crate::integrations::templates::collect_project_files(&root)
+            .map_err(|e| e.to_string())?;
+        let dest_dir = root.join(".typeward").join("build");
+        std::fs::create_dir_all(&dest_dir).map_err(err)?;
+        let dest = dest_dir.join("source-bundle.zip");
+        let file = std::fs::File::create(&dest).map_err(err)?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for abs in files {
+            let rel = abs
+                .strip_prefix(&root)
+                .map_err(err)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            zip.start_file(rel, options).map_err(err)?;
+            let bytes = std::fs::read(&abs).map_err(err)?;
+            use std::io::Write;
+            zip.write_all(&bytes).map_err(err)?;
+        }
+        zip.finish().map_err(err)?;
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(err)?
 }
 
 // ---------- Autosave / crash recovery -------------------------------------

@@ -45,6 +45,10 @@ pub struct EditorSettings {
     pub line_wrap: bool,
     #[serde(rename = "fontSize")]
     pub font_size: u16,
+    // Halting matches the engines' historical hardcoded behavior, so the
+    // serde default keeps older settings.json files loading unchanged.
+    #[serde(rename = "stopOnFirstError", default = "default_true")]
+    pub stop_on_first_error: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,14 +200,29 @@ pub struct GithubSettings {
     pub account_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiSettings {
+    /// Master switch. When off, the editor hides every AI surface (chat
+    /// panel, toolbar toggle) and no provider activates — zero AI traffic.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(rename = "activeProvider", default)]
     pub active_provider: Option<String>,
     #[serde(rename = "ollamaBaseUrl", default)]
     pub ollama_base_url: Option<String>,
     #[serde(rename = "perProviderModel", default)]
     pub per_provider_model: HashMap<String, String>,
+}
+
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            active_provider: None,
+            ollama_base_url: None,
+            per_provider_model: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -240,7 +259,16 @@ pub struct WorkspaceSettings {
     pub default_view: String,
     #[serde(rename = "defaultSort")]
     pub default_sort: String,
+    /// Per-card enable map for the Projects dashboard (legacy name kept so
+    /// pre-dashboard settings.json files carry their toggles over).
     pub widgets: HashMap<String, bool>,
+    /// Whether the dashboard panel shows above the project grid.
+    #[serde(rename = "dashboardEnabled", default)]
+    pub dashboard_enabled: bool,
+    /// User-arranged card order (drag & drop). Unknown ids are ignored;
+    /// missing ids append in registry order.
+    #[serde(rename = "dashboardOrder", default)]
+    pub dashboard_order: Vec<String>,
 }
 
 impl Default for Settings {
@@ -267,6 +295,7 @@ impl Default for EditorSettings {
             spell_check: true,
             line_wrap: true,
             font_size: 13,
+            stop_on_first_error: true,
         }
     }
 }
@@ -292,6 +321,8 @@ impl Default for WorkspaceSettings {
             default_view: "cards".into(),
             default_sort: "last-opened".into(),
             widgets: HashMap::new(),
+            dashboard_enabled: false,
+            dashboard_order: Vec::new(),
         }
     }
 }
