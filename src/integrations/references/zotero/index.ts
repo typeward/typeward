@@ -1,6 +1,7 @@
 export {
   createBetterBibTexProvider,
   probeBetterBibTex,
+  probeZoteroLocalApi,
   type BetterBibTexConfig,
 } from "./better-bibtex";
 export {

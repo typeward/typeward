@@ -2,7 +2,9 @@ import { createEffect, createRoot, createSignal } from "solid-js";
 import * as ipc from "~/ipc";
 import { isTauriMobile } from "~/lib/platform";
 import {
+  ACCENTS,
   type Accent,
+  THEMES,
   type Theme,
   accent,
   setAccent,
@@ -23,6 +25,8 @@ import {
   setDensity,
 } from "~/stores/ui-store";
 import {
+  dashboardEnabled,
+  dashboardOrder,
   defaultSort,
   defaultView,
   enableSpaces,
@@ -30,6 +34,8 @@ import {
   notificationsPanelDefault,
   type ProjectsSort,
   type ProjectsView,
+  setDashboardEnabled,
+  setDashboardOrder,
   setDefaultSort,
   setDefaultView,
   setEnableSpaces,
@@ -40,6 +46,19 @@ import {
 } from "~/stores/workspace-store";
 
 export type CompileEngine = "system-tex" | "tectonic" | "texlive-wasm";
+
+/**
+ * settings.json is an external boundary — values may predate the current
+ * enum (removed themes, renamed sorts). An invalid value would otherwise be
+ * applied verbatim AND re-persisted, making it sticky forever.
+ */
+export function validEnum<T extends string>(
+  raw: string,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  return (allowed as readonly string[]).includes(raw) ? (raw as T) : fallback;
+}
 
 function migrateCompileEngine(raw: string): CompileEngine {
   if (raw === "busytex") {
@@ -60,6 +79,8 @@ export interface EditorSettings {
   spellCheck: boolean;
   lineWrap: boolean;
   fontSize: number;
+  /** Pass -halt-on-error to latexmk/pdflatex (Tectonic always halts). */
+  stopOnFirstError: boolean;
 }
 
 const DEFAULT_EDITOR: EditorSettings = {
@@ -68,6 +89,7 @@ const DEFAULT_EDITOR: EditorSettings = {
   spellCheck: true,
   lineWrap: true,
   fontSize: 13,
+  stopOnFirstError: true,
 };
 
 const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
@@ -79,7 +101,7 @@ const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
   },
   cloud: { accounts: [] },
   vcs: { git: {}, github: {} },
-  ai: { perProviderModel: {} },
+  ai: { enabled: true, perProviderModel: {} },
   grammar: { enabled: false },
   templates: { recentTemplateIds: [] },
   account: {},
@@ -99,14 +121,16 @@ createRoot(() => {
   void (async () => {
     try {
       const s = await ipc.loadSettings();
-      setTheme(s.theme as Theme);
-      setAccent(s.accent as Accent);
+      setTheme(validEnum<Theme>(s.theme, THEMES, "daylight"));
+      setAccent(validEnum<Accent>(s.accent, ACCENTS, "violet-cyan"));
       setEditorSettings(s.editor);
       setProjectsRoot(s.projectsRoot);
       setCompileEngine(migrateCompileEngine(s.compileEngine));
       setOnboarded(s.onboarded);
 
-      setDensity(s.ui.density as Density);
+      setDensity(
+        validEnum<Density>(s.ui.density, ["compact", "cozy", "comfortable"], "cozy"),
+      );
       setAnimations(s.ui.animations);
       setAmbientLights(s.ui.ambientLights);
       setCustomThemesEnabled(s.ui.customThemesEnabled);
@@ -115,9 +139,19 @@ createRoot(() => {
       setEnableSpaces(s.workspace.enableSpaces);
       setEnableTags(s.workspace.enableTags);
       setNotificationsPanelDefault(s.workspace.notificationsPanelDefault);
-      setDefaultView(s.workspace.defaultView as ProjectsView);
-      setDefaultSort(s.workspace.defaultSort as ProjectsSort);
+      setDefaultView(
+        validEnum<ProjectsView>(s.workspace.defaultView, ["cards", "list"], "cards"),
+      );
+      setDefaultSort(
+        validEnum<ProjectsSort>(
+          s.workspace.defaultSort,
+          ["last-opened", "created", "name", "modified", "format"],
+          "last-opened",
+        ),
+      );
       setWidgetEnabled(s.workspace.widgets);
+      setDashboardEnabled(s.workspace.dashboardEnabled);
+      setDashboardOrder(s.workspace.dashboardOrder);
 
       if (s.integrations) {
         setIntegrationsSettings({ ...DEFAULT_INTEGRATIONS, ...s.integrations });
@@ -154,6 +188,8 @@ createRoot(() => {
         defaultView: defaultView(),
         defaultSort: defaultSort(),
         widgets: widgetEnabled(),
+        dashboardEnabled: dashboardEnabled(),
+        dashboardOrder: dashboardOrder(),
       },
       integrations: integrationsSettings(),
     };

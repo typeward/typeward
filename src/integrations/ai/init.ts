@@ -18,8 +18,10 @@ import {
 export function initAiProviders(): void {
   createRoot(() => {
     createEffect(() => {
-      const desired = integrationsSettings().ai.activeProvider as AiProviderId | undefined;
+      const ai = integrationsSettings().ai;
+      const desired = ai.activeProvider as AiProviderId | undefined;
       if (
+        ai.enabled &&
         desired &&
         getAvailableProviderIds().includes(desired) &&
         hasEntitlement(`integrations.ai.${desired}`)

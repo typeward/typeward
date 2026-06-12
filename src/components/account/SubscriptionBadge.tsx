@@ -13,8 +13,14 @@ import { supabaseUser } from "~/integrations/supabase/session";
 
 const PALETTE: Record<string, { bg: string; color: string }> = {
   free: { bg: "var(--color-control-fill)", color: "var(--color-fg-3)" },
-  pro: { bg: "rgba(139, 92, 246, 0.16)", color: "rgb(167, 139, 250)" },
-  team: { bg: "rgba(34, 197, 94, 0.16)", color: "rgb(74, 222, 128)" },
+  pro: {
+    bg: "color-mix(in srgb, var(--color-accent-1) 16%, transparent)",
+    color: "var(--color-accent-1)",
+  },
+  team: {
+    bg: "color-mix(in srgb, var(--color-ok) 16%, transparent)",
+    color: "var(--color-ok)",
+  },
 };
 
 export const SubscriptionBadge: Component = () => {

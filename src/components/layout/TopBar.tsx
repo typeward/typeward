@@ -68,7 +68,10 @@ export const TopBar: Component<TopBarProps> = (props) => {
           <Show when={props.notifications && props.notifications > 0}>
             <span
               class="mono absolute -right-0.5 -top-0.5 rounded-full px-1 text-[11px]"
-              style={{ background: "rgba(244,63,94,0.18)", color: "var(--color-err)" }}
+              style={{
+                background: "color-mix(in srgb, var(--color-err) 18%, transparent)",
+                color: "var(--color-err)",
+              }}
             >
               {props.notifications}
             </span>

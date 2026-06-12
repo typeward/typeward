@@ -21,7 +21,10 @@ import type {
   EntitlementSource,
   Tier,
 } from "~/integrations/types";
-import { getCredential, setCredential } from "~/integrations/auth/credentials";
+import {
+  getChunkedCredential,
+  setChunkedCredential,
+} from "~/integrations/auth/chunked";
 
 import { getSupabaseClient } from "./client";
 import { supabaseSession, supabaseSessionReady } from "./session";
@@ -75,7 +78,9 @@ function buildSource(snapshot: CachedSnapshot): EntitlementSource {
 }
 
 async function readCache(userId: string): Promise<CachedSnapshot | null> {
-  const raw = await getCredential({ service: CACHE_SERVICE, account: userId });
+  // Chunked: the pro/team snapshot (~66 rows of JSON) exceeds Windows
+  // Credential Manager's single-blob cap.
+  const raw = await getChunkedCredential(CACHE_SERVICE, userId);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as CachedSnapshot;
@@ -85,7 +90,7 @@ async function readCache(userId: string): Promise<CachedSnapshot | null> {
 }
 
 async function writeCache(userId: string, snapshot: CachedSnapshot): Promise<void> {
-  await setCredential({ service: CACHE_SERVICE, account: userId }, JSON.stringify(snapshot));
+  await setChunkedCredential(CACHE_SERVICE, userId, JSON.stringify(snapshot));
 }
 
 async function fetchEntitlements(): Promise<CachedSnapshot | null> {

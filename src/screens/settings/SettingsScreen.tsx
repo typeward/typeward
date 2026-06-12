@@ -2,30 +2,32 @@ import { useNavigate } from "@solidjs/router";
 import {
   ArrowLeft,
   Bell,
+  BookMarked,
   Check,
-  CheckCircle,
   ChevronDown,
-  CreditCard,
-  ExternalLink,
-  Globe,
+  Cloud,
+  GitBranch,
   Keyboard,
   Key,
   LogOut,
   Palette,
-  Plug,
-  Search,
   Shield,
   Sparkles,
+  SpellCheck,
   Trash2,
   Type,
-  User,
-  Users,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Switch } from "~/components/forms/Switch";
+import { KbdHint } from "~/components/primitives/KbdHint";
+import { commands } from "~/commands/registry";
+import * as ipc from "~/ipc";
+import { installDismiss } from "~/lib/dismiss";
+import { currentTier } from "~/integrations/entitlements";
+import { signOut, supabaseUser } from "~/integrations/supabase/session";
 import { AccountSection } from "./AccountSection";
 import { IntegrationsPanel } from "./IntegrationsPanel";
 import {
@@ -33,8 +35,10 @@ import {
   type EditorSettings,
   compileEngine,
   editorSettings,
+  integrationsSettings,
   setCompileEngine,
   setEditorSettings,
+  setIntegrationsSettings,
 } from "~/stores/settings-store";
 import { previousRoute, setPreviousRoute } from "~/stores/nav-store";
 import {
@@ -50,15 +54,22 @@ import {
 import {
   type Density,
   DENSITIES,
+  activeCustomTheme,
   ambientLights,
   animations,
   customThemesEnabled,
   density,
+  setActiveCustomTheme,
   setAmbientLights,
   setAnimations,
   setCustomThemesEnabled,
   setDensity,
 } from "~/stores/ui-store";
+import {
+  customThemeWarnings,
+  customThemes,
+  reloadCustomThemes,
+} from "~/themes/custom-themes";
 import {
   enableSpaces,
   enableTags,
@@ -70,18 +81,17 @@ import {
 import { isTauriMobile } from "~/lib/platform";
 
 type SectionId =
-  | "profile"
   | "account"
   | "notifications"
   | "security"
   | "editor"
   | "appearance"
   | "shortcuts"
-  | "language"
-  | "team"
-  | "integrations"
-  | "billing"
-  | "usage";
+  | "int-references"
+  | "int-cloud"
+  | "int-vcs"
+  | "int-ai"
+  | "int-grammar";
 
 interface NavItem {
   id: SectionId;
@@ -95,12 +105,13 @@ interface NavGroup {
   items: NavItem[];
 }
 
+// Placeholder sections (Profile, Team, Language, Billing, Usage) were
+// removed from the nav entirely — they come back when their features do.
 const NAV: NavGroup[] = [
   {
     label: "Account",
     items: [
-      { id: "profile", label: "Profile", icon: User },
-      { id: "account", label: "Account & login", icon: Key },
+      { id: "account", label: "Account & plan", icon: Key },
       { id: "notifications", label: "Notifications", icon: Bell },
       { id: "security", label: "Security", icon: Shield },
     ],
@@ -111,21 +122,16 @@ const NAV: NavGroup[] = [
       { id: "editor", label: "Editor", icon: Type },
       { id: "appearance", label: "Appearance", icon: Palette },
       { id: "shortcuts", label: "Keyboard", icon: Keyboard },
-      { id: "language", label: "Language & region", icon: Globe },
     ],
   },
   {
-    label: "Collaboration",
+    label: "Integrations",
     items: [
-      { id: "team", label: "Team & spaces", icon: Users },
-      { id: "integrations", label: "Integrations", icon: Plug },
-    ],
-  },
-  {
-    label: "Plan",
-    items: [
-      { id: "billing", label: "Billing & plan", icon: CreditCard, badge: "Free" },
-      { id: "usage", label: "Usage", icon: Sparkles },
+      { id: "int-references", label: "References", icon: BookMarked },
+      { id: "int-cloud", label: "Cloud storage", icon: Cloud },
+      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch },
+      { id: "int-ai", label: "AI providers", icon: Sparkles },
+      { id: "int-grammar", label: "Grammar", icon: SpellCheck },
     ],
   },
 ];
@@ -139,7 +145,7 @@ const SettingsScreen: Component = () => {
   // link.
   const backLabel = () => {
     const prev = previousRoute();
-    if (prev === "/editor") return "Editor";
+    if (prev?.startsWith("/editor")) return "Editor";
     return "Projects";
   };
   const goBack = () => {
@@ -173,13 +179,6 @@ const SettingsScreen: Component = () => {
           <span class="text-fg-4">/</span>
           <span class="text-[12px] font-medium text-fg-1">Settings</span>
           <div class="flex-1" />
-          <button
-            type="button"
-            class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[11px] text-fg-2 hover:bg-[var(--color-control-fill)]"
-          >
-            <ExternalLink size={12} style={{ opacity: 0.7 }} />
-            <span>Docs</span>
-          </button>
         </div>
 
         <div class="flex min-h-0 flex-1 gap-2 p-2">
@@ -188,13 +187,7 @@ const SettingsScreen: Component = () => {
             class="glass flex flex-col overflow-hidden rounded-xl"
             style={{ width: "236px", height: "100%" }}
           >
-            <div class="border-b border-glass-stroke p-3">
-              <div class="glass-inset flex h-8 items-center gap-2 rounded-lg px-2.5 text-[12px] text-fg-3">
-                <Search size={12} style={{ opacity: 0.6 }} />
-                <span>Search settings…</span>
-              </div>
-            </div>
-            <div class="flex-1 space-y-3.5 overflow-auto scroll p-2">
+            <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
               <For each={NAV}>
                 {(g) => (
                   <div>
@@ -218,8 +211,13 @@ const SettingsScreen: Component = () => {
                               {item.label}
                             </span>
                             <Show when={item.badge}>
-                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-[length:var(--ui-font-xs)] font-semibold text-white">
+                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-[length:var(--ui-font-xs)] font-semibold">
                                 {item.badge}
+                              </span>
+                            </Show>
+                            <Show when={item.id === "account"}>
+                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-[length:var(--ui-font-xs)] font-semibold capitalize">
+                                {currentTier()}
                               </span>
                             </Show>
                           </button>
@@ -230,16 +228,19 @@ const SettingsScreen: Component = () => {
                 )}
               </For>
             </div>
-            <div class="border-t border-glass-stroke p-3">
-              <button
-                type="button"
-                class="lift glass-soft flex h-8 w-full items-center justify-center gap-1.5 rounded-md text-[11px] hover:bg-[var(--color-control-fill-hover)]"
-                style={{ color: "var(--color-err)" }}
-              >
-                <LogOut size={12} style={{ opacity: 0.8 }} />
-                <span>Sign out</span>
-              </button>
-            </div>
+            <Show when={supabaseUser()}>
+              <div class="border-t border-glass-stroke p-3">
+                <button
+                  type="button"
+                  onClick={() => void signOut()}
+                  class="lift glass-soft flex h-8 w-full items-center justify-center gap-1.5 rounded-md text-[11px] hover:bg-[var(--color-control-fill-hover)]"
+                  style={{ color: "var(--color-err)" }}
+                >
+                  <LogOut size={12} style={{ opacity: 0.8 }} />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            </Show>
           </div>
 
           {/* Main panel */}
@@ -257,23 +258,26 @@ const SettingsScreen: Component = () => {
               <Show when={active() === "security"}>
                 <SecurityPanel />
               </Show>
-              <Show when={active() === "integrations"}>
-                <IntegrationsPanel />
+              <Show when={active() === "int-references"}>
+                <IntegrationsPanel section="references" />
+              </Show>
+              <Show when={active() === "int-cloud"}>
+                <IntegrationsPanel section="cloud" />
+              </Show>
+              <Show when={active() === "int-vcs"}>
+                <IntegrationsPanel section="vcs" />
+              </Show>
+              <Show when={active() === "int-ai"}>
+                <IntegrationsPanel section="ai" />
+              </Show>
+              <Show when={active() === "int-grammar"}>
+                <IntegrationsPanel section="grammar" />
               </Show>
               <Show when={active() === "account"}>
                 <AccountSection />
               </Show>
-              <Show
-                when={
-                  active() !== "appearance" &&
-                  active() !== "editor" &&
-                  active() !== "notifications" &&
-                  active() !== "security" &&
-                  active() !== "integrations" &&
-                  active() !== "account"
-                }
-              >
-                <PlaceholderPanel sectionId={active()} />
+              <Show when={active() === "shortcuts"}>
+                <ShortcutsPanel />
               </Show>
             </div>
           </div>
@@ -318,7 +322,7 @@ const Row: Component<{
   hint?: string;
   children: JSX.Element;
 }> = (props) => (
-  <div class="flex items-center gap-4 border-t border-white/[0.04] px-5 py-3.5 first:border-t-0">
+  <div class="flex items-center gap-4 border-t border-glass-stroke px-5 py-3.5 first:border-t-0">
     <div class="min-w-0 flex-1">
       <div class="text-[13px] font-medium text-fg-1">{props.label}</div>
       <Show when={props.hint}>
@@ -344,6 +348,16 @@ const Pill: Component<{
   </span>
 );
 
+/** House pattern for visible-but-unbuilt controls (matches ExportMenu). */
+const SoonPill: Component = () => (
+  <span
+    class="mono rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
+    style={{ background: "var(--color-control-fill)", color: "var(--color-fg-3)" }}
+  >
+    soon
+  </span>
+);
+
 // =================================================================
 // Appearance — themes + accents + density
 // =================================================================
@@ -356,6 +370,20 @@ interface ThemeMeta {
 }
 
 const THEME_META: Record<Theme, ThemeMeta> = {
+  daylight: {
+    id: "daylight",
+    name: "Daylight",
+    vibe:
+      "radial-gradient(circle at 75% 20%, #F0E7CF, transparent 60%), radial-gradient(circle at 25% 80%, #ECDFC2, transparent 60%), #F8F4EA",
+    dark: false,
+  },
+  lamplight: {
+    id: "lamplight",
+    name: "Lamplight",
+    vibe:
+      "radial-gradient(circle at 75% 15%, #C2691E, transparent 55%), radial-gradient(circle at 60% 45%, rgba(232,163,77,0.45), transparent 60%), #0D0C0A",
+    dark: true,
+  },
   aurora: {
     id: "aurora",
     name: "Aurora",
@@ -363,52 +391,7 @@ const THEME_META: Record<Theme, ThemeMeta> = {
       "radial-gradient(circle at 20% 30%, #4C1D95, transparent 60%), radial-gradient(circle at 80% 70%, #155E75, transparent 60%), #0A0B0F",
     dark: true,
   },
-  obsidian: { id: "obsidian", name: "Obsidian", vibe: "#0A0B0F", dark: true },
-  graphite: { id: "graphite", name: "Graphite", vibe: "#1F2937", dark: true },
   paper: { id: "paper", name: "Paper", vibe: "#FAF9F6", dark: false },
-  catppuccin: {
-    id: "catppuccin",
-    name: "Catppuccin",
-    vibe:
-      "radial-gradient(circle at 25% 25%, #CBA6F7, transparent 50%), radial-gradient(circle at 75% 75%, #F5C2E7, transparent 50%), #1E1E2E",
-    dark: true,
-  },
-  dracula: {
-    id: "dracula",
-    name: "Dracula",
-    vibe:
-      "radial-gradient(circle at 30% 30%, #FF79C6, transparent 55%), radial-gradient(circle at 75% 70%, #8BE9FD, transparent 55%), #282A36",
-    dark: true,
-  },
-  gruvbox: {
-    id: "gruvbox",
-    name: "Gruvbox",
-    vibe:
-      "radial-gradient(circle at 25% 30%, #FE8019, transparent 55%), radial-gradient(circle at 75% 70%, #FABD2F, transparent 55%), #282828",
-    dark: true,
-  },
-  mono: { id: "mono", name: "Mono", vibe: "#FAF9F6", dark: false },
-  nord: {
-    id: "nord",
-    name: "Nord",
-    vibe:
-      "radial-gradient(circle at 30% 30%, #88C0D0, transparent 55%), radial-gradient(circle at 70% 70%, #5E81AC, transparent 55%), #2E3440",
-    dark: true,
-  },
-  "solarized-light": {
-    id: "solarized-light",
-    name: "Solarized Light",
-    vibe:
-      "radial-gradient(circle at 30% 30%, #B58900, transparent 55%), radial-gradient(circle at 70% 70%, #268BD2, transparent 55%), #FDF6E3",
-    dark: false,
-  },
-  "tokyo-night": {
-    id: "tokyo-night",
-    name: "Tokyo Night",
-    vibe:
-      "radial-gradient(circle at 25% 30%, #7AA2F7, transparent 55%), radial-gradient(circle at 75% 70%, #BB9AF7, transparent 55%), #1A1B26",
-    dark: true,
-  },
 };
 
 interface AccentMeta {
@@ -418,24 +401,45 @@ interface AccentMeta {
   b: string;
 }
 
+// Each theme's native accent pair — used to preview the "Theme default"
+// accent chip. Live var(--color-accent-*) would mirror whatever accent is
+// currently active instead of what reverting restores. Keep in sync with
+// the theme CSS files.
+const THEME_NATIVE_ACCENT: Record<Theme, [string, string]> = {
+  daylight: ["#101210", "#3A352B"],
+  lamplight: ["#E8A34D", "#C2691E"],
+  aurora: ["#8B5CF6", "#22D3EE"],
+  paper: ["#7C3AED", "#0891B2"],
+};
+
 const ACCENT_META: Record<Accent, AccentMeta> = {
-  "violet-cyan": { id: "violet-cyan", label: "Aurora", a: "#8B5CF6", b: "#22D3EE" },
+  // "violet-cyan" is the stored id for "no data-accent" — i.e. the active
+  // theme's native accent. Its swatch resolves through THEME_NATIVE_ACCENT
+  // at render time.
+  "violet-cyan": { id: "violet-cyan", label: "Theme default", a: "", b: "" },
   "amber-rose": { id: "amber-rose", label: "Ember", a: "#F43F5E", b: "#F59E0B" },
   "emerald-teal": { id: "emerald-teal", label: "Tide", a: "#10B981", b: "#14B8A6" },
   "indigo-pink": { id: "indigo-pink", label: "Orchid", a: "#6366F1", b: "#EC4899" },
 };
+
+// A custom theme only takes over once the switch is on AND a theme is
+// picked — until then the built-in pickers keep working.
+const customThemeActive = (): boolean =>
+  customThemesEnabled() &&
+  Boolean(activeCustomTheme()) &&
+  customThemes().some((t) => t.id === activeCustomTheme());
 
 const AppearancePanel: Component = () => {
   return (
     <div class="space-y-3">
       <Card
         title="Theme"
-        subtitle="Built-in themes. Disabled while Custom themes are on."
+        subtitle="Built-in themes. Disabled while a custom theme is active."
       >
         <div
           class="grid grid-cols-4 gap-3 p-5"
           style={
-            customThemesEnabled()
+            customThemeActive()
               ? { opacity: "0.4", "pointer-events": "none" }
               : undefined
           }
@@ -453,7 +457,7 @@ const AppearancePanel: Component = () => {
         <div
           class="flex flex-wrap items-center gap-2 p-5"
           style={
-            customThemesEnabled()
+            customThemeActive()
               ? { opacity: "0.4", "pointer-events": "none" }
               : undefined
           }
@@ -462,6 +466,8 @@ const AppearancePanel: Component = () => {
             {(a) => {
               const meta = ACCENT_META[a];
               const active = () => accent() === a;
+              const stops = (): [string, string] =>
+                meta.a ? [meta.a, meta.b] : THEME_NATIVE_ACCENT[theme()];
               return (
                 <button
                   type="button"
@@ -470,7 +476,7 @@ const AppearancePanel: Component = () => {
                   style={{
                     padding: "2px",
                     background: active()
-                      ? "linear-gradient(135deg,#A78BFA,#67E8F9)"
+                      ? "linear-gradient(135deg,var(--color-accent-1),var(--color-accent-2))"
                       : "transparent",
                   }}
                 >
@@ -484,7 +490,7 @@ const AppearancePanel: Component = () => {
                     <div
                       class="h-6 w-6 rounded-full"
                       style={{
-                        background: `linear-gradient(135deg, ${meta.a}, ${meta.b})`,
+                        background: `linear-gradient(135deg, ${stops()[0]}, ${stops()[1]})`,
                         "box-shadow": "inset 0 1px 0 rgba(255,255,255,0.2)",
                       }}
                     />
@@ -506,30 +512,7 @@ const AppearancePanel: Component = () => {
         </div>
       </Card>
 
-      <Card
-        title="Custom themes"
-        subtitle="Drop JSON files into the themes folder and they show up here. See /design/themes.md for the schema."
-      >
-        <Row
-          label="Enable custom themes"
-          hint="When on, built-in theme + accent pickers are disabled and your custom themes take over."
-        >
-          <Switch
-            checked={customThemesEnabled()}
-            onChange={setCustomThemesEnabled}
-          />
-        </Row>
-        <Show when={customThemesEnabled()}>
-          <div class="px-5 pb-5">
-            <div class="glass-inset rounded-md p-3 text-[length:var(--ui-font-sm)] text-fg-3">
-              No custom themes discovered yet. The JSON-file watcher lands in a
-              follow-up slice — once it does, themes from{" "}
-              <span class="mono text-fg-2">&lt;app_data&gt;/typeward/themes/</span>{" "}
-              show up below.
-            </div>
-          </div>
-        </Show>
-      </Card>
+      <CustomThemesCard />
 
       <Card title="Density & motion">
         <Row label="UI density" hint="Affects padding and row heights across the app.">
@@ -543,7 +526,7 @@ const AppearancePanel: Component = () => {
                     onClick={() => setDensity(d as Density)}
                     class={`h-7 rounded px-3 text-[11px] capitalize ${
                       active()
-                        ? "accent-grad font-semibold text-white"
+                        ? "accent-grad font-semibold"
                         : "text-fg-2 hover:bg-[var(--color-control-fill)]"
                     }`}
                   >
@@ -571,13 +554,13 @@ const AppearancePanel: Component = () => {
       <Card title="Workspace">
         <Row
           label="Enable Spaces"
-          hint="Group projects into spaces in the Projects sidebar."
+          hint="Preview with sample data — real spaces aren't built yet."
         >
           <Switch checked={enableSpaces()} onChange={setEnableSpaces} />
         </Row>
         <Row
           label="Enable Tags"
-          hint="Surface tag list in the Projects sidebar."
+          hint="Preview with sample data — real tags aren't built yet."
         >
           <Switch checked={enableTags()} onChange={setEnableTags} />
         </Row>
@@ -595,6 +578,159 @@ const AppearancePanel: Component = () => {
   );
 };
 
+/**
+ * User-authored JSON themes from `<app_data>/themes/`. The card is the whole
+ * authoring loop: create the sample, open the folder, edit, reload — the
+ * active theme re-skins live without restarting.
+ */
+const CustomThemesCard: Component = () => {
+  const [busy, setBusy] = createSignal(false);
+  const [note, setNote] = createSignal<string | null>(null);
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setNote(null);
+    try {
+      await fn();
+    } catch (e) {
+      setNote(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createSample = () =>
+    run(async () => {
+      const path = await ipc.customThemeWriteSample();
+      await reloadCustomThemes();
+      setNote(`Sample written to ${path}`);
+    });
+
+  const missingActive = () =>
+    customThemesEnabled() &&
+    Boolean(activeCustomTheme()) &&
+    !customThemes().some((t) => t.id === activeCustomTheme());
+
+  return (
+    <Card
+      title="Custom themes"
+      subtitle="JSON theme files layered over a built-in base. Edit a file, hit Reload, and the app re-skins live — see the sample for the full token vocabulary."
+    >
+      <Row
+        label="Enable custom themes"
+        hint="While a custom theme is active the built-in theme and accent pickers above are bypassed."
+      >
+        <Switch checked={customThemesEnabled()} onChange={setCustomThemesEnabled} />
+      </Row>
+      <Show when={customThemesEnabled()}>
+        <div class="border-t border-glass-stroke px-5 py-4">
+          <Show
+            when={customThemes().length > 0}
+            fallback={
+              <div class="text-[12px] leading-relaxed text-fg-3">
+                No theme files yet. Create the sample to get a working file you
+                can copy and recolor — each file needs a <span class="mono">name</span>,
+                a <span class="mono">base</span> (daylight, lamplight, aurora, or
+                paper), and a <span class="mono">tokens</span> map.
+              </div>
+            }
+          >
+            <div class="grid grid-cols-4 gap-3">
+              <For each={customThemes()}>
+                {(t) => {
+                  const active = () => activeCustomTheme() === t.id;
+                  const swatchBg = () => t.tokens["--color-bg-base"] ?? THEME_META[t.base as Theme]?.vibe ?? "#222";
+                  const swatchAccent = () => t.tokens["--color-accent-1"] ?? "#888";
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setActiveCustomTheme(active() ? null : t.id)}
+                      class="lift relative overflow-hidden rounded-xl text-left"
+                      style={{
+                        height: "72px",
+                        border: active() ? "none" : "1px solid var(--color-glass-stroke)",
+                        "box-shadow": active()
+                          ? "0 0 0 1.5px var(--color-accent-1)"
+                          : undefined,
+                        background: swatchBg(),
+                      }}
+                    >
+                      <div class="absolute inset-x-2 bottom-2 flex items-center gap-1.5 rounded-md px-2 py-1"
+                        style={{ background: "rgba(0,0,0,0.35)", "backdrop-filter": "blur(4px)" }}
+                      >
+                        <span class="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: swatchAccent() }} />
+                        <span class="truncate text-[11px] font-medium text-white">{t.name}</span>
+                        <span class="mono ml-auto text-[9px] uppercase text-white/60">{t.base}</span>
+                        <Show when={active()}>
+                          <Check size={10} stroke-width={3} class="text-white" />
+                        </Show>
+                      </div>
+                    </button>
+                  );
+                }}
+              </For>
+            </div>
+          </Show>
+          <Show when={missingActive()}>
+            <div class="mt-3 text-[11px]" style={{ color: "var(--color-warn)" }}>
+              The previously active theme "{activeCustomTheme()}" wasn't found —
+              its file may have been renamed or removed. The base theme is shown
+              until you pick another.
+            </div>
+          </Show>
+          <Show when={customThemeWarnings().length > 0}>
+            <div class="mt-3 flex flex-col gap-1">
+              <For each={customThemeWarnings()}>
+                {(w) => (
+                  <div class="text-[11px]" style={{ color: "var(--color-warn)" }}>
+                    {w}
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
+        </div>
+        <Row
+          label="Theme files"
+          hint="One .json per theme in the app's themes folder. The file name becomes the theme id."
+        >
+          <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled={busy()}
+              onClick={() => void run(() => ipc.customThemesOpenDir())}
+              class="lift glass-soft h-8 rounded-md px-2.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)] disabled:opacity-50"
+            >
+              Open folder
+            </button>
+            <button
+              type="button"
+              disabled={busy()}
+              onClick={() => void createSample()}
+              class="lift glass-soft h-8 rounded-md px-2.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)] disabled:opacity-50"
+            >
+              Create sample
+            </button>
+            <button
+              type="button"
+              disabled={busy()}
+              onClick={() => void run(() => reloadCustomThemes())}
+              class="lift glass-soft h-8 rounded-md px-2.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)] disabled:opacity-50"
+            >
+              Reload
+            </button>
+          </div>
+        </Row>
+        <Show when={note()}>
+          <div class="mono border-t border-glass-stroke px-5 py-2.5 text-[11px] text-fg-3">
+            {note()}
+          </div>
+        </Show>
+      </Show>
+    </Card>
+  );
+};
+
 const ThemeTile: Component<{
   meta: ThemeMeta;
   active: boolean;
@@ -608,7 +744,7 @@ const ThemeTile: Component<{
       height: "104px",
       border: props.active ? "none" : "1px solid var(--color-glass-stroke)",
       "box-shadow": props.active
-        ? "0 0 0 1.5px var(--color-accent-1), 0 6px 18px rgba(139,92,246,0.22)"
+        ? "0 0 0 1.5px var(--color-accent-1), 0 6px 18px color-mix(in srgb, var(--color-accent-1) 22%, transparent)"
         : undefined,
     }}
   >
@@ -699,7 +835,7 @@ const EditorPanel: Component = () => {
         </Show>
         <Row
           label="Auto-compile on save"
-          hint="Recompile within 200ms of typing pause."
+          hint="Recompile automatically after each save (Mod+S)."
         >
           <Switch
             checked={editorSettings().autoCompile}
@@ -708,9 +844,12 @@ const EditorPanel: Component = () => {
         </Row>
         <Row
           label="Stop on first error"
-          hint="Halt the build at the first \\error rather than continuing."
+          hint="Halt latexmk/pdflatex at the first error. Off = push through and collect every diagnostic in one pass (Tectonic always halts)."
         >
-          <Switch checked={false} onChange={() => {}} />
+          <Switch
+            checked={editorSettings().stopOnFirstError}
+            onChange={(v) => update("stopOnFirstError", v)}
+          />
         </Row>
       </Card>
 
@@ -731,19 +870,24 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("lineWrap", v)}
           />
         </Row>
-        <Row label="Vim mode">
+        <Row label="Vim mode" hint="Modal editing bindings in the source pane.">
           <Switch
             checked={editorSettings().vimMode}
             onChange={(v) => update("vimMode", v)}
           />
         </Row>
         <Row
-          label="Spell-check"
-          hint="Grammar & LaTeX-aware. Uses your interface language."
+          label="Spell & grammar check"
+          hint="Powered by Harper — configure it under Settings → Integrations → Grammar."
         >
           <Switch
-            checked={editorSettings().spellCheck}
-            onChange={(v) => update("spellCheck", v)}
+            checked={integrationsSettings().grammar.enabled}
+            onChange={(v) =>
+              setIntegrationsSettings((prev) => ({
+                ...prev,
+                grammar: { ...prev.grammar, enabled: v },
+              }))
+            }
           />
         </Row>
       </Card>
@@ -757,8 +901,10 @@ const SelectStub: Component<{
   onChange: (v: string | number) => void;
 }> = (props) => {
   const [open, setOpen] = createSignal(false);
+  let rootRef: HTMLDivElement | undefined;
+  installDismiss(() => rootRef, open, () => setOpen(false));
   return (
-    <div class="relative">
+    <div class="relative" ref={rootRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -770,7 +916,7 @@ const SelectStub: Component<{
       <Show when={open()}>
         <div
           class="glass absolute right-0 z-20 mt-1 w-[180px] overflow-hidden rounded-md py-1"
-          style={{ background: "rgba(15,17,22,0.96)" }}
+          style={{ background: "var(--color-popover-bg)" }}
           onClick={(e) => e.stopPropagation()}
         >
           <For each={props.options}>
@@ -810,7 +956,8 @@ const NotificationsPanel: Component = () => {
     <div class="space-y-3">
       <Card
         title="Notifications"
-        subtitle="Pick where each event reaches you. Quiet hours pause email and push."
+        subtitle="Preview only — notification delivery isn't built yet, so these controls are disabled."
+        action={<SoonPill />}
       >
         <div
           class="label-xs grid items-center gap-4 px-5 pb-2 pt-3 uppercase tracking-wider text-fg-3"
@@ -824,7 +971,7 @@ const NotificationsPanel: Component = () => {
         <For each={prefs}>
           {(p) => (
             <div
-              class="grid items-center gap-4 border-t border-white/[0.04] px-5 py-3"
+              class="grid items-center gap-4 border-t border-glass-stroke px-5 py-3"
               style={{ "grid-template-columns": "1fr 64px 64px 64px" }}
             >
               <div>
@@ -834,13 +981,13 @@ const NotificationsPanel: Component = () => {
                 </Show>
               </div>
               <div class="flex justify-center">
-                <Switch checked={p.inApp} onChange={() => {}} />
+                <Switch checked={p.inApp} onChange={() => {}} disabled />
               </div>
               <div class="flex justify-center">
-                <Switch checked={p.email} onChange={() => {}} />
+                <Switch checked={p.email} onChange={() => {}} disabled />
               </div>
               <div class="flex justify-center">
-                <Switch checked={p.push} onChange={() => {}} />
+                <Switch checked={p.push} onChange={() => {}} disabled />
               </div>
             </div>
           )}
@@ -848,24 +995,11 @@ const NotificationsPanel: Component = () => {
       </Card>
       <Card
         title="Quiet hours"
-        subtitle="Pause email and push outside writing time. In-app stays on."
+        subtitle="Pause email and push outside writing time. Disabled until delivery exists."
+        action={<SoonPill />}
       >
         <Row label="Quiet hours">
-          <Switch checked={true} onChange={() => {}} />
-        </Row>
-        <Row label="From">
-          <SelectStub
-            value="22:00"
-            options={[{ value: "22:00", label: "22:00" }]}
-            onChange={() => {}}
-          />
-        </Row>
-        <Row label="To">
-          <SelectStub
-            value="08:30"
-            options={[{ value: "08:30", label: "08:30" }]}
-            onChange={() => {}}
-          />
+          <Switch checked={false} onChange={() => {}} disabled />
         </Row>
       </Card>
     </div>
@@ -873,8 +1007,70 @@ const NotificationsPanel: Component = () => {
 };
 
 // =================================================================
+// Keyboard shortcuts — read live from the CommandRegistry
+// =================================================================
+
+const ShortcutsPanel: Component = () => {
+  const bound = () =>
+    commands()
+      .filter((c) => c.shortcut)
+      .slice()
+      .sort((a, b) => a.title.localeCompare(b.title));
+  return (
+    <Card
+      title="Keyboard shortcuts"
+      subtitle="Bindings come from the command registry — format-specific commands appear while a matching project is open. Remapping isn't supported yet."
+    >
+      <For each={bound()}>
+        {(c) => (
+          <Row label={c.title} hint={c.subtitle}>
+            <KbdHint shortcut={c.shortcut!} size="md" />
+          </Row>
+        )}
+      </For>
+      <Row
+        label="Jump to source"
+        hint="Double-click (or Shift+click) anywhere on the PDF preview to jump the editor to that line."
+      >
+        <KbdHint shortcut="Shift" size="md" />
+      </Row>
+    </Card>
+  );
+};
+
+// =================================================================
 // Security panel
 // =================================================================
+
+const resetAppData = async (): Promise<void> => {
+  let proceed = false;
+  try {
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    proceed = await ask(
+      "Reset Typeward to its defaults? Settings, theme preferences, and local UI state are cleared; project files on disk are untouched. The app reloads afterwards.",
+      {
+        title: "Reset local app data",
+        kind: "warning",
+        okLabel: "Reset and reload",
+        cancelLabel: "Cancel",
+      },
+    );
+  } catch {
+    proceed = window.confirm("Reset Typeward to its defaults and reload?");
+  }
+  if (!proceed) return;
+  try {
+    await ipc.resetSettings();
+  } catch {
+    // settings.json may not exist yet — the reload boots on defaults anyway.
+  }
+  try {
+    localStorage.clear();
+  } catch {
+    /* storage unavailable */
+  }
+  window.location.reload();
+};
 
 const SecurityPanel: Component = () => {
   return (
@@ -884,11 +1080,10 @@ const SecurityPanel: Component = () => {
         subtitle="Add a second factor to protect your account."
         action={
           <Pill
-            bg="rgba(16,185,129,0.10)"
-            color="#A7F3D0"
-            icon={<CheckCircle size={12} />}
+            bg="var(--color-control-fill)"
+            color="var(--color-fg-3)"
           >
-            Cloud sync coming
+            Coming soon
           </Pill>
         }
       >
@@ -916,26 +1111,27 @@ const SecurityPanel: Component = () => {
         <div class="flex items-center gap-4 px-5 py-4">
           <div
             class="flex h-9 w-9 items-center justify-center rounded-md"
-            style={{ background: "rgba(244,63,94,0.10)" }}
+            style={{ background: "color-mix(in srgb, var(--color-err) 10%, transparent)" }}
           >
-            <Trash2 size={14} style={{ color: "#FCA5A5" }} />
+            <Trash2 size={14} style={{ color: "var(--color-err)" }} />
           </div>
           <div class="flex-1">
-            <div class="text-[13px] font-medium" style={{ color: "#FECACA" }}>
+            <div class="text-[13px] font-medium" style={{ color: "var(--color-err)" }}>
               Reset local app data
             </div>
             <div class="mt-0.5 text-[11px] text-fg-2">
-              Clears settings, theme prefs, and project list. Files on disk are
-              untouched.
+              Restores default settings and clears local UI state. Your project
+              files on disk are untouched; the app reloads afterwards.
             </div>
           </div>
           <button
             type="button"
+            onClick={() => void resetAppData()}
             class="lift h-8 rounded-md px-3 text-[12px] font-medium"
             style={{
-              background: "rgba(244,63,94,0.12)",
-              color: "#FCA5A5",
-              border: "1px solid rgba(244,63,94,0.25)",
+              background: "color-mix(in srgb, var(--color-err) 12%, transparent)",
+              color: "var(--color-err)",
+              border: "1px solid color-mix(in srgb, var(--color-err) 25%, transparent)",
             }}
           >
             Reset
@@ -946,34 +1142,3 @@ const SecurityPanel: Component = () => {
   );
 };
 
-// =================================================================
-// Placeholder for unimplemented sections
-// =================================================================
-
-const PlaceholderPanel: Component<{ sectionId: SectionId }> = (props) => {
-  const flat = NAV.flatMap((g) => g.items);
-  const item = () => flat.find((i) => i.id === props.sectionId)!;
-  const Icon = () => {
-    const IconComponent = item().icon;
-    return <IconComponent size={20} />;
-  };
-  return (
-    <Card
-      title={item().label}
-      subtitle="This pane lights up alongside Typeward's cloud sync layer (Phase 4)."
-    >
-      <div class="flex flex-col items-center gap-3 px-5 py-10 text-center">
-        <div
-          class="flex h-12 w-12 items-center justify-center rounded-xl"
-          style={{ background: "rgba(139,92,246,0.10)" }}
-        >
-          <Icon />
-        </div>
-        <p class="max-w-[440px] text-[13px] leading-relaxed text-fg-3">
-          Typeward is local-first for Phase 1. {item().label.toLowerCase()} settings
-          arrive once accounts and cloud sync land.
-        </p>
-      </div>
-    </Card>
-  );
-};
