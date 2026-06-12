@@ -18,8 +18,8 @@ import {
   XCircle,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
-import { compileState, lastResult } from "~/stores/editor-store";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on } from "solid-js";
+import { compileState, lastResult, requestGotoSource } from "~/stores/editor-store";
 import { formatShortcutForDisplay } from "~/lib/shortcuts";
 
 type LogsTabId = "logs" | "issues";
@@ -56,12 +56,20 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
     issues: errs().length + warns().length,
   }));
 
-  // Auto-expand the drawer on a compile failure so the user sees the log /
-  // diagnostics without having to click. Stays expanded once user expanded it.
   const handleSelectTab = (id: LogsTabId) => {
     setTab(id);
     if (minimized()) setMinimized(false);
   };
+
+  // Auto-expand on compile failure so diagnostics surface without a click.
+  createEffect(
+    on(compileState, (state) => {
+      if (state === "error") {
+        setMinimized(false);
+        setTab("issues");
+      }
+    }),
+  );
 
   return (
     <div
@@ -93,7 +101,7 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
                     class="mono rounded-full px-1.5 py-0.5 text-[10px]"
                     style={{
                       background: active()
-                        ? "rgba(139,92,246,0.18)"
+                        ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
                         : "var(--color-control-fill)",
                       color: active() ? "var(--color-accent-1)" : "var(--color-fg-3)",
                     }}
@@ -121,10 +129,10 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
             <StatusPill
               dot={
                 compileState() === "ok"
-                  ? "#10B981"
+                  ? "var(--color-ok)"
                   : compileState() === "error"
-                    ? "#F43F5E"
-                    : "#F59E0B"
+                    ? "var(--color-err)"
+                    : "var(--color-warn)"
               }
             >
               {lastResult()!.durationMs}ms
@@ -148,7 +156,7 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
           </Show>
 
           <Show when={!props.embedded}>
-            <div class="mx-1 h-4 w-px bg-white/5" />
+            <div class="mx-1 h-4 w-px bg-glass-stroke" />
             <button
               type="button"
               onClick={() => setMinimized((v) => !v)}
@@ -252,12 +260,10 @@ const IssuesTabBody: Component = () => {
           {(d) => (
             <IssueCard
               severity="error"
-              borderColor="#F43F5E"
-              tint="#FECACA"
-              tintBg="rgba(244,63,94,0.12)"
-              icon={<XCircle size={12} style={{ color: "#F87171" }} />}
+              icon={<XCircle size={12} />}
               title={d.message}
               meta={`${d.file}:${d.line}`}
+              onJump={d.file ? () => requestGotoSource(d.file, d.line) : undefined}
             />
           )}
         </For>
@@ -265,22 +271,17 @@ const IssuesTabBody: Component = () => {
           {(d) => (
             <IssueCard
               severity="warning"
-              borderColor="#F59E0B"
-              tint="#FDE68A"
-              tintBg="rgba(245,158,11,0.12)"
-              icon={<AlertTriangle size={12} style={{ color: "#FBBF24" }} />}
+              icon={<AlertTriangle size={12} />}
               title={d.message}
               meta={`${d.file}:${d.line}`}
+              onJump={d.file ? () => requestGotoSource(d.file, d.line) : undefined}
             />
           )}
         </For>
         <Show when={result()!.ok && errs().length === 0 && warns().length === 0}>
           <IssueCard
             severity="success"
-            borderColor="#10B981"
-            tint="#A7F3D0"
-            tintBg="rgba(16,185,129,0.12)"
-            icon={<CheckCircle2 size={12} style={{ color: "#34D399" }} />}
+            icon={<CheckCircle2 size={12} />}
             title="Compiled successfully"
             meta={`${result()!.durationMs}ms`}
           />
@@ -299,7 +300,7 @@ const IssuesTabBody: Component = () => {
             <div class="flex items-start gap-2.5">
               <div
                 class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md"
-                style={{ background: "rgba(244,63,94,0.12)" }}
+                style={{ background: "color-mix(in srgb, var(--color-err) 12%, transparent)" }}
               >
                 <XCircle size={12} style={{ color: "var(--color-err)" }} />
               </div>
@@ -325,27 +326,33 @@ const SEVERITY_FG: Record<"error" | "warning" | "success", string> = {
   success: "var(--color-ok)",
 };
 
+/** `onJump` makes the card clickable — jumps the editor to file:line. */
 const IssueCard: Component<{
   severity: "error" | "warning" | "success";
-  borderColor: string;
-  tint: string;
-  tintBg: string;
   icon: JSX.Element;
   title: string;
   meta: string;
+  onJump?: () => void;
 }> = (props) => (
-  <div
-    class="rounded-lg p-3"
+  <button
+    type="button"
+    disabled={!props.onJump}
+    onClick={() => props.onJump?.()}
+    title={props.onJump ? "Jump to source" : undefined}
+    class="block w-full rounded-lg p-3 text-left disabled:cursor-default enabled:cursor-pointer enabled:hover:bg-[var(--color-control-fill-hover)]"
     style={{
       background: "var(--color-control-fill)",
       border: "1px solid var(--color-control-stroke)",
-      "border-left": `2px solid ${props.borderColor}`,
+      "border-left": `2px solid ${SEVERITY_FG[props.severity]}`,
     }}
   >
     <div class="flex items-start gap-2.5">
       <div
         class="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md"
-        style={{ background: props.tintBg }}
+        style={{
+          background: `color-mix(in srgb, ${SEVERITY_FG[props.severity]} 12%, transparent)`,
+          color: SEVERITY_FG[props.severity],
+        }}
       >
         {props.icon}
       </div>
@@ -361,7 +368,7 @@ const IssueCard: Component<{
         </div>
       </div>
     </div>
-  </div>
+  </button>
 );
 
 const EmptyTab: Component<{ title: string; body: string }> = (props) => (
@@ -467,8 +474,8 @@ const SelectorCard: Component<{
     style={
       props.active
         ? {
-            background: "rgba(139,92,246,0.10)",
-            border: "1px solid rgba(139,92,246,0.45)",
+            background: "color-mix(in srgb, var(--color-accent-1) 10%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--color-accent-1) 45%, transparent)",
           }
         : {
             border: "1px solid var(--color-glass-stroke)",
@@ -479,7 +486,7 @@ const SelectorCard: Component<{
       class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md"
       style={{
         background: props.active
-          ? "rgba(139,92,246,0.18)"
+          ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
           : "var(--color-control-fill)",
         color: props.active ? "var(--color-accent-1)" : "var(--color-fg-2)",
       }}
@@ -501,7 +508,7 @@ const SelectorCard: Component<{
         class="mono rounded-full px-1.5 py-0.5 text-[10px]"
         style={{
           background: props.active
-            ? "rgba(139,92,246,0.18)"
+            ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
             : "var(--color-control-fill)",
           color: props.active ? "var(--color-accent-1)" : "var(--color-fg-3)",
         }}

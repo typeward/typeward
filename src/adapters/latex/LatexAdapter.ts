@@ -6,7 +6,7 @@ import type {
   Project,
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
-import { compileEngine } from "~/stores/settings-store";
+import { compileEngine, editorSettings } from "~/stores/settings-store";
 
 const compile = async (project: Project): Promise<CompileResult> => {
   const engine = compileEngine();
@@ -16,12 +16,12 @@ const compile = async (project: Project): Promise<CompileResult> => {
     );
     return compileWithTexliveWasm(project);
   }
-  return ipc.compileLatex(project, engine);
+  return ipc.compileLatex(project, engine, editorSettings().stopOnFirstError);
 };
 
 /**
  * Adapter-published commands. They're registered with the CommandRegistry
- * when a LaTeX project opens (see commands/adapter-binding.ts) and
+ * when a LaTeX project opens (see commands/boot.ts) and
  * unregistered on close so they don't pollute the palette for other formats.
  *
  * Run handlers read from the editor-store directly via the shared actions

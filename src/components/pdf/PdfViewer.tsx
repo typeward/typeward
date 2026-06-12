@@ -16,7 +16,10 @@ import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup } f
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { LogsView } from "~/components/editor/LogsDrawer";
+import { installDismiss } from "~/lib/dismiss";
+import { integrationsSettings } from "~/stores/settings-store";
 import {
+  animations,
   consolePosition,
   previewMode,
   setPreviewMode,
@@ -63,9 +66,26 @@ const ZOOM_PRESETS = [50, 75, 90, 100, 110, 125, 150, 175, 200] as const;
  */
 export const PdfViewer: Component<PdfViewerProps> = (props) => {
   let scrollEl!: HTMLDivElement;
+  let zoomRef: HTMLDivElement | undefined;
   const [pages, setPages] = createSignal<HTMLCanvasElement[]>([]);
   const [scale, setScale] = createSignal(1.1);
   const [zoomOpen, setZoomOpen] = createSignal(false);
+
+  installDismiss(() => zoomRef, zoomOpen, () => setZoomOpen(false));
+
+  const scrollBehavior = (): ScrollBehavior =>
+    !animations() ||
+    (typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      ? "auto"
+      : "smooth";
+
+  // AI master switch. When it flips off while the chat is showing, fall
+  // back to the PDF so the pane never strands on a hidden mode.
+  const aiEnabled = () => integrationsSettings().ai.enabled;
+  createEffect(() => {
+    if (!aiEnabled() && previewMode() === "ai") setPreviewMode("pdf");
+  });
   const [loading, setLoading] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
   const [currentPage, setCurrentPage] = createSignal(1);
@@ -169,14 +189,16 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     ),
   );
 
-  // Zoom changes: re-render at new scale (no fresh load).
+  // Zoom changes: re-render at new scale (no fresh load). Bumps the
+  // generation so two quick zoom changes can't race — without it the
+  // slower render could land last and win over the newer scale.
   createEffect(
     on(
       scale,
       async (s) => {
         if (!docRef) return;
         savedScrollTop = scrollEl?.scrollTop ?? 0;
-        await renderAll(docRef, s);
+        await renderAll(docRef, s, ++loadGen);
       },
       { defer: true },
     ),
@@ -198,7 +220,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         // isn't kissing the top edge of the viewport.
         scrollEl.scrollTo({
           top: Math.max(0, pageEl.offsetTop + yCss - 60),
-          behavior: "smooth",
+          behavior: scrollBehavior(),
         });
         setCurrentPage(t.page);
         setHighlight({ page: t.page, yCss });
@@ -210,10 +232,12 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     ),
   );
 
-  const handlePageClick = (e: MouseEvent, pageNum: number) => {
-    // Inverse search uses shift+click — plain clicks must keep text
-    // selection / pan affordances open for future use.
-    if (!e.shiftKey || !props.onPageClick) return;
+  // Inverse search fires on double-click (double-tap on touch) — the
+  // natural "take me to this" gesture — with shift+click kept as the
+  // power-user shortcut. Plain single clicks stay free for text
+  // selection / pan affordances.
+  const triggerInverseSearch = (e: MouseEvent, pageNum: number) => {
+    if (!props.onPageClick) return;
     const wrapper = e.currentTarget as HTMLElement;
     const canvas = wrapper.querySelector("canvas");
     if (!canvas) return;
@@ -224,6 +248,11 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     const s = scale();
     e.preventDefault();
     props.onPageClick(pageNum, xPx / s, yPx / s);
+  };
+
+  const handlePageClick = (e: MouseEvent, pageNum: number) => {
+    if (!e.shiftKey) return;
+    triggerInverseSearch(e, pageNum);
   };
 
   onCleanup(() => {
@@ -238,7 +267,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     const clamped = Math.max(1, Math.min(totalPages(), n));
     setCurrentPage(clamped);
     const el = pageEls[clamped - 1] as HTMLElement | undefined;
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (el) el.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   };
 
   const fileName = () =>
@@ -256,7 +285,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           type="button"
           onClick={() => props.onCompile?.()}
           disabled={props.compiling}
-          class="lift glow-violet relative flex h-8 items-center gap-2 rounded-lg accent-grad pl-3 pr-2.5 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+          class="lift glow-accent relative flex h-8 items-center gap-2 rounded-lg accent-grad pl-3 pr-2.5 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Show
             when={props.compiling}
@@ -283,12 +312,15 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           />
         </Show>
 
-        <ToolbarIconToggle
-          active={previewMode() === "ai"}
-          onClick={() => setPreviewMode(previewMode() === "ai" ? "pdf" : "ai")}
-          icon={<Sparkles size={16} />}
-          label="AI"
-        />
+        <Show when={aiEnabled()}>
+          <ToolbarIconToggle
+            active={previewMode() === "ai"}
+            onClick={() => setPreviewMode(previewMode() === "ai" ? "pdf" : "ai")}
+            icon={<Sparkles size={16} />}
+            label="AI"
+          />
+        </Show>
+
 
         <Show when={loading() && previewMode() === "pdf"}>
           <Loader2 size={12} class="ml-2 animate-spin text-fg-3" />
@@ -331,7 +363,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             </div>
 
             {/* Zoom dropdown — rightmost element per updated layout */}
-            <div class="relative">
+            <div class="relative" ref={zoomRef}>
               <button
                 type="button"
                 onClick={() => setZoomOpen((v) => !v)}
@@ -433,7 +465,8 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                   data-page={pageNum}
                   class="relative"
                   onClick={(e) => handlePageClick(e, pageNum)}
-                  title="Shift+click to jump to source"
+                  onDblClick={(e) => triggerInverseSearch(e, pageNum)}
+                  title="Double-click to jump to source"
                 >
                   <div class="mono absolute -left-12 top-1.5 select-none text-[10px] text-fg-4">
                     p. {pageNum}
@@ -493,8 +526,8 @@ const ToolbarIconToggle: Component<{
     style={
       props.active
         ? {
-            background: "rgba(139,92,246,0.18)",
-            border: "1px solid rgba(139,92,246,0.45)",
+            background: "color-mix(in srgb, var(--color-accent-1) 18%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--color-accent-1) 45%, transparent)",
           }
         : undefined
     }
@@ -512,8 +545,8 @@ const ToolbarKbd: Component<{ shortcut: string }> = (props) => {
         <kbd
           class="mono rounded px-1 py-0.5 text-[10px]"
           style={{
-            background: "rgba(0,0,0,0.25)",
-            color: "rgba(255,255,255,0.85)",
+            background: "color-mix(in srgb, var(--color-accent-fg) 16%, transparent)",
+            color: "var(--color-accent-fg)",
             "line-height": "1",
           }}
         >
@@ -551,7 +584,7 @@ const PageCanvas: Component<{ canvas: HTMLCanvasElement }> = (props) => {
   return (
     <div
       ref={setup}
-      class="rounded-md bg-white shadow-[0_18px_60px_rgba(0,0,0,0.55),0_2px_6px_rgba(0,0,0,0.4)]"
+      class="rounded-md bg-white shadow-[0_18px_60px_rgba(0,0,0,0.35),0_2px_6px_rgba(0,0,0,0.25)]"
     />
   );
 };

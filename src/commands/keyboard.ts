@@ -40,32 +40,37 @@ const isTypingInNonEditorInput = (target: EventTarget | null): boolean => {
 };
 
 const handler = (event: KeyboardEvent) => {
-  // The palette's own input field handles Escape natively via its onClose.
-  // Don't double-dispatch Escape into command registry.
+  // Tracks "a registered Mod-shortcut matched the key but its when()/scope
+  // gate failed". Without preventDefault in that case the webview's native
+  // default (e.g. Ctrl+S save dialog) falls through on a key the app owns.
+  let matchedButGated = false;
+
   for (const cmd of commands()) {
     if (!cmd.shortcut) continue;
-    if (cmd.when && !cmd.when()) continue;
+    if (!matches(event, cmd.shortcut)) continue;
 
-    const scope = cmd.scope ?? "global";
-    if (scope === "editor" && !editorHasFocus(event.target)) continue;
-    if (
-      scope === "global" &&
-      isTypingInNonEditorInput(event.target) &&
-      // Mod+K should still fire from form fields — it's how users escape
-      // typing back to navigation. Treat any Mod-combo as "wants to break
-      // out of typing" and let it through.
-      !(event.metaKey || event.ctrlKey)
-    ) {
+    const gated =
+      (cmd.when && !cmd.when()) ||
+      ((cmd.scope ?? "global") === "editor" && !editorHasFocus(event.target)) ||
+      ((cmd.scope ?? "global") === "global" &&
+        isTypingInNonEditorInput(event.target) &&
+        // Mod+K should still fire from form fields — it's how users escape
+        // typing back to navigation. Treat any Mod-combo as "wants to break
+        // out of typing" and let it through.
+        !(event.metaKey || event.ctrlKey));
+
+    if (gated) {
+      if (event.metaKey || event.ctrlKey) matchedButGated = true;
       continue;
     }
-
-    if (!matches(event, cmd.shortcut)) continue;
 
     event.preventDefault();
     event.stopPropagation();
     void cmd.run();
     return;
   }
+
+  if (matchedButGated) event.preventDefault();
 };
 
 let installed = false;

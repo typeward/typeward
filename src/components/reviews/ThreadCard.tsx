@@ -131,7 +131,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
             <div class="mt-2 space-y-2">
               <For each={replies()}>
                 {(reply) => (
-                  <div class="rounded-md px-2 py-1.5" style={{ background: "rgba(255,255,255,0.03)" }}>
+                  <div class="rounded-md px-2 py-1.5" style={{ background: "var(--color-glass-soft-fill)" }}>
                     <div class="text-[11px]">
                       <span class="font-medium text-fg-1">{reply.author}</span>
                       <span class="text-fg-3"> · {relativeTime(reply.createdAt)}</span>
@@ -158,7 +158,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
                 onClick={handleReply}
                 disabled={!replyText().trim()}
                 class="rounded-md px-2.5 py-1 text-[11px] font-medium disabled:opacity-40"
-                style={{ background: "var(--color-accent-1)", color: "#fff" }}
+                style={{ background: "var(--color-accent-1)", color: "var(--color-accent-fg)" }}
               >
                 Reply
               </button>

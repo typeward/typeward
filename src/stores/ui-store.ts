@@ -24,6 +24,16 @@ const [consolePosition, setConsolePosition] =
   createSignal<ConsolePosition>("pdf-tab");
 const [previewMode, setPreviewMode] = createSignal<PreviewMode>("pdf");
 
+/**
+ * Focus mode — hides editor chrome (top bar, sidebar, tab strip, toolbars)
+ * leaving just source + page. Session-scoped on purpose: reopening the app
+ * into hidden chrome would read as "the UI is broken".
+ */
+const [focusMode, setFocusMode] = createSignal(false);
+const toggleFocusMode = (): void => {
+  setFocusMode((v) => !v);
+};
+
 if (typeof document !== "undefined") {
   createRoot(() => {
     createEffect(() => {
@@ -48,6 +58,7 @@ export {
   customThemesEnabled,
   density,
   editorLayout,
+  focusMode,
   previewMode,
   setActiveCustomTheme,
   setAmbientLights,
@@ -56,5 +67,7 @@ export {
   setCustomThemesEnabled,
   setDensity,
   setEditorLayout,
+  setFocusMode,
   setPreviewMode,
+  toggleFocusMode,
 };

@@ -107,6 +107,26 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
       setRefreshTick((t) => t + 1);
       return;
     }
+    // Destructive: overwrites the local file with the remote copy and
+    // deletes the sidecar — no undo path, so confirm first.
+    let proceed = false;
+    try {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      proceed = await ask(
+        `Replace your local "${entry.relPath}" with the remote version? Your local edits will be lost.`,
+        {
+          title: "Keep theirs",
+          kind: "warning",
+          okLabel: "Replace local copy",
+          cancelLabel: "Cancel",
+        },
+      );
+    } catch {
+      proceed = window.confirm(
+        `Replace your local "${entry.relPath}" with the remote version?`,
+      );
+    }
+    if (!proceed) return;
     const content = await readTextFile(entry.conflictAbs);
     await writeTextFile(entry.originalAbs, content);
     await remove(entry.conflictAbs);

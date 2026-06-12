@@ -90,12 +90,6 @@ function serverRequestResult(method: string, params: unknown): unknown {
   return null;
 }
 
-export class LspUnavailableError extends Error {
-  constructor(public readonly languageId: string, public readonly binary: string) {
-    super(`Language server for ${languageId} (${binary}) is not on PATH`);
-  }
-}
-
 // -------- JSON-RPC wrapper --------------------------------------------------
 
 export interface JsonRpcClient {

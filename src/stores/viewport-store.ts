@@ -35,9 +35,11 @@ export const setActivePane = (p: Pane): void => {
 };
 
 export const cyclePane = (direction: 1 | -1): void => {
+  // Clamp at the ends — wrap-around makes a forward swipe from "preview"
+  // jump to the sidebar, which reads as a glitch on a 3-pane strip.
   const idx = PANE_ORDER.indexOf(activePane());
-  const next = PANE_ORDER[(idx + direction + PANE_ORDER.length) % PANE_ORDER.length];
-  setActivePaneSig(next);
+  const next = Math.min(Math.max(idx + direction, 0), PANE_ORDER.length - 1);
+  setActivePaneSig(PANE_ORDER[next]);
 };
 
 export const setLogsSheetOpen = (v: boolean): void => {

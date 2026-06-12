@@ -3,22 +3,21 @@ import {
   ChevronUp,
   CircleDot,
   FilePlus,
-  FolderPlus,
   ListTree,
-  MoreHorizontal,
-  Search,
   Zap,
 } from "lucide-solid";
+import { exists } from "@tauri-apps/plugin-fs";
 import type { Component, JSX } from "solid-js";
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, createResource, createSignal } from "solid-js";
 import { FileTree } from "~/components/editor/FileTree";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
 import { CommitPanel } from "~/components/vcs/CommitPanel";
 import { ReviewPanel } from "~/components/reviews/ReviewPanel";
+import * as ipc from "~/ipc";
+import { recordError } from "~/lib/telemetry";
 import { activeFile, project } from "~/stores/editor-store";
-import { compileEngine } from "~/stores/settings-store";
+import { compileEngine, integrationsSettings } from "~/stores/settings-store";
 import { allOpenThreadCount } from "~/stores/review-store";
-import { KbdHint } from "~/components/primitives/KbdHint";
 
 const ENGINE_LABEL: Record<string, string> = {
   "system-tex": "pdflatex",
@@ -47,29 +46,75 @@ interface EditorSidebarProps {
 }
 
 export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
+  const [newFileOpen, setNewFileOpen] = createSignal(false);
+  const [newFileName, setNewFileName] = createSignal("");
+  const [newFileError, setNewFileError] = createSignal<string | null>(null);
+
+  // The SCM tab is meaningless outside a git repo — `.git` can be a dir or
+  // (worktrees) a file; `exists` covers both. Non-Tauri contexts resolve
+  // false and simply hide the tab.
+  const [isGitRepo] = createResource(
+    () => project()?.rootPath ?? null,
+    async (root) => {
+      if (!root) return false;
+      try {
+        return await exists(`${root}/.git`);
+      } catch {
+        return false;
+      }
+    },
+    { initialValue: false },
+  );
+
+  // If SCM was active and the project switched to a non-repo, the tab
+  // strip no longer shows it — bounce back to Files.
+  createEffect(() => {
+    if (!isGitRepo() && props.tab === "scm") props.setTab("files");
+  });
+
+  // Refs only earns a tab once at least one citation provider is set up —
+  // an empty panel teaches users to ignore the sidebar.
+  const hasReferences = () => {
+    const refs = integrationsSettings().references;
+    return (
+      refs.betterBibTex.enabled ||
+      Boolean(refs.zoteroWeb.userId) ||
+      Boolean(refs.mendeley.profileId) ||
+      refs.jabref.paths.length > 0
+    );
+  };
+  createEffect(() => {
+    if (!hasReferences() && props.tab === "references") props.setTab("files");
+  });
+
+  const createNewFile = async () => {
+    const p = project();
+    const name = newFileName().trim().replace(/\\/g, "/");
+    if (!p || !name) return;
+    try {
+      // The IPC validates the project-relative path and creates parent
+      // dirs, so "chapters/intro.tex" also works as a folder shortcut.
+      await ipc.writeProjectTextFile(p.rootPath, name, "");
+      setNewFileOpen(false);
+      setNewFileName("");
+      setNewFileError(null);
+      props.onSelectFile(name);
+    } catch (e) {
+      setNewFileError(String(e));
+      recordError("new-file", `creating ${name} failed`, e);
+    }
+  };
+
   return (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-      <div class="flex-shrink-0 border-b border-glass-stroke p-2.5">
-        <button
-          type="button"
-          class="lift glass-inset flex w-full items-center gap-2 rounded-lg px-2.5 text-[length:var(--ui-font-sm)] text-fg-3 hover:text-fg-2"
-          style={{ height: "var(--ui-row)" }}
-        >
-          <Search class="ui-icon-menu" style={{ opacity: 0.6 }} />
-          <span>Search files…</span>
-          <span class="ml-auto">
-            <KbdHint shortcut="Mod+P" />
-          </span>
-        </button>
-      </div>
-
-      {/* Tab row — Files / Review / TODO. */}
+      {/* Tab row — Files / Review / TODO. SCM only inside git repos; Refs
+          only when a citation provider is configured. */}
       <div class="flex flex-shrink-0 items-center gap-0 border-b border-glass-stroke px-2 pt-1.5">
         <For
           each={[
             { id: "files" as LeftTab, label: "Files" },
-            { id: "references" as LeftTab, label: "Refs" },
-            { id: "scm" as LeftTab, label: "SCM" },
+            ...(hasReferences() ? [{ id: "references" as LeftTab, label: "Refs" }] : []),
+            ...(isGitRepo() ? [{ id: "scm" as LeftTab, label: "SCM" }] : []),
             { id: "review" as LeftTab, label: "Review", count: allOpenThreadCount() },
             { id: "todo" as LeftTab, label: "TODO", count: 0 },
           ]}
@@ -91,7 +136,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                     class="mono rounded-full px-1.5 py-0.5 text-[length:var(--ui-font-xs)]"
                     style={{
                       background: active()
-                        ? "rgba(139,92,246,0.18)"
+                        ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
                         : "var(--color-control-fill)",
                       color: active() ? "var(--color-accent-1)" : "var(--color-fg-3)",
                     }}
@@ -114,37 +159,50 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         </For>
       </div>
 
-      {/* "Files" section header (was inside FileTree) — uppercase label on
-        the left, new-folder / new-file / more action icons on the right. */}
+      {/* "Files" section header — uppercase label + new-file action. */}
       <Show when={props.tab === "files"}>
         <div
           class="flex h-9 flex-shrink-0 items-center justify-between px-3 text-[length:var(--ui-font-xs)] uppercase tracking-[0.1em] text-fg-3"
         >
           <span>Files</span>
-          <div class="flex items-center gap-0.5">
-            <button
-              type="button"
-              title="New folder"
-              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
-            >
-              <FolderPlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
-            </button>
-            <button
-              type="button"
-              title="New file"
-              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
-            >
-              <FilePlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
-            </button>
-            <button
-              type="button"
-              title="More"
-              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
-            >
-              <MoreHorizontal class="ui-icon-menu" style={{ opacity: 0.8 }} />
-            </button>
-          </div>
+          <button
+            type="button"
+            title="New file"
+            aria-label="New file"
+            onClick={() => {
+              setNewFileOpen((v) => !v);
+              setNewFileError(null);
+            }}
+            class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+          >
+            <FilePlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
+          </button>
         </div>
+        <Show when={newFileOpen()}>
+          <div class="flex-shrink-0 px-3 pb-2">
+            <input
+              type="text"
+              value={newFileName()}
+              onInput={(e) => setNewFileName(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void createNewFile();
+                if (e.key === "Escape") {
+                  setNewFileOpen(false);
+                  setNewFileName("");
+                  setNewFileError(null);
+                }
+              }}
+              ref={(el) => setTimeout(() => el.focus(), 0)}
+              placeholder="name.tex — Enter to create, Esc to cancel"
+              class="glass-inset w-full rounded-md px-2 py-1.5 text-[12px] text-fg-1 placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            />
+            <Show when={newFileError()}>
+              <div class="mt-1 text-[11px]" style={{ color: "var(--color-err)" }}>
+                {newFileError()}
+              </div>
+            </Show>
+          </div>
+        </Show>
       </Show>
 
       <div class="min-h-0 flex-1 overflow-auto scroll">
@@ -167,8 +225,8 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         <Show when={props.tab === "todo"}>
           <EmptyTab
             icon={<CircleDot size={20} />}
-            title="No TODOs"
-            body="Mark passages with comments like %! TODO: tighten proof — they'll be collected here."
+            title="TODO collection — coming soon"
+            body="This tab will collect %! TODO: comments from your sources. It isn't built yet."
           />
         </Show>
       </div>
@@ -181,15 +239,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       <div class="flex-shrink-0 space-y-2.5 border-t border-glass-stroke p-3">
         <div class="flex items-center justify-between">
           <span class="label-xs text-fg-3">Project</span>
-          <div class="mono flex items-center gap-1.5 text-[11px] text-fg-2">
-            <ListTree size={10} style={{ opacity: 0.7 }} />
-            main · local
-          </div>
         </div>
-        <div class="grid grid-cols-3 gap-2">
+        <div class="grid grid-cols-2 gap-2">
           <Stat label="Words" value={wordCount()} />
           <Stat label="Lines" value={lineCount()} />
-          <Stat label="Files" value="—" />
         </div>
         <Show when={project()?.format === "latex"}>
           <div class="glass-soft flex items-center gap-2 rounded-lg px-2.5 py-2">
@@ -270,8 +323,7 @@ const OutlinePanel: Component<{ collapsed: boolean; onToggle: () => void }> = (
       <Show when={!props.collapsed}>
         <div class="max-h-[200px] space-y-1.5 overflow-auto scroll px-2.5 pb-2.5">
           <div class="text-[11px] text-fg-3 px-2 py-1.5 italic">
-            Outline tracking lands when CodeMirror's structure tree wires up to
-            the editor (Phase 2 polish).
+            Document outline isn't built yet — coming soon.
           </div>
         </div>
       </Show>

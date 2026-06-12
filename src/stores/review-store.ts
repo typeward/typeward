@@ -11,6 +11,10 @@ const [allThreads, setAllThreads] = createSignal<CommentThread[]>([]);
 const [showResolved, setShowResolved] = createSignal(false);
 
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
+// Root captured when the save was scheduled — the debounce can outlive a
+// project switch, and writing to whatever project() points at by then would
+// drop one project's threads into another's sidecar.
+let _pendingRoot: string | null = null;
 
 function threadsForFile(relPath: string): CommentThread[] {
   return allThreads().filter((t) => t.fileRelPath === relPath);
@@ -81,46 +85,76 @@ function updateThreadOffsets(
   scheduleSave();
 }
 
-async function loadThreads(): Promise<void> {
+async function loadThreads(isCurrent: () => boolean = () => true): Promise<void> {
   const proj = project();
   if (!proj) return;
   try {
     const raw = await ipc.readProjectTextFile(proj.rootPath, SIDECAR_REL_PATH);
+    if (!isCurrent()) return;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       setAllThreads(parsed);
     }
   } catch {
+    if (!isCurrent()) return;
     setAllThreads([]);
   }
 }
 
 function scheduleSave(): void {
   if (_saveTimer) clearTimeout(_saveTimer);
+  _pendingRoot = project()?.rootPath ?? null;
   _saveTimer = setTimeout(() => {
     _saveTimer = null;
-    saveThreads();
+    const root = _pendingRoot;
+    _pendingRoot = null;
+    // A project switch flushes pending saves explicitly; if the timer still
+    // fires across one (missed flush), refuse rather than cross-write.
+    if (root && root === project()?.rootPath) void writeThreads(root);
   }, SAVE_DEBOUNCE_MS);
+}
+
+/**
+ * Write any pending debounced save immediately, to the project that was
+ * active when it was scheduled. Call before resetting on a project switch.
+ */
+async function flushPendingReviewSave(): Promise<void> {
+  if (!_saveTimer) return;
+  clearTimeout(_saveTimer);
+  _saveTimer = null;
+  const root = _pendingRoot;
+  _pendingRoot = null;
+  if (root) await writeThreads(root);
+}
+
+/** Clear in-memory threads on project switch/close (cancels pending saves). */
+function resetThreads(): void {
+  if (_saveTimer) {
+    clearTimeout(_saveTimer);
+    _saveTimer = null;
+  }
+  _pendingRoot = null;
+  setAllThreads([]);
 }
 
 async function saveThreads(): Promise<void> {
   const proj = project();
   if (!proj) return;
+  await writeThreads(proj.rootPath);
+}
+
+async function writeThreads(rootPath: string): Promise<void> {
   const data = JSON.stringify(allThreads(), null, 2);
   try {
-    await ipc.writeProjectTextFile(proj.rootPath, SIDECAR_REL_PATH, data);
+    await ipc.writeProjectTextFile(rootPath, SIDECAR_REL_PATH, data);
   } catch {
     // save is non-critical; failures are intentionally swallowed
   }
 }
 
 function _resetForTests(): void {
-  setAllThreads([]);
+  resetThreads();
   setShowResolved(false);
-  if (_saveTimer) {
-    clearTimeout(_saveTimer);
-    _saveTimer = null;
-  }
 }
 
 export {
@@ -141,5 +175,7 @@ export {
   updateThreadOffsets,
   loadThreads,
   saveThreads,
+  flushPendingReviewSave,
+  resetThreads,
   _resetForTests,
 };

@@ -2,12 +2,11 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import {
   FileQuestion,
   Folder,
-  History,
   Settings as SettingsIcon,
-  Users,
 } from "lucide-solid";
 import { LayoutMenu } from "~/components/editor/LayoutMenu";
 import { ProjectSwitcherMenu } from "~/components/editor/ProjectSwitcherMenu";
+import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
 import type { Component } from "solid-js";
 import { Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
@@ -28,25 +27,22 @@ import {
 } from "~/stores/editor-store";
 import { setCursorLine } from "~/stores/editor-view-store";
 import { setPreviousRoute } from "~/stores/nav-store";
+import {
+  flushPendingReviewSave,
+  loadThreads,
+  resetThreads,
+} from "~/stores/review-store";
 import { startSession, stopAllSessions } from "~/stores/lsp-store";
 import { startWatching, stopWatching } from "~/stores/watcher-store";
 import { TextShell } from "./shells/text-shell";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
-import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
-import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
+import { adapterFor } from "~/commands/actions";
 import {
   registerAdapterCommands,
   unregisterAdapterCommands,
 } from "~/commands/boot";
+import { focusMode } from "~/stores/ui-store";
 import type { EditorAdapter } from "~/adapters/types";
-
-const adapterForFormat = (
-  format: string,
-): EditorAdapter | null => {
-  if (format === "latex") return LatexAdapter;
-  if (format === "typst") return TypstAdapter;
-  return null;
-};
 
 const EditorScreen: Component = () => {
   const [params] = useSearchParams();
@@ -71,6 +67,7 @@ const EditorScreen: Component = () => {
       void stopAllSessions();
       void stopWatching();
       teardownAdapter();
+      void flushPendingReviewSave().then(resetThreads);
       setProject(null);
       resetTabs();
       return;
@@ -82,13 +79,18 @@ const EditorScreen: Component = () => {
         // Tear down any previous project's LSP sessions + watcher before swapping.
         await stopAllSessions();
         await stopWatching();
+        // Persist any pending review-comment save to the *previous* project
+        // before its threads are cleared.
+        await flushPendingReviewSave();
         if (!token.isCurrent()) return;
         teardownAdapter();
         setProject(p);
         resetTabs();
+        resetThreads();
+        void loadThreads(token.isCurrent);
         // Bind the matching adapter's commands into the registry so the
         // palette and Mod+Enter work format-specifically.
-        const adapter = adapterForFormat(p.format);
+        const adapter = adapterFor(p);
         if (adapter) {
           registerAdapterCommands(adapter);
           registeredAdapter = adapter;
@@ -114,6 +116,11 @@ const EditorScreen: Component = () => {
       } catch (e) {
         if (!token.isCurrent()) return;
         console.error("Failed to open project", e);
+        // The previous project's runtime must not outlive its blanked UI.
+        void stopAllSessions();
+        void stopWatching();
+        teardownAdapter();
+        void flushPendingReviewSave().then(resetThreads);
         setProject(null);
         resetTabs();
       }
@@ -125,6 +132,7 @@ const EditorScreen: Component = () => {
     void stopAllSessions();
     void stopWatching();
     teardownAdapter();
+    void flushPendingReviewSave().then(resetThreads);
   });
 
   const openFile = async (
@@ -215,13 +223,23 @@ const EditorScreen: Component = () => {
         </Match>
         <Match when={project()}>
           <div class="relative z-10 flex h-full flex-col">
-            <EditorTopBar
-              onBack={() => navigate("/projects")}
-              onSettings={() => {
-                setPreviousRoute("/editor");
-                navigate("/settings");
-              }}
-            />
+            <Show when={!focusMode()}>
+              <EditorTopBar
+                onBack={() => navigate("/projects")}
+                onSettings={() => {
+                  // Keep the ?path= query — a bare "/editor" return route
+                  // makes EditorScreen tear the project down and strand the
+                  // user on "No project open".
+                  const p = project();
+                  setPreviousRoute(
+                    p
+                      ? `/editor?path=${encodeURIComponent(p.rootPath)}`
+                      : "/projects",
+                  );
+                  navigate("/settings");
+                }}
+              />
+            </Show>
             <div class="flex min-h-0 flex-1 gap-2 p-2">
               <TextShell onSelectFile={(rel) => void openFile(rel)} />
             </div>
@@ -251,7 +269,10 @@ const EditorTopBar: Component<{
     const p = project();
     const f = activeFile();
     if (!p) return null;
-    return { space: p.name, sub: "sections", file: f?.relPath ?? p.rootFile };
+    const rel = (f?.relPath ?? p.rootFile).replace(/\\/g, "/");
+    const segs = rel.split("/");
+    const file = segs.pop() ?? rel;
+    return { space: p.name, sub: segs.join("/"), file };
   });
 
   const saveLabel = createMemo(() => {
@@ -287,8 +308,10 @@ const EditorTopBar: Component<{
             <div class="glass-soft flex h-7 items-center gap-1.5 rounded-md px-3">
               <Folder size={12} style={{ opacity: 0.5 }} />
               <span class="text-[12px] text-fg-2">{bc().space}</span>
-              <span class="text-fg-4">/</span>
-              <span class="text-[12px] text-fg-2">{bc().sub}</span>
+              <Show when={bc().sub}>
+                <span class="text-fg-4">/</span>
+                <span class="text-[12px] text-fg-2">{bc().sub}</span>
+              </Show>
               <span class="text-fg-4">/</span>
               <span class="text-[12px] font-medium text-fg-1">{bc().file}</span>
             </div>
@@ -298,12 +321,12 @@ const EditorTopBar: Component<{
           <span class="relative flex h-1.5 w-1.5">
             <span
               class="pulse absolute inset-0 rounded-full"
-              style={{ background: activeFile()?.dirty ? "#F59E0B" : "#10B981" }}
+              style={{ background: activeFile()?.dirty ? "var(--color-warn)" : "var(--color-ok)" }}
             />
             <span
               class="absolute inset-0 rounded-full opacity-30"
               style={{
-                background: activeFile()?.dirty ? "#F59E0B" : "#10B981",
+                background: activeFile()?.dirty ? "var(--color-warn)" : "var(--color-ok)",
                 transform: "scale(1.6)",
               }}
             />
@@ -320,32 +343,19 @@ const EditorTopBar: Component<{
             style={{
               background:
                 compileState() === "ok"
-                  ? "#10B981"
+                  ? "var(--color-ok)"
                   : compileState() === "error"
-                    ? "#F43F5E"
+                    ? "var(--color-err)"
                     : compileState() === "compiling"
-                      ? "#F59E0B"
-                      : "#6B7280",
+                      ? "var(--color-warn)"
+                      : "var(--color-fg-4)",
             }}
           />
           <span class="text-[11px] text-fg-2">{compileLabel()}</span>
           <span class="mono text-[11px] text-fg-4">·</span>
           <span class="mono text-[11px] text-fg-2">{compileDuration()}</span>
         </div>
-        <button
-          type="button"
-          class="lift glass-soft flex h-7 items-center gap-1.5 rounded-md px-3 text-[12px] font-medium text-fg-1 hover:bg-[var(--color-control-fill-hover)]"
-        >
-          <Users size={12} style={{ opacity: 0.7 }} />
-          Share
-        </button>
-        <button
-          type="button"
-          title="Version history"
-          class="lift flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--color-control-fill)]"
-        >
-          <History class="ui-icon-chrome" style={{ opacity: 0.85 }} />
-        </button>
+        <SyncStatusBadge />
         <LayoutMenu />
         <button
           type="button"

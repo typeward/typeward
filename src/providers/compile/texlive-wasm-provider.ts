@@ -1,5 +1,4 @@
 import { readDir, type DirEntry } from "@tauri-apps/plugin-fs";
-import texliveWorkerUrl from "texlive-wasm/worker?url";
 import type { CompileResult, Project } from "~/adapters/types";
 import * as ipc from "~/ipc";
 
@@ -12,7 +11,7 @@ async function getEngineHandle(): Promise<import("texlive-wasm").EngineHandle> {
     const { withTauriFs } = await import("texlive-wasm/tauri");
     const { BaseDirectory } = await import("@tauri-apps/plugin-fs");
     return withTauriFs(
-      (vfs) => createEngine("pdflatex", { vfs, workerUrl: texliveWorkerUrl }),
+      (vfs) => createEngine("pdflatex", { vfs }),
       { texmfRoot: "texlive-wasm/texmf", baseDir: BaseDirectory.Resource },
     );
   })();

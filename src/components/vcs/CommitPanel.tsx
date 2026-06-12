@@ -329,18 +329,21 @@ const KIND_LABEL: Record<ipc.GitChangeKind, string> = {
 };
 
 const KIND_COLOR: Record<ipc.GitChangeKind, string> = {
-  added: "rgb(74, 222, 128)",
-  modified: "rgb(251, 191, 36)",
-  deleted: "rgb(248, 113, 113)",
-  renamed: "rgb(129, 140, 248)",
-  typechange: "rgb(251, 191, 36)",
+  added: "var(--color-ok)",
+  modified: "var(--color-warn)",
+  deleted: "var(--color-err)",
+  renamed: "var(--color-accent-2)",
+  typechange: "var(--color-warn)",
   none: "var(--color-fg-3)",
 };
 
 const ChangeKindBadge: Component<{ kind: ipc.GitChangeKind; untracked: boolean }> = (props) => (
   <span
     class="mono inline-flex h-4 w-4 items-center justify-center rounded text-[10px] font-semibold"
-    style={{ color: KIND_COLOR[props.kind], background: `${KIND_COLOR[props.kind]}22` }}
+    style={{
+      color: KIND_COLOR[props.kind],
+      background: `color-mix(in srgb, ${KIND_COLOR[props.kind]} 13%, transparent)`,
+    }}
     title={props.untracked ? "Untracked" : props.kind}
   >
     {props.untracked ? "U" : KIND_LABEL[props.kind]}

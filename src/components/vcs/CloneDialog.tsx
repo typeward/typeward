@@ -43,7 +43,10 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
 
   const kind = createMemo<Kind>(() => {
     const u = url();
-    if (/^https:\/\/git(hub|lab)\.com\//i.test(u)) return "github";
+    // GitHub only — GitLab must NOT match here or its users get blocked
+    // behind the GitHub device-flow sign-in. GitLab goes through the
+    // generic username/PAT path.
+    if (/^https:\/\/github\.com\//i.test(u)) return "github";
     if (/^https:\/\/git\.overleaf\.com\//i.test(u)) return "overleaf";
     return "generic";
   });

@@ -6,7 +6,18 @@ import {
   XCircle,
 } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Match, Show, Switch, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+} from "solid-js";
 import { CodeMirror } from "~/components/editor/CodeMirror";
 import {
   EditorSidebar,
@@ -30,18 +41,21 @@ import {
   setActiveIndex,
   updateActiveFile,
 } from "~/stores/editor-store";
-import { theme } from "~/themes/theme-store";
+import { LIGHT_THEMES, theme } from "~/themes/theme-store";
 import { cursorCol, cursorLine } from "~/stores/editor-view-store";
 import { editorSettings, integrationsSettings } from "~/stores/settings-store";
 import { harperLinter } from "~/lib/grammar/cm6";
 import { reviewExtension, dispatchSetThreads } from "~/lib/reviews/cm6";
 import { recoverThreads } from "~/lib/reviews/recovery";
-import { activeFileThreads, updateThreadOffsets, loadThreads } from "~/stores/review-store";
+import { activeFileThreads, updateThreadOffsets } from "~/stores/review-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import type { GrammarSyntax } from "~/ipc";
 import {
   consolePosition,
   editorLayout,
+  focusMode,
+  setPreviewMode,
+  toggleFocusMode,
 } from "~/stores/ui-store";
 import {
   activePane,
@@ -77,6 +91,28 @@ export const TextShell: Component<{
   const save = () => void saveActiveFile();
   const compile = () => void compileActiveProject();
 
+  // Surface diagnostics on compile failure. When the console lives in the
+  // PDF pane, the stale PDF would otherwise keep showing with no hint that
+  // anything went wrong (the LogsDrawer handles its own expand).
+  createEffect(
+    on(compileState, (state) => {
+      if (state === "error" && consolePosition() === "pdf-tab") {
+        setPreviewMode("console");
+      }
+    }),
+  );
+
+  // `review.togglePanel` (command palette) dispatches this event; the
+  // sidebar tab state lives here.
+  const onToggleReview = () => {
+    setLeftTab("review");
+    if (isTabletViewport()) setActivePane("sidebar");
+  };
+  window.addEventListener("typeward:toggle-review-panel", onToggleReview);
+  onCleanup(() =>
+    window.removeEventListener("typeward:toggle-review-panel", onToggleReview),
+  );
+
   const pdfPath = createMemo(() => lastResult()?.outputPath ?? null);
 
   const previewKind = createMemo<"markdown" | "pdf">(() => {
@@ -94,7 +130,7 @@ export const TextShell: Component<{
   });
 
   const mdTheme = createMemo<"dark" | "light">(() =>
-    (["paper", "solarized-light"] as string[]).includes(theme()) ? "light" : "dark"
+    (LIGHT_THEMES as readonly string[]).includes(theme()) ? "light" : "dark"
   );
 
   const handleSelectFile = (rel: string) => {
@@ -205,7 +241,49 @@ const DesktopLayout: Component<ShellProps> = (props) => {
     </div>
   );
 
+  // Focus mode strips the chrome down to source + page. A separate branch
+  // (rather than conditional Resizable panels) keeps the sidebar-resize
+  // size bookkeeping out of the picture entirely.
+  const focusLayout = () => (
+    <div class="relative flex h-full w-full overflow-hidden" data-editor-shell>
+      <Switch>
+        <Match when={showEditor() && showPreview()}>
+          <Resizable orientation="horizontal" class="flex min-h-0 flex-1 overflow-hidden">
+            <Resizable.Panel initialSize={0.55} minSize={0.3}>
+              {editorPane()}
+            </Resizable.Panel>
+            <Resizable.Handle aria-label="Resize preview" class="group relative w-[6px] shrink-0">
+              <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
+            </Resizable.Handle>
+            <Resizable.Panel initialSize={0.45} minSize={0.22}>
+              {previewPane()}
+            </Resizable.Panel>
+          </Resizable>
+        </Match>
+        <Match when={showEditor()}>
+          <div class="flex min-h-0 flex-1">{editorPane()}</div>
+        </Match>
+        <Match when={showPreview()}>
+          <div class="flex min-h-0 flex-1">{previewPane()}</div>
+        </Match>
+      </Switch>
+      <button
+        type="button"
+        onClick={() => toggleFocusMode()}
+        title="Exit focus mode (Mod+Shift+F)"
+        class="lift absolute bottom-3 right-4 z-20 flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] text-fg-3 opacity-50 hover:opacity-100"
+        style={{
+          background: "var(--color-popover-bg)",
+          border: "1px solid var(--color-glass-stroke)",
+        }}
+      >
+        Exit focus
+      </button>
+    </div>
+  );
+
   return (
+    <Show when={!focusMode()} fallback={focusLayout()}>
     <Resizable
       ref={sidebar.setRef}
       orientation="horizontal"
@@ -267,6 +345,7 @@ const DesktopLayout: Component<ShellProps> = (props) => {
         </div>
       </Resizable.Panel>
     </Resizable>
+    </Show>
   );
 };
 
@@ -278,7 +357,6 @@ const TabletLayout: Component<ShellProps> = (props) => {
   let rootRef: HTMLDivElement | undefined;
 
   onMount(() => {
-    loadThreads();
     if (!rootRef) return;
     const teardown = installSwipeListener(rootRef, (direction) => {
       cyclePane(direction);
@@ -349,6 +427,15 @@ const TabletLayout: Component<ShellProps> = (props) => {
 // =================================================================
 
 const LogsSheet: Component = () => {
+  // Escape closes the sheet for keyboard-attached tablets.
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && logsSheetOpen()) {
+      e.stopPropagation();
+      setLogsSheetOpen(false);
+    }
+  };
+  document.addEventListener("keydown", onKeyDown);
+  onCleanup(() => document.removeEventListener("keydown", onKeyDown));
   return (
     <Show when={logsSheetOpen()}>
       {/* Backdrop dims the pane behind the sheet; tapping closes it. */}
@@ -395,10 +482,40 @@ const CenterPane: Component<{
     return `${f.path}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}`;
   });
 
+  // Closing a dirty tab would silently discard the buffer (the autosave
+  // snapshot only resurfaces on the next project open) — confirm first.
+  const requestCloseFile = async (index: number) => {
+    const f = openFiles()[index];
+    if (f?.dirty) {
+      let discard = false;
+      try {
+        const { ask } = await import("@tauri-apps/plugin-dialog");
+        discard = await ask(
+          `"${f.relPath}" has unsaved changes. Close it and discard them?`,
+          {
+            title: "Unsaved changes",
+            kind: "warning",
+            okLabel: "Discard changes",
+            cancelLabel: "Keep open",
+          },
+        );
+      } catch {
+        discard = window.confirm(
+          `"${f.relPath}" has unsaved changes. Close and discard?`,
+        );
+      }
+      if (!discard) return;
+    }
+    closeFile(index);
+  };
+
   return (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-      {/* File tabs strip */}
+      {/* File tabs strip — hidden in focus mode along with the toolbar. */}
+      <Show when={!focusMode()}>
       <div
+        role="tablist"
+        aria-label="Open files"
         class={`flex ${tabHeight()} flex-shrink-0 items-center gap-0.5 overflow-x-auto border-b border-glass-stroke px-2 scroll`}
       >
         <Show
@@ -412,25 +529,29 @@ const CenterPane: Component<{
               const active = () => activeIndex() === i();
               return (
                 <div
-                  class={`lift flex ${tabRowHeight()} flex-shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium ${
+                  role="tab"
+                  aria-selected={active()}
+                  tabIndex={active() ? 0 : -1}
+                  onClick={() => setActiveIndex(i())}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setActiveIndex(i());
+                    }
+                  }}
+                  class={`lift flex ${tabRowHeight()} flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium ${
                     active() ? "text-fg-1" : "text-fg-2 hover:bg-[var(--color-control-fill)]"
                   }`}
                   style={
                     active()
                       ? {
                           background: "var(--color-control-fill)",
-                          border: "1px solid rgba(139,92,246,0.25)",
+                          border: "1px solid color-mix(in srgb, var(--color-accent-1) 25%, transparent)",
                         }
                       : undefined
                   }
                 >
-                  <button
-                    type="button"
-                    onClick={() => setActiveIndex(i())}
-                    class="mono"
-                  >
-                    {f.relPath}
-                  </button>
+                  <span class="mono">{f.relPath}</span>
                   <Show when={f.dirty}>
                     <span
                       class="h-1.5 w-1.5 rounded-full"
@@ -441,7 +562,7 @@ const CenterPane: Component<{
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      closeFile(i());
+                      void requestCloseFile(i());
                     }}
                     class={`-mr-1 flex items-center justify-center rounded opacity-60 hover:bg-[var(--color-control-fill-hover)] hover:opacity-100 ${
                       isTabletViewport() ? "h-9 w-9" : "h-4 w-4"
@@ -458,8 +579,9 @@ const CenterPane: Component<{
         {/* Save + Compile buttons were removed 2026-05-15. Save is on Mod+S;
             Compile is the PDF panel's Recompile button. */}
       </div>
+      </Show>
 
-      <Show when={activeFile()}>
+      <Show when={activeFile() && !focusMode()}>
         <FormatToolbar />
       </Show>
 
@@ -522,6 +644,7 @@ const CenterPane: Component<{
                 language={lang}
                 fontSize={editorSettings().fontSize}
                 lineWrap={editorSettings().lineWrap}
+                vimMode={editorSettings().vimMode}
                 extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
               />
             );
@@ -529,7 +652,9 @@ const CenterPane: Component<{
         </Show>
       </div>
 
-      <StatusBar />
+      <Show when={!focusMode()}>
+        <StatusBar />
+      </Show>
     </div>
   );
 };
