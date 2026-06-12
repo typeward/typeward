@@ -3,7 +3,7 @@ import type { Component } from "solid-js";
 import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import type { EditorCommand, Project } from "~/adapters/types";
 import { closePalette } from "~/commands/actions";
-import { paletteOpen_ } from "~/commands/palette-store";
+import { navigateTo, paletteOpen_ } from "~/commands/palette-store";
 import { commands as registryCommands } from "~/commands/registry";
 import { shortcutTokens } from "~/lib/shortcuts";
 import { projects } from "~/stores/projects-store";
@@ -106,18 +106,22 @@ export const CommandPalette: Component = () => {
   });
 
   // Group rows by their `group` field while preserving order — render
-  // sections with the group label as a header.
+  // sections with the group label as a header. The absolute index rides
+  // along so rows don't need an O(n) indexOf per render.
   const groupedRows = createMemo(() => {
     const list = rows();
-    const groups: Array<{ label: string; rows: PaletteRow[] }> = [];
-    for (const row of list) {
+    const groups: Array<{
+      label: string;
+      rows: Array<{ row: PaletteRow; idx: number }>;
+    }> = [];
+    list.forEach((row, idx) => {
       const last = groups[groups.length - 1];
       if (last && last.label === row.group) {
-        last.rows.push(row);
+        last.rows.push({ row, idx });
       } else {
-        groups.push({ label: row.group, rows: [row] });
+        groups.push({ label: row.group, rows: [{ row, idx }] });
       }
-    }
+    });
     return groups;
   });
 
@@ -143,6 +147,10 @@ export const CommandPalette: Component = () => {
     } else if (e.key === "Escape") {
       e.preventDefault();
       closePalette();
+    } else if (e.key === "Tab") {
+      // Focus trap: the palette is the only interactive surface while open;
+      // letting Tab walk into the obscured background loses the keyboard user.
+      e.preventDefault();
     }
   };
 
@@ -151,14 +159,16 @@ export const CommandPalette: Component = () => {
       <div
         class="fixed inset-0 z-50 flex items-start justify-center pt-[120px]"
         style={{
-          background:
-            "radial-gradient(ellipse at center, rgba(10,11,15,0.55) 0%, rgba(10,11,15,0.85) 100%)",
+          background: "var(--color-overlay-scrim)",
           "backdrop-filter": "blur(2px) saturate(120%)",
         }}
         onClick={() => closePalette()}
       >
         <div
-          class="glass glow-violet w-[560px] overflow-hidden rounded-2xl"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Command palette"
+          class="glass glow-accent w-[560px] overflow-hidden rounded-2xl"
           onClick={(e) => e.stopPropagation()}
           style={{ background: "var(--color-popover-bg)" }}
           onKeyDown={handleKey}
@@ -169,6 +179,10 @@ export const CommandPalette: Component = () => {
               ref={(el) => (inputRef = el)}
               placeholder="Jump to project, command, or paper…"
               value={query()}
+              role="combobox"
+              aria-expanded="true"
+              aria-controls="palette-listbox"
+              aria-activedescendant={`palette-option-${selectedIdx()}`}
               onInput={(e) => {
                 setQuery(e.currentTarget.value);
                 setSelectedIdx(0);
@@ -186,7 +200,12 @@ export const CommandPalette: Component = () => {
             </kbd>
           </div>
 
-          <div class="max-h-[360px] overflow-auto scroll p-2">
+          <div
+            id="palette-listbox"
+            role="listbox"
+            aria-label="Results"
+            class="max-h-[360px] overflow-auto scroll p-2"
+          >
             <Show
               when={rows().length > 0}
               fallback={
@@ -200,14 +219,16 @@ export const CommandPalette: Component = () => {
                   <div>
                     <div class="label-xs px-2.5 pb-1.5 pt-2 text-fg-3">{g.label}</div>
                     <For each={g.rows}>
-                      {(row) => {
-                        const idx = () => rows().indexOf(row);
-                        const active = () => idx() === selectedIdx();
+                      {({ row, idx }) => {
+                        const active = () => idx === selectedIdx();
                         return (
                           <button
                             type="button"
+                            id={`palette-option-${idx}`}
+                            role="option"
+                            aria-selected={active()}
                             onClick={() => row.run()}
-                            onMouseEnter={() => setSelectedIdx(idx())}
+                            onMouseEnter={() => setSelectedIdx(idx)}
                             class={`flex h-10 w-full items-center gap-3 rounded-lg px-2.5 text-left ${
                               active()
                                 ? "bg-[var(--color-control-fill-hover)]"
@@ -294,8 +315,5 @@ export const CommandPalette: Component = () => {
 };
 
 const openProject = (p: Project) => {
-  // Lazy import to avoid pulling palette-store ↔ actions cycle at module load.
-  import("~/commands/palette-store").then(({ navigateTo }) => {
-    navigateTo(`/editor?path=${encodeURIComponent(p.rootPath)}`);
-  });
+  navigateTo(`/editor?path=${encodeURIComponent(p.rootPath)}`);
 };

@@ -44,8 +44,8 @@ export const PaneSwitcher: Component = () => {
                 active()
                   ? {
                       background:
-                        "linear-gradient(180deg, rgba(139,92,246,0.18), rgba(139,92,246,0.08))",
-                      border: "1px solid rgba(139,92,246,0.32)",
+                        "linear-gradient(180deg, color-mix(in srgb, var(--color-accent-1) 18%, transparent), color-mix(in srgb, var(--color-accent-1) 8%, transparent))",
+                      border: "1px solid color-mix(in srgb, var(--color-accent-1) 32%, transparent)",
                     }
                   : undefined
               }

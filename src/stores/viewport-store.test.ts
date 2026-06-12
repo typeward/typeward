@@ -25,16 +25,22 @@ describe("viewport-store", () => {
     expect(viewportMode()).toBe("desktop");
   });
 
-  it("cycles active pane in both directions wrapping at ends", () => {
+  it("cycles active pane in both directions clamping at ends", () => {
     setActivePane("sidebar");
     cyclePane(1);
     expect(activePane()).toBe("editor");
     cyclePane(1);
     expect(activePane()).toBe("preview");
+    // Clamped: a forward swipe at the last pane stays put instead of
+    // wrapping back to the sidebar.
     cyclePane(1);
+    expect(activePane()).toBe("preview");
+    cyclePane(-1);
+    expect(activePane()).toBe("editor");
+    cyclePane(-1);
     expect(activePane()).toBe("sidebar");
     cyclePane(-1);
-    expect(activePane()).toBe("preview");
+    expect(activePane()).toBe("sidebar");
   });
 
   it("toggles the logs sheet", () => {

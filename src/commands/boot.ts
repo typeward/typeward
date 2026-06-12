@@ -14,6 +14,7 @@ import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
 import { addThread } from "~/stores/review-store";
 import { dispatchSetThreads, getCurrentRanges } from "~/lib/reviews/cm6";
+import { toggleFocusMode } from "~/stores/ui-store";
 
 /**
  * Commands available regardless of which screen is mounted. The keyboard
@@ -138,6 +139,18 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => project() !== null,
     run: () => {
       window.dispatchEvent(new CustomEvent("typeward:toggle-review-panel"));
+    },
+  },
+  {
+    id: "core.toggleFocusMode",
+    title: "Toggle Focus Mode",
+    subtitle: "Hide editor chrome — just source and page",
+    shortcut: "Mod+Shift+F",
+    group: "View",
+    scope: "global",
+    when: () => project() !== null,
+    run: () => {
+      toggleFocusMode();
     },
   },
 ];

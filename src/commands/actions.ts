@@ -18,7 +18,7 @@ import {
   setLastResult,
 } from "~/stores/editor-store";
 import { currentCursorLine } from "~/stores/editor-view-store";
-import { compileEngine } from "~/stores/settings-store";
+import { compileEngine, editorSettings } from "~/stores/settings-store";
 import {
   navigateTo,
   setPaletteOpen,
@@ -27,11 +27,10 @@ import {
 } from "./palette-store";
 
 /**
- * Single point that maps a project's format to its adapter. EditorScreen's
- * `adapterForFormat` mirrors this — keep them in lockstep when new
- * adapters land.
+ * Single point that maps a project's format to its adapter. EditorScreen
+ * imports this too — add new adapters here only.
  */
-const adapterFor = (p: Project): EditorAdapter | null => {
+export const adapterFor = (p: Project): EditorAdapter | null => {
   if (p.format === "latex") return LatexAdapter;
   if (p.format === "typst") return TypstAdapter;
   return null;
@@ -47,9 +46,18 @@ export async function saveActiveFile(): Promise<void> {
   // switches tabs during the write, we must only clear `dirty` on the file we
   // actually wrote and only if its buffer still matches what hit disk.
   const savedContent = file.content;
-  await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+  try {
+    await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+  } catch (e) {
+    recordError("save-failed", `write_project_text_file failed for ${file.relPath}`, e);
+    throw e;
+  }
   markFileCleanIfUnchanged(file.path, savedContent);
   notifyLocalSave(p.rootPath, [file.relPath]);
+  // Auto-compile rides the explicit save path only — compileActiveProject
+  // saves via saveAllDirtyFiles, so this can't recurse, and its
+  // "already compiling" guard absorbs rapid save bursts.
+  if (editorSettings().autoCompile) void compileActiveProject();
 }
 
 /**
@@ -64,7 +72,12 @@ export async function saveAllDirtyFiles(): Promise<void> {
   for (const file of openFiles()) {
     if (!file.dirty) continue;
     const savedContent = file.content;
-    await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+    try {
+      await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+    } catch (e) {
+      recordError("save-failed", `write_project_text_file failed for ${file.relPath}`, e);
+      throw e;
+    }
     markFileCleanIfUnchanged(file.path, savedContent);
     saved.push(file.relPath);
   }
@@ -87,9 +100,11 @@ export async function compileActiveProject(): Promise<void> {
   // one directory fight over aux files and corrupt the output.
   if (compileState() === "compiling") return;
 
-  await saveAllDirtyFiles();
   setCompileState("compiling");
   try {
+    // Inside the try so a failed save surfaces as a compile error in the
+    // Issues tab instead of an unhandled rejection.
+    await saveAllDirtyFiles();
     const result = await adapter.compile(p);
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");

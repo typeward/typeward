@@ -78,7 +78,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
             type="button"
             onClick={() => setScope("file")}
             class={`rounded px-2 py-0.5 text-[11px] font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
-            style={scope() === "file" ? { background: "rgba(255,255,255,0.08)" } : {}}
+            style={scope() === "file" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             This file
           </button>
@@ -86,7 +86,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
             type="button"
             onClick={() => setScope("all")}
             class={`rounded px-2 py-0.5 text-[11px] font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
-            style={scope() === "all" ? { background: "rgba(255,255,255,0.08)" } : {}}
+            style={scope() === "all" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             All files
           </button>

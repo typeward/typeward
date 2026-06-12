@@ -13,6 +13,11 @@ interface SessionEntry {
 
 const [sessions, setSessions] = createSignal<SessionEntry[]>([]);
 
+// Concurrent startSession calls for the same language both pass the
+// `findSession` check before either registers — track in-flight starts so
+// the second caller awaits the first instead of spawning a second server.
+const inFlight = new Map<LspLanguage, Promise<LspSession | null>>();
+
 function findSession(language: LspLanguage): LspSession | null {
   return sessions().find((s) => s.language === language)?.session ?? null;
 }
@@ -30,6 +35,20 @@ async function startSession(
   // Avoid duplicate sessions per language.
   const existing = findSession(language);
   if (existing) return existing;
+  const pending = inFlight.get(language);
+  if (pending) return pending;
+  const p = doStartSession(language, project, isCurrent).finally(() => {
+    inFlight.delete(language);
+  });
+  inFlight.set(language, p);
+  return p;
+}
+
+async function doStartSession(
+  language: LspLanguage,
+  project: Project,
+  isCurrent: () => boolean,
+): Promise<LspSession | null> {
 
   let transport: lspIpc.LanguageServerClient;
   try {

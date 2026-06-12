@@ -57,16 +57,14 @@ export const SyncStatusBadge: Component = () => {
             style={{
               background: agg().phase === "idle"
                 ? "var(--color-control-fill)"
-                : agg().phase === "conflict"
-                  ? "rgba(248, 113, 113, 0.16)"
-                  : agg().phase === "error"
-                    ? "rgba(248, 113, 113, 0.16)"
-                    : "rgba(99, 102, 241, 0.16)",
+                : agg().phase === "conflict" || agg().phase === "error"
+                  ? "color-mix(in srgb, var(--color-err) 14%, transparent)"
+                  : "color-mix(in srgb, var(--color-accent-1) 14%, transparent)",
               color: agg().phase === "idle"
                 ? "var(--color-fg-2)"
                 : agg().phase === "conflict" || agg().phase === "error"
-                  ? "rgb(248, 113, 113)"
-                  : "rgb(129, 140, 248)",
+                  ? "var(--color-err)"
+                  : "var(--color-accent-1)",
             }}
             title={
               agg().conflicts > 0

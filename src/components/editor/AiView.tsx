@@ -126,9 +126,9 @@ export const AiView: Component = () => {
             <div class="mx-auto flex max-w-[520px] flex-col items-center gap-3 pt-12 text-center">
               <span
                 class="flex h-12 w-12 items-center justify-center rounded-2xl accent-grad"
-                style={{ "box-shadow": "0 0 0 1px rgba(139,92,246,0.35)" }}
+                style={{ "box-shadow": "0 0 0 1px color-mix(in srgb, var(--color-accent-1) 35%, transparent)" }}
               >
-                <Sparkles size={20} class="text-white" />
+                <Sparkles size={20} />
               </span>
               <h2 class="text-[length:var(--ui-font-lg)] font-semibold text-fg-1">
                 {activeProviderId() ? "Ask anything" : "No AI provider configured"}
@@ -138,9 +138,8 @@ export const AiView: Component = () => {
                   when={activeProviderId()}
                   fallback={
                     <span>
-                      Pick a provider in Settings → Integrations → AI. Claude,
-                      ChatGPT, Gemini, and a local Ollama daemon are all
-                      supported.
+                      Pick a provider in Settings → Integrations → AI and mark
+                      it active. A local Ollama daemon works fully offline.
                     </span>
                   }
                 >
@@ -185,7 +184,7 @@ export const AiView: Component = () => {
             placeholder={activeProviderId() ? "Ask the assistant…" : "Configure a provider first"}
             rows={2}
             disabled={!activeProviderId() || streaming()}
-            class="min-h-[40px] flex-1 resize-none bg-transparent text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-4 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="min-h-[40px] flex-1 resize-none bg-transparent text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Show
             when={streaming()}
@@ -194,7 +193,7 @@ export const AiView: Component = () => {
                 type="button"
                 disabled={!activeProviderId() || !draft().trim()}
                 onClick={() => void send()}
-                class="lift flex h-8 items-center gap-1.5 rounded-md accent-grad px-2.5 text-[12px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                class="lift flex h-8 items-center gap-1.5 rounded-md accent-grad px-2.5 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Send size={12} stroke-width={2.2} />
                 Send
@@ -266,7 +265,7 @@ const MessageBubble: Component<{
   >
     <div
       class={`max-w-[80%] rounded-lg px-3 py-2 text-[length:var(--ui-font-sm)] leading-relaxed ${
-        props.role === "user" ? "accent-grad text-white" : "glass-soft text-fg-1"
+        props.role === "user" ? "accent-grad" : "glass-soft text-fg-1"
       }`}
       style={{ "white-space": "pre-wrap" }}
     >

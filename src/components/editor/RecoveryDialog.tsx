@@ -20,6 +20,23 @@ interface RecoveryDialogProps {
 
 export const RecoveryDialog: Component<RecoveryDialogProps> = (props) => {
   const discardAll = async () => {
+    // Deletes the snapshots — the only copy of these unsaved edits.
+    let proceed = false;
+    try {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      proceed = await ask(
+        `Delete ${props.orphans.length} recovered snapshot${props.orphans.length === 1 ? "" : "s"}? The unsaved edits they hold can't be restored afterwards.`,
+        {
+          title: "Discard snapshots",
+          kind: "warning",
+          okLabel: "Discard",
+          cancelLabel: "Keep",
+        },
+      );
+    } catch {
+      proceed = window.confirm("Delete the recovered snapshots permanently?");
+    }
+    if (!proceed) return;
     for (const s of props.orphans) {
       try {
         await ipc.clearSnapshot(props.projectRoot, s.relPath);

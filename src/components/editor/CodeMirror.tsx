@@ -6,6 +6,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
+import { vim } from "@replit/codemirror-vim";
 import { tags as t } from "@lezer/highlight";
 import type { Component } from "solid-js";
 import { createEffect, on, onCleanup, onMount } from "solid-js";
@@ -20,6 +21,8 @@ interface CodeMirrorProps {
   language?: CodeMirrorLanguage;
   fontSize?: number;
   lineWrap?: boolean;
+  /** Modal Vim bindings via @replit/codemirror-vim. */
+  vimMode?: boolean;
   /** Optional callback that receives the EditorView once mounted. */
   onReady?: (view: EditorView) => void;
   /**
@@ -60,7 +63,7 @@ const baseTheme = EditorView.theme({
     borderLeftWidth: "2px",
   },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    background: "rgba(139, 92, 246, 0.18)",
+    background: "var(--color-text-selection)",
   },
   ".cm-lineNumbers .cm-gutterElement": {
     padding: "0 14px 0 10px",
@@ -87,13 +90,13 @@ const baseTheme = EditorView.theme({
 });
 
 const latexHighlight = HighlightStyle.define([
-  { tag: t.keyword, color: "#C4B5FD" }, // \commands
-  { tag: t.tagName, color: "#34D399" }, // \begin{env}
-  { tag: t.bracket, color: "var(--color-fg-3)" },
-  { tag: t.string, color: "#67E8F9" }, // math
-  { tag: t.comment, color: "#5F6878", fontStyle: "italic" },
-  { tag: t.atom, color: "#67E8F9" }, // math operators
-  { tag: t.attributeName, color: "#A7F3D0" },
+  { tag: t.keyword, color: "var(--syntax-cmd)" }, // \commands
+  { tag: t.tagName, color: "var(--syntax-env)" }, // \begin{env}
+  { tag: t.bracket, color: "var(--syntax-bracket)" },
+  { tag: t.string, color: "var(--syntax-math)" }, // math
+  { tag: t.comment, color: "var(--syntax-comment)", fontStyle: "italic" },
+  { tag: t.atom, color: "var(--syntax-math)" }, // math operators
+  { tag: t.attributeName, color: "var(--syntax-attr)" },
   { tag: t.literal, color: "var(--color-fg-1)" },
 ]);
 
@@ -104,6 +107,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   const langCompartment = new Compartment();
   const lineWrapCompartment = new Compartment();
   const fontSizeCompartment = new Compartment();
+  const vimCompartment = new Compartment();
+
+  const vimExtension = (on: boolean) => (on ? vim() : []);
 
   const langExtension = (lang: CodeMirrorProps["language"]) => {
     if (lang === "markdown") return markdown();
@@ -122,6 +128,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
     const state = EditorState.create({
       doc: props.value,
       extensions: [
+        // Vim must precede the other keymaps so its handlers win in
+        // normal/visual mode.
+        vimCompartment.of(vimExtension(props.vimMode ?? false)),
         lineNumbers(),
         history(),
         drawSelection(),
@@ -131,8 +140,15 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         // Mod+S and Mod+Enter intentionally aren't bound here — they go
         // through the global keyboard router (src/commands/keyboard.ts)
         // which reads the CommandRegistry, so the registry's `when()`
-        // predicate stays authoritative.
-        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+        // predicate stays authoritative. defaultKeymap ships its own
+        // Mod-Enter (insertBlankLine); left in place it fires *alongside*
+        // the router's compile dispatch and a stray blank line gets saved
+        // to disk on every keyboard-triggered compile.
+        keymap.of([
+          ...defaultKeymap.filter((b) => b.key !== "Mod-Enter"),
+          ...historyKeymap,
+          ...searchKeymap,
+        ]),
         baseTheme,
         syntaxHighlighting(latexHighlight),
         langCompartment.of(langExtension(props.language ?? "latex")),
@@ -197,6 +213,13 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
       effects: lineWrapCompartment.reconfigure(
         lineWrapExtension(props.lineWrap ?? true),
       ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: vimCompartment.reconfigure(vimExtension(props.vimMode ?? false)),
     });
   });
 

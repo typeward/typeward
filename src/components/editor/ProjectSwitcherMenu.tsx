@@ -1,7 +1,8 @@
 import { useNavigate } from "@solidjs/router";
 import { ArrowLeft, ChevronDown, FolderOpen } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
+import { installDismiss } from "~/lib/dismiss";
 import { project } from "~/stores/editor-store";
 import { projects } from "~/stores/projects-store";
 
@@ -19,18 +20,8 @@ export const ProjectSwitcherMenu: Component<{
   const navigate = useNavigate();
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
-
-  const handleDocClick = (e: MouseEvent) => {
-    if (!rootRef) return;
-    if (rootRef.contains(e.target as Node)) return;
-    setOpen(false);
-  };
-  const onTrigger = () => {
-    setOpen((v) => !v);
-    if (!open()) return;
-    setTimeout(() => document.addEventListener("click", handleDocClick), 0);
-  };
-  onCleanup(() => document.removeEventListener("click", handleDocClick));
+  installDismiss(() => rootRef, open, () => setOpen(false));
+  const onTrigger = () => setOpen((v) => !v);
 
   const others = () =>
     projects()
@@ -50,7 +41,7 @@ export const ProjectSwitcherMenu: Component<{
         class="lift flex h-7 items-center gap-1.5 rounded-md px-2.5 hover:bg-[var(--color-control-fill)]"
       >
         <span class="flex h-4 w-4 items-center justify-center rounded-[5px] accent-grad">
-          <span class="text-[9px] font-bold text-white">τ</span>
+          <span class="text-[9px] font-bold">τ</span>
         </span>
         <span class="text-[length:var(--ui-font-sm)] font-semibold tracking-tight text-fg-1">
           {project()?.name ?? "—"}

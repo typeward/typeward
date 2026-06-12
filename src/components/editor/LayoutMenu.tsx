@@ -1,6 +1,7 @@
 import { Columns3, FileText, FileType2, Layout as LayoutIcon, Terminal } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { Show, createSignal, onCleanup } from "solid-js";
+import { Show, createSignal } from "solid-js";
+import { installDismiss } from "~/lib/dismiss";
 import {
   type ConsolePosition,
   type EditorLayout,
@@ -17,18 +18,8 @@ import {
 export const LayoutMenu: Component = () => {
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
-
-  const handleDocClick = (e: MouseEvent) => {
-    if (!rootRef) return;
-    if (rootRef.contains(e.target as Node)) return;
-    setOpen(false);
-  };
-  const onTrigger = () => {
-    setOpen((v) => !v);
-    if (!open()) return;
-    setTimeout(() => document.addEventListener("click", handleDocClick), 0);
-  };
-  onCleanup(() => document.removeEventListener("click", handleDocClick));
+  installDismiss(() => rootRef, open, () => setOpen(false));
+  const onTrigger = () => setOpen((v) => !v);
 
   return (
     <div ref={rootRef} class="relative">
@@ -127,7 +118,7 @@ const LayoutOption: Component<{
       <span
         class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md"
         style={{
-          background: active() ? "rgba(139,92,246,0.16)" : "var(--color-control-fill)",
+          background: active() ? "color-mix(in srgb, var(--color-accent-1) 16%, transparent)" : "var(--color-control-fill)",
           color: active() ? "var(--color-accent-1)" : "var(--color-fg-2)",
         }}
       >
@@ -167,7 +158,7 @@ const ConsoleOption: Component<{
       <span
         class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md"
         style={{
-          background: active() ? "rgba(139,92,246,0.16)" : "var(--color-control-fill)",
+          background: active() ? "color-mix(in srgb, var(--color-accent-1) 16%, transparent)" : "var(--color-control-fill)",
           color: active() ? "var(--color-accent-1)" : "var(--color-fg-2)",
         }}
       >

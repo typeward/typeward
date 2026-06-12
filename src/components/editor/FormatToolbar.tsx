@@ -18,6 +18,7 @@ import { For } from "solid-js";
 import type { ProjectFormat } from "~/adapters/types";
 import { project } from "~/stores/editor-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
+import { isTabletViewport } from "~/stores/viewport-store";
 
 // Each snippet uses `$|` to mark where the caret should land after insert.
 // Strip the marker to get the literal text; cursor offset = marker index.
@@ -147,9 +148,11 @@ const ToolGroup: Component<{ buttons: ToolBtn[] }> = (props) => (
         onClick={() => insertSnippet(b.kind)}
         title={b.label}
         aria-label={`Insert ${b.label}`}
-        class="lift flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-3 hover:bg-[var(--color-control-fill-hover)] hover:text-fg-1"
+        class={`lift flex flex-shrink-0 items-center justify-center rounded-md text-fg-3 hover:bg-[var(--color-control-fill-hover)] hover:text-fg-1 ${
+          isTabletViewport() ? "h-11 w-11" : "h-7 w-7"
+        }`}
       >
-        {b.icon(13)}
+        {b.icon(isTabletViewport() ? 16 : 13)}
       </button>
     )}
   </For>

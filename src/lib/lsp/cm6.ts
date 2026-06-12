@@ -283,8 +283,8 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
 }
 
 function kindToType(kind?: number): string | undefined {
-  // LSP CompletionItemKind subset — only the ones lucide-solid... wait,
-  // CodeMirror "type" is a free-form string that becomes an icon class.
+  // Maps the LSP CompletionItemKind subset we care about onto CodeMirror's
+  // free-form "type" strings (which become autocomplete icon classes).
   switch (kind) {
     case 3: return "function";
     case 6: return "variable";
