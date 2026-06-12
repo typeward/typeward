@@ -69,6 +69,7 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-confirm",
+    "dialog:allow-ask",
     "os:default",
     {
       "identifier": "opener:allow-open-url",
@@ -78,6 +79,7 @@
         { "url": "https://accounts.google.com/o/oauth2/v2/auth*" },
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
+        { "url": "https://tug.org/*" },
         { "url": "http://127.0.0.1:*" }
       ]
     },
@@ -90,7 +92,7 @@
           "args": [
             "-X",
             "compile",
-            { "validator": "^[A-Za-z0-9_\\-./]+$" },
+            { "validator": "^[A-Za-z0-9_](?:\\.?[A-Za-z0-9_/-])*$" },
             "--keep-logs",
             "--synctex"
           ]

@@ -71,6 +71,7 @@ pub fn install(app: &AppHandle) {
 
 /// Per-field caps so a single record can't bloat the JSONL log. `detail`
 /// often carries compile-log tails, so it gets the largest budget.
+const MAX_KIND_LEN: usize = 64;
 const MAX_SUMMARY_LEN: usize = 2_000;
 const MAX_DETAIL_LEN: usize = 16_000;
 
@@ -91,7 +92,7 @@ fn truncate_on_char_boundary(mut s: String, max: usize) -> String {
 pub fn record_event(kind: String, summary: String, detail: Option<String>) -> Result<(), String> {
     let event = Event {
         at: Utc::now().to_rfc3339(),
-        kind,
+        kind: truncate_on_char_boundary(kind, MAX_KIND_LEN),
         summary: truncate_on_char_boundary(summary, MAX_SUMMARY_LEN),
         detail: detail.map(|d| truncate_on_char_boundary(d, MAX_DETAIL_LEN)),
     };

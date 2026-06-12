@@ -1,7 +1,7 @@
 [package]
 name = "typeward"
 version = "0.0.1"
-description = "Typeward — multiplatform editor for LaTeX, Typst, Markdown and more"
+description = "Typeward — multiplatform editor for LaTeX and Typst"
 authors = ["Typeward"]
 edition = "2021"
 
@@ -41,8 +41,8 @@ url = "2"
 sha2 = "0.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
-# VCS — Phase 3. libgit2 bindings; HTTPS uses libcurl + system TLS so we
-# pick up the same crypto chain as the rest of the desktop binary.
+# VCS — Phase 3. libgit2 bindings; the "https" feature uses openssl on
+# Unix and the OS-native TLS stack (WinHTTP/SChannel) on Windows.
 git2 = { version = "0.20", default-features = false, features = ["https"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 

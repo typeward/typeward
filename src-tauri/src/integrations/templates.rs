@@ -243,7 +243,7 @@ pub async fn template_save(
         fs::create_dir_all(&dest)?;
 
         let mut copied_any = false;
-        for entry in collect_template_files(&src_root)? {
+        for entry in collect_project_files(&src_root)? {
             let rel = entry
                 .strip_prefix(&src_root)
                 .map_err(|_| TemplateError::BadPath(entry.to_string_lossy().into()))?;
@@ -292,8 +292,10 @@ pub async fn template_save(
 }
 
 /// Walk a project root collecting regular files to capture, skipping
-/// sidecar/VCS dirs, symlinks, and LaTeX build artifacts.
-fn collect_template_files(root: &Path) -> Result<Vec<PathBuf>, TemplateError> {
+/// sidecar/VCS dirs, symlinks, and LaTeX build artifacts. Shared with the
+/// source-bundle zip export, which wants exactly the same "just the
+/// sources" view of a project.
+pub(crate) fn collect_project_files(root: &Path) -> Result<Vec<PathBuf>, TemplateError> {
     let mut out = Vec::new();
     collect_template_walk(root, &mut out)?;
     Ok(out)

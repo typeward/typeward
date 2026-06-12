@@ -118,10 +118,12 @@ interface BackendCompileResult {
 export const compileLatex = async (
   project: Project,
   engine?: "system-tex" | "tectonic",
+  haltOnError?: boolean,
 ): Promise<CompileResult> => {
   const result = await invoke<BackendCompileResult>("compile_latex", {
     project,
     engine,
+    haltOnError,
   });
   return {
     ok: result.ok,
@@ -189,6 +191,7 @@ export interface AppSettings {
     spellCheck: boolean;
     lineWrap: boolean;
     fontSize: number;
+    stopOnFirstError: boolean;
   };
   projectsRoot: string;
   compileEngine: string;
@@ -212,7 +215,10 @@ export interface WorkspaceSettings {
   notificationsPanelDefault: boolean;
   defaultView: string; // "cards" | "list"
   defaultSort: string; // "last-opened" | "created" | "name" | "modified" | "format"
+  /** Per-card enable map for the Projects dashboard (legacy `widgets` name). */
   widgets: Record<string, boolean>;
+  dashboardEnabled: boolean;
+  dashboardOrder: string[];
 }
 
 /**
@@ -228,6 +234,8 @@ export interface IntegrationsSettings {
     github: { accountId?: string };
   };
   ai: {
+    /** Master switch — off hides every AI surface and deactivates providers. */
+    enabled: boolean;
     activeProvider?: string;
     ollamaBaseUrl?: string;
     perProviderModel: Record<string, string>;
@@ -247,8 +255,45 @@ export interface ReferencesProvidersSettings {
 
 export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");
 
+/** Overwrite settings.json with the defaults (Settings → Security → Reset). */
+export const resetSettings = (): Promise<void> => invoke("reset_settings");
+
+/**
+ * Zip the project sources (skips `.git`/`.typeward`, symlinks, build junk)
+ * into the project's `.typeward/build/` sidecar and return the zip's path.
+ */
+export const exportProjectZip = (project: Project): Promise<string> =>
+  invoke("export_project_zip", { project });
+
 export const saveSettings = (settings: AppSettings): Promise<void> =>
   invoke("save_settings", { settings });
+
+// ----- Custom themes -------------------------------------------------------
+
+export interface CustomTheme {
+  id: string;
+  name: string;
+  base: string; // one of the built-in theme ids
+  tokens: Record<string, string>;
+}
+
+export interface CustomThemesResult {
+  themes: CustomTheme[];
+  /** One line per file that failed validation (typo'd token, bad base, …). */
+  warnings: string[];
+}
+
+/** Scan `<app_data>/themes/*.json` for user-authored themes. */
+export const customThemesList = (): Promise<CustomThemesResult> =>
+  invoke("custom_themes_list");
+
+/** Write the bundled sample theme (no-op if present); returns its path. */
+export const customThemeWriteSample = (): Promise<string> =>
+  invoke("custom_theme_write_sample");
+
+/** Open the custom themes folder in the OS file manager. */
+export const customThemesOpenDir = (): Promise<void> =>
+  invoke("custom_themes_open_dir");
 
 // ----- Git ----------------------------------------------------------------
 

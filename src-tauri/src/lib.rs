@@ -8,6 +8,7 @@ mod project;
 mod settings;
 mod synctex;
 mod telemetry;
+mod themes;
 mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -45,6 +46,11 @@ pub fn run() {
             synctex::synctex_inverse,
             commands::load_settings,
             commands::save_settings,
+            commands::reset_settings,
+            commands::export_project_zip,
+            themes::custom_themes_list,
+            themes::custom_theme_write_sample,
+            themes::custom_themes_open_dir,
             lsp::start_lsp,
             lsp::send_lsp_message,
             lsp::stop_lsp,
