@@ -10,16 +10,22 @@ beforeEach(async () => {
 });
 
 describe("theme-store", () => {
-  it("does not set data-theme for the default Aurora theme", () => {
+  it("does not set data-theme for Aurora (the tokens.css :root baseline)", () => {
     expect(theme()).toBe("aurora");
     expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
   });
 
-  it("sets data-theme on <html> when a non-default theme is selected", async () => {
-    setTheme("obsidian");
+  it("sets data-theme on <html> when a non-baseline theme is selected", async () => {
+    setTheme("lamplight");
     await Promise.resolve();
-    expect(theme()).toBe("obsidian");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("obsidian");
+    expect(theme()).toBe("lamplight");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("lamplight");
+  });
+
+  it("sets data-theme for the Daylight default theme", async () => {
+    setTheme("daylight");
+    await Promise.resolve();
+    expect(document.documentElement.getAttribute("data-theme")).toBe("daylight");
   });
 
   it("removes data-accent when switching back to violet-cyan", async () => {

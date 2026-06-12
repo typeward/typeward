@@ -34,7 +34,9 @@ export const Switch: Component<SwitchProps> = (props) => {
         ) : null}
       </div>
       <KSwitch.Control class="relative inline-flex h-[18px] w-[32px] shrink-0 cursor-pointer items-center rounded-full border border-glass-stroke bg-glass-fill transition data-[checked]:border-transparent data-[checked]:accent-grad">
-        <KSwitch.Thumb class="block h-[14px] w-[14px] translate-x-[2px] rounded-full bg-fg-1 shadow-[0_1px_2px_rgba(0,0,0,0.4)] transition-transform data-[checked]:translate-x-[16px]" />
+        {/* Checked thumb rides the accent track — fg-1 would vanish on
+            Daylight's near-black accent, accent-fg contrasts everywhere. */}
+        <KSwitch.Thumb class="block h-[14px] w-[14px] translate-x-[2px] rounded-full bg-fg-1 shadow-[0_1px_2px_rgba(0,0,0,0.4)] transition-transform data-[checked]:translate-x-[16px] data-[checked]:bg-[var(--color-accent-fg)]" />
       </KSwitch.Control>
     </KSwitch>
   );

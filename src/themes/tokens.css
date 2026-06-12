@@ -22,7 +22,6 @@
 
   /* Glass surfaces (used by .glass, .glass-soft, .glass-inset utilities) */
   --color-glass-fill: rgb(255 255 255 / 0.035);
-  --color-glass-fill-2: rgb(255 255 255 / 0.06);
   --color-glass-stroke: rgb(255 255 255 / 0.07);
   --color-glass-stroke-strong: rgb(255 255 255 / 0.12);
 
@@ -36,14 +35,14 @@
    * - control-fill-hover: hover state of the above
    * - control-stroke: 1px outline used with control-fill
    * - overlay-dim: faint inner darkening (PDF viewport, LogsView, AiView)
-   * - overlay-deep: a bit more darkening (cell output gutters)
+   * - overlay-scrim: full-screen modal backdrop (command palette)
    * - popover-bg: near-opaque backdrop used by dropdown menus / palette
    */
   --color-control-fill: rgb(255 255 255 / 0.04);
   --color-control-fill-hover: rgb(255 255 255 / 0.06);
   --color-control-stroke: rgb(255 255 255 / 0.06);
   --color-overlay-dim: rgb(0 0 0 / 0.18);
-  --color-overlay-deep: rgb(0 0 0 / 0.25);
+  --color-overlay-scrim: rgb(8 9 12 / 0.65);
   --color-popover-bg: rgb(15 17 22 / 0.95);
 
   /*
@@ -87,9 +86,28 @@
    */
   --color-selection-bg: rgb(139 92 246 / 0.10);
 
+  /*
+   * Text-selection highlight (CodeMirror + global ::selection). Defaults to
+   * an accent wash; Daylight overrides with the identity's brass so selected
+   * text reads like a highlighter pass on paper rather than a gray block.
+   * Keep this strong enough to spot at a glance — 20% washed out.
+   */
+  --color-text-selection: color-mix(in srgb, var(--color-accent-1) 32%, transparent);
+
   /* Accent (overridden by data-accent="...") */
   --color-accent-1: #8b5cf6; /* violet */
   --color-accent-2: #22d3ee; /* cyan */
+
+  /*
+   * Text/icon color on accent surfaces (.accent-grad buttons, badges).
+   * Themes whose accent is light (Lamplight's amber) flip this to a dark
+   * ink so labels stay readable; explicit data-accent palettes reset it
+   * to white in accents.css.
+   */
+  --color-accent-fg: #ffffff;
+
+  /* .glass-soft body tint — light themes invert to a faint ink wash. */
+  --color-glass-soft-fill: rgb(255 255 255 / 0.02);
 
   /* Status */
   --color-ok: #10b981;
@@ -97,9 +115,9 @@
   --color-err: #f43f5e;
 
   /*
-   * Shadow tokens — surface-aware. Aurora/Obsidian/Graphite are dark, so
-   * insets are bright-on-dark and drops are deep blacks. Paper overrides
-   * both in its theme file because dark drops on light paper look wrong.
+   * Shadow tokens — surface-aware. Aurora and Lamplight are dark, so
+   * insets are bright-on-dark and drops are deep blacks. The light themes
+   * (Daylight, Paper) override both because dark drops on paper look wrong.
    */
   --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.05);
   --shadow-glass-drop: 0 8px 32px rgb(0 0 0 / 0.32);
@@ -126,6 +144,30 @@
   --blob-2-op: 0.42;
   --blob-3-op: 0.40;
   --blob-4-op: 0.22;
+}
+
+/*
+ * Editor syntax tokens consumed by the CodeMirror highlight style
+ * (src/components/editor/CodeMirror.tsx) so source colors re-skin with the
+ * theme. Defaults are Aurora's palette; every theme file overrides them.
+ */
+:root {
+  --syntax-cmd: #c4b5fd;
+  --syntax-env: #34d399;
+  --syntax-math: #67e8f9;
+  --syntax-comment: #5f6878;
+  --syntax-bracket: var(--color-fg-3);
+  --syntax-attr: #a7f3d0;
+}
+
+/*
+ * .accent-text gradient stops. The default lightens the accent toward white
+ * (right for dark themes); Daylight overrides with brass — lightening its
+ * near-black ink accent would render emphasis *fainter* than body text.
+ */
+:root {
+  --accent-text-1: color-mix(in oklab, var(--color-accent-1) 70%, white);
+  --accent-text-2: color-mix(in oklab, var(--color-accent-2) 70%, white);
 }
 
 /*

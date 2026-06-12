@@ -13,7 +13,7 @@ interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
 
 const VARIANT: Record<ButtonVariant, string> = {
   primary:
-    "accent-grad text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_4px_14px_rgba(0,0,0,0.35)] hover:brightness-110",
+    "accent-grad shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_4px_14px_rgba(0,0,0,0.22)] hover:brightness-110",
   secondary:
     "glass-soft text-fg-1 hover:bg-[var(--color-control-fill-hover)]",
   ghost: "text-fg-2 hover:bg-[var(--color-control-fill)] hover:text-fg-1",

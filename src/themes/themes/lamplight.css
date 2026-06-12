@@ -1,0 +1,73 @@
+/* Lamplight — the "lights out" variant of the Desk Lamp design
+ * (design_files/t1/Typeward.html, html[data-theme="dark"] tokens): the same
+ * study after dark, lit by a single amber lamp. Near-black warm bg, parchment
+ * text, amber accent, glass cards (t1 --card-* tokens), and an amber lamp
+ * glow in the ambient blobs standing in for the design's beam. */
+
+[data-theme="lamplight"] {
+  --color-bg-base: #0d0c0a;
+
+  --color-fg-1: #ede6d8;
+  --color-fg-2: rgb(237 230 216 / 0.62);
+  --color-fg-3: rgb(237 230 216 / 0.42);
+  --color-fg-4: rgb(237 230 216 / 0.28);
+
+  /* Glass — t1 dark card tokens (4.5% white fill, 9% white stroke). */
+  --color-glass-fill: rgb(255 255 255 / 0.045);
+  --color-glass-stroke: rgb(255 255 255 / 0.09);
+  --color-glass-stroke-strong: rgb(255 255 255 / 0.14);
+  --color-glass-inset-fill: rgb(0 0 0 / 0.25);
+  --color-glass-inset-stroke: rgb(255 255 255 / 0.05);
+  --color-glass-soft-fill: rgb(255 255 255 / 0.025);
+
+  --color-control-fill: rgb(255 255 255 / 0.05);
+  --color-control-fill-hover: rgb(255 255 255 / 0.08);
+  --color-control-stroke: rgb(255 255 255 / 0.08);
+  --color-overlay-dim: rgb(0 0 0 / 0.22);
+  --color-overlay-scrim: rgb(6 5 3 / 0.66);
+  --color-popover-bg: rgb(22 19 15 / 0.97);
+  --color-topbar-bg: rgb(13 12 10 / 0.72);
+  --color-selection-bg: rgb(232 163 77 / 0.12);
+  --color-text-selection: rgb(232 163 77 / 0.40);
+  --color-card-bg: rgb(23 21 15 / 0.60);
+  --color-card-bg-soft: rgb(23 21 15 / 0.40);
+
+  /* Format accents from the design's dark code palette. */
+  --format-latex: #8fb0e8;
+  --format-typst: #94c2a0;
+
+  /* Amber lamp on dark — light accent, so text on accent goes dark
+   * (t1 --btn-bg #E8A34D / --btn-fg #16120D). */
+  --color-accent-1: #e8a34d;
+  --color-accent-2: #c2691e;
+  --color-accent-fg: #16120d;
+
+  --color-ok: #5fa855;
+  --color-warn: #e8a34d;
+  --color-err: #d9907e;
+
+  /* Deep black drop + a whisper of amber halo (t1 --win-shadow). */
+  --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  --shadow-glass-drop:
+    0 8px 32px rgb(0 0 0 / 0.50),
+    0 0 60px rgb(232 163 77 / 0.05);
+  --shadow-glass-inset-inner: inset 0 1px 2px rgb(0 0 0 / 0.30);
+
+  /* Editor syntax — t1 dark code palette. */
+  --syntax-cmd: #8fb0e8;
+  --syntax-env: #94c2a0;
+  --syntax-math: #d9907e;
+  --syntax-comment: rgb(237 230 216 / 0.38);
+  --syntax-bracket: rgb(237 230 216 / 0.42);
+  --syntax-attr: #b8d4be;
+
+  /* Ambient: the lamp beam — amber pooled top-right, embers low. */
+  --blob-1: #c2691e;
+  --blob-2: #e8a34d;
+  --blob-3: #7a3f10;
+  --blob-4: #e8a34d;
+  --blob-1-op: 0.28;
+  --blob-2-op: 0.20;
+  --blob-3-op: 0.24;
+  --blob-4-op: 0.10;
+}

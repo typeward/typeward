@@ -16,7 +16,7 @@ export const KbdHint: Component<{
   shortcut: string;
   /** "sm" (default) for small inline hints, "md" for prominent buttons. */
   size?: "sm" | "md";
-  /** Optional tone override — "default" uses dim bg, "dark" uses opaque (for accent-grad buttons). */
+  /** Optional tone override — "default" uses dim bg, "dark" tints off the accent text color (for accent-grad buttons). */
   tone?: "default" | "dark";
 }> = (props) => {
   const tokens = () => shortcutTokens(props.shortcut);
@@ -37,8 +37,8 @@ export const KbdHint: Component<{
               style={
                 tone() === "dark"
                   ? {
-                      background: "rgba(0,0,0,0.25)",
-                      color: "rgba(255,255,255,0.85)",
+                      background: "color-mix(in srgb, var(--color-accent-fg) 16%, transparent)",
+                      color: "var(--color-accent-fg)",
                       "line-height": "1",
                     }
                   : {

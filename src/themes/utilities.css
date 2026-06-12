@@ -13,6 +13,21 @@ svg {
   shape-rendering: geometricPrecision;
 }
 
+::selection {
+  background: var(--color-text-selection);
+}
+
+/* Keyboard focus ring — scoped to click-targets (not text inputs, which
+ * match :focus-visible on every focus and carry their own ring styles). */
+button:focus-visible,
+a:focus-visible,
+[role="tab"]:focus-visible,
+[role="option"]:focus-visible,
+select:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent-1) 70%, transparent);
+  outline-offset: 2px;
+}
+
 /* Glass surfaces -------------------------------------------------------- */
 
 .glass {
@@ -29,7 +44,7 @@ svg {
 }
 
 .glass-soft {
-  background: rgb(255 255 255 / 0.02);
+  background: var(--color-glass-soft-fill);
   border: 1px solid var(--color-glass-stroke);
 }
 
@@ -47,13 +62,17 @@ svg {
     var(--color-accent-1) 0%,
     var(--color-accent-2) 100%
   );
+  /* Label color must track the accent: amber accents (Daylight/Lamplight)
+   * need ink text where violet/cyan took white. Unlayered, so this wins
+   * over Tailwind's layered text-* utilities on the same element. */
+  color: var(--color-accent-fg);
 }
 
 .accent-text {
   background: linear-gradient(
     135deg,
-    color-mix(in oklab, var(--color-accent-1) 70%, white) 0%,
-    color-mix(in oklab, var(--color-accent-2) 70%, white) 100%
+    var(--accent-text-1) 0%,
+    var(--accent-text-2) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;
@@ -83,6 +102,17 @@ svg {
 
 .lift:hover {
   filter: brightness(1.18);
+}
+
+/* Brightness alone is imperceptible on Daylight's near-black accent fill —
+ * layer an accent-fg wash over the gradient so primaries always respond. */
+.lift.accent-grad:hover {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
+      color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+    ),
+    linear-gradient(135deg, var(--color-accent-1) 0%, var(--color-accent-2) 100%);
 }
 
 /* Typography utilities -------------------------------------------------- */
@@ -146,13 +176,13 @@ body {
   background: transparent;
 }
 .scroll::-webkit-scrollbar-thumb {
-  background: rgb(255 255 255 / 0.06);
+  background: var(--color-control-fill);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 .scroll::-webkit-scrollbar-thumb:hover {
-  background: rgb(255 255 255 / 0.12);
+  background: var(--color-control-fill-hover);
 }
 
 /* Animations ----------------------------------------------------------- */
@@ -239,24 +269,24 @@ body {
 }
 
 /* Strong accent glow — used on the primary "New project" button and the
- * focused command palette card. */
-.glow-violet {
+ * focused command palette card. Re-tints with the active accent. */
+.glow-accent {
   box-shadow:
-    0 0 0 1px rgb(139 92 246 / 0.4),
-    0 8px 28px rgb(139 92 246 / 0.28),
-    0 0 60px rgb(34 211 238 / 0.18);
+    0 0 0 1px color-mix(in srgb, var(--color-accent-1) 40%, transparent),
+    0 8px 28px color-mix(in srgb, var(--color-accent-1) 28%, transparent),
+    0 0 60px color-mix(in srgb, var(--color-accent-2) 18%, transparent);
 }
 
 /* Avatar rings — small accent-coloured halo around 28px avatars. */
 .avatar-ring {
   box-shadow:
     0 0 0 2px var(--color-bg-base),
-    0 0 0 3.5px rgb(34 211 238 / 0.5);
+    0 0 0 3.5px color-mix(in srgb, var(--color-accent-2) 50%, transparent);
 }
 .avatar-ring-2 {
   box-shadow:
     0 0 0 2px var(--color-bg-base),
-    0 0 0 3.5px rgb(139 92 246 / 0.5);
+    0 0 0 3.5px color-mix(in srgb, var(--color-accent-1) 50%, transparent);
 }
 
 /* Ambient background — radial blob blurs + film grain overlay. Mounted
@@ -337,9 +367,9 @@ body {
 .card-shell:hover {
   transform: translateY(-2px);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.06),
-    0 18px 50px rgb(0 0 0 / 0.45),
-    0 0 0 1px rgb(139 92 246 / 0.18);
+    var(--shadow-glass-inset),
+    var(--shadow-glass-drop),
+    0 0 0 1px color-mix(in srgb, var(--color-accent-1) 18%, transparent);
 }
 
 /* Project card hover — gradient border + glow on the leaner Phase C card.
@@ -364,11 +394,11 @@ body {
     /* gradient ring — always visible, lives inside the card box */
     inset 0 0 0 1.5px var(--color-accent-1),
     /* inner halo — soft glow fading inward from each edge */
-    inset 0 0 24px -8px rgb(139 92 246 / 0.45),
+    inset 0 0 24px -8px color-mix(in srgb, var(--color-accent-1) 45%, transparent),
     /* downward-only drop shadow for depth — zero top extent so it can
        never clip against the upper section, and the lateral spread fits
        cleanly within the inter-card gap */
-    0 6px 18px -6px rgb(139 92 246 / 0.22);
+    0 6px 18px -6px color-mix(in srgb, var(--color-accent-1) 22%, transparent);
 }
 
 /* Active sidebar item — 2px accent gradient bar on the left edge. */
@@ -402,10 +432,10 @@ body {
 .composer-glow {
   background: linear-gradient(
     90deg,
-    rgb(139 92 246 / 0),
-    rgb(139 92 246 / 0.35),
-    rgb(34 211 238 / 0.35),
-    rgb(139 92 246 / 0)
+    transparent,
+    color-mix(in srgb, var(--color-accent-1) 35%, transparent),
+    color-mix(in srgb, var(--color-accent-2) 35%, transparent),
+    transparent
   );
   background-size: 200% 100%;
   animation: border-flow 3.6s linear infinite;
@@ -437,6 +467,122 @@ body {
 
 .no-emoji {
   font-variant-emoji: text;
+}
+
+/* Markdown preview prose — MarkdownPreview.tsx renders sanitized HTML into
+ * .md-preview; Tailwind preflight strips every element default, so the
+ * prose scale lives here. Token-driven, so the light/dark variant classes
+ * the component sets need no per-theme rules of their own. */
+.md-preview {
+  font-size: 14px;
+  line-height: 1.7;
+}
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4,
+.md-preview h5,
+.md-preview h6 {
+  margin: 1.4em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-fg-1);
+}
+.md-preview h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--color-glass-stroke);
+}
+.md-preview h2 {
+  font-size: 1.4em;
+}
+.md-preview h3 {
+  font-size: 1.15em;
+}
+.md-preview h1:first-child,
+.md-preview h2:first-child,
+.md-preview h3:first-child {
+  margin-top: 0;
+}
+.md-preview p {
+  margin: 0 0 0.9em;
+}
+.md-preview a {
+  color: var(--color-accent-1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-preview ul,
+.md-preview ol {
+  margin: 0 0 0.9em;
+  padding-left: 1.5em;
+}
+.md-preview ul {
+  list-style: disc;
+}
+.md-preview ol {
+  list-style: decimal;
+}
+.md-preview li {
+  margin: 0.25em 0;
+}
+.md-preview li > ul,
+.md-preview li > ol {
+  margin-bottom: 0;
+}
+.md-preview blockquote {
+  margin: 0 0 0.9em;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--color-glass-stroke-strong);
+  color: var(--color-fg-2);
+}
+.md-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-control-fill);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.md-preview pre {
+  margin: 0 0 1em;
+  padding: 12px 14px;
+  overflow-x: auto;
+  background: var(--color-glass-inset-fill);
+  border: 1px solid var(--color-glass-inset-stroke);
+  border-radius: 8px;
+}
+.md-preview pre code {
+  background: transparent;
+  padding: 0;
+}
+.md-preview table {
+  margin: 0 0 1em;
+  border-collapse: collapse;
+}
+.md-preview th,
+.md-preview td {
+  padding: 6px 10px;
+  text-align: left;
+  border: 1px solid var(--color-glass-stroke);
+}
+.md-preview th {
+  font-weight: 600;
+  background: var(--color-control-fill);
+}
+.md-preview hr {
+  margin: 1.5em 0;
+  border: none;
+  height: 1px;
+  background: var(--color-glass-stroke-strong);
+}
+.md-preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.md-preview .katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
 }
 
 /* --- Review comment anchors --- */

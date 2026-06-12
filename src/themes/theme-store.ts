@@ -1,34 +1,21 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 
-export const THEMES = [
-  "aurora",
-  "obsidian",
-  "graphite",
-  "paper",
-  "catppuccin",
-  "dracula",
-  "gruvbox",
-  "mono",
-  "nord",
-  "solarized-light",
-  "tokyo-night",
-] as const;
+export const THEMES = ["daylight", "lamplight", "aurora", "paper"] as const;
 export type Theme = (typeof THEMES)[number];
 
 /** Display labels for each built-in theme. */
 export const THEME_LABEL: Record<Theme, string> = {
+  daylight: "Daylight",
+  lamplight: "Lamplight",
   aurora: "Aurora",
-  obsidian: "Obsidian",
-  graphite: "Graphite",
   paper: "Paper",
-  catppuccin: "Catppuccin",
-  dracula: "Dracula",
-  gruvbox: "Gruvbox",
-  mono: "Mono",
-  nord: "Nord",
-  "solarized-light": "Solarized Light",
-  "tokyo-night": "Tokyo Night",
 };
+
+/**
+ * Light-surface themes — consulted when an embedded surface needs a
+ * light/dark variant decision (e.g. the Markdown preview's prose theme).
+ */
+export const LIGHT_THEMES: readonly Theme[] = ["daylight", "paper"];
 
 export const ACCENTS = [
   "violet-cyan",
@@ -42,7 +29,7 @@ const STORAGE_KEY = "typeward.theme";
 
 type Persisted = { theme: Theme; accent: Accent };
 
-const DEFAULT: Persisted = { theme: "aurora", accent: "violet-cyan" };
+const DEFAULT: Persisted = { theme: "daylight", accent: "violet-cyan" };
 
 function read(): Persisted {
   try {
