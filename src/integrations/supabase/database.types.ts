@@ -1,12 +1,11 @@
 /**
- * Hand-rolled Supabase schema types. Mirrors the migrations in
- * `infrastructure/supabase/migrations/`.
- *
- * Regenerate after schema changes with:
- *   cd infrastructure
- *   supabase gen types typescript --linked > ../src/integrations/supabase/database.types.ts
- *
- * Until that's run against staging, this file is the source of truth.
+ * Hand-rolled Supabase schema types — only the columns the app actually
+ * reads. Billing is owned by the Typeward website (Stripe checkout +
+ * webhook), so the Stripe columns (`stripe_price_id`, `stripe_customer_id`,
+ * `stripe_subscription_id`) are deliberately omitted here even though they
+ * exist on the live tables; the app never selects them. If you regenerate
+ * from the schema (`supabase gen types typescript --linked`), drop the
+ * Stripe columns again to keep the app's model billing-free.
  */
 
 export type Json =
@@ -27,7 +26,6 @@ export interface Database {
           price_cents: number;
           currency: string;
           billing_interval: string | null;
-          stripe_price_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -36,7 +34,6 @@ export interface Database {
           price_cents?: number;
           currency?: string;
           billing_interval?: string | null;
-          stripe_price_id?: string | null;
         };
         Update: {
           id?: string;
@@ -44,7 +41,6 @@ export interface Database {
           price_cents?: number;
           currency?: string;
           billing_interval?: string | null;
-          stripe_price_id?: string | null;
         };
         Relationships: [];
       };
@@ -55,8 +51,6 @@ export interface Database {
           plan_id: string;
           status: string;
           current_period_end: string | null;
-          stripe_subscription_id: string | null;
-          stripe_customer_id: string | null;
           cancel_at_period_end: boolean;
           created_at: string;
           updated_at: string;
@@ -66,8 +60,6 @@ export interface Database {
           plan_id: string;
           status: string;
           current_period_end?: string | null;
-          stripe_subscription_id?: string | null;
-          stripe_customer_id?: string | null;
           cancel_at_period_end?: boolean;
         };
         Update: {
@@ -75,8 +67,6 @@ export interface Database {
           plan_id?: string;
           status?: string;
           current_period_end?: string | null;
-          stripe_subscription_id?: string | null;
-          stripe_customer_id?: string | null;
           cancel_at_period_end?: boolean;
         };
         Relationships: [];

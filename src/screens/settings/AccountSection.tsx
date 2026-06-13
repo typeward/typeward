@@ -9,9 +9,17 @@
  * The entitlement source swaps to the user's subscription after sign-in.
  * The plan query here is only a compact account summary; the gates
  * themselves read from `src/integrations/entitlements.ts`.
+ *
+ * Billing is NOT handled in the app — plans are purchased and managed on
+ * the Typeward website. Signed-in users get a link out to it; the app only
+ * reads the resulting subscription tier.
  */
 
-import { LogIn, LogOut, Mail, ShieldCheck } from "lucide-solid";
+/** Account + billing page on the Typeward website (allowlisted in capabilities). */
+const ACCOUNT_BILLING_URL = "https://typeward.app/account";
+
+import { ExternalLink, LogIn, LogOut, Mail, ShieldCheck } from "lucide-solid";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Component } from "solid-js";
 import { Show, createResource, createSignal } from "solid-js";
 
@@ -135,9 +143,19 @@ const SignInCard: Component = () => {
         >
           {busy() ? "Signing in…" : "Sign in"}
         </Button>
-        <div class="text-[11px] text-fg-3">
-          No account? Sign-up happens via the dashboard for now — self-serve
-          registration in the app lands with the billing rollout.
+        <div class="flex flex-col gap-2 text-[11px] text-fg-3">
+          <span>
+            No account yet? Sign up and choose a plan on the Typeward website,
+            then sign in here.
+          </span>
+          <button
+            type="button"
+            onClick={() => void openUrl(ACCOUNT_BILLING_URL)}
+            class="lift flex items-center gap-1.5 self-start rounded-md px-2 py-1 text-fg-2 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+          >
+            <ExternalLink class="ui-icon-sm" />
+            Create an account
+          </button>
         </div>
       </div>
     </Card>
@@ -187,6 +205,13 @@ const SignedInCard: Component = () => {
         </Show>
         <div class="flex items-center gap-2">
           <Button
+            variant="primary"
+            leadingIcon={<ExternalLink class="ui-icon-sm" />}
+            onClick={() => void openUrl(ACCOUNT_BILLING_URL)}
+          >
+            Manage plan & billing
+          </Button>
+          <Button
             variant="ghost"
             leadingIcon={<LogOut class="ui-icon-sm" />}
             onClick={handleSignOut}
@@ -197,8 +222,9 @@ const SignedInCard: Component = () => {
         <div class="flex items-center gap-1.5 text-[11px] text-fg-3">
           <ShieldCheck class="ui-icon-sm" />
           <span>
-            Paid integrations are gated by the current entitlement source.
-            Sign-out returns to the free-tier matrix.
+            Plans are purchased and managed on the Typeward website. Paid
+            integrations unlock from the entitlement tier on your subscription;
+            sign-out returns to the free-tier matrix.
           </span>
         </div>
       </div>

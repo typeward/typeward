@@ -80,6 +80,7 @@
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
         { "url": "https://tug.org/*" },
+        { "url": "https://typeward.app/*" },
         { "url": "http://127.0.0.1:*" }
       ]
     },
