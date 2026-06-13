@@ -4,8 +4,7 @@
  *
  * Phase 2.1 ships the scaffold: lifecycle, status hooks, conflict
  * detection, cursor persistence. Provider-specific transport details
- * (longpoll cadence for Dropbox, polling cadence for OneDrive/Drive)
- * arrive with each provider in 2.2–2.4.
+ * (longpoll cadence for Dropbox) arrive with each provider.
  */
 
 import {

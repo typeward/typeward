@@ -28,8 +28,6 @@
 #   - VITE_SUPABASE_ANON_KEY         — staging publishable / anon key
 #   - VITE_MENDELEY_CLIENT_ID
 #   - VITE_DROPBOX_CLIENT_ID
-#   - VITE_MICROSOFT_CLIENT_ID
-#   - VITE_GOOGLE_CLIENT_ID
 #   - VITE_GITHUB_CLIENT_ID
 # Set them under Settings → Secrets and variables → Actions when you
 # want sign-in / OAuth surfaces to work in the test build.
@@ -183,8 +181,6 @@ jobs:
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
           VITE_DROPBOX_CLIENT_ID: ${{ secrets.VITE_DROPBOX_CLIENT_ID }}
-          VITE_MICROSOFT_CLIENT_ID: ${{ secrets.VITE_MICROSOFT_CLIENT_ID }}
-          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
           VITE_GITHUB_CLIENT_ID: ${{ secrets.VITE_GITHUB_CLIENT_ID }}
         run: npm run tauri build
 

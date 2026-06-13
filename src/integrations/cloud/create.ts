@@ -70,11 +70,7 @@ export async function createCloudBackedProject(
     },
   });
 
-  const provider = cloudProviderForAccount(opts.account, {
-    projectsRoot: opts.projectsRoot,
-    projectId,
-    cacheRoot: project.rootPath,
-  });
+  const provider = cloudProviderForAccount(opts.account);
 
   const engine = new SyncEngine(provider, {
     providerId: provider.id,

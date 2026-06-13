@@ -18,13 +18,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface OauthFlowOptions {
-  /** Provider's authorization endpoint, e.g. `https://accounts.google.com/o/oauth2/v2/auth`. */
+  /** Provider's authorization endpoint, e.g. `https://www.dropbox.com/oauth2/authorize`. */
   authUrl: string;
-  /** Provider's token endpoint, e.g. `https://oauth2.googleapis.com/token`. */
+  /** Provider's token endpoint, e.g. `https://api.dropboxapi.com/oauth2/token`. */
   tokenUrl: string;
   clientId: string;
   scopes?: string[];
-  /** Provider-specific extra params (e.g. `{ access_type: "offline" }`). */
+  /** Provider-specific extra params (e.g. `{ token_access_type: "offline" }`). */
   extraAuthParams?: Record<string, string>;
 }
 

@@ -42,14 +42,6 @@ import {
   connectDropbox,
   disconnectDropbox,
 } from "~/integrations/cloud/dropbox";
-import {
-  connectOneDrive,
-  disconnectOneDrive,
-} from "~/integrations/cloud/onedrive";
-import {
-  connectGoogleDrive,
-  disconnectGoogleDrive,
-} from "~/integrations/cloud/gdrive";
 import { detectICloudDrive } from "~/integrations/cloud/icloud";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 
@@ -394,22 +386,6 @@ const CLOUD_PROVIDERS = [
     connect: connectDropbox,
     disconnect: disconnectDropbox,
   },
-  {
-    id: "onedrive" as const,
-    name: "OneDrive",
-    feature: "integrations.cloud.onedrive" as const,
-    hint: "Microsoft Graph with delta polling every 60s. `Files.ReadWrite` + `offline_access` scopes — broad enough to open any folder, narrow enough to keep tokens minimal.",
-    connect: connectOneDrive,
-    disconnect: disconnectOneDrive,
-  },
-  {
-    id: "gdrive" as const,
-    name: "Google Drive",
-    feature: "integrations.cloud.gdrive" as const,
-    hint: "`drive.file` scope — Typeward only sees files it created or you opened with it. Picking an arbitrary existing folder isn't possible under this scope; create a new project to start.",
-    connect: connectGoogleDrive,
-    disconnect: disconnectGoogleDrive,
-  },
 ];
 
 const CloudStorageCard: Component = () => {
@@ -431,7 +407,7 @@ const CloudStorageCard: Component = () => {
 };
 
 interface CloudProviderConfig {
-  id: "dropbox" | "onedrive" | "gdrive";
+  id: "dropbox";
   name: string;
   feature: EntitlementKey;
   hint: string;
