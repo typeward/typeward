@@ -209,7 +209,10 @@ pub fn custom_themes_open_dir(app: tauri::AppHandle) -> CmdResult<()> {
 /// Working example: a deep-sea dark theme on the Lamplight base. Every token
 /// group a theme author typically wants is represented — surfaces, text,
 /// controls, accent, semantic colors, editor syntax, ambient blobs.
-const SAMPLE_THEME_JSON: &str = r#"{
+// `r##"…"##` (not `r#"…"#`): the JSON's hex colors contain the `"#`
+// sequence (e.g. `"#0b1418"`), which would otherwise close an `r#"` raw
+// string early. The content has no `"##`, so the doubled hashes are safe.
+const SAMPLE_THEME_JSON: &str = r##"{
   "name": "Harbor",
   "base": "lamplight",
   "tokens": {
@@ -261,7 +264,7 @@ const SAMPLE_THEME_JSON: &str = r#"{
     "--blob-4-op": "0.35"
   }
 }
-"#;
+"##;
 
 #[cfg(test)]
 mod tests {
