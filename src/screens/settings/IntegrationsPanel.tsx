@@ -7,14 +7,10 @@
  * sub-routing, so users can scroll one page to see what's wired up.
  */
 
-import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import {
   Check,
   ExternalLink,
-  FileText,
-  Plus,
   RefreshCw,
-  Trash2,
   X,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
@@ -105,7 +101,6 @@ const ReferencesCard: Component = () => {
       <FeatureGate feature="integrations.references.mendeley">
         <MendeleyRow />
       </FeatureGate>
-      <JabRefRow />
     </Card>
   );
 };
@@ -361,7 +356,7 @@ const MendeleyRow: Component = () => {
       hint={
         isConnected()
           ? `Connected as ${settings().displayName}.`
-          : "Mendeley Desktop was discontinued in 2022 and the API is in maintenance mode. Use Zotero or JabRef for new workflows; this exists for migration."
+          : "Mendeley Desktop was discontinued in 2022 and the API is in maintenance mode. Use Zotero for new workflows; this exists for migration."
       }
       status={isConnected() ? "ready" : "unconfigured"}
       controls={
@@ -381,72 +376,6 @@ const MendeleyRow: Component = () => {
     >
       <Show when={error()}>
         <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
-      </Show>
-    </ProviderRow>
-  );
-};
-
-const JabRefRow: Component = () => {
-  const settings = () => integrationsSettings().references.jabref;
-
-  const addPath = async () => {
-    const picked = await openFileDialog({
-      title: "Pick a .bib file",
-      filters: [{ name: "BibTeX", extensions: ["bib"] }],
-      multiple: false,
-    });
-    if (!picked || typeof picked !== "string") return;
-    if (settings().paths.includes(picked)) return;
-
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      references: {
-        ...integrationsSettings().references,
-        jabref: { paths: [...settings().paths, picked] },
-      },
-    });
-  };
-
-  const removePath = (path: string) => {
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      references: {
-        ...integrationsSettings().references,
-        jabref: { paths: settings().paths.filter((p) => p !== path) },
-      },
-    });
-  };
-
-  return (
-    <ProviderRow
-      name="JabRef (.bib files)"
-      hint="Add one or more .bib files. They're read locally and merged into the project library on refresh — works without any external service."
-      status={settings().paths.length > 0 ? "ready" : "unconfigured"}
-      controls={
-        <Button variant="ghost" size="sm" onClick={addPath} leadingIcon={<Plus class="ui-icon-sm" />}>
-          Add file
-        </Button>
-      }
-    >
-      <Show when={settings().paths.length > 0}>
-        <div class="mt-3 flex flex-col gap-1">
-          <For each={settings().paths}>
-            {(path) => (
-              <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px]">
-                <FileText class="ui-icon-sm text-fg-3" />
-                <span class="truncate font-mono text-fg-1">{path}</span>
-                <button
-                  type="button"
-                  onClick={() => removePath(path)}
-                  class="ml-auto text-fg-3 hover:text-[var(--color-err)]"
-                  aria-label={`Remove ${path}`}
-                >
-                  <Trash2 class="ui-icon-sm" />
-                </button>
-              </div>
-            )}
-          </For>
-        </div>
       </Show>
     </ProviderRow>
   );

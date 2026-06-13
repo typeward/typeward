@@ -89,7 +89,7 @@ export const ReferencesPanel: Component = () => {
               <Quote class="mx-auto mb-2 ui-icon-menu text-fg-3/60" />
               <div class="text-fg-2">No reference providers configured.</div>
               <div class="mt-1">
-                Connect Zotero, Mendeley, or JabRef in Settings → Integrations to start.
+                Connect Zotero or Mendeley in Settings → Integrations to start.
               </div>
             </div>
           }

@@ -97,7 +97,6 @@ const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
     betterBibTex: { enabled: false, libraryId: 1 },
     zoteroWeb: {},
     mendeley: {},
-    jabref: { paths: [] },
   },
   cloud: { accounts: [] },
   vcs: { git: {}, github: {} },

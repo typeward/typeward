@@ -79,8 +79,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     return (
       refs.betterBibTex.enabled ||
       Boolean(refs.zoteroWeb.userId) ||
-      Boolean(refs.mendeley.profileId) ||
-      refs.jabref.paths.length > 0
+      Boolean(refs.mendeley.profileId)
     );
   };
   createEffect(() => {

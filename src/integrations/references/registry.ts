@@ -4,8 +4,8 @@
  * UI surfaces read through this single source of truth.
  *
  * Phase 1 starts with zero providers registered. Each provider sub-module
- * (zotero / mendeley / jabref / doi-lookup) wires its `register()` call
- * behind a settings flag once the user opts in.
+ * (zotero / mendeley / doi-lookup) wires its `register()` call behind a
+ * settings flag once the user opts in.
  */
 
 import { createSignal } from "solid-js";
