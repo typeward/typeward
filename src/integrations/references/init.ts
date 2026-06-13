@@ -16,7 +16,6 @@ import { integrationsSettings } from "~/stores/settings-store";
 import { createBetterBibTexProvider } from "./zotero/better-bibtex";
 import { createZoteroWebProvider } from "./zotero/web";
 import { createMendeleyProvider } from "./mendeley";
-import { createJabRefProvider } from "./jabref";
 import {
   registerCitationProvider,
   unregisterCitationProvider,
@@ -26,7 +25,6 @@ const PROVIDER_IDS = {
   betterBibTex: "zotero-better-bibtex",
   zoteroWeb: (userId: string) => `zotero-web:${userId}`,
   mendeley: (profileId: string) => `mendeley:${profileId}`,
-  jabref: (paths: string[]) => `jabref:${paths.join("|") || "empty"}`,
 } as const;
 
 export function initReferenceProviders(): void {
@@ -66,12 +64,6 @@ export function initReferenceProviders(): void {
             displayName: refs.mendeley.displayName,
           }),
         );
-      }
-
-      if (refs.jabref.paths.length > 0) {
-        const id = PROVIDER_IDS.jabref(refs.jabref.paths);
-        desired.add(id);
-        registerCitationProvider(createJabRefProvider({ paths: refs.jabref.paths }));
       }
 
       for (const prev of known) {

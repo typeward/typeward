@@ -1,8 +1,8 @@
 /**
  * Per-project storage for DOI / arXiv lookups.
  *
- * DOI lookup isn't a "library" in the sense Zotero/Mendeley/JabRef are —
- * it's a one-shot resolver that drops entries into a project-local
+ * DOI lookup isn't a "library" in the sense Zotero/Mendeley are — it's a
+ * one-shot resolver that drops entries into a project-local
  * `.bib` file. The aggregator picks this file up alongside provider
  * exports and merges into `library.bib`.
  *

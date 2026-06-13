@@ -108,8 +108,6 @@ pub struct ReferencesSettings {
     pub zotero_web: ZoteroWebSettings,
     #[serde(default)]
     pub mendeley: MendeleyAccountSettings,
-    #[serde(default)]
-    pub jabref: JabRefSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -155,13 +153,6 @@ pub struct MendeleyAccountSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub display_name: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct JabRefSettings {
-    /// Absolute paths to `.bib` files the user has added.
-    #[serde(default)]
-    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

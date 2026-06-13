@@ -250,7 +250,6 @@ export interface ReferencesProvidersSettings {
   betterBibTex: { enabled: boolean; libraryId: number };
   zoteroWeb: { userId?: string };
   mendeley: { profileId?: string; displayName?: string };
-  jabref: { paths: string[] };
 }
 
 export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");

@@ -3,10 +3,10 @@
  *
  * Note on Mendeley's status (2026): Mendeley Desktop was discontinued in
  * September 2022 and the web product is in maintenance mode. The REST
- * API still works, but feature parity vs Zotero / JabRef will drift over
- * time. UI surfaces should warn users that JabRef / Zotero are better-
- * supported long-term — this provider exists for users migrating off
- * Mendeley, not for fresh adoption.
+ * API still works, but feature parity vs Zotero will drift over time. UI
+ * surfaces should warn users that Zotero is the better-supported choice
+ * long-term — this provider exists for users migrating off Mendeley, not
+ * for fresh adoption.
  *
  * The client id is read from `import.meta.env.VITE_MENDELEY_CLIENT_ID`
  * (registered at dev.mendeley.com — public, not secret). Without it,
