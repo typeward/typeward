@@ -75,8 +75,6 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://www.dropbox.com/oauth2/authorize*" },
-        { "url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize*" },
-        { "url": "https://accounts.google.com/o/oauth2/v2/auth*" },
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
         { "url": "https://tug.org/*" },

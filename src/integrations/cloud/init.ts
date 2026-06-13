@@ -75,11 +75,7 @@ export function initCloudSync(): void {
 
       teardown();
 
-      const provider = cloudProviderForAccount(accountRef, {
-        projectsRoot: root,
-        projectId,
-        cacheRoot,
-      });
+      const provider = cloudProviderForAccount(accountRef);
       const engine = new SyncEngine(provider, {
         providerId: provider.id,
         projectId,

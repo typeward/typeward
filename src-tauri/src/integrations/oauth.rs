@@ -68,15 +68,15 @@ pub enum OauthError {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OauthBeginRequest {
-    /// Provider's authorization endpoint, e.g. `https://accounts.google.com/o/oauth2/v2/auth`.
+    /// Provider's authorization endpoint, e.g. `https://www.dropbox.com/oauth2/authorize`.
     pub auth_url: String,
-    /// Provider's token endpoint, e.g. `https://oauth2.googleapis.com/token`.
+    /// Provider's token endpoint, e.g. `https://api.dropboxapi.com/oauth2/token`.
     pub token_url: String,
     pub client_id: String,
     #[serde(default)]
     pub scopes: Vec<String>,
     /// Provider-specific extra params on the authorization URL (e.g.
-    /// `access_type=offline` for Google, `prompt=consent`).
+    /// `token_access_type=offline` for Dropbox).
     #[serde(default)]
     pub extra_auth_params: HashMap<String, String>,
 }
@@ -247,17 +247,15 @@ fn validate_oauth_endpoint(raw: &str, kind: OauthEndpointKind) -> Result<(), Oau
             matches!(
                 (host.as_str(), path),
                 ("www.dropbox.com", "/oauth2/authorize")
-                    | ("accounts.google.com", "/o/oauth2/v2/auth")
                     | ("api.mendeley.com", "/oauth/authorize")
-            ) || (host == "login.microsoftonline.com" && path.ends_with("/oauth2/v2.0/authorize"))
+            )
         }
         OauthEndpointKind::Token => {
             matches!(
                 (host.as_str(), path),
                 ("api.dropboxapi.com", "/oauth2/token")
-                    | ("oauth2.googleapis.com", "/token")
                     | ("api.mendeley.com", "/oauth/token")
-            ) || (host == "login.microsoftonline.com" && path.ends_with("/oauth2/v2.0/token"))
+            )
         }
     };
 
@@ -586,7 +584,7 @@ mod tests {
         )
         .is_ok());
         assert!(validate_oauth_endpoint(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            "https://api.dropboxapi.com/oauth2/token",
             OauthEndpointKind::Token,
         )
         .is_ok());
@@ -600,7 +598,7 @@ mod tests {
         )
         .is_err());
         assert!(validate_oauth_endpoint(
-            "http://oauth2.googleapis.com/token",
+            "http://api.dropboxapi.com/oauth2/token",
             OauthEndpointKind::Token,
         )
         .is_err());

@@ -179,11 +179,6 @@ fn allowed_https_host(host: &str) -> bool {
             | "api.dropboxapi.com"
             | "content.dropboxapi.com"
             | "notify.dropboxapi.com"
-            | "login.microsoftonline.com"
-            | "graph.microsoft.com"
-            | "accounts.google.com"
-            | "oauth2.googleapis.com"
-            | "www.googleapis.com"
             | "generativelanguage.googleapis.com"
             | "github.com"
             | "api.github.com"
@@ -199,8 +194,6 @@ fn allowed_raw_auth_header_host(host: &str) -> bool {
             | "api.dropboxapi.com"
             | "content.dropboxapi.com"
             | "notify.dropboxapi.com"
-            | "graph.microsoft.com"
-            | "www.googleapis.com"
             | "generativelanguage.googleapis.com"
     )
 }

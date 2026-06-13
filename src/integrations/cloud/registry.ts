@@ -18,22 +18,10 @@ import {
   createDropboxProvider,
   type DropboxAccount,
 } from "~/integrations/cloud/dropbox";
-import {
-  createGoogleDriveProvider,
-  type GoogleAccount,
-} from "~/integrations/cloud/gdrive";
-import {
-  createOneDriveProvider,
-  type MicrosoftAccount,
-} from "~/integrations/cloud/onedrive";
-import {
-  idMapPath,
-  idMapPathForCacheRoot,
-  projectCacheRoot,
-} from "~/integrations/cloud/core";
+import { projectCacheRoot } from "~/integrations/cloud/core";
 import type { CloudFsProvider } from "~/integrations/types";
 
-export type CloudProviderId = "dropbox" | "onedrive" | "gdrive";
+export type CloudProviderId = "dropbox";
 
 export interface CloudAccountRef {
   provider: CloudProviderId;
@@ -47,27 +35,10 @@ export interface CloudAccountRef {
  * provider ids — defensive guard for storage that pre-dates a code
  * change.
  */
-export function cloudProviderForAccount(
-  ref: CloudAccountRef,
-  options: { projectsRoot: string; projectId?: string; cacheRoot?: string },
-): CloudFsProvider {
+export function cloudProviderForAccount(ref: CloudAccountRef): CloudFsProvider {
   switch (ref.provider) {
     case "dropbox":
       return createDropboxProvider(asDropbox(ref));
-    case "onedrive":
-      return createOneDriveProvider(asMicrosoft(ref));
-    case "gdrive": {
-      if (!options.projectId) {
-        throw new Error(
-          "Google Drive provider needs a projectId to anchor its id↔path map",
-        );
-      }
-      return createGoogleDriveProvider(asGoogle(ref), {
-        idMapPath: options.cacheRoot
-          ? idMapPathForCacheRoot(options.cacheRoot, ref.provider)
-          : idMapPath(options.projectsRoot, ref.provider, options.projectId),
-      });
-    }
     default: {
       const _exhaust: never = ref.provider;
       throw new Error(`Unknown cloud provider id '${_exhaust as string}'`);
@@ -95,7 +66,7 @@ export function readCloudOrigin(project: Project): {
 } | null {
   const origin = project.integrations?.cloudOrigin;
   if (!origin) return null;
-  if (origin.provider !== "dropbox" && origin.provider !== "onedrive" && origin.provider !== "gdrive") {
+  if (origin.provider !== "dropbox") {
     return null;
   }
   return {
@@ -112,22 +83,6 @@ export function readCloudOrigin(project: Project): {
 // the settings ref lost it.
 
 function asDropbox(ref: CloudAccountRef): DropboxAccount {
-  return {
-    accountId: ref.accountId,
-    email: ref.label ?? ref.accountId,
-    displayName: ref.label ?? ref.accountId,
-  };
-}
-
-function asMicrosoft(ref: CloudAccountRef): MicrosoftAccount {
-  return {
-    accountId: ref.accountId,
-    email: ref.label ?? ref.accountId,
-    displayName: ref.label ?? ref.accountId,
-  };
-}
-
-function asGoogle(ref: CloudAccountRef): GoogleAccount {
   return {
     accountId: ref.accountId,
     email: ref.label ?? ref.accountId,

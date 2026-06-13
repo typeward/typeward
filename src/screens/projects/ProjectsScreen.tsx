@@ -702,12 +702,7 @@ const NewProjectDialog: Component<{
 
   const cloudAccounts = createMemo<CloudAccountRef[]>(() =>
     integrationsSettings()
-      .cloud.accounts.filter(
-        (a) =>
-          a.provider === "dropbox" ||
-          a.provider === "onedrive" ||
-          a.provider === "gdrive",
-      )
+      .cloud.accounts.filter((a) => a.provider === "dropbox")
       .map((a) => ({
         provider: a.provider as CloudAccountRef["provider"],
         accountId: a.accountId,
@@ -720,10 +715,7 @@ const NewProjectDialog: Component<{
     const root = projectsRoot();
     if (!root) return [];
     try {
-      const provider = cloudProviderForAccount(acc, {
-        projectsRoot: root,
-        projectId: "_picker",
-      });
+      const provider = cloudProviderForAccount(acc);
       return await provider.listRoots();
     } catch (e) {
       setErr(`Could not list remote folders: ${e instanceof Error ? e.message : String(e)}`);
@@ -915,10 +907,8 @@ const NewProjectDialog: Component<{
                 when={(remoteRoots() ?? []).length > 0}
                 fallback={
                   <div class="text-[11px] text-fg-3">
-                    No folders found.{" "}
-                    {account()?.provider === "gdrive"
-                      ? "Google Drive's drive.file scope only shows folders Typeward has created — create one in Drive's web UI first, or use a different provider."
-                      : "Create one in the provider's web UI, then come back."}
+                    No folders found. Create one in the provider's web UI, then
+                    come back.
                   </div>
                 }
               >

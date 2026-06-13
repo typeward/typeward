@@ -4,7 +4,7 @@
  * Every integration — reference managers, cloud storage, VCS, AI providers,
  * grammar checkers, template sources — implements one of these. The seam
  * lets the rest of the app stay format-agnostic and provider-agnostic; UI
- * code talks to interfaces, not Zotero / OneDrive / Anthropic by name.
+ * code talks to interfaces, not Zotero / Dropbox / Anthropic by name.
  *
  * Providers are registered through per-category registries (see
  * src/integrations/<category>/registry.ts files added in later phases) and
@@ -81,7 +81,7 @@ export interface CitationProvider extends IntegrationProvider {
 
 export interface RemoteFolder {
   /** Provider-scoped opaque id. For path-based providers (Dropbox), this is
-   * the path; for id-based ones (Drive, OneDrive) it's the opaque file id. */
+   * the path; for id-based providers it's the opaque file id. */
   id: string;
   name: string;
   parentId?: string;
