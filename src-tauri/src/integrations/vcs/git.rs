@@ -114,9 +114,31 @@ fn open_repo(path: &Path) -> Result<Repository, GitError> {
     Repository::open(path).map_err(|_| GitError::OpenFailed(path.to_string_lossy().into_owned()))
 }
 
+/// Existing-repo operations: the repo must be a project the user opened.
+/// Webview XSS == arbitrary IPC, so a bare "absolute path" check would let a
+/// compromised renderer run git against any repo on disk.
 fn validate_repo_path(repo_path: &str) -> Result<PathBuf, GitError> {
     let path = PathBuf::from(repo_path);
     if !path.is_absolute() {
+        return Err(GitError::InvalidPath(repo_path.to_string()));
+    }
+    if !crate::project::is_registered_root(&path) {
+        return Err(GitError::InvalidPath(repo_path.to_string()));
+    }
+    Ok(path)
+}
+
+/// Clone / init destinations don't exist as projects yet, so accept either an
+/// already-opened root or a brand-new path under the configured projects root.
+/// This stops `git_clone` / `git_init` from writing a repo anywhere on disk.
+fn validate_new_repo_path(repo_path: &str) -> Result<PathBuf, GitError> {
+    let path = PathBuf::from(repo_path);
+    if !path.is_absolute() {
+        return Err(GitError::InvalidPath(repo_path.to_string()));
+    }
+    if !(crate::project::is_registered_root(&path)
+        || crate::project::is_new_path_under_projects_root(&path))
+    {
         return Err(GitError::InvalidPath(repo_path.to_string()));
     }
     Ok(path)
@@ -251,7 +273,7 @@ fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
 #[tauri::command]
 pub async fn git_init(repo_path: String, bare: Option<bool>) -> Result<(), GitError> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
-        let path = validate_repo_path(&repo_path)?;
+        let path = validate_new_repo_path(&repo_path)?;
         std::fs::create_dir_all(&path)?;
         if bare.unwrap_or(false) {
             Repository::init_bare(&path)?;
@@ -592,7 +614,7 @@ pub async fn git_push(
 #[tauri::command]
 pub async fn git_clone(url: String, dest_path: String) -> Result<(), GitError> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
-        let dest = validate_repo_path(&dest_path)?;
+        let dest = validate_new_repo_path(&dest_path)?;
         if dest.exists() {
             return Err(GitError::InvalidPath(format!(
                 "destination already exists: {}",

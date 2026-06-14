@@ -21,6 +21,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             telemetry::install(&app.handle());
+            // Seed the project trust boundary (project.rs) from the configured
+            // projects root before the webview can issue any IPC, so file IO /
+            // compile / git can be gated to the projects area.
+            let projects_root = settings::load(&app.handle())
+                .map(|s| std::path::PathBuf::from(s.projects_root))
+                .unwrap_or_else(|_| settings::default_projects_root());
+            let _ = std::fs::create_dir_all(&projects_root);
+            project::set_projects_root(&projects_root);
             Ok(())
         })
         .manage(lsp::LspManager::default())
@@ -34,6 +42,7 @@ pub fn run() {
             commands::list_projects,
             commands::create_project,
             commands::open_project,
+            commands::import_project_folder,
             commands::set_project_integrations,
             commands::read_project_text_file,
             commands::read_project_binary_file,

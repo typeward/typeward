@@ -43,16 +43,17 @@ pub fn forward(
     source_file: &Path,
     line: u32,
 ) -> Result<Option<ForwardLocation>, String> {
-    if which::which("synctex").is_err() {
+    let Ok(synctex) = which::which("synctex") else {
         return Ok(None);
-    }
+    };
     if !pdf_path.exists() {
         return Ok(None);
     }
 
-    // synctex view -i <line>:<col>:<file> -o <pdf>
+    // synctex view -i <line>:<col>:<file> -o <pdf>. Spawn the absolute path,
+    // not the bare name, so the binary is never resolved from a current dir.
     let input = format!("{line}:1:{}", source_file.display());
-    let output = Command::new("synctex")
+    let output = Command::new(&synctex)
         .args(["view", "-i", &input, "-o"])
         .arg(pdf_path)
         .output()
@@ -73,16 +74,17 @@ pub fn inverse(
     x: f64,
     y: f64,
 ) -> Result<Option<InverseLocation>, String> {
-    if which::which("synctex").is_err() {
+    let Ok(synctex) = which::which("synctex") else {
         return Ok(None);
-    }
+    };
     if !pdf_path.exists() {
         return Ok(None);
     }
 
-    // synctex edit -o <page>:<x>:<y>:<pdf>
+    // synctex edit -o <page>:<x>:<y>:<pdf>. Spawn the absolute path, not the
+    // bare name, so the binary is never resolved from a current dir.
     let arg = format!("{page}:{x}:{y}:{}", pdf_path.display());
-    let output = Command::new("synctex")
+    let output = Command::new(&synctex)
         .args(["edit", "-o", &arg])
         .output()
         .map_err(|e| format!("synctex spawn failed: {e}"))?;
@@ -199,6 +201,9 @@ pub struct ForwardArgs {
 
 #[tauri::command]
 pub fn synctex_forward(args: ForwardArgs) -> Result<Option<ForwardLocation>, String> {
+    if !project::is_registered_root(Path::new(&args.project_root)) {
+        return Err(format!("not an opened project root: {}", args.project_root));
+    }
     let root = PathBuf::from(&args.project_root)
         .canonicalize()
         .map_err(|e| e.to_string())?;
@@ -223,6 +228,9 @@ pub struct InverseArgs {
 
 #[tauri::command]
 pub fn synctex_inverse(args: InverseArgs) -> Result<Option<InverseLocation>, String> {
+    if !project::is_registered_root(Path::new(&args.project_root)) {
+        return Err(format!("not an opened project root: {}", args.project_root));
+    }
     let root = PathBuf::from(&args.project_root)
         .canonicalize()
         .map_err(|e| e.to_string())?;

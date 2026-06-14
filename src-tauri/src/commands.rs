@@ -19,7 +19,20 @@ fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// Gate a renderer-supplied project root against the registry of opened
+/// projects (see `project.rs`). Threat model: webview XSS == arbitrary IPC, so
+/// every file/compile/snapshot/watch command that takes a root must prove it's
+/// a project the user actually opened — not an arbitrary path like `~/.ssh`.
+fn ensure_registered(project_root: &str) -> CmdResult<()> {
+    if project::is_registered_root(Path::new(project_root)) {
+        Ok(())
+    } else {
+        Err(format!("not an opened project root: {project_root}"))
+    }
+}
+
 fn checked_project_root_and_file(project: &Project) -> CmdResult<(PathBuf, String)> {
+    ensure_registered(&project.root_path)?;
     let root = PathBuf::from(&project.root_path)
         .canonicalize()
         .map_err(err)?;
@@ -42,7 +55,11 @@ pub fn list_projects(root: Option<String>) -> CmdResult<Vec<Project>> {
     let root = root
         .map(PathBuf::from)
         .unwrap_or_else(settings::default_projects_root);
-    project::list_projects(&root).map_err(err)
+    let projects = project::list_projects(&root).map_err(err)?;
+    for p in &projects {
+        project::register_root(Path::new(&p.root_path));
+    }
+    Ok(projects)
 }
 
 #[tauri::command]
@@ -57,12 +74,30 @@ pub fn create_project(
     if !parent.exists() {
         std::fs::create_dir_all(&parent).map_err(err)?;
     }
-    project::create_project(&parent, &name, format).map_err(err)
+    let project = project::create_project(&parent, &name, format).map_err(err)?;
+    project::register_root(Path::new(&project.root_path));
+    Ok(project)
 }
 
 #[tauri::command]
 pub fn open_project(path: String) -> CmdResult<Project> {
-    project::read_project(Path::new(&path)).map_err(err)
+    let project = project::read_project(Path::new(&path)).map_err(err)?;
+    project::register_root(Path::new(&project.root_path));
+    Ok(project)
+}
+
+/// Write `.typeward/project.json` for an existing folder (e.g. a just-cloned
+/// repo) so it shows up in the library and can be opened. Gated to the projects
+/// area like `git_clone`. Returns the detected project.
+#[tauri::command]
+pub fn import_project_folder(path: String) -> CmdResult<Project> {
+    let root = PathBuf::from(&path);
+    if !(project::is_registered_root(&root) || project::is_new_path_under_projects_root(&root)) {
+        return Err(format!("path is outside the projects root: {path}"));
+    }
+    let project = project::import_folder_as_project(&root, None).map_err(err)?;
+    project::register_root(Path::new(&project.root_path));
+    Ok(project)
 }
 
 /// Replace the project's `integrations` block. Caller passes the
@@ -74,11 +109,13 @@ pub fn set_project_integrations(
     project_root: String,
     integrations: project::ProjectIntegrations,
 ) -> CmdResult<Project> {
+    ensure_registered(&project_root)?;
     project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
 }
 
 #[tauri::command]
 pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResult<String> {
+    ensure_registered(&project_root)?;
     let path =
         project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
     fs_ops::read_text(&path).map_err(err)
@@ -89,6 +126,7 @@ pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResu
 /// the WASM in-memory FS so `\includegraphics{...}` resolves.
 #[tauri::command]
 pub fn read_project_binary_file(project_root: String, rel_path: String) -> CmdResult<Vec<u8>> {
+    ensure_registered(&project_root)?;
     let path =
         project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
     std::fs::read(&path).map_err(err)
@@ -100,6 +138,7 @@ pub fn write_project_text_file(
     rel_path: String,
     content: String,
 ) -> CmdResult<()> {
+    ensure_registered(&project_root)?;
     let path =
         project::resolve_project_write_path(Path::new(&project_root), &rel_path).map_err(err)?;
     fs_ops::write_text(&path, &content).map_err(err)
@@ -115,6 +154,7 @@ pub fn write_project_binary_file(
     rel_path: String,
     bytes: Vec<u8>,
 ) -> CmdResult<()> {
+    ensure_registered(&project_root)?;
     let path =
         project::resolve_project_write_path(Path::new(&project_root), &rel_path).map_err(err)?;
     if let Some(parent) = path.parent() {
@@ -227,14 +267,17 @@ fn run_system_tex(root_file: &str, root: &Path, halt_on_error: bool) -> Result<(
     // PATH, or it spawns but exits non-zero with no useful diagnostics, fall
     // back to a direct pdflatex invocation. MiKTeX on Windows sometimes ships
     // latexmk without a usable Perl, so the fallback is important.
-    if which::which("latexmk").is_ok() {
+    // Spawn the absolute path resolved against PATH, never the bare name:
+    // `current_dir(root)` would otherwise let Windows' CreateProcess execute a
+    // `latexmk`/`pdflatex` planted in a malicious project directory.
+    if let Ok(latexmk) = which::which("latexmk") {
         let mut latexmk_args = vec!["-pdf", "-synctex=1", "-interaction=nonstopmode"];
         if halt_on_error {
             latexmk_args.push("-halt-on-error");
         }
         latexmk_args.push(root_file);
         accumulated_log.push_str(&format!("$ latexmk {}\n", latexmk_args.join(" ")));
-        match Command::new("latexmk")
+        match Command::new(&latexmk)
             .args(&latexmk_args)
             .current_dir(root)
             .output()
@@ -258,11 +301,14 @@ fn run_system_tex(root_file: &str, root: &Path, halt_on_error: bool) -> Result<(
         }
     }
 
-    if which::which("pdflatex").is_err() {
-        accumulated_log
-            .push_str("\nNo LaTeX engine on PATH. Install MiKTeX/TeX Live or pick the Tectonic engine in Settings.");
-        return Ok((accumulated_log, false));
-    }
+    let pdflatex = match which::which("pdflatex") {
+        Ok(path) => path,
+        Err(_) => {
+            accumulated_log
+                .push_str("\nNo LaTeX engine on PATH. Install MiKTeX/TeX Live or pick the Tectonic engine in Settings.");
+            return Ok((accumulated_log, false));
+        }
+    };
 
     let mut pdflatex_args = vec!["-synctex=1", "-interaction=nonstopmode"];
     if halt_on_error {
@@ -270,7 +316,7 @@ fn run_system_tex(root_file: &str, root: &Path, halt_on_error: bool) -> Result<(
     }
     pdflatex_args.push(root_file);
     accumulated_log.push_str(&format!("\n$ pdflatex {}\n", pdflatex_args.join(" ")));
-    let output = Command::new("pdflatex")
+    let output = Command::new(&pdflatex)
         .args(&pdflatex_args)
         .current_dir(root)
         .output()
@@ -304,16 +350,20 @@ async fn run_tectonic(
         let ok = output.status.success();
         return Ok((merge_io(&output.stdout, &output.stderr), ok));
     }
-    // Fall back to PATH.
-    if which::which("tectonic").is_err() {
-        return Err(
-            "tectonic is not bundled (run `npm run fetch:tectonic`) and not on PATH".into(),
-        );
-    }
+    // Fall back to PATH — resolve the absolute path and spawn that, not the
+    // bare name, so `current_dir(root)` can't redirect to a planted binary.
+    let tectonic = match which::which("tectonic") {
+        Ok(path) => path,
+        Err(_) => {
+            return Err(
+                "tectonic is not bundled (run `npm run fetch:tectonic`) and not on PATH".into(),
+            )
+        }
+    };
     let root_for_cmd = root.to_path_buf();
     let root_file_for_cmd = root_file.to_string();
     tokio::task::spawn_blocking(move || {
-        let output = Command::new("tectonic")
+        let output = Command::new(&tectonic)
             .args([
                 "-X",
                 "compile",
@@ -388,16 +438,19 @@ pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
     let root_for_cmd = root.clone();
     let root_file_for_cmd = root_file.clone();
     let (log, success) = tokio::task::spawn_blocking(move || -> CmdResult<(String, bool)> {
-        if which::which("typst").is_err() {
-            return Err(
-                "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
-                    .into(),
-            );
-        }
+        // Resolve the absolute path on PATH and spawn THAT, not the bare name.
+        // Bare `Command::new("typst")` + `current_dir(project)` lets Windows'
+        // CreateProcess search the project dir first, so a planted `typst.exe`
+        // in a malicious project would run (argument/binary planting). `which`
+        // resolves against the app's CWD/PATH, never the project.
+        let typst = which::which("typst").map_err(|_| {
+            "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
+                .to_string()
+        })?;
 
         let mut log = String::new();
         log.push_str(&format!("$ typst compile {}\n", root_file_for_cmd));
-        let output = Command::new("typst")
+        let output = Command::new(&typst)
             .args(["compile", root_file_for_cmd.as_str()])
             .current_dir(&root_for_cmd)
             .output()
@@ -491,7 +544,14 @@ pub fn load_settings(app: tauri::AppHandle) -> CmdResult<Settings> {
 
 #[tauri::command]
 pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()> {
-    settings::save(&app, &settings).map_err(err)
+    settings::save(&app, &settings).map_err(err)?;
+    // Keep the clone-destination boundary in sync when the user moves their
+    // projects root. (File IO is gated by the opened-project registry, which
+    // this does not affect.)
+    let root = PathBuf::from(&settings.projects_root);
+    let _ = std::fs::create_dir_all(&root);
+    project::set_projects_root(&root);
+    Ok(())
 }
 
 /// Settings → Security → "Reset local app data". Overwrites settings.json
@@ -499,7 +559,9 @@ pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()>
 /// files on disk are untouched.
 #[tauri::command]
 pub fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
-    settings::save(&app, &Settings::default()).map_err(err)
+    settings::save(&app, &Settings::default()).map_err(err)?;
+    project::set_projects_root(&settings::default_projects_root());
+    Ok(())
 }
 
 /// Zip the project sources for sharing. Reuses the template-capture walk
@@ -542,15 +604,18 @@ pub async fn export_project_zip(project: Project) -> CmdResult<String> {
 
 #[tauri::command]
 pub fn write_snapshot(project_root: String, rel_path: String, content: String) -> CmdResult<()> {
+    ensure_registered(&project_root)?;
     autosave::write(Path::new(&project_root), &rel_path, &content).map_err(err)
 }
 
 #[tauri::command]
 pub fn clear_snapshot(project_root: String, rel_path: String) -> CmdResult<()> {
+    ensure_registered(&project_root)?;
     autosave::clear(Path::new(&project_root), &rel_path).map_err(err)
 }
 
 #[tauri::command]
 pub fn list_orphan_snapshots(project_root: String) -> CmdResult<Vec<Snapshot>> {
+    ensure_registered(&project_root)?;
     autosave::list_orphans(Path::new(&project_root)).map_err(err)
 }

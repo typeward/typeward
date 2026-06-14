@@ -154,8 +154,10 @@ export function createDropboxProvider(account: DropboxAccount): CloudFsProvider 
           const file = toRemoteFile(entry, rootId);
           changes.push({ kind: "modified", file });
         } else if (entry[".tag"] === "deleted") {
-          const relPath = relPathFromAbsolute(entry.path_lower, rootId);
-          if (relPath !== null) {
+          // Match the original-cased relPath used when the file was added, so
+          // the engine finds and removes the correct local cache file.
+          const relPath = displayRelPath(entry.path_lower, entry.path_display, rootId);
+          if (relPath) {
             changes.push({ kind: "removed", relPath });
           }
         }
@@ -222,11 +224,32 @@ export function createDropboxProvider(account: DropboxAccount): CloudFsProvider 
 function toRemoteFile(entry: DropboxFileEntry, rootId: string): RemoteFile {
   return {
     id: entry.path_lower,
-    relPath: relPathFromAbsolute(entry.path_lower, rootId) ?? entry.name,
+    relPath: displayRelPath(entry.path_lower, entry.path_display, rootId) ?? entry.name,
     rev: entry.rev,
     size: entry.size,
     modifiedAt: entry.server_modified,
   };
+}
+
+/**
+ * Project-relative path with the ORIGINAL casing preserved. Dropbox's
+ * `path_lower` is the stable identifier (kept as `RemoteFile.id` and used for
+ * comparisons), but using it for the local cache path lowercases everything —
+ * `Figures/Plot.PNG` becomes `figures/plot.png`, which breaks
+ * `\includegraphics{Figures/Plot.PNG}` on case-sensitive filesystems. So strip
+ * the root prefix via the case-insensitive `path_lower`, then take the matching
+ * tail segments from `path_display` (same segment count, original casing).
+ */
+function displayRelPath(
+  pathLower: string,
+  pathDisplay: string,
+  rootId: string,
+): string | null {
+  const relLower = relPathFromAbsolute(pathLower, rootId.toLowerCase());
+  if (!relLower) return null;
+  const segCount = relLower.split("/").length;
+  const displaySegs = pathDisplay.split("/");
+  return displaySegs.slice(displaySegs.length - segCount).join("/") || null;
 }
 
 function relPathFromAbsolute(absLower: string, rootIdLower: string): string | null {

@@ -37,6 +37,9 @@ export const createProject = (params: {
 export const openProject = (path: string): Promise<Project> =>
   invoke("open_project", { path });
 
+export const importProjectFolder = (path: string): Promise<Project> =>
+  invoke("import_project_folder", { path });
+
 export const setProjectIntegrations = (
   projectRoot: string,
   integrations: ProjectIntegrations,

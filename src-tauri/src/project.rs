@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -107,6 +109,8 @@ pub enum ProjectError {
     InvalidProjectName(String),
     #[error("project path escapes root: {0}")]
     PathEscapesRoot(String),
+    #[error("no .tex or .typ entry file found in folder")]
+    NoRootFile,
 }
 
 const SIDECAR_DIR: &str = ".typeward";
@@ -180,6 +184,71 @@ pub fn list_projects(root: &Path) -> Result<Vec<Project>, ProjectError> {
     }
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(out)
+}
+
+/// Turn an existing folder (e.g. a freshly cloned git repo) into a Typeward
+/// project: if it already carries `.typeward/project.json` read it unchanged,
+/// otherwise detect the root file and write the metadata. Without this a normal
+/// repo clone never appears in the library (`list_projects` requires the
+/// sidecar). Errors when no LaTeX/Typst entry is present.
+pub fn import_folder_as_project(root: &Path, name: Option<&str>) -> Result<Project, ProjectError> {
+    if !root.is_dir() {
+        return Err(ProjectError::NotADirectory(root.to_string_lossy().into()));
+    }
+    if project_json_path(root).exists() {
+        return read_project(root);
+    }
+    let (root_file, format) = discover_root_file(root)?;
+    let name = name
+        .map(str::to_string)
+        .or_else(|| {
+            root.file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "Imported project".to_string());
+    let project = Project {
+        root_path: root.to_string_lossy().to_string(),
+        root_file,
+        format,
+        name,
+        integrations: ProjectIntegrations::default(),
+    };
+    write_project(&project)?;
+    Ok(project)
+}
+
+/// Pick a root file: `main.tex`, then the first `.tex`, then the first `.typ`.
+/// LaTeX-biased, mirroring the Overleaf import heuristic.
+fn discover_root_file(root: &Path) -> Result<(String, ProjectFormat), ProjectError> {
+    if root.join("main.tex").exists() {
+        return Ok(("main.tex".into(), ProjectFormat::Latex));
+    }
+    if let Some(found) = find_first_by_ext(root, "tex")? {
+        return Ok((found, ProjectFormat::Latex));
+    }
+    if let Some(found) = find_first_by_ext(root, "typ")? {
+        return Ok((found, ProjectFormat::Typst));
+    }
+    Err(ProjectError::NoRootFile)
+}
+
+fn find_first_by_ext(dir: &Path, ext: &str) -> Result<Option<String>, ProjectError> {
+    let mut matches: Vec<String> = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) == Some(ext) {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                matches.push(name.to_string());
+            }
+        }
+    }
+    matches.sort();
+    Ok(matches.into_iter().next())
 }
 
 pub fn create_project(
@@ -300,6 +369,79 @@ fn canonical_existing_ancestor(path: &Path) -> Result<PathBuf, ProjectError> {
         current = current.parent().ok_or_else(|| {
             ProjectError::InvalidRelativePath(path.to_string_lossy().into_owned())
         })?;
+    }
+}
+
+// ----- Runtime trust boundary --------------------------------------------
+//
+// Threat model: webview XSS == arbitrary IPC. The custom file IPC, compile,
+// snapshot, synctex, watcher, and git commands all validate paths relative to
+// a *renderer-supplied* root — on their own they'd let a compromised webview
+// read/write/compile anywhere the OS user can reach (e.g. ~/.ssh). Two gates
+// bound that surface:
+//
+//   - the registry of project roots the user actually opened this session
+//     (`register_root` is called only from the trusted open/list/create/import
+//     paths, never from an unproven renderer path). File IO, compile,
+//     snapshots, synctex, the watcher, and existing-repo git ops require the
+//     root to be registered.
+//   - the configured projects root, for validating brand-new destinations
+//     (git clone) that aren't projects yet.
+
+static OPENED_ROOTS: OnceLock<RwLock<HashSet<PathBuf>>> = OnceLock::new();
+static PROJECTS_ROOT: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+
+fn opened_roots() -> &'static RwLock<HashSet<PathBuf>> {
+    OPENED_ROOTS.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+fn projects_root_cell() -> &'static RwLock<Option<PathBuf>> {
+    PROJECTS_ROOT.get_or_init(|| RwLock::new(None))
+}
+
+/// Record a project root the user opened. Call ONLY from trusted command paths
+/// (open/list/create/import) that have proven the path is a real project.
+pub fn register_root(root: &Path) {
+    if let Ok(canon) = root.canonicalize() {
+        if let Ok(mut set) = opened_roots().write() {
+            set.insert(canon);
+        }
+    }
+}
+
+/// True if `root` canonicalizes to a project root opened this session.
+pub fn is_registered_root(root: &Path) -> bool {
+    let Ok(canon) = root.canonicalize() else {
+        return false;
+    };
+    opened_roots()
+        .read()
+        .map(|set| set.contains(&canon))
+        .unwrap_or(false)
+}
+
+/// Record the configured projects root (persisted-settings value, read at
+/// startup and on settings save).
+pub fn set_projects_root(root: &Path) {
+    let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if let Ok(mut cur) = projects_root_cell().write() {
+        *cur = Some(canon);
+    }
+}
+
+/// True if a not-yet-existing path (e.g. a clone destination) sits under the
+/// configured projects root. The leaf doesn't exist yet, so the nearest
+/// existing ancestor is canonicalized for the prefix check.
+pub fn is_new_path_under_projects_root(path: &Path) -> bool {
+    let Ok(guard) = projects_root_cell().read() else {
+        return false;
+    };
+    let Some(root) = guard.as_ref() else {
+        return false;
+    };
+    match canonical_existing_ancestor(path) {
+        Ok(ancestor) => ancestor.starts_with(root),
+        Err(_) => false,
     }
 }
 
@@ -425,5 +567,30 @@ mod tests {
         let resolved = resolve_project_write_path(&dir, "sections/intro.tex").unwrap();
         assert!(resolved.starts_with(dir.canonicalize().unwrap()));
         assert!(resolved.ends_with(Path::new("sections").join("intro.tex")));
+    }
+
+    #[test]
+    fn registry_gates_only_registered_roots() {
+        let opened = temp_dir();
+        let other = temp_dir();
+        assert!(!is_registered_root(&opened));
+        register_root(&opened);
+        assert!(is_registered_root(&opened));
+        // A sibling directory we never opened stays out.
+        assert!(!is_registered_root(&other));
+    }
+
+    #[test]
+    fn new_path_under_projects_root_accepts_children_rejects_outside() {
+        let root = temp_dir();
+        set_projects_root(&root);
+        // A brand-new child dir (clone destination) is allowed.
+        assert!(is_new_path_under_projects_root(&root.join("cloned-repo")));
+        assert!(is_new_path_under_projects_root(
+            &root.join("nested").join("repo")
+        ));
+        // Outside the projects root is rejected (parent escape).
+        let outside = temp_dir().join("evil");
+        assert!(!is_new_path_under_projects_root(&outside));
     }
 }

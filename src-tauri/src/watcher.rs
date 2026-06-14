@@ -64,6 +64,14 @@ pub async fn watch_project(
 ) -> Result<(), WatcherError> {
     let project_id = args.project_id;
     let root_path = PathBuf::from(&args.root);
+    // Gate to opened projects (see project.rs) — XSS must not be able to watch
+    // arbitrary directories and exfiltrate filesystem activity.
+    if !crate::project::is_registered_root(&root_path) {
+        return Err(WatcherError::Watch(format!(
+            "not an opened project root: {}",
+            args.root
+        )));
+    }
 
     // notify uses synchronous callbacks; we hop onto a tokio mpsc to bridge
     // to the async Tauri emit.
