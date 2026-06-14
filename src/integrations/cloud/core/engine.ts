@@ -132,6 +132,36 @@ export class SyncEngine {
   }
 
   /**
+   * Populate a brand-new cache from existing remote content: download every
+   * file, record its sync state (rev + content hash), and persist the
+   * post-enumeration cursor. Run once at project creation, BEFORE the engine
+   * starts — so the local working copy mirrors the remote and the first poll's
+   * delta() continues from the cursor instead of replaying the whole tree as
+   * conflicts against a planted starter. Returns the number of files seeded.
+   */
+  async seedFromRemote(): Promise<number> {
+    await this.ensureSyncStateLoaded();
+    const { files, cursor } = await this.provider.enumerateFiles(this.opts.rootId);
+    for (const file of files) {
+      let normRel: string;
+      try {
+        normRel = normalizeRemoteRelPath(file.relPath);
+      } catch {
+        // Skip unsafe remote paths (traversal, .typeward, absolute) — same
+        // rule the pull path enforces.
+        continue;
+      }
+      const abs = cachePathForRemoteRel(this.cacheRoot(), normRel);
+      await mkdirParents(abs);
+      await this.provider.downloadFile(file, abs);
+      await this.recordSyncedFile(normRel, file, abs);
+    }
+    this.cursor = cursor;
+    await this.persistCursor(cursor);
+    return files.length;
+  }
+
+  /**
    * Queue local saves for upload. Called from the save path via the
    * init-layer notifier. Internal-state paths (`.typeward/...`) throw in
    * `normalizeRemoteRelPath` and are silently skipped — they must never push.
@@ -461,7 +491,7 @@ function emptySyncState(): SyncStateManifest {
 async function fileSignature(absPath: string): Promise<Pick<SyncedFileState, "hash" | "size" | "mtimeMs">> {
   const [bytes, metadata] = await Promise.all([readFile(absPath), stat(absPath)]);
   return {
-    hash: hashBytes(bytes),
+    hash: await sha256Hex(bytes),
     size: bytes.byteLength,
     mtimeMs: metadata.mtime ? metadata.mtime.getTime() : 0,
   };
@@ -472,13 +502,19 @@ async function localMatchesState(absPath: string, state: SyncedFileState): Promi
   return signature.hash === state.hash && signature.size === state.size;
 }
 
-function hashBytes(bytes: Uint8Array): string {
-  let hash = 0x811c9dc5;
-  for (const byte of bytes) {
-    hash ^= byte;
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+/**
+ * SHA-256 of the file bytes, hex. A wide cryptographic digest so conflict
+ * detection can't be fooled by a collision — remote content is attacker-
+ * controlled in the threat model, and a narrow 32-bit hash could be crafted to
+ * collide (same hash + size) with a local edit and silently hide it. (Persisted
+ * pre-upgrade FNV hashes simply mismatch once and the file is conservatively
+ * re-evaluated as changed — never the other way around.)
+ */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 async function mkdirParents(absPath: string): Promise<void> {

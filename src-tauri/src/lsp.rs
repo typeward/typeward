@@ -85,9 +85,10 @@ pub async fn start_lsp(
     args: StartArgs,
 ) -> Result<StartResult, LspError> {
     let bin = binary_for_language(&args.language_id)?;
-    if which::which(bin).is_err() {
-        return Err(LspError::BinaryMissing(bin.to_string()));
-    }
+    // Resolve to an absolute path and spawn that. A bare `Command::new("texlab")`
+    // with `current_dir(project)` lets Windows execute a `texlab.exe`/`tinymist.exe`
+    // planted in a malicious project; `which` resolves against PATH, not the project.
+    let bin_path = which::which(bin).map_err(|_| LspError::BinaryMissing(bin.to_string()))?;
 
     let server_id = format!(
         "{}-{}",
@@ -98,7 +99,7 @@ pub async fn start_lsp(
             .unwrap_or(0)
     );
 
-    let mut child = Command::new(bin)
+    let mut child = Command::new(&bin_path)
         .current_dir(&args.project_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

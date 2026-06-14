@@ -124,6 +124,19 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
 
       const destPath = joinPath(projRoot, sanitize(destName));
       await ipc.gitClone(u, destPath);
+      // A plain git repo has no .typeward/project.json, so list_projects would
+      // never surface it. Detect the root file and write project metadata so
+      // the clone appears in the library and opens.
+      try {
+        await ipc.importProjectFolder(destPath);
+      } catch {
+        await refreshProjects();
+        setError(
+          `Cloned to ${destPath}, but no LaTeX/Typst entry was found — add a main.tex/main.typ, then open the folder.`,
+        );
+        setBusy(false);
+        return;
+      }
       await refreshProjects();
       reset();
       props.onCloned?.(destPath);
