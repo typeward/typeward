@@ -88,5 +88,23 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
+      # The Tauri build script validates `bundle.externalBin` resource paths,
+      # so even `cargo test` needs the (gitignored) Tectonic sidecar present —
+      # same fetch + Linux gnu-triple symlink as build.yml.
+      - name: Set up Node (for the Tectonic fetch script)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch Tectonic sidecar
+        shell: bash
+        working-directory: app
+        run: npm run fetch:tectonic
+
+      - name: Symlink Tectonic for the gnu triple
+        run: |
+          cd app/src-tauri/binaries
+          ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
       - name: Cargo test
         run: cargo test --manifest-path app/src-tauri/Cargo.toml
