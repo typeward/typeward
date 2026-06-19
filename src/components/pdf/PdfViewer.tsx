@@ -94,6 +94,10 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   >(null);
   let savedScrollTop = 0;
   let docRef: pdfjs.PDFDocumentProxy | null = null;
+  // v6 removed PDFDocumentProxy.destroy(); teardown now goes through the
+  // loading task. We keep both: docRef (proxy) for getPage/re-render, taskRef
+  // (loading task) to destroy the doc + release the worker.
+  let taskRef: pdfjs.PDFDocumentLoadingTask | null = null;
   // Bumps on every load() / re-render request. Older async chains compare
   // this to their captured `gen` after each await and exit if superseded —
   // without this, a slow load completing after a newer one wipes the screen.
@@ -113,12 +117,14 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       if (gen !== loadGen) return;
       const buf = new Uint8Array(bytes.byteLength);
       buf.set(bytes);
-      const doc = await pdfjs.getDocument({ data: buf }).promise;
+      const task = pdfjs.getDocument({ data: buf });
+      const doc = await task.promise;
       if (gen !== loadGen) {
-        doc.destroy();
+        task.destroy();
         return;
       }
-      if (docRef) docRef.destroy();
+      if (taskRef) taskRef.destroy();
+      taskRef = task;
       docRef = doc;
       await renderAll(doc, scale(), gen);
     } catch (e) {
@@ -159,7 +165,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             canvasContext: ctx,
             viewport,
             canvas,
-          } as unknown as Parameters<typeof page.render>[0]).promise;
+          }).promise;
         } catch (e) {
           if (isCancellation(e)) return;
           throw e;
@@ -256,7 +262,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   };
 
   onCleanup(() => {
-    docRef?.destroy();
+    taskRef?.destroy();
   });
 
   const totalPages = () => pages().length;
