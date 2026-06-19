@@ -511,7 +511,10 @@ async function localMatchesState(absPath: string, state: SyncedFileState): Promi
  * re-evaluated as changed — never the other way around.)
  */
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  // crypto.subtle.digest wants an ArrayBuffer-backed BufferSource; the lib
+  // types model a bare Uint8Array as possibly SharedArrayBuffer-backed. Tauri's
+  // readFile always returns a plain (non-shared) buffer, so the narrow is safe.
+  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
