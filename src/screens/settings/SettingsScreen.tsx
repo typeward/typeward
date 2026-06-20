@@ -399,29 +399,42 @@ const THEME_META: Record<Theme, ThemeMeta> = {
 interface AccentMeta {
   id: Accent;
   label: string;
-  a: string;
-  b: string;
 }
 
-// Each theme's native accent pair — used to preview the "Theme default"
-// accent chip. Live var(--color-accent-*) would mirror whatever accent is
-// currently active instead of what reverting restores. Keep in sync with
-// the theme CSS files.
-const THEME_NATIVE_ACCENT: Record<Theme, [string, string]> = {
-  daylight: ["#101210", "#3A352B"],
-  lamplight: ["#E8A34D", "#C2691E"],
-  aurora: ["#8E61F6", "#22D3EE"],
-  paper: ["#7C3AED", "#07809D"],
-};
+// Preview swatch colors are read straight off the CSS tokens via a detached
+// probe element, so they can never drift from the themes. The [data-theme] /
+// [data-accent] rules set the vars on the probe directly, so this resolves each
+// theme's NATIVE accent (probe carries no data-accent) regardless of whatever
+// theme/accent is currently active on <html>. Cached — theme CSS is static.
+const _accentProbeCache = new Map<string, [string, string]>();
+function probeAccentPair(attr: "data-theme" | "data-accent", value: string): [string, string] {
+  const key = `${attr}=${value}`;
+  const hit = _accentProbeCache.get(key);
+  if (hit) return hit;
+  const el = document.createElement("span");
+  el.style.cssText = "position:absolute;visibility:hidden;pointer-events:none";
+  el.setAttribute(attr, value);
+  document.body.appendChild(el);
+  const cs = getComputedStyle(el);
+  const pair: [string, string] = [
+    cs.getPropertyValue("--color-accent-1").trim(),
+    cs.getPropertyValue("--color-accent-2").trim(),
+  ];
+  el.remove();
+  if (pair[0]) _accentProbeCache.set(key, pair);
+  return pair;
+}
+const themeNativeAccent = (t: Theme): [string, string] => probeAccentPair("data-theme", t);
+const accentPalette = (a: Accent): [string, string] => probeAccentPair("data-accent", a);
 
 const ACCENT_META: Record<Accent, AccentMeta> = {
-  // "violet-cyan" is the stored id for "no data-accent" — i.e. the active
-  // theme's native accent. Its swatch resolves through THEME_NATIVE_ACCENT
-  // at render time.
-  "violet-cyan": { id: "violet-cyan", label: "Theme default", a: "", b: "" },
-  "amber-rose": { id: "amber-rose", label: "Ember", a: "#F43F5E", b: "#F59E0B" },
-  "emerald-teal": { id: "emerald-teal", label: "Tide", a: "#10B981", b: "#14B8A6" },
-  "indigo-pink": { id: "indigo-pink", label: "Orchid", a: "#6C6FF2", b: "#EC4899" },
+  // "violet-cyan" is the stored id for "no data-accent" — the active theme's
+  // native accent. Swatch colors for every entry are read from the CSS tokens
+  // at render time (see probeAccentPair), so nothing here can drift.
+  "violet-cyan": { id: "violet-cyan", label: "Theme default" },
+  "amber-rose": { id: "amber-rose", label: "Ember" },
+  "emerald-teal": { id: "emerald-teal", label: "Tide" },
+  "indigo-pink": { id: "indigo-pink", label: "Orchid" },
 };
 
 // A custom theme only takes over once the switch is on AND a theme is
@@ -469,7 +482,7 @@ const AppearancePanel: Component = () => {
               const meta = ACCENT_META[a];
               const active = () => accent() === a;
               const stops = (): [string, string] =>
-                meta.a ? [meta.a, meta.b] : THEME_NATIVE_ACCENT[theme()];
+                a === "violet-cyan" ? themeNativeAccent(theme()) : accentPalette(a);
               return (
                 <button
                   type="button"
