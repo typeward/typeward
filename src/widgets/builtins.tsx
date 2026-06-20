@@ -122,7 +122,7 @@ const RecentProjectsWidget: Component = () => (
             <span class="truncate text-[length:var(--ui-font-sm)] text-fg-1">
               {p.name}
             </span>
-            <span class="mono ml-auto flex-shrink-0 text-[10px] uppercase text-fg-4">
+            <span class="mono ml-auto flex-shrink-0 text-[10px] uppercase text-fg-3">
               {p.format}
             </span>
           </button>
@@ -534,7 +534,7 @@ const ActivityGraphWidget: Component = () => {
     <div class="flex w-full gap-[3px]">
       <For each={monthLabels()}>
         {(lbl) => (
-          <span class="mono flex-1 overflow-visible whitespace-nowrap text-center text-[8px] leading-none text-fg-4">
+          <span class="mono flex-1 overflow-visible whitespace-nowrap text-center text-[8px] leading-none text-fg-3">
             {lbl}
           </span>
         )}
@@ -547,7 +547,7 @@ const ActivityGraphWidget: Component = () => {
     <div class="flex w-[14px] flex-shrink-0 flex-col gap-[3px]">
       <For each={["", "M", "", "W", "", "F", ""]}>
         {(m) => (
-          <span class="mono flex flex-1 items-center justify-end text-[8px] leading-none text-fg-4">
+          <span class="mono flex flex-1 items-center justify-end text-[8px] leading-none text-fg-3">
             {m}
           </span>
         )}
@@ -557,7 +557,7 @@ const ActivityGraphWidget: Component = () => {
 
   const Legend: Component = () => (
     <div class="flex items-center gap-1 pl-[18px]">
-      <span class="mono text-[8px] text-fg-4">Less</span>
+      <span class="mono text-[8px] text-fg-3">Less</span>
       <For each={[0, 0.25, 0.5, 0.75, 1]}>
         {(r) => (
           <span
@@ -571,7 +571,7 @@ const ActivityGraphWidget: Component = () => {
           />
         )}
       </For>
-      <span class="mono text-[8px] text-fg-4">More</span>
+      <span class="mono text-[8px] text-fg-3">More</span>
     </div>
   );
 
@@ -652,7 +652,7 @@ const ActivityGraphWidget: Component = () => {
         <Show
           when={activityMode() === "heatmap"}
           fallback={
-            <div class="mono pl-[18px] text-[8px] text-fg-4">
+            <div class="mono pl-[18px] text-[8px] text-fg-3">
               {total() > 0 ? `peak ${maxWeek()}/week` : "no activity yet"}
             </div>
           }
@@ -750,7 +750,7 @@ const DeadlinesWidget: Component = () => {
 
       <div class="grid grid-cols-7 gap-[3px] text-center">
         <For each={WEEKDAYS}>
-          {(w) => <span class="mono text-[9px] uppercase text-fg-4">{w}</span>}
+          {(w) => <span class="mono text-[9px] uppercase text-fg-3">{w}</span>}
         </For>
       </div>
 
@@ -799,7 +799,7 @@ const DeadlinesWidget: Component = () => {
       <div class="mt-auto flex flex-col gap-1 border-t border-glass-stroke pt-1.5">
         <Show
           when={dueSoon().length > 0}
-          fallback={<span class="mono px-0.5 text-[10px] text-fg-4">No deadlines set</span>}
+          fallback={<span class="mono px-0.5 text-[10px] text-fg-3">No deadlines set</span>}
         >
           <For each={dueSoon()}>
             {(x) => (

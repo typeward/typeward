@@ -58,7 +58,7 @@ export const ProjectSwitcherMenu: Component<{
         >
           <div class="mb-1.5 flex items-center justify-between px-1">
             <span class="label-xs text-fg-3">Recent</span>
-            <span class="mono text-[10px] text-fg-4">{others().length}</span>
+            <span class="mono text-[10px] text-fg-3">{others().length}</span>
           </div>
           <Show
             when={others().length > 0}

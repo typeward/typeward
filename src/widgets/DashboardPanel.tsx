@@ -129,7 +129,7 @@ export const DashboardPanel: Component = () => {
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
         <span class="label-xs text-fg-2">Widgets</span>
         <Show when={orderedCards().length > 1}>
-          <span class="mono hidden text-[10px] text-fg-4 sm:inline">
+          <span class="mono hidden text-[10px] text-fg-3 sm:inline">
             drag the grip to rearrange
           </span>
         </Show>
@@ -300,7 +300,7 @@ const CustomizeMenu: Component = () => {
               </button>
             )}
           </For>
-          <div class="mt-1.5 border-t border-glass-stroke px-1 pt-1.5 text-[10px] leading-relaxed text-fg-4">
+          <div class="mt-1.5 border-t border-glass-stroke px-1 pt-1.5 text-[10px] leading-relaxed text-fg-3">
             Toggle cards on or off; drag any card by its grip to rearrange.
           </div>
         </div>
