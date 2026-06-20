@@ -130,6 +130,9 @@ function findAccount(
     provider: acc.provider as CloudProviderId,
     accountId: acc.accountId,
     label: acc.label,
+    baseUrl: acc.baseUrl,
+    username: acc.username,
+    allowPrivateHost: acc.allowPrivateHost,
   };
 }
 

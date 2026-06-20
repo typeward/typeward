@@ -22,3 +22,4 @@ pub mod oauth;
 pub mod overleaf;
 pub mod templates;
 pub mod vcs;
+pub mod webdav;

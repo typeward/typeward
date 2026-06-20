@@ -228,7 +228,7 @@ export interface TemplateProvider extends IntegrationProvider {
 
 // ----- Entitlements ------------------------------------------------------
 
-export type Tier = "free" | "pro" | "team";
+export type Tier = "free" | "pro";
 
 /**
  * Entitlement keys identify a gated feature. Stable, prefixed by category

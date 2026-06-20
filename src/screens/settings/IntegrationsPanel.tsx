@@ -42,7 +42,7 @@ import {
   connectDropbox,
   disconnectDropbox,
 } from "~/integrations/cloud/dropbox";
-import { detectICloudDrive } from "~/integrations/cloud/icloud";
+import { connectWebdav, disconnectWebdav } from "~/integrations/cloud/webdav";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 
 export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
@@ -392,7 +392,7 @@ const CloudStorageCard: Component = () => {
   return (
     <Card
       title="Cloud storage"
-      subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave. iCloud Drive uses the OS sync on macOS — no API call needed."
+      subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave."
     >
       <For each={CLOUD_PROVIDERS}>
         {(provider) => (
@@ -401,7 +401,9 @@ const CloudStorageCard: Component = () => {
           </FeatureGate>
         )}
       </For>
-      <ICloudRow />
+      <FeatureGate feature="integrations.cloud.webdav">
+        <WebdavRow />
+      </FeatureGate>
     </Card>
   );
 };
@@ -486,30 +488,168 @@ const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) =
   );
 };
 
-const ICloudRow: Component = () => {
-  const [info] = createResource(detectICloudDrive);
+/** Forgiving normalization so users can paste a bare host. Rust validates +
+ * screens the host; here we only ensure a parseable https URL. */
+function normalizeWebdavUrl(raw: string): string {
+  let s = raw.trim();
+  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
+  if (!s.endsWith("/")) s = `${s}/`;
+  return s;
+}
 
-  const status = (): ProviderStatus => {
-    const v = info();
-    if (!v) return "checking";
-    return v.available ? "ready" : "unreachable";
+const WEBDAV_INPUT =
+  "glass-inset h-8 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]";
+
+const WebdavRow: Component = () => {
+  const accounts = () =>
+    integrationsSettings().cloud.accounts.filter((a) => a.provider === "webdav");
+  const [adding, setAdding] = createSignal(false);
+  const [url, setUrl] = createSignal("");
+  const [username, setUsername] = createSignal("");
+  const [password, setPassword] = createSignal("");
+  const [allowPrivate, setAllowPrivate] = createSignal(false);
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string | null>(null);
+
+  const handleAdd = async () => {
+    setError(null);
+    const user = username().trim();
+    if (!url().trim() || !user || !password()) {
+      setError("Server URL, username, and app password are all required.");
+      return;
+    }
+    setBusy(true);
+    try {
+      assertEntitlement("integrations.cloud.webdav");
+      const connected = await connectWebdav({
+        url: normalizeWebdavUrl(url()),
+        username: user,
+        password: password(),
+        allowPrivateHost: allowPrivate(),
+      });
+      setIntegrationsSettings({
+        ...integrationsSettings(),
+        cloud: {
+          accounts: [
+            ...integrationsSettings().cloud.accounts.filter(
+              (a) => !(a.provider === "webdav" && a.accountId === connected.accountId),
+            ),
+            {
+              provider: "webdav",
+              accountId: connected.accountId,
+              label: connected.label,
+              baseUrl: connected.baseUrl,
+              username: connected.username,
+              allowPrivateHost: connected.allowPrivateHost,
+            },
+          ],
+        },
+      });
+      setUrl("");
+      setUsername("");
+      setPassword("");
+      setAllowPrivate(false);
+      setAdding(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisconnect = async (accountId: string) => {
+    await disconnectWebdav(accountId);
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      cloud: {
+        accounts: integrationsSettings().cloud.accounts.filter(
+          (a) => !(a.provider === "webdav" && a.accountId === accountId),
+        ),
+      },
+    });
   };
 
   return (
     <ProviderRow
-      name="iCloud Drive"
-      hint={
-        info()?.available
-          ? "Available — open or save a project inside ~/Library/Mobile Documents/com~apple~CloudDocs and macOS keeps it in sync."
-          : (info()?.reason ?? "Apple platforms only.")
-      }
-      status={status()}
+      name="WebDAV"
+      hint="Self-hosted or hosted WebDAV — Nextcloud, ownCloud, Fastmail, mailbox.org, a NAS. Use an app password (not your account password); it's required when 2FA is on. Files sync into a local cache, like Dropbox."
+      status={accounts().length > 0 ? "ready" : "unconfigured"}
       controls={
-        <span class="text-[11px] text-fg-3 italic">No sign-in needed</span>
+        <Button
+          variant={adding() ? "ghost" : "primary"}
+          size="sm"
+          onClick={() => setAdding(!adding())}
+        >
+          {adding() ? "Cancel" : "Add server"}
+        </Button>
       }
-    />
+    >
+      <Show when={accounts().length > 0 || adding()}>
+        <div class="mt-3 flex flex-col gap-2">
+          <For each={accounts()}>
+            {(acc) => (
+              <div class="flex items-center justify-between gap-2 text-[12px] text-fg-2">
+                <span class="truncate">{acc.label ?? acc.accountId}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleDisconnect(acc.accountId)}
+                >
+                  Disconnect
+                </Button>
+              </div>
+            )}
+          </For>
+          <Show when={adding()}>
+            <div class="flex flex-col gap-2">
+              <input
+                type="text"
+                placeholder="https://cloud.example.com/remote.php/dav/files/you/"
+                value={url()}
+                onInput={(e) => setUrl(e.currentTarget.value)}
+                class={WEBDAV_INPUT}
+              />
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Username"
+                  value={username()}
+                  onInput={(e) => setUsername(e.currentTarget.value)}
+                  class={`${WEBDAV_INPUT} flex-1`}
+                />
+                <input
+                  type="password"
+                  placeholder="App password"
+                  value={password()}
+                  onInput={(e) => setPassword(e.currentTarget.value)}
+                  class={`${WEBDAV_INPUT} flex-[2] font-mono`}
+                />
+              </div>
+              <label class="flex items-center gap-2 text-[11px] text-fg-2">
+                <input
+                  type="checkbox"
+                  checked={allowPrivate()}
+                  onInput={(e) => setAllowPrivate(e.currentTarget.checked)}
+                />
+                Allow a private / LAN server (10.x, 172.16.x, 192.168.x). Loopback and
+                cloud-metadata addresses stay blocked.
+              </label>
+              <div>
+                <Button variant="primary" size="sm" onClick={handleAdd} disabled={busy()}>
+                  {busy() ? "Connecting…" : "Connect"}
+                </Button>
+              </div>
+              <Show when={error()}>
+                <div class="text-[11px] text-[var(--color-err)]">{error()}</div>
+              </Show>
+            </div>
+          </Show>
+        </div>
+      </Show>
+    </ProviderRow>
   );
 };
+
 
 // =================================================================
 // Git & GitHub card

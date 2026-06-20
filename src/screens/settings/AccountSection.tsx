@@ -233,24 +233,13 @@ const SignedInCard: Component = () => {
 };
 
 const PlanBadge: Component<{ plan: string }> = (props) => {
-  const label = () =>
-    props.plan === "pro"
-      ? "Pro"
-      : props.plan === "team"
-        ? "Team"
-        : "Free";
+  const label = () => (props.plan === "pro" ? "Pro" : "Free");
   const bg = () =>
     props.plan === "pro"
       ? "color-mix(in srgb, var(--color-accent-1) 16%, transparent)"
-      : props.plan === "team"
-        ? "color-mix(in srgb, var(--color-ok) 16%, transparent)"
-        : "var(--color-control-fill)";
+      : "var(--color-control-fill)";
   const color = () =>
-    props.plan === "pro"
-      ? "var(--color-accent-1)"
-      : props.plan === "team"
-        ? "var(--color-ok)"
-        : "var(--color-fg-3)";
+    props.plan === "pro" ? "var(--color-accent-1)" : "var(--color-fg-3)";
 
   return (
     <span

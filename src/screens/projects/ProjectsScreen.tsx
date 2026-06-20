@@ -702,11 +702,14 @@ const NewProjectDialog: Component<{
 
   const cloudAccounts = createMemo<CloudAccountRef[]>(() =>
     integrationsSettings()
-      .cloud.accounts.filter((a) => a.provider === "dropbox")
+      .cloud.accounts.filter((a) => a.provider === "dropbox" || a.provider === "webdav")
       .map((a) => ({
         provider: a.provider as CloudAccountRef["provider"],
         accountId: a.accountId,
         label: a.label,
+        baseUrl: a.baseUrl,
+        username: a.username,
+        allowPrivateHost: a.allowPrivateHost,
       })),
   );
 

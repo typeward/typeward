@@ -167,6 +167,18 @@ pub struct CloudAccountRef {
     #[serde(rename = "accountId")]
     pub account_id: String,
     pub label: Option<String>,
+    // WebDAV accounts carry their server URL + username here (the password is
+    // in the keyring). Optional + skipped for the OAuth providers (Dropbox).
+    #[serde(rename = "baseUrl", default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(
+        rename = "allowPrivateHost",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub allow_private_host: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
