@@ -176,7 +176,7 @@ const PinnedNotesWidget: Component = () => (
     value={pinnedNote()}
     onInput={(e) => updateNote(e.currentTarget.value)}
     placeholder="Scratch notes, ideas, todo, anything sticky…"
-    class="glass-inset h-full w-full resize-none rounded-lg p-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none"
+    class="glass-inset h-full w-full resize-none rounded-lg p-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
   />
 );
 

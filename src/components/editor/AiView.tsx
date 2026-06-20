@@ -184,7 +184,7 @@ export const AiView: Component = () => {
             placeholder={activeProviderId() ? "Ask the assistant…" : "Configure a provider first"}
             rows={2}
             disabled={!activeProviderId() || streaming()}
-            class="min-h-[40px] flex-1 resize-none bg-transparent text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="min-h-[40px] flex-1 resize-none rounded-md bg-transparent text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)] disabled:cursor-not-allowed disabled:opacity-50"
           />
           <Show
             when={streaming()}

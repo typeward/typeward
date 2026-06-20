@@ -187,7 +187,7 @@ export const CommandPalette: Component = () => {
                 setQuery(e.currentTarget.value);
                 setSelectedIdx(0);
               }}
-              class="flex-1 bg-transparent text-[14px] text-fg-1 placeholder:text-fg-3 focus:outline-none"
+              class="flex-1 rounded-md bg-transparent text-[14px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
             <kbd
               class="mono rounded px-1.5 py-0.5 text-[10px] text-fg-2"
