@@ -58,7 +58,7 @@
   --syntax-cmd: #8fb0e8;
   --syntax-env: #94c2a0;
   --syntax-math: #d9907e;
-  --syntax-comment: rgb(237 230 216 / 0.38);
+  --syntax-comment: rgb(237 230 216 / 0.51); /* was 0.38 — 4.6:1 on bg (AA) */
   --syntax-bracket: rgb(237 230 216 / 0.42);
   --syntax-attr: #b8d4be;
 
