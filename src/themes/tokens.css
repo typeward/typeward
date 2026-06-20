@@ -95,16 +95,16 @@
   --color-text-selection: color-mix(in srgb, var(--color-accent-1) 32%, transparent);
 
   /* Accent (overridden by data-accent="...") */
-  --color-accent-1: #8b5cf6; /* violet */
+  --color-accent-1: #8e61f6; /* violet — nudged lighter (was #8b5cf6) so dark accent-fg clears 4.6:1 on the button gradient */
   --color-accent-2: #22d3ee; /* cyan */
 
   /*
-   * Text/icon color on accent surfaces (.accent-grad buttons, badges).
-   * Themes whose accent is light (Lamplight's amber) flip this to a dark
-   * ink so labels stay readable; explicit data-accent palettes reset it
-   * to white in accents.css.
+   * Text/icon color on accent surfaces (.accent-grad buttons, badges). Must
+   * track accent lightness: light accents (Aurora violet/cyan, Lamplight amber,
+   * the bright data-accent palettes) take dark ink; dark-ink accents (Daylight)
+   * take a light fg. White-on-light-accent failed AA (cyan end was 1.81:1).
    */
-  --color-accent-fg: #ffffff;
+  --color-accent-fg: #111314; /* dark ink — Aurora's accents are light (was #ffffff) */
 
   /* .glass-soft body tint — light themes invert to a faint ink wash. */
   --color-glass-soft-fill: rgb(255 255 255 / 0.02);
@@ -113,6 +113,12 @@
   --color-ok: #10b981;
   --color-warn: #f59e0b;
   --color-err: #f43f5e;
+  /*
+   * Filled danger-button surface. Deeper than --color-err, which on dark
+   * themes stays light enough to read as error TEXT on the bg — too light to
+   * carry a white button label. Light themes override to their own err.
+   */
+  --color-danger-fill: #d73753;
 
   /*
    * Shadow tokens — surface-aware. Aurora and Lamplight are dark, so

@@ -2,24 +2,25 @@
  * Accent palettes. Swapped via [data-accent="..."] on <html>.
  * No data-accent attribute means the active theme's own accent applies
  * (Daylight/Lamplight ship brass-amber, Aurora violet/cyan, ...). These
- * blocks load after the theme files, so an explicit choice wins — and each
- * resets --color-accent-fg since all four palettes carry white text fine.
+ * blocks load after the theme files, so an explicit choice wins. All three
+ * palettes are bright, so --color-accent-fg is dark ink: white labels failed
+ * WCAG AA on these gradients (e.g. emerald 2.49:1, amber 2.15:1).
  */
 
 [data-accent="amber-rose"] {
   --color-accent-1: #f59e0b;
   --color-accent-2: #f43f5e;
-  --color-accent-fg: #ffffff;
+  --color-accent-fg: #111314; /* dark ink — bright accent (was #ffffff) */
 }
 
 [data-accent="emerald-teal"] {
   --color-accent-1: #10b981;
   --color-accent-2: #14b8a6;
-  --color-accent-fg: #ffffff;
+  --color-accent-fg: #111314; /* dark ink — bright accent (was #ffffff) */
 }
 
 [data-accent="indigo-pink"] {
-  --color-accent-1: #6366f1;
+  --color-accent-1: #6c6ff2; /* nudged lighter (was #6366f1) so dark fg clears 4.6:1 */
   --color-accent-2: #ec4899;
-  --color-accent-fg: #ffffff;
+  --color-accent-fg: #111314; /* dark ink — bright accent (was #ffffff) */
 }
