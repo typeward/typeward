@@ -53,6 +53,7 @@
   --color-ok: #3d7a4a;
   --color-warn: #866b37; /* was #9a7b3f — darkened to 4.6:1 on ivory (AA text) */
   --color-err: #a84935;
+  --color-danger-fill: var(--color-err); /* #a84935 seal-red is dark enough for white labels */
 
   /* Soft paper drops + crisp white inset highlight. */
   --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.6);

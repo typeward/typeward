@@ -45,6 +45,7 @@
   --color-ok: #5fa855;
   --color-warn: #e8a34d;
   --color-err: #d9907e;
+  --color-danger-fill: #9d685b; /* deeper than the salmon err so white labels clear 4.6:1 */
 
   /* Deep black drop + a whisper of amber halo (t1 --win-shadow). */
   --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.05);
