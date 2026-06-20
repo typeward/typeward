@@ -1,6 +1,7 @@
 import { Bell, CheckCircle2, Info, AlertTriangle, X as XIcon } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
+import { installDismiss } from "~/lib/dismiss";
 
 /**
  * Right-side notifications drawer. Slides in from the right when open;
@@ -43,8 +44,16 @@ export const NotificationsPanel: Component<{
   const markAllRead = () =>
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
 
+  let panelRef: HTMLDivElement | undefined;
+  // Close when clicking anywhere outside the drawer, except the bell toggle
+  // (its own handler closes it — otherwise the two would fight and reopen).
+  installDismiss(() => panelRef, () => props.open, () => props.onClose(), {
+    ignoreSelector: "[data-notif-toggle]",
+  });
+
   return (
     <div
+      ref={panelRef}
       class="glass absolute right-2 top-2 bottom-2 z-30 flex flex-col overflow-hidden rounded-xl"
       style={{
         width: "320px",

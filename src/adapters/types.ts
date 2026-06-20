@@ -13,6 +13,15 @@ export interface Project {
   format: ProjectFormat;
   /** Display name; defaults to folder basename, user-overridable. */
   name: string;
+  /** User-set deadline, ISO date (`YYYY-MM-DD`). Optional. */
+  deadline?: string;
+  /**
+   * Filesystem timestamps (epoch millis) attached by `list_projects` only —
+   * derived from folder/root-file mtime, never persisted to project.json.
+   * Absent on projects returned by `open_project` / `create_project`.
+   */
+  createdAt?: number;
+  modifiedAt?: number;
   /**
    * Per-project integration state. Optional: older project.json files load
    * with `integrations` absent; default to an empty object at read time.

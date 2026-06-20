@@ -196,6 +196,7 @@ pub async fn template_instantiate(
             root_file: manifest.root_file.clone(),
             format: manifest.format,
             name: name.clone(),
+            deadline: None,
             integrations: ProjectIntegrations::default(),
         };
         project::write_project(&project)?;
@@ -377,7 +378,7 @@ fn locate_template(
     if id.is_empty()
         || id.contains('/')
         || id.contains('\\')
-        || id.split(|c| c == '/' || c == '\\').any(|seg| seg == "..")
+        || id.split(['/', '\\']).any(|seg| seg == "..")
     {
         return Err(TemplateError::NotFound(template_id.to_string()));
     }

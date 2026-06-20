@@ -36,10 +36,21 @@ async function create(input: {
   return project;
 }
 
+/** Persist a deadline (ISO `YYYY-MM-DD`, or `null` to clear) + patch the store. */
+async function setDeadline(rootPath: string, deadline: string | null): Promise<void> {
+  await ipc.setProjectDeadline(rootPath, deadline);
+  setProjects((prev) =>
+    prev.map((p) =>
+      p.rootPath === rootPath ? { ...p, deadline: deadline ?? undefined } : p,
+    ),
+  );
+}
+
 export {
   create,
   error,
   loading,
   projects,
   refresh,
+  setDeadline,
 };

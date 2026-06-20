@@ -99,8 +99,8 @@ const ReferencesCard: Component = () => {
 
 const BetterBibTexRow: Component = () => {
   // "Ready" if either local path answers — Better BibTeX or plain
-  // Zotero 7's built-in API. `bbt` decides whether the library-id field
-  // (a BBT concept) is shown.
+  // Zotero 7's built-in API. `bbt` only affects the explanatory hint now;
+  // libraries are auto-discovered either way.
   const [probe] = createResource(async () => {
     const bbt = await probeBetterBibTex();
     if (bbt) return { reachable: true, bbt: true };
@@ -118,22 +118,10 @@ const BetterBibTexRow: Component = () => {
     });
   };
 
-  const setLibraryId = (value: string) => {
-    const id = Number.parseInt(value, 10);
-    if (!Number.isFinite(id) || id < 1) return;
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      references: {
-        ...integrationsSettings().references,
-        betterBibTex: { ...settings(), libraryId: id },
-      },
-    });
-  };
-
   return (
     <ProviderRow
       name="Zotero (local)"
-      hint="Talks to the Zotero app on this machine — no login. Works with plain Zotero 7 (enable 'Allow other applications…' under Settings → Advanced); the Better BibTeX plugin is optional and adds nicer citation keys."
+      hint="Talks to the Zotero app on this machine — no login. Works with plain Zotero 7 (enable 'Allow other applications…' under Settings → Advanced); the Better BibTeX plugin is optional and adds nicer citation keys. Your libraries (personal + groups) are discovered automatically."
       status={
         probe() === undefined
           ? "checking"
@@ -149,27 +137,10 @@ const BetterBibTexRow: Component = () => {
         />
       }
     >
-      <Show when={settings().enabled && probe()?.reachable}>
-        <div class="mt-3 flex items-center gap-2 text-[12px] text-fg-2">
-          <Show
-            when={probe()?.bbt}
-            fallback={
-              <span class="text-fg-3">
-                Using Zotero's built-in API (personal library). Install Better
-                BibTeX for stable, human-readable citation keys.
-              </span>
-            }
-          >
-            <span>Library id</span>
-            <input
-              type="number"
-              min={1}
-              value={settings().libraryId}
-              onInput={(e) => setLibraryId(e.currentTarget.value)}
-              class="glass-inset h-7 w-20 rounded-md px-2 font-mono text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-            />
-            <span class="text-fg-3">1 = personal library; group libraries use higher ids.</span>
-          </Show>
+      <Show when={settings().enabled && probe()?.reachable && !probe()?.bbt}>
+        <div class="mt-3 text-[12px] text-fg-3">
+          Using Zotero's built-in API. Install Better BibTeX for stable,
+          human-readable citation keys.
         </div>
       </Show>
     </ProviderRow>
@@ -649,7 +620,6 @@ const WebdavRow: Component = () => {
     </ProviderRow>
   );
 };
-
 
 // =================================================================
 // Git & GitHub card

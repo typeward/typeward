@@ -1,11 +1,7 @@
 import type { Component } from "solid-js";
-import { Show, createEffect, onCleanup, onMount } from "solid-js";
+import { Show, createEffect, lazy, onCleanup, onMount } from "solid-js";
 import { Router, Route, useNavigate } from "@solidjs/router";
 import { onboarded, settingsLoaded } from "~/stores/settings-store";
-import OnboardingScreen from "~/screens/onboarding/OnboardingScreen";
-import ProjectsScreen from "~/screens/projects/ProjectsScreen";
-import EditorScreen from "~/screens/editor/EditorScreen";
-import SettingsScreen from "~/screens/settings/SettingsScreen";
 // Side-effect imports: instantiate the settings store + theme store on boot
 // so their createRoot effects are mounted before any screen renders.
 import "~/stores/settings-store";
@@ -32,6 +28,11 @@ import "@fontsource/inter/700.css";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/600.css";
+
+const OnboardingScreen = lazy(() => import("~/screens/onboarding/OnboardingScreen"));
+const ProjectsScreen = lazy(() => import("~/screens/projects/ProjectsScreen"));
+const EditorScreen = lazy(() => import("~/screens/editor/EditorScreen"));
+const SettingsScreen = lazy(() => import("~/screens/settings/SettingsScreen"));
 
 setupAutosave();
 installFrontendErrorHook();

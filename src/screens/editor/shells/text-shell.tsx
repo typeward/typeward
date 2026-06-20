@@ -292,7 +292,10 @@ const DesktopLayout: Component<ShellProps> = (props) => {
       sizes={sidebar.sizes()}
       onSizesChange={sidebar.onSizesChange}
     >
-      <Resizable.Panel minSize="200px" maxSize="320px">
+      {/* min-w-0 zeroes the panel's flex auto-minimum so wide tab content
+          (long reference titles, search results) can't grow the pane past its
+          corvu-controlled size; overflow-hidden clips the rest. */}
+      <Resizable.Panel minSize="200px" maxSize="320px" class="min-w-0 overflow-hidden">
         <EditorSidebar
           tab={props.leftTab}
           setTab={props.setLeftTab}

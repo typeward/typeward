@@ -46,6 +46,13 @@ export const setProjectIntegrations = (
 ): Promise<Project> =>
   invoke("set_project_integrations", { projectRoot, integrations });
 
+/** Set (ISO `YYYY-MM-DD`) or clear (`null`) a project's deadline. */
+export const setProjectDeadline = (
+  projectRoot: string,
+  deadline: string | null,
+): Promise<Project> =>
+  invoke("set_project_deadline", { projectRoot, deadline });
+
 // ----- File I/O ------------------------------------------------------------
 
 export const readProjectTextFile = (
@@ -222,6 +229,10 @@ export interface WorkspaceSettings {
   widgets: Record<string, boolean>;
   dashboardEnabled: boolean;
   dashboardOrder: string[];
+  /** Show an approximate word count on each project card. */
+  projectCardWords: boolean;
+  /** Stat ids shown on the dashboard Statistics card (frontend coerces). */
+  statsCards: string[];
 }
 
 /**
@@ -259,7 +270,7 @@ export interface IntegrationsSettings {
 
 export interface ReferencesProvidersSettings {
   activeProvider?: string;
-  betterBibTex: { enabled: boolean; libraryId: number };
+  betterBibTex: { enabled: boolean };
   zoteroWeb: { userId?: string };
   mendeley: { profileId?: string; displayName?: string };
 }

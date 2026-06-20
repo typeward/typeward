@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -110,26 +110,13 @@ pub struct ReferencesSettings {
     pub mendeley: MendeleyAccountSettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BetterBibTexSettings {
+    /// Local Zotero provider on/off. Libraries (personal + groups) are
+    /// auto-discovered, so there's no library-id field anymore — a stale
+    /// `libraryId` in an older settings.json is simply ignored on read.
     #[serde(default)]
     pub enabled: bool,
-    /// Zotero library id; `1` is the user's personal library.
-    #[serde(rename = "libraryId", default = "default_library_id")]
-    pub library_id: u32,
-}
-
-impl Default for BetterBibTexSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            library_id: default_library_id(),
-        }
-    }
-}
-
-fn default_library_id() -> u32 {
-    1
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -272,6 +259,24 @@ pub struct WorkspaceSettings {
     /// missing ids append in registry order.
     #[serde(rename = "dashboardOrder", default)]
     pub dashboard_order: Vec<String>,
+    /// Show an approximate word count on each project card. Opt-in because it
+    /// reads each project's root file when the library renders.
+    #[serde(rename = "projectCardWords", default)]
+    pub project_card_words: bool,
+    /// Which summary statistics the dashboard Statistics card shows (ids from
+    /// the frontend stat catalog). The frontend coerces unknown ids and caps
+    /// the count, so this is stored loosely.
+    #[serde(rename = "statsCards", default = "default_stats_cards")]
+    pub stats_cards: Vec<String>,
+}
+
+fn default_stats_cards() -> Vec<String> {
+    vec![
+        "latex".into(),
+        "typst".into(),
+        "deadlines".into(),
+        "overdue".into(),
+    ]
 }
 
 impl Default for Settings {
@@ -326,6 +331,8 @@ impl Default for WorkspaceSettings {
             widgets: HashMap::new(),
             dashboard_enabled: false,
             dashboard_order: Vec::new(),
+            project_card_words: false,
+            stats_cards: default_stats_cards(),
         }
     }
 }
@@ -338,12 +345,52 @@ pub enum SettingsError {
     Json(#[from] serde_json::Error),
     #[error("could not resolve app data dir")]
     NoAppDataDir,
+    #[error("projects root must be an absolute path under Documents: {0}")]
+    InvalidProjectsRoot(String),
 }
 
 pub fn default_projects_root() -> PathBuf {
     dirs::document_dir()
         .map(|d| d.join("Typeward"))
         .unwrap_or_else(|| PathBuf::from("Typeward"))
+}
+
+fn canonical_existing_ancestor(path: &Path) -> Result<PathBuf, SettingsError> {
+    let mut current = path;
+    loop {
+        if current.exists() {
+            return Ok(current.canonicalize()?);
+        }
+        current = current.parent().ok_or_else(|| {
+            SettingsError::InvalidProjectsRoot(path.to_string_lossy().into_owned())
+        })?;
+    }
+}
+
+pub fn validate_projects_root(root: &Path) -> Result<(), SettingsError> {
+    if !root.is_absolute() {
+        return Err(SettingsError::InvalidProjectsRoot(
+            root.to_string_lossy().into_owned(),
+        ));
+    }
+    let documents = dirs::document_dir()
+        .ok_or_else(|| SettingsError::InvalidProjectsRoot(root.to_string_lossy().into_owned()))?;
+    let documents = canonical_existing_ancestor(&documents)?;
+    let candidate = canonical_existing_ancestor(root)?;
+    if candidate.starts_with(&documents) {
+        Ok(())
+    } else {
+        Err(SettingsError::InvalidProjectsRoot(
+            root.to_string_lossy().into_owned(),
+        ))
+    }
+}
+
+fn sanitize_loaded_settings(mut settings: Settings) -> Settings {
+    if validate_projects_root(Path::new(&settings.projects_root)).is_err() {
+        settings.projects_root = default_projects_root().to_string_lossy().into_owned();
+    }
+    settings
 }
 
 fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, SettingsError> {
@@ -362,10 +409,11 @@ pub fn load(app_handle: &tauri::AppHandle) -> Result<Settings, SettingsError> {
     }
     let bytes = fs::read(path)?;
     let settings: Settings = serde_json::from_slice(&bytes)?;
-    Ok(settings)
+    Ok(sanitize_loaded_settings(settings))
 }
 
 pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), SettingsError> {
+    validate_projects_root(Path::new(&settings.projects_root))?;
     let path = settings_path(app_handle)?;
     let json = serde_json::to_vec_pretty(settings)?;
     fs_ops::atomic_write(&path, &json)?;

@@ -67,7 +67,7 @@ pub fn write_text(path: &Path, content: &str) -> io::Result<()> {
     atomic_write(path, content.as_bytes())
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::PathBuf;
@@ -84,7 +84,6 @@ mod tests {
         dir
     }
 
-    #[cfg(unix)]
     #[test]
     fn atomic_write_does_not_follow_preexisting_temp_symlink() {
         let dir = temp_dir();

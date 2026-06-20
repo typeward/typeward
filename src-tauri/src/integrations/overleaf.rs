@@ -91,6 +91,7 @@ pub async fn overleaf_import_zip(
             root_file,
             format,
             name,
+            deadline: None,
             integrations: ProjectIntegrations::default(),
         };
         project::write_project(&project)?;

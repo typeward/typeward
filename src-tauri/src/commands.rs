@@ -15,6 +15,9 @@ use crate::settings::{self, Settings};
 /// can serialize it cleanly. Domain modules keep their own typed errors.
 type CmdResult<T> = Result<T, String>;
 
+const MAX_PROJECT_TEXT_READ_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PROJECT_BINARY_READ_BYTES: u64 = 128 * 1024 * 1024;
+
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -28,6 +31,28 @@ fn ensure_registered(project_root: &str) -> CmdResult<()> {
         Ok(())
     } else {
         Err(format!("not an opened project root: {project_root}"))
+    }
+}
+
+fn ensure_under_projects_root(path: &Path) -> CmdResult<()> {
+    if project::is_path_under_projects_root(path) {
+        Ok(())
+    } else {
+        Err(format!(
+            "path is outside the configured projects root: {}",
+            path.display()
+        ))
+    }
+}
+
+fn ensure_registered_or_under_projects_root(path: &Path) -> CmdResult<()> {
+    if project::is_registered_root(path) || project::is_path_under_projects_root(path) {
+        Ok(())
+    } else {
+        Err(format!(
+            "path is outside the configured projects root: {}",
+            path.display()
+        ))
     }
 }
 
@@ -45,21 +70,34 @@ fn checked_project_root_and_file(project: &Project) -> CmdResult<(PathBuf, Strin
     Ok((root, rel))
 }
 
+fn ensure_read_size(path: &Path, max_bytes: u64) -> CmdResult<()> {
+    let len = std::fs::metadata(path).map_err(err)?.len();
+    if len > max_bytes {
+        Err(format!(
+            "file is too large to read through IPC: {} bytes exceeds {}",
+            len, max_bytes
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub fn detect_tex() -> EngineProbe {
     detect::probe()
 }
 
 #[tauri::command]
-pub fn list_projects(root: Option<String>) -> CmdResult<Vec<Project>> {
+pub fn list_projects(root: Option<String>) -> CmdResult<Vec<project::ProjectListing>> {
     let root = root
         .map(PathBuf::from)
         .unwrap_or_else(settings::default_projects_root);
-    let projects = project::list_projects(&root).map_err(err)?;
-    for p in &projects {
-        project::register_root(Path::new(&p.root_path));
+    ensure_under_projects_root(&root)?;
+    let listings = project::list_project_listings(&root).map_err(err)?;
+    for l in &listings {
+        project::register_root(Path::new(&l.project.root_path));
     }
-    Ok(projects)
+    Ok(listings)
 }
 
 #[tauri::command]
@@ -71,6 +109,7 @@ pub fn create_project(
     let parent = parent
         .map(PathBuf::from)
         .unwrap_or_else(settings::default_projects_root);
+    ensure_under_projects_root(&parent)?;
     if !parent.exists() {
         std::fs::create_dir_all(&parent).map_err(err)?;
     }
@@ -81,6 +120,7 @@ pub fn create_project(
 
 #[tauri::command]
 pub fn open_project(path: String) -> CmdResult<Project> {
+    ensure_registered_or_under_projects_root(Path::new(&path))?;
     let project = project::read_project(Path::new(&path)).map_err(err)?;
     project::register_root(Path::new(&project.root_path));
     Ok(project)
@@ -92,9 +132,7 @@ pub fn open_project(path: String) -> CmdResult<Project> {
 #[tauri::command]
 pub fn import_project_folder(path: String) -> CmdResult<Project> {
     let root = PathBuf::from(&path);
-    if !(project::is_registered_root(&root) || project::is_new_path_under_projects_root(&root)) {
-        return Err(format!("path is outside the projects root: {path}"));
-    }
+    ensure_registered_or_under_projects_root(&root)?;
     let project = project::import_folder_as_project(&root, None).map_err(err)?;
     project::register_root(Path::new(&project.root_path));
     Ok(project)
@@ -113,11 +151,42 @@ pub fn set_project_integrations(
     project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
 }
 
+/// Set or clear a project's deadline. `deadline` is a plain ISO date
+/// (`YYYY-MM-DD`); `None` clears it. Shape is validated here so a malformed
+/// value never lands in project.json.
+#[tauri::command]
+pub fn set_project_deadline(project_root: String, deadline: Option<String>) -> CmdResult<Project> {
+    ensure_registered(&project_root)?;
+    let deadline = match deadline {
+        Some(d) if is_iso_date(&d) => Some(d),
+        Some(_) => return Err("deadline must be an ISO date (YYYY-MM-DD)".into()),
+        None => None,
+    };
+    project::set_deadline(Path::new(&project_root), deadline).map_err(err)
+}
+
+/// Cheap `YYYY-MM-DD` shape check (digits + dashes, plausible ranges). Not a
+/// full calendar validation — just enough to keep junk out of project.json.
+fn is_iso_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let digits = |range: std::ops::Range<usize>| b[range].iter().all(u8::is_ascii_digit);
+    if !(digits(0..4) && digits(5..7) && digits(8..10)) {
+        return false;
+    }
+    let month: u8 = s[5..7].parse().unwrap_or(0);
+    let day: u8 = s[8..10].parse().unwrap_or(0);
+    (1..=12).contains(&month) && (1..=31).contains(&day)
+}
+
 #[tauri::command]
 pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResult<String> {
     ensure_registered(&project_root)?;
     let path =
         project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
+    ensure_read_size(&path, MAX_PROJECT_TEXT_READ_BYTES)?;
     fs_ops::read_text(&path).map_err(err)
 }
 
@@ -129,6 +198,7 @@ pub fn read_project_binary_file(project_root: String, rel_path: String) -> CmdRe
     ensure_registered(&project_root)?;
     let path =
         project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
+    ensure_read_size(&path, MAX_PROJECT_BINARY_READ_BYTES)?;
     std::fs::read(&path).map_err(err)
 }
 
@@ -260,7 +330,11 @@ pub async fn compile_latex(
     })
 }
 
-fn run_system_tex(root_file: &str, root: &Path, halt_on_error: bool) -> Result<(String, bool), String> {
+fn run_system_tex(
+    root_file: &str,
+    root: &Path,
+    halt_on_error: bool,
+) -> Result<(String, bool), String> {
     let mut accumulated_log = String::new();
 
     // Prefer latexmk (handles multiple passes, bibliography). If it isn't on
@@ -589,9 +663,8 @@ pub async fn export_project_zip(project: Project) -> CmdResult<String> {
                 .to_string_lossy()
                 .replace('\\', "/");
             zip.start_file(rel, options).map_err(err)?;
-            let bytes = std::fs::read(&abs).map_err(err)?;
-            use std::io::Write;
-            zip.write_all(&bytes).map_err(err)?;
+            let mut input = std::fs::File::open(&abs).map_err(err)?;
+            std::io::copy(&mut input, &mut zip).map_err(err)?;
         }
         zip.finish().map_err(err)?;
         Ok(dest.to_string_lossy().into_owned())

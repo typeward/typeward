@@ -112,7 +112,7 @@ pub fn list_recent_events(limit: Option<usize>) -> Result<Vec<Event>, String> {
     let reader = BufReader::new(f);
     let mut events: Vec<Event> = reader
         .lines()
-        .filter_map(|l| l.ok())
+        .map_while(Result::ok)
         .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
         .collect();
     let limit = limit.unwrap_or(100).min(MAX_ENTRIES);
@@ -126,9 +126,7 @@ fn append(event: &Event) -> std::io::Result<()> {
         .lock()
         .expect("telemetry lock poisoned")
         .clone()
-        .ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "telemetry not initialized")
-        })?;
+        .ok_or_else(|| std::io::Error::other("telemetry not initialized"))?;
     let line = serde_json::to_string(event)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
@@ -142,7 +140,7 @@ fn append(event: &Event) -> std::io::Result<()> {
 fn trim(path: &std::path::Path) -> std::io::Result<()> {
     let f = fs::File::open(path)?;
     let reader = BufReader::new(f);
-    let lines: Vec<String> = reader.lines().filter_map(|l| l.ok()).collect();
+    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
     if lines.len() <= MAX_ENTRIES {
         return Ok(());
     }
