@@ -49,6 +49,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # Grammar — Phase 5. Rust-native, runs in-process, zero network.
 harper-core = "0.59"
 
+# WebDAV cloud provider. quick-xml is non-validating (immune to XXE /
+# entity-expansion by construction) so it can parse attacker-controlled
+# PROPFIND multistatus bodies safely; percent-encoding builds WebDAV hrefs.
+quick-xml = "0.37"
+percent-encoding = "2"
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

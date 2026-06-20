@@ -42,10 +42,9 @@ interface CachedSnapshot {
 
 function planFromRows(rows: CachedSnapshot["rows"]): Tier {
   // The plan isn't returned by get_entitlements directly; derive from the
-  // presence of pro/team-only feature flags. Cheap and stable.
+  // presence of a Pro-only feature flag. Cheap and stable.
   const lookup = (key: string): boolean =>
     rows.find((r) => r.feature_key === key)?.value === "true";
-  if (lookup("templates.shared.publish")) return "team";
   if (lookup("integrations.cloud.dropbox")) return "pro";
   return "free";
 }
@@ -78,7 +77,7 @@ function buildSource(snapshot: CachedSnapshot): EntitlementSource {
 }
 
 async function readCache(userId: string): Promise<CachedSnapshot | null> {
-  // Chunked: the pro/team snapshot (~66 rows of JSON) exceeds Windows
+  // Chunked: the Pro snapshot of feature rows (JSON) exceeds Windows
   // Credential Manager's single-blob cap.
   const raw = await getChunkedCredential(CACHE_SERVICE, userId);
   if (!raw) return null;

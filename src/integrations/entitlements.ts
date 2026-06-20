@@ -15,7 +15,6 @@ import type { EntitlementKey, EntitlementSource, Tier } from "./types";
 const FREE_ENTITLEMENTS = new Set<EntitlementKey>([
   "integrations.references.zotero.local",
   "integrations.references.doi_lookup",
-  "integrations.cloud.icloud",
   "integrations.vcs.git",
   "integrations.vcs.github",
   "integrations.vcs.overleaf_import",

@@ -17,10 +17,6 @@ const PALETTE: Record<string, { bg: string; color: string }> = {
     bg: "color-mix(in srgb, var(--color-accent-1) 16%, transparent)",
     color: "var(--color-accent-1)",
   },
-  team: {
-    bg: "color-mix(in srgb, var(--color-ok) 16%, transparent)",
-    color: "var(--color-ok)",
-  },
 };
 
 export const SubscriptionBadge: Component = () => {

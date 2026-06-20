@@ -98,6 +98,12 @@ pub fn run() {
             integrations::templates::templates_list,
             integrations::templates::template_instantiate,
             integrations::templates::template_save,
+            integrations::webdav::webdav_validate_host,
+            integrations::webdav::webdav_status_probe,
+            integrations::webdav::webdav_propfind,
+            integrations::webdav::webdav_get,
+            integrations::webdav::webdav_put,
+            integrations::webdav::webdav_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

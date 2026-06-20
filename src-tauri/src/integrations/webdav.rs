@@ -1,0 +1,1137 @@
+//! WebDAV cloud provider transport.
+//!
+//! Unlike the other integrations, a WebDAV server lives at a *user-supplied*
+//! host (self-hosted Nextcloud/ownCloud, Fastmail, a NAS, ...). The shared
+//! [`http`](super::http) funnel deliberately allows only a fixed compile-time
+//! host set as an SSRF defense, so WebDAV cannot ride it. Instead this module
+//! owns a dedicated outbound path that is gated two ways:
+//!
+//!   1. **Provenance** — a host only becomes reachable after the user enrolls
+//!      it through the WebDAV-account save flow (`webdav_validate_host`), which
+//!      persists it. A renderer-supplied URL to an un-enrolled host is rejected
+//!      by the frontend before it reaches an IPC here.
+//!   2. **Resolve-then-pin SSRF screening** — every request resolves the host,
+//!      screens *all* resolved IPs (and any numeric-literal host, to close the
+//!      resolver-bypass class) against a deny-table, then pins the connection
+//!      to the vetted address. Loopback / link-local / cloud-metadata are
+//!      blocked unconditionally; RFC1918 / ULA / CGNAT are blocked unless the
+//!      account explicitly opted into a private/LAN server.
+//!
+//! Server XML (PROPFIND multistatus) is attacker-controlled, so it is parsed
+//! here in Rust with quick-xml (non-validating: no external entities, no
+//! entity-expansion) rather than handed to the webview's DOMParser.
+
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Duration;
+
+use base64::Engine as _;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use reqwest::{Client, Method};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use url::Url;
+
+use crate::integrations::credentials;
+
+const KEYRING_SERVICE: &str = "webdav";
+
+// Body the multistatus parser will buffer / the file bytes we hand back. The
+// whole body crosses the IPC bridge, so cap it like the shared http funnel.
+const MAX_XML_BYTES: usize = 32 * 1024 * 1024;
+const MAX_FILE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Characters that must be percent-encoded inside a single WebDAV path
+/// segment. We encode everything that isn't an RFC 3986 unreserved char or a
+/// sub-delim that servers tolerate; `/` is never in a segment (we join
+/// segments ourselves), so it stays a separator.
+const SEGMENT: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'/')
+    .add(b'\\')
+    .add(b'^')
+    .add(b'[')
+    .add(b']')
+    .add(b'|');
+
+#[derive(Debug, Error, Serialize)]
+#[serde(tag = "kind", content = "message")]
+pub enum WebdavError {
+    #[error("invalid WebDAV URL: {0}")]
+    InvalidUrl(String),
+    #[error("WebDAV requires https (got {0})")]
+    InsecureScheme(String),
+    #[error("host is not allowed (loopback/link-local/metadata/private): {0}")]
+    BlockedHost(String),
+    #[error("could not resolve host: {0}")]
+    Dns(String),
+    #[error("redirect to a different host was blocked: {0}")]
+    BlockedRedirect(String),
+    #[error("network error: {0}")]
+    Network(String),
+    #[error("response too large: {0}")]
+    TooLarge(String),
+    #[error("server returned {status}: {detail}")]
+    Status { status: u16, detail: String },
+    #[error("credential lookup failed: {0}")]
+    Credential(String),
+    #[error("malformed multistatus XML: {0}")]
+    Xml(String),
+    #[error("background task failed: {0}")]
+    Join(String),
+}
+
+/// A persisted WebDAV account, passed from the frontend on every call. The
+/// password is never carried here — it is read from the keyring in Rust under
+/// service `webdav` / account `accountId`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavAccount {
+    pub account_id: String,
+    /// Normalized base collection URL, always ending in `/`, e.g.
+    /// `https://cloud.example.com/remote.php/dav/files/me/`.
+    pub base_url: String,
+    pub username: String,
+    #[serde(default)]
+    pub allow_private_host: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavEntry {
+    /// Path relative to the account base, e.g. `figures/plot.pdf`. Directories
+    /// carry no trailing slash; `is_dir` is authoritative.
+    pub rel_path: String,
+    pub is_dir: bool,
+    /// Normalized ETag (quotes and any weak `W/` prefix stripped). Acts as the
+    /// per-file `rev` for the sync engine.
+    pub etag: Option<String>,
+    pub size: Option<u64>,
+    pub last_modified: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavListResult {
+    pub entries: Vec<WebdavEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavGetResult {
+    pub etag: Option<String>,
+    /// File bytes. Tauri serializes `Vec<u8>` as a JSON number array; the
+    /// frontend writes them to the cache via the scoped fs plugin.
+    pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavPutResult {
+    pub etag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostVerdict {
+    pub ok: bool,
+    pub host: String,
+    pub port: u16,
+    /// The base path component, always ending in `/`.
+    pub base_path: String,
+    /// The normalized base URL the frontend should persist.
+    pub base_url: String,
+    pub reason: Option<String>,
+}
+
+// ===========================================================================
+// SSRF screening
+// ===========================================================================
+
+/// Parse a host string as an IP literal, accepting the obfuscated IPv4 forms
+/// (decimal `2130706433`, hex `0x7f000001`, octal `0177.0.0.1`, short
+/// `127.1`) that `IpAddr::from_str` rejects but the OS resolver / url crate
+/// may accept — closing the numeric-literal resolver-bypass class.
+fn parse_ip_literal(host: &str) -> Option<IpAddr> {
+    let host = host.trim();
+    let unbracketed = host.strip_prefix('[').and_then(|h| h.strip_suffix(']'));
+    if let Some(v6) = unbracketed {
+        return v6.parse::<Ipv6Addr>().ok().map(IpAddr::V6);
+    }
+    if host.contains(':') {
+        return host.parse::<Ipv6Addr>().ok().map(IpAddr::V6);
+    }
+    parse_ipv4_relaxed(host).map(IpAddr::V4)
+}
+
+fn parse_u32_radix(part: &str) -> Option<u32> {
+    if let Some(hex) = part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+        if hex.is_empty() {
+            return None;
+        }
+        u32::from_str_radix(hex, 16).ok()
+    } else if part.len() > 1 && part.starts_with('0') {
+        u32::from_str_radix(part, 8).ok()
+    } else {
+        part.parse::<u32>().ok()
+    }
+}
+
+/// inet_aton-style relaxed IPv4 parsing. Only returns Some when the whole
+/// string is numeric (1-4 dotted parts); ordinary hostnames fall through to
+/// DNS resolution.
+fn parse_ipv4_relaxed(host: &str) -> Option<Ipv4Addr> {
+    if host.is_empty() {
+        return None;
+    }
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() > 4 {
+        return None;
+    }
+    let nums: Vec<u32> = parts.iter().map(|p| parse_u32_radix(p)).collect::<Option<Vec<_>>>()?;
+    let value: u32 = match nums.as_slice() {
+        [a] => *a,
+        [a, b] => {
+            if *a > 0xff || *b > 0x00ff_ffff {
+                return None;
+            }
+            (a << 24) | b
+        }
+        [a, b, c] => {
+            if *a > 0xff || *b > 0xff || *c > 0xffff {
+                return None;
+            }
+            (a << 24) | (b << 16) | c
+        }
+        [a, b, c, d] => {
+            if *a > 0xff || *b > 0xff || *c > 0xff || *d > 0xff {
+                return None;
+            }
+            (a << 24) | (b << 16) | (c << 8) | d
+        }
+        _ => return None,
+    };
+    Some(Ipv4Addr::from(value))
+}
+
+/// True when an address must never be reached, regardless of the private
+/// opt-in: loopback, link-local (incl. the 169.254.169.254 metadata IP),
+/// unspecified, multicast/broadcast, and the IPv6 metadata address.
+fn is_hard_blocked(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_documentation()
+        }
+        IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_hard_blocked(IpAddr::V4(mapped));
+            }
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || is_v6_link_local(v6)
+                || is_v6_metadata(v6)
+        }
+    }
+}
+
+fn is_v6_link_local(v6: Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xffc0) == 0xfe80
+}
+
+fn is_v6_unique_local(v6: Ipv6Addr) -> bool {
+    (v6.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// AWS/GCP/Azure IPv6 instance metadata. Inside ULA, so it would slip through
+/// a private opt-in — block it explicitly.
+fn is_v6_metadata(v6: Ipv6Addr) -> bool {
+    v6 == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x254)
+}
+
+fn is_v4_private_class(v4: Ipv4Addr) -> bool {
+    // RFC1918 + CGNAT (100.64/10). 169.254.169.254 is link-local, handled by
+    // is_hard_blocked, so opting into "private" never exposes metadata.
+    v4.is_private() || matches!(v4.octets(), [100, b, _, _] if (64..=127).contains(&b))
+}
+
+/// Final decision for a single resolved IP given the account's opt-in.
+fn is_blocked_ip(ip: IpAddr, allow_private: bool) -> bool {
+    if is_hard_blocked(ip) {
+        return true;
+    }
+    if allow_private {
+        return false;
+    }
+    match ip {
+        IpAddr::V4(v4) => is_v4_private_class(v4),
+        IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_v4_private_class(mapped);
+            }
+            is_v6_unique_local(v6)
+        }
+    }
+}
+
+/// Resolve `host` (or accept a literal) and screen every resulting address.
+/// Rejects if the host has no addresses or *any* address is blocked (defends
+/// against round-robin DNS that mixes a public and a private answer). Returns
+/// the vetted socket addresses to pin the connection to.
+async fn resolve_and_screen(
+    host: &str,
+    port: u16,
+    allow_private: bool,
+) -> Result<Vec<SocketAddr>, WebdavError> {
+    if let Some(ip) = parse_ip_literal(host) {
+        if is_blocked_ip(ip, allow_private) {
+            return Err(WebdavError::BlockedHost(host.to_string()));
+        }
+        return Ok(vec![SocketAddr::new(ip, port)]);
+    }
+
+    let lookup_host = host.to_string();
+    let addrs: Vec<SocketAddr> = tokio::net::lookup_host((lookup_host.as_str(), port))
+        .await
+        .map_err(|e| WebdavError::Dns(e.to_string()))?
+        .collect();
+
+    if addrs.is_empty() {
+        return Err(WebdavError::Dns(format!("no addresses for {host}")));
+    }
+    for addr in &addrs {
+        if is_blocked_ip(addr.ip(), allow_private) {
+            return Err(WebdavError::BlockedHost(host.to_string()));
+        }
+    }
+    Ok(addrs)
+}
+
+// ===========================================================================
+// URL handling
+// ===========================================================================
+
+fn host_of(url: &Url) -> Result<String, WebdavError> {
+    url.host_str()
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase())
+        .ok_or_else(|| WebdavError::InvalidUrl(url.as_str().to_string()))
+}
+
+/// Normalize a user-supplied base URL: require https, force a single trailing
+/// slash on the path. Returns the parsed URL plus its decoded path prefix.
+fn normalize_base(base_url: &str) -> Result<(Url, String), WebdavError> {
+    let mut url = Url::parse(base_url).map_err(|e| WebdavError::InvalidUrl(e.to_string()))?;
+    if url.scheme() != "https" {
+        return Err(WebdavError::InsecureScheme(url.scheme().to_string()));
+    }
+    if !url.path().ends_with('/') {
+        let p = format!("{}/", url.path());
+        url.set_path(&p);
+    }
+    let decoded_path = percent_decode_str(url.path()).decode_utf8_lossy().into_owned();
+    Ok((url, decoded_path))
+}
+
+fn encode_rel(rel_path: &str) -> String {
+    rel_path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|seg| utf8_percent_encode(seg, SEGMENT).to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Build the absolute request URL for `rel_path` under the account base.
+fn request_url(account: &WebdavAccount, rel_path: &str, is_dir: bool) -> Result<Url, WebdavError> {
+    let (base, _) = normalize_base(&account.base_url)?;
+    let encoded = encode_rel(rel_path);
+    let mut joined = base
+        .join(&encoded)
+        .map_err(|e| WebdavError::InvalidUrl(e.to_string()))?;
+    if is_dir && !joined.path().ends_with('/') {
+        let p = format!("{}/", joined.path());
+        joined.set_path(&p);
+    }
+    Ok(joined)
+}
+
+fn normalize_etag(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    let t = t.strip_prefix("W/").or_else(|| t.strip_prefix("w/")).unwrap_or(t);
+    let t = t.trim().trim_matches('"').trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+// ===========================================================================
+// HTTP execution (screened client + Basic auth)
+// ===========================================================================
+
+fn basic_auth_header(username: &str, password: &str) -> String {
+    let token = base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    format!("Basic {token}")
+}
+
+async fn account_password(account_id: &str) -> Result<String, WebdavError> {
+    let id = account_id.to_string();
+    let secret = tokio::task::spawn_blocking(move || credentials::get_secret(KEYRING_SERVICE, &id))
+        .await
+        .map_err(|e| WebdavError::Join(e.to_string()))?
+        .map_err(|e| WebdavError::Credential(e.to_string()))?;
+    secret.ok_or_else(|| WebdavError::Credential("no stored password for account".into()))
+}
+
+/// Build a reqwest client pinned to the screened addresses for `host`. The
+/// redirect policy only follows same-host https hops so a redirect can never
+/// escape the pinned (vetted) address.
+fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<Client, WebdavError> {
+    let expected = host.to_ascii_lowercase();
+    let redirect_host = expected.clone();
+    let policy = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        let same_host = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
+        if attempt.url().scheme() == "https" && same_host.as_deref() == Some(redirect_host.as_str())
+        {
+            attempt.follow()
+        } else {
+            attempt.error("redirect to a different host blocked")
+        }
+    });
+
+    Client::builder()
+        .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(120))
+        .redirect(policy)
+        .resolve_to_addrs(&expected, addrs)
+        .build()
+        .map_err(|e| WebdavError::Network(e.to_string()))
+}
+
+struct RawResponse {
+    status: u16,
+    etag: Option<String>,
+    body: Vec<u8>,
+}
+
+async fn execute(
+    account: &WebdavAccount,
+    method: Method,
+    url: &Url,
+    headers: &[(&str, String)],
+    body: Option<Vec<u8>>,
+    cap: usize,
+) -> Result<RawResponse, WebdavError> {
+    let host = host_of(url)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| WebdavError::InvalidUrl(url.as_str().to_string()))?;
+    let addrs = resolve_and_screen(&host, port, account.allow_private_host).await?;
+    let client = build_client(&host, &addrs)?;
+    let password = account_password(&account.account_id).await?;
+
+    let mut builder = client
+        .request(method, url.clone())
+        .header("Authorization", basic_auth_header(&account.username, &password));
+    for (name, value) in headers {
+        builder = builder.header(*name, value);
+    }
+    if let Some(bytes) = body {
+        builder = builder.body(bytes);
+    }
+
+    let res = builder.send().await.map_err(|e| {
+        // A blocked same-host redirect surfaces as a reqwest error; keep the
+        // message specific so the UI can explain it.
+        if e.is_redirect() {
+            WebdavError::BlockedRedirect(host.clone())
+        } else {
+            WebdavError::Network(e.to_string())
+        }
+    })?;
+
+    let status = res.status().as_u16();
+    let etag = res
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .and_then(normalize_etag);
+
+    if let Some(len) = res.content_length() {
+        if len > cap as u64 {
+            return Err(WebdavError::TooLarge(format!("{len} bytes")));
+        }
+    }
+    let bytes = res
+        .bytes()
+        .await
+        .map_err(|e| WebdavError::Network(e.to_string()))?;
+    if bytes.len() > cap {
+        return Err(WebdavError::TooLarge(format!("{} bytes", bytes.len())));
+    }
+
+    Ok(RawResponse {
+        status,
+        etag,
+        body: bytes.to_vec(),
+    })
+}
+
+fn http_ok(status: u16) -> bool {
+    (200..300).contains(&status)
+}
+
+fn status_err(status: u16, body: &[u8]) -> WebdavError {
+    let detail = String::from_utf8_lossy(body);
+    let detail: String = detail.chars().take(500).collect();
+    WebdavError::Status { status, detail }
+}
+
+// ===========================================================================
+// multistatus parsing (quick-xml, prefix-agnostic local-name matching)
+// ===========================================================================
+
+struct RawEntry {
+    href_path: String,
+    is_dir: bool,
+    etag: Option<String>,
+    size: Option<u64>,
+    last_modified: Option<String>,
+}
+
+fn local_name(qname: &[u8]) -> String {
+    let name = match qname.iter().rposition(|&b| b == b':') {
+        Some(i) => &qname[i + 1..],
+        None => qname,
+    };
+    String::from_utf8_lossy(name).to_ascii_lowercase()
+}
+
+#[derive(PartialEq)]
+enum Field {
+    None,
+    Href,
+    Status,
+    Etag,
+    Size,
+    LastMod,
+}
+
+fn parse_multistatus(xml: &[u8]) -> Result<Vec<RawEntry>, WebdavError> {
+    let mut reader = Reader::from_reader(xml);
+
+    let mut entries: Vec<RawEntry> = Vec::new();
+    let mut buf = Vec::new();
+
+    // response-level accumulation
+    let mut href: Option<String> = None;
+    let mut resp_is_dir = false;
+    let mut resp_etag: Option<String> = None;
+    let mut resp_size: Option<u64> = None;
+    let mut resp_lastmod: Option<String> = None;
+
+    // propstat-level temp
+    let mut in_propstat = false;
+    let mut in_resourcetype = false;
+    let mut ps_status_text = String::new();
+    let mut ps_is_dir = false;
+    let mut ps_etag: Option<String> = None;
+    let mut ps_size: Option<u64> = None;
+    let mut ps_lastmod: Option<String> = None;
+
+    let mut field = Field::None;
+    let mut text_buf = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Err(e) => return Err(WebdavError::Xml(e.to_string())),
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "response" => {
+                        href = None;
+                        resp_is_dir = false;
+                        resp_etag = None;
+                        resp_size = None;
+                        resp_lastmod = None;
+                    }
+                    "propstat" => {
+                        in_propstat = true;
+                        ps_status_text.clear();
+                        ps_is_dir = false;
+                        ps_etag = None;
+                        ps_size = None;
+                        ps_lastmod = None;
+                    }
+                    "resourcetype" => in_resourcetype = true,
+                    "collection" => {
+                        if in_resourcetype {
+                            ps_is_dir = true;
+                        }
+                    }
+                    "href" => {
+                        field = Field::Href;
+                        text_buf.clear();
+                    }
+                    "status" if in_propstat => {
+                        field = Field::Status;
+                        text_buf.clear();
+                    }
+                    "getetag" if in_propstat => {
+                        field = Field::Etag;
+                        text_buf.clear();
+                    }
+                    "getcontentlength" if in_propstat => {
+                        field = Field::Size;
+                        text_buf.clear();
+                    }
+                    "getlastmodified" if in_propstat => {
+                        field = Field::LastMod;
+                        text_buf.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = local_name(e.name().as_ref());
+                if name == "collection" && in_resourcetype {
+                    ps_is_dir = true;
+                }
+            }
+            Ok(Event::Text(e)) => {
+                if field != Field::None {
+                    let t = e.unescape().unwrap_or_default();
+                    text_buf.push_str(&t);
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "href" => {
+                        if matches!(field, Field::Href) {
+                            href = Some(text_buf.trim().to_string());
+                        }
+                        field = Field::None;
+                    }
+                    "status" => {
+                        if matches!(field, Field::Status) {
+                            ps_status_text = text_buf.clone();
+                        }
+                        field = Field::None;
+                    }
+                    "getetag" => {
+                        if matches!(field, Field::Etag) {
+                            ps_etag = normalize_etag(&text_buf);
+                        }
+                        field = Field::None;
+                    }
+                    "getcontentlength" => {
+                        if matches!(field, Field::Size) {
+                            ps_size = text_buf.trim().parse::<u64>().ok();
+                        }
+                        field = Field::None;
+                    }
+                    "getlastmodified" => {
+                        if matches!(field, Field::LastMod) {
+                            let v = text_buf.trim();
+                            if !v.is_empty() {
+                                ps_lastmod = Some(v.to_string());
+                            }
+                        }
+                        field = Field::None;
+                    }
+                    "resourcetype" => in_resourcetype = false,
+                    "propstat" => {
+                        if status_is_ok(&ps_status_text) {
+                            resp_is_dir = resp_is_dir || ps_is_dir;
+                            if ps_etag.is_some() {
+                                resp_etag = ps_etag.take();
+                            }
+                            if ps_size.is_some() {
+                                resp_size = ps_size.take();
+                            }
+                            if ps_lastmod.is_some() {
+                                resp_lastmod = ps_lastmod.take();
+                            }
+                        }
+                        in_propstat = false;
+                    }
+                    "response" => {
+                        if let Some(h) = href.take() {
+                            let path = href_to_path(&h);
+                            entries.push(RawEntry {
+                                href_path: path,
+                                is_dir: resp_is_dir,
+                                etag: resp_etag.take(),
+                                size: resp_size.take(),
+                                last_modified: resp_lastmod.take(),
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(entries)
+}
+
+fn status_is_ok(status_line: &str) -> bool {
+    // "HTTP/1.1 200 OK" -> first 3-digit token in 2xx.
+    status_line
+        .split_whitespace()
+        .find_map(|tok| tok.parse::<u16>().ok())
+        .map(http_ok)
+        .unwrap_or(false)
+}
+
+/// Take a possibly-absolute href, reduce to its decoded path component.
+fn href_to_path(href: &str) -> String {
+    let path = if let Ok(u) = Url::parse(href) {
+        u.path().to_string()
+    } else {
+        // absolute-path form: strip a query/fragment if present
+        href.split(['?', '#']).next().unwrap_or(href).to_string()
+    };
+    percent_decode_str(&path).decode_utf8_lossy().into_owned()
+}
+
+/// Convert parsed raw entries into account-relative entries, dropping the
+/// listed collection itself (`request_path`) and computing `rel_path` against
+/// `base_path`.
+fn to_entries(raw: Vec<RawEntry>, base_path: &str, request_path: &str) -> Vec<WebdavEntry> {
+    let base = ensure_trailing_slash(base_path);
+    let req = ensure_trailing_slash(request_path);
+    let mut out = Vec::new();
+    for e in raw {
+        let href = ensure_trailing_slash_if(&e.href_path, e.is_dir);
+        // skip the listed directory itself
+        if trim_trailing_slash(&href) == trim_trailing_slash(&req) {
+            continue;
+        }
+        let Some(rel) = href.strip_prefix(base.as_str()) else {
+            continue;
+        };
+        let rel = trim_trailing_slash(rel).to_string();
+        if rel.is_empty() {
+            continue;
+        }
+        out.push(WebdavEntry {
+            rel_path: rel,
+            is_dir: e.is_dir,
+            etag: e.etag,
+            size: e.size,
+            last_modified: e.last_modified,
+        });
+    }
+    out
+}
+
+fn ensure_trailing_slash(s: &str) -> String {
+    if s.ends_with('/') {
+        s.to_string()
+    } else {
+        format!("{s}/")
+    }
+}
+
+fn ensure_trailing_slash_if(s: &str, cond: bool) -> String {
+    if cond {
+        ensure_trailing_slash(s)
+    } else {
+        s.to_string()
+    }
+}
+
+fn trim_trailing_slash(s: &str) -> &str {
+    s.strip_suffix('/').unwrap_or(s)
+}
+
+// ===========================================================================
+// IPC commands
+// ===========================================================================
+
+/// Validate and normalize a user-entered WebDAV base URL at enrollment time.
+/// Requires https and screens the host (resolve + deny-table, honoring the
+/// private opt-in). Returns the normalized base URL to persist.
+#[tauri::command]
+pub async fn webdav_validate_host(url: String, allow_private: bool) -> Result<HostVerdict, WebdavError> {
+    let (base, base_path) = normalize_base(&url)?;
+    let host = host_of(&base)?;
+    let port = base
+        .port_or_known_default()
+        .ok_or_else(|| WebdavError::InvalidUrl(url.clone()))?;
+
+    if let Err(e) = resolve_and_screen(&host, port, allow_private).await {
+        return Ok(HostVerdict {
+            ok: false,
+            host,
+            port,
+            base_path,
+            base_url: base.to_string(),
+            reason: Some(e.to_string()),
+        });
+    }
+
+    Ok(HostVerdict {
+        ok: true,
+        host,
+        port,
+        base_path,
+        base_url: base.to_string(),
+        reason: None,
+    })
+}
+
+/// Cheap auth/reachability probe: PROPFIND Depth:0 on the account base.
+#[tauri::command]
+pub async fn webdav_status_probe(account: WebdavAccount) -> Result<bool, WebdavError> {
+    let url = request_url(&account, "", true)?;
+    let body = PROPFIND_BODY.as_bytes().to_vec();
+    let res = execute(
+        &account,
+        propfind_method()?,
+        &url,
+        &[("Depth", "0".into()), ("Content-Type", "application/xml; charset=utf-8".into())],
+        Some(body),
+        MAX_XML_BYTES,
+    )
+    .await?;
+    Ok(http_ok(res.status))
+}
+
+/// PROPFIND Depth:1 listing of `rel_path` under the account base.
+#[tauri::command]
+pub async fn webdav_propfind(
+    account: WebdavAccount,
+    rel_path: String,
+    depth: u8,
+) -> Result<WebdavListResult, WebdavError> {
+    let url = request_url(&account, &rel_path, true)?;
+    let depth_header = if depth == 0 { "0" } else { "1" };
+    let body = PROPFIND_BODY.as_bytes().to_vec();
+    let res = execute(
+        &account,
+        propfind_method()?,
+        &url,
+        &[
+            ("Depth", depth_header.into()),
+            ("Content-Type", "application/xml; charset=utf-8".into()),
+        ],
+        Some(body),
+        MAX_XML_BYTES,
+    )
+    .await?;
+    if !http_ok(res.status) {
+        return Err(status_err(res.status, &res.body));
+    }
+    let (_, base_path) = normalize_base(&account.base_url)?;
+    let request_path = percent_decode_str(url.path()).decode_utf8_lossy().into_owned();
+    let raw = parse_multistatus(&res.body)?;
+    Ok(WebdavListResult {
+        entries: to_entries(raw, &base_path, &request_path),
+    })
+}
+
+/// GET file bytes + ETag.
+#[tauri::command]
+pub async fn webdav_get(account: WebdavAccount, rel_path: String) -> Result<WebdavGetResult, WebdavError> {
+    let url = request_url(&account, &rel_path, false)?;
+    let res = execute(&account, Method::GET, &url, &[], None, MAX_FILE_BYTES).await?;
+    if !http_ok(res.status) {
+        return Err(status_err(res.status, &res.body));
+    }
+    Ok(WebdavGetResult {
+        etag: res.etag,
+        body: res.body,
+    })
+}
+
+/// PUT file bytes. Creates missing ancestor collections (MKCOL chain) on 409,
+/// and uses `If-Match` for optimistic concurrency when a known rev is given.
+#[tauri::command]
+pub async fn webdav_put(
+    account: WebdavAccount,
+    rel_path: String,
+    body: Vec<u8>,
+    if_match: Option<String>,
+) -> Result<WebdavPutResult, WebdavError> {
+    let url = request_url(&account, &rel_path, false)?;
+    let mut headers: Vec<(&str, String)> = Vec::new();
+    if let Some(rev) = &if_match {
+        headers.push(("If-Match", format!("\"{rev}\"")));
+    }
+
+    let res = execute(&account, Method::PUT, &url, &headers, Some(body.clone()), MAX_XML_BYTES).await?;
+    if res.status == 409 {
+        // missing parent collection — create the chain and retry once
+        ensure_ancestors(&account, &rel_path).await?;
+        let retry = execute(&account, Method::PUT, &url, &headers, Some(body), MAX_XML_BYTES).await?;
+        if !http_ok(retry.status) {
+            return Err(status_err(retry.status, &retry.body));
+        }
+        return Ok(WebdavPutResult {
+            etag: resolve_put_etag(&account, &rel_path, retry.etag).await,
+        });
+    }
+    if !http_ok(res.status) {
+        return Err(status_err(res.status, &res.body));
+    }
+    Ok(WebdavPutResult {
+        etag: resolve_put_etag(&account, &rel_path, res.etag).await,
+    })
+}
+
+/// DELETE a file (or collection). 404 is treated as already-converged.
+#[tauri::command]
+pub async fn webdav_delete(
+    account: WebdavAccount,
+    rel_path: String,
+    if_match: Option<String>,
+) -> Result<(), WebdavError> {
+    let url = request_url(&account, &rel_path, false)?;
+    let mut headers: Vec<(&str, String)> = Vec::new();
+    if let Some(rev) = &if_match {
+        headers.push(("If-Match", format!("\"{rev}\"")));
+    }
+    let res = execute(&account, Method::DELETE, &url, &headers, None, MAX_XML_BYTES).await?;
+    if http_ok(res.status) || res.status == 404 {
+        Ok(())
+    } else {
+        Err(status_err(res.status, &res.body))
+    }
+}
+
+const PROPFIND_BODY: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:propfind xmlns:D="DAV:">
+  <D:prop>
+    <D:resourcetype/>
+    <D:getetag/>
+    <D:getcontentlength/>
+    <D:getlastmodified/>
+  </D:prop>
+</D:propfind>"#;
+
+fn propfind_method() -> Result<Method, WebdavError> {
+    Method::from_bytes(b"PROPFIND").map_err(|e| WebdavError::Network(e.to_string()))
+}
+
+fn mkcol_method() -> Result<Method, WebdavError> {
+    Method::from_bytes(b"MKCOL").map_err(|e| WebdavError::Network(e.to_string()))
+}
+
+/// Create each missing ancestor collection of `rel_path`, top-down.
+async fn ensure_ancestors(account: &WebdavAccount, rel_path: &str) -> Result<(), WebdavError> {
+    let segments: Vec<&str> = rel_path.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.len() <= 1 {
+        return Ok(());
+    }
+    let mut prefix = String::new();
+    for seg in &segments[..segments.len() - 1] {
+        if prefix.is_empty() {
+            prefix = (*seg).to_string();
+        } else {
+            prefix = format!("{prefix}/{seg}");
+        }
+        let url = request_url(account, &prefix, true)?;
+        let res = execute(account, mkcol_method()?, &url, &[], None, MAX_XML_BYTES).await?;
+        // 201 created, 405 already exists -> both fine; anything else is fatal.
+        if !http_ok(res.status) && res.status != 405 {
+            return Err(status_err(res.status, &res.body));
+        }
+    }
+    Ok(())
+}
+
+/// Some servers omit the ETag on the PUT response; fetch it with a Depth:0
+/// PROPFIND so echo suppression and conditional writes still work.
+async fn resolve_put_etag(
+    account: &WebdavAccount,
+    rel_path: &str,
+    from_put: Option<String>,
+) -> Option<String> {
+    if from_put.is_some() {
+        return from_put;
+    }
+    let list = webdav_propfind(account.clone(), rel_path.to_string(), 0).await.ok()?;
+    list.entries.into_iter().find(|e| !e.is_dir).and_then(|e| e.etag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_decimal_hex_octal_ipv4_literals() {
+        assert_eq!(parse_ipv4_relaxed("2130706433"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(parse_ipv4_relaxed("0x7f000001"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(parse_ipv4_relaxed("0177.0.0.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(parse_ipv4_relaxed("127.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
+        assert_eq!(parse_ipv4_relaxed("192.168.0.1"), Some(Ipv4Addr::new(192, 168, 0, 1)));
+        assert_eq!(parse_ipv4_relaxed("cloud.example.com"), None);
+    }
+
+    #[test]
+    fn hard_blocks_loopback_linklocal_metadata() {
+        for h in ["127.0.0.1", "169.254.169.254", "0.0.0.0", "0x7f000001", "2130706433"] {
+            let ip = parse_ip_literal(h).expect(h);
+            assert!(is_blocked_ip(ip, true), "{h} must stay blocked even with opt-in");
+        }
+        let v6_meta = parse_ip_literal("[fd00:ec2::254]").unwrap();
+        assert!(is_blocked_ip(v6_meta, true), "ipv6 metadata must stay blocked with opt-in");
+        let v6_loop = parse_ip_literal("[::1]").unwrap();
+        assert!(is_blocked_ip(v6_loop, true));
+    }
+
+    #[test]
+    fn private_ranges_gated_by_optin() {
+        for h in ["10.0.0.5", "172.16.3.4", "192.168.1.50", "100.64.0.1"] {
+            let ip = parse_ip_literal(h).expect(h);
+            assert!(is_blocked_ip(ip, false), "{h} blocked without opt-in");
+            assert!(!is_blocked_ip(ip, true), "{h} allowed with opt-in");
+        }
+        let ula = parse_ip_literal("[fd12:3456::1]").unwrap();
+        assert!(is_blocked_ip(ula, false));
+        assert!(!is_blocked_ip(ula, true));
+    }
+
+    #[test]
+    fn public_hosts_pass() {
+        let ip = parse_ip_literal("93.184.216.34").unwrap();
+        assert!(!is_blocked_ip(ip, false));
+        // ipv4-mapped public address
+        let mapped = parse_ip_literal("[::ffff:93.184.216.34]").unwrap();
+        assert!(!is_blocked_ip(mapped, false));
+        // ipv4-mapped private must still be caught
+        let mapped_priv = parse_ip_literal("[::ffff:192.168.0.1]").unwrap();
+        assert!(is_blocked_ip(mapped_priv, false));
+    }
+
+    #[test]
+    fn encodes_path_segments_preserving_separators() {
+        assert_eq!(encode_rel("figures/plot 1.pdf"), "figures/plot%201.pdf");
+        assert_eq!(encode_rel("a/b#c.tex"), "a/b%23c.tex");
+        assert_eq!(encode_rel("café/résumé.tex"), "caf%C3%A9/r%C3%A9sum%C3%A9.tex");
+    }
+
+    #[test]
+    fn normalizes_etag() {
+        assert_eq!(normalize_etag("\"abc123\""), Some("abc123".into()));
+        assert_eq!(normalize_etag("W/\"abc123\""), Some("abc123".into()));
+        assert_eq!(normalize_etag("  \"x\" "), Some("x".into()));
+        assert_eq!(normalize_etag("\"\""), None);
+    }
+
+    #[test]
+    fn parses_multistatus_with_mixed_prefixes_and_propstat_split() {
+        let xml = br#"<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/files/me/project/</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype><d:collection/></d:resourcetype><d:getetag>"root1"</d:getetag></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/files/me/project/main.tex</d:href>
+            <d:propstat>
+              <d:prop>
+                <d:resourcetype/>
+                <d:getcontentlength>4525</d:getcontentlength>
+                <d:getetag>"file-abc"</d:getetag>
+                <d:getlastmodified>Wed, 12 Apr 2006 17:48:03 GMT</d:getlastmodified>
+              </d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+            <d:propstat>
+              <d:prop><d:getcontenttype/></d:prop>
+              <d:status>HTTP/1.1 404 Not Found</d:status>
+            </d:propstat>
+          </d:response>
+          <lp1:response xmlns:lp1="DAV:">
+            <lp1:href>/dav/files/me/project/figures/</lp1:href>
+            <lp1:propstat>
+              <lp1:prop><lp1:resourcetype><lp1:collection/></lp1:resourcetype><lp1:getetag>"dir-x"</lp1:getetag></lp1:prop>
+              <lp1:status>HTTP/1.1 200 OK</lp1:status>
+            </lp1:propstat>
+          </lp1:response>
+        </d:multistatus>"#;
+        let raw = parse_multistatus(xml).unwrap();
+        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/");
+        assert_eq!(entries.len(), 2);
+        let file = entries.iter().find(|e| e.rel_path == "main.tex").unwrap();
+        assert!(!file.is_dir);
+        assert_eq!(file.etag.as_deref(), Some("file-abc"));
+        assert_eq!(file.size, Some(4525));
+        let dir = entries.iter().find(|e| e.rel_path == "figures").unwrap();
+        assert!(dir.is_dir);
+        assert_eq!(dir.etag.as_deref(), Some("dir-x"));
+    }
+
+    #[test]
+    fn skips_self_entry_when_listing_subdir() {
+        let xml = br#"<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/files/me/project/figures/</d:href>
+            <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/files/me/project/figures/plot.pdf</d:href>
+            <d:propstat><d:prop><d:resourcetype/><d:getetag>"p1"</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+          </d:response>
+        </d:multistatus>"#;
+        let raw = parse_multistatus(xml).unwrap();
+        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/figures/");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].rel_path, "figures/plot.pdf");
+    }
+
+    #[test]
+    fn href_decoding_handles_percent_and_unicode() {
+        assert_eq!(href_to_path("/dav/a%20test/r%C3%A9sum%C3%A9.tex"), "/dav/a test/résumé.tex");
+        assert_eq!(href_to_path("https://h.example/dav/x%23y"), "/dav/x#y");
+    }
+
+    #[test]
+    fn basic_auth_is_base64_userpass() {
+        // "me:pw" -> bWU6cHc=
+        assert_eq!(basic_auth_header("me", "pw"), "Basic bWU6cHc=");
+    }
+
+    #[test]
+    fn normalize_base_requires_https_and_trailing_slash() {
+        let (u, p) = normalize_base("https://h.example/remote.php/dav/files/me").unwrap();
+        assert!(u.as_str().ends_with('/'));
+        assert_eq!(p, "/remote.php/dav/files/me/");
+        assert!(matches!(
+            normalize_base("http://h.example/dav/"),
+            Err(WebdavError::InsecureScheme(_))
+        ));
+    }
+}

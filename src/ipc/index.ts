@@ -231,7 +231,16 @@ export interface WorkspaceSettings {
  */
 export interface IntegrationsSettings {
   references: ReferencesProvidersSettings;
-  cloud: { accounts: Array<{ provider: string; accountId: string; label?: string }> };
+  cloud: {
+    accounts: Array<{
+      provider: string;
+      accountId: string;
+      label?: string;
+      baseUrl?: string;
+      username?: string;
+      allowPrivateHost?: boolean;
+    }>;
+  };
   vcs: {
     git: { authorName?: string; authorEmail?: string };
     github: { accountId?: string };
