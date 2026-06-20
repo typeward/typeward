@@ -13,11 +13,23 @@ export function installDismiss(
   root: () => HTMLElement | undefined,
   isOpen: () => boolean,
   close: () => void,
+  options?: {
+    /**
+     * CSS selector for elements that should NOT count as "outside" — e.g. the
+     * toggle button that opens the popover, so its own click doesn't close +
+     * immediately reopen via its own handler.
+     */
+    ignoreSelector?: string;
+  },
 ): void {
   const onPointerDown = (e: MouseEvent) => {
     if (!isOpen()) return;
+    const target = e.target as HTMLElement | null;
+    if (options?.ignoreSelector && target?.closest(options.ignoreSelector)) {
+      return;
+    }
     const el = root();
-    if (el && !el.contains(e.target as Node)) close();
+    if (el && target && !el.contains(target)) close();
   };
   const onKeyDown = (e: KeyboardEvent) => {
     if (!isOpen() || e.key !== "Escape") return;

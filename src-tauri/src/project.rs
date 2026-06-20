@@ -20,11 +20,29 @@ pub struct Project {
     pub root_file: String,
     pub format: ProjectFormat,
     pub name: String,
+    /// Optional user-set deadline, ISO date (`YYYY-MM-DD`). Additive — older
+    /// project.json files load with `deadline = None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
     /// Per-project integration state (cloud origin, git binding, reference
     /// library binding). Optional / additive — older project.json files
     /// without this block load with `ProjectIntegrations::default()`.
     #[serde(default)]
     pub integrations: ProjectIntegrations,
+}
+
+/// Listing view of a project: the persisted `Project` plus filesystem
+/// timestamps computed at read time (epoch millis). The timestamps are NOT
+/// part of project.json — they're derived from the folder/root-file metadata
+/// each time the library is enumerated, so they can't go stale on disk.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectListing {
+    #[serde(flatten)]
+    pub project: Project,
+    #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<i64>,
+    #[serde(rename = "modifiedAt", skip_serializing_if = "Option::is_none")]
+    pub modified_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -186,6 +204,63 @@ pub fn list_projects(root: &Path) -> Result<Vec<Project>, ProjectError> {
     Ok(out)
 }
 
+/// Like `list_projects` but attaches filesystem timestamps (created/modified)
+/// so the Projects screen can offer date-based sorts and activity cards
+/// without persisting volatile mtimes into project.json.
+pub fn list_project_listings(root: &Path) -> Result<Vec<ProjectListing>, ProjectError> {
+    let projects = list_projects(root)?;
+    Ok(projects
+        .into_iter()
+        .map(|project| {
+            let (created_at, modified_at) = project_fs_times(&project);
+            ProjectListing {
+                project,
+                created_at,
+                modified_at,
+            }
+        })
+        .collect())
+}
+
+/// (created, modified) epoch-millis for a project. "Modified" is the newest of
+/// the folder and root-file mtimes (a content edit bumps the root file; adding
+/// a file bumps the folder). "Created" falls back to the modified time on
+/// filesystems that don't record a birth time (e.g. some Linux setups).
+fn project_fs_times(project: &Project) -> (Option<i64>, Option<i64>) {
+    let root = Path::new(&project.root_path);
+    let folder_meta = fs::metadata(root).ok();
+    let file_meta = fs::metadata(root.join(&project.root_file)).ok();
+
+    let to_ms = |t: std::time::SystemTime| -> Option<i64> {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis() as i64)
+    };
+
+    let folder_mtime = folder_meta.as_ref().and_then(|m| m.modified().ok());
+    let file_mtime = file_meta.as_ref().and_then(|m| m.modified().ok());
+    let modified = match (folder_mtime, file_mtime) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
+
+    let created = folder_meta
+        .as_ref()
+        .and_then(|m| m.created().ok())
+        .or(modified);
+
+    (created.and_then(to_ms), modified.and_then(to_ms))
+}
+
+/// Read-modify-write the project's deadline (`None` clears it). Returns the
+/// updated project. Deadlines are plain ISO dates; the caller validates shape.
+pub fn set_deadline(root: &Path, deadline: Option<String>) -> Result<Project, ProjectError> {
+    let mut project = read_project(root)?;
+    project.deadline = deadline;
+    write_project(&project)?;
+    Ok(project)
+}
+
 /// Turn an existing folder (e.g. a freshly cloned git repo) into a Typeward
 /// project: if it already carries `.typeward/project.json` read it unchanged,
 /// otherwise detect the root file and write the metadata. Without this a normal
@@ -212,6 +287,7 @@ pub fn import_folder_as_project(root: &Path, name: Option<&str>) -> Result<Proje
         root_file,
         format,
         name,
+        deadline: None,
         integrations: ProjectIntegrations::default(),
     };
     write_project(&project)?;
@@ -275,6 +351,7 @@ pub fn create_project(
         root_file: root_file.to_string(),
         format,
         name: name.to_string(),
+        deadline: None,
         integrations: ProjectIntegrations::default(),
     };
     write_project(&project)?;
@@ -432,7 +509,7 @@ pub fn set_projects_root(root: &Path) {
 /// True if a not-yet-existing path (e.g. a clone destination) sits under the
 /// configured projects root. The leaf doesn't exist yet, so the nearest
 /// existing ancestor is canonicalized for the prefix check.
-pub fn is_new_path_under_projects_root(path: &Path) -> bool {
+pub fn is_path_under_projects_root(path: &Path) -> bool {
     let Ok(guard) = projects_root_cell().read() else {
         return false;
     };
@@ -443,6 +520,10 @@ pub fn is_new_path_under_projects_root(path: &Path) -> bool {
         Ok(ancestor) => ancestor.starts_with(root),
         Err(_) => false,
     }
+}
+
+pub fn is_new_path_under_projects_root(path: &Path) -> bool {
+    is_path_under_projects_root(path)
 }
 
 #[cfg(test)]
@@ -470,6 +551,37 @@ mod tests {
         assert_eq!(read.name, "Test");
         assert_eq!(read.root_file, "main.tex");
         assert!(matches!(read.format, ProjectFormat::Latex));
+    }
+
+    #[test]
+    fn deadline_round_trips_and_clears() {
+        let dir = temp_dir();
+        let project = create_project(&dir, "Deadline", ProjectFormat::Latex).unwrap();
+        assert!(project.deadline.is_none());
+
+        let root = Path::new(&project.root_path);
+        let set = set_deadline(root, Some("2026-07-01".into())).unwrap();
+        assert_eq!(set.deadline.as_deref(), Some("2026-07-01"));
+        assert_eq!(
+            read_project(root).unwrap().deadline.as_deref(),
+            Some("2026-07-01")
+        );
+
+        let cleared = set_deadline(root, None).unwrap();
+        assert!(cleared.deadline.is_none());
+        assert!(read_project(root).unwrap().deadline.is_none());
+    }
+
+    #[test]
+    fn listings_attach_filesystem_timestamps() {
+        let dir = temp_dir();
+        create_project(&dir, "Timed", ProjectFormat::Typst).unwrap();
+        let listings = list_project_listings(&dir).unwrap();
+        assert_eq!(listings.len(), 1);
+        assert!(listings[0].modified_at.is_some());
+        // `created` falls back to `modified` when birth time is unavailable, so
+        // it should always be populated for a folder we just created.
+        assert!(listings[0].created_at.is_some());
     }
 
     #[test]
@@ -503,6 +615,7 @@ mod tests {
             root_file: "-shell-escape.tex".into(),
             format: ProjectFormat::Latex,
             name: "Bad".into(),
+            deadline: None,
             integrations: ProjectIntegrations::default(),
         };
         let err = write_project(&project).unwrap_err();

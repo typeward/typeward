@@ -110,7 +110,7 @@ fn walk(
         }
         let rel = path
             .strip_prefix(snapshot_root)
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "strip_prefix"))?
+            .map_err(|_| std::io::Error::other("strip_prefix"))?
             .with_extension("")
             .to_string_lossy()
             .replace('\\', "/");
@@ -152,7 +152,7 @@ fn mtime_ms(path: &Path) -> std::io::Result<i64> {
     Ok(duration.as_millis() as i64)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -172,7 +172,6 @@ mod tests {
         dir
     }
 
-    #[cfg(unix)]
     #[test]
     fn list_orphans_skips_symlinked_snapshots() {
         let root = temp_dir();

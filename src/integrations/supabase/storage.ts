@@ -24,9 +24,21 @@ import {
 } from "~/integrations/auth/chunked";
 
 const SERVICE = "supabase.session";
+const browserSessionFallback = new Map<string, string>();
+
+type TauriWindow = Window & {
+  __TAURI_INTERNALS__?: {
+    invoke?: unknown;
+  };
+};
 
 function sanitizeAccount(key: string): string {
   return key.replace(/[\\/]/g, "_");
+}
+
+function hasTauriIpc(): boolean {
+  if (typeof window === "undefined") return false;
+  return typeof (window as TauriWindow).__TAURI_INTERNALS__?.invoke === "function";
 }
 
 // Chunked storage is load-bearing here: the session bundle is 2–4 KB and
@@ -34,13 +46,27 @@ function sanitizeAccount(key: string): string {
 // writes fail and sign-in dies *after* a successful GoTrue login.
 export const keyringSupabaseStorage = {
   async getItem(key: string): Promise<string | null> {
-    return await getChunkedCredential(SERVICE, sanitizeAccount(key));
+    const account = sanitizeAccount(key);
+    if (!hasTauriIpc()) return browserSessionFallback.get(account) ?? null;
+    return await getChunkedCredential(SERVICE, account);
   },
   async setItem(key: string, value: string): Promise<void> {
-    if (!value) return; // keyring rejects empty secrets; treat empty set as remove.
-    await setChunkedCredential(SERVICE, sanitizeAccount(key), value);
+    const account = sanitizeAccount(key);
+    if (!value) {
+      browserSessionFallback.delete(account);
+      if (hasTauriIpc()) await deleteChunkedCredential(SERVICE, account);
+      return;
+    }
+    if (!hasTauriIpc()) {
+      browserSessionFallback.set(account, value);
+      return;
+    }
+    await setChunkedCredential(SERVICE, account, value);
   },
   async removeItem(key: string): Promise<void> {
-    await deleteChunkedCredential(SERVICE, sanitizeAccount(key));
+    const account = sanitizeAccount(key);
+    browserSessionFallback.delete(account);
+    if (!hasTauriIpc()) return;
+    await deleteChunkedCredential(SERVICE, account);
   },
 };

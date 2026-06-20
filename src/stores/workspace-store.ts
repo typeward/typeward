@@ -1,7 +1,14 @@
 import { createSignal } from "solid-js";
 
 export type ProjectsView = "cards" | "list";
-export type ProjectsSort = "last-opened" | "created" | "name" | "modified" | "format";
+export type ProjectsSort =
+  | "last-opened"
+  | "created"
+  | "name"
+  | "name-desc"
+  | "modified"
+  | "deadline"
+  | "format";
 
 // Spaces/Tags render sample data until the real features land — opt-in only.
 const [enableSpaces, setEnableSpaces] = createSignal<boolean>(false);
@@ -38,6 +45,20 @@ const [dashboardEnabled, setDashboardEnabled] = createSignal<boolean>(false);
  */
 const [dashboardOrder, setDashboardOrder] = createSignal<string[]>([]);
 
+/** Show an approximate word count on each project card (reads root files). */
+const [projectCardWords, setProjectCardWords] = createSignal<boolean>(false);
+
+/**
+ * Stat ids shown on the dashboard Statistics card. Loosely stored — the card
+ * coerces unknown ids and caps the count against its stat catalog.
+ */
+const [statsCards, setStatsCards] = createSignal<string[]>([
+  "latex",
+  "typst",
+  "deadlines",
+  "overdue",
+]);
+
 export {
   dashboardEnabled,
   dashboardOrder,
@@ -46,6 +67,7 @@ export {
   enableSpaces,
   enableTags,
   notificationsPanelDefault,
+  projectCardWords,
   setDashboardEnabled,
   setDashboardOrder,
   setDefaultSort,
@@ -53,7 +75,10 @@ export {
   setEnableSpaces,
   setEnableTags,
   setNotificationsPanelDefault,
+  setProjectCardWords,
+  setStatsCards,
   setWidgetEnabled,
+  statsCards,
   toggleWidget,
   widgetEnabled,
 };

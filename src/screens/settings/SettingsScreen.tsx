@@ -74,9 +74,11 @@ import {
   enableSpaces,
   enableTags,
   notificationsPanelDefault,
+  projectCardWords,
   setEnableSpaces,
   setEnableTags,
   setNotificationsPanelDefault,
+  setProjectCardWords,
 } from "~/stores/workspace-store";
 import { isTauriMobile } from "~/lib/platform";
 
@@ -571,6 +573,15 @@ const AppearancePanel: Component = () => {
           <Switch
             checked={notificationsPanelDefault()}
             onChange={setNotificationsPanelDefault}
+          />
+        </Row>
+        <Row
+          label="Word count on project cards"
+          hint="Show an approximate word count on each card. Reads each project's root file when the library loads."
+        >
+          <Switch
+            checked={projectCardWords()}
+            onChange={setProjectCardWords}
           />
         </Row>
       </Card>

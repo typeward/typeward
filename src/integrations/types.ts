@@ -41,6 +41,12 @@ export interface Citation {
   doi?: string;
   /** Provider-specific opaque id for round-tripping. */
   providerEntryId?: string;
+  /**
+   * Human-readable source library this entry came from (e.g. a Zotero
+   * "My Library" / group name). Optional — the references panel falls back to
+   * the provider's display name when unset, so entries always group somewhere.
+   */
+  library?: string;
 }
 
 export interface BibTexEntry {
@@ -60,8 +66,17 @@ export interface CitationProvider extends IntegrationProvider {
    * Lightweight search for picker UIs. Returns metadata only (title,
    * authors, year). Empty query is allowed and should surface "recent" or
    * "all" entries up to a sensible limit.
+   *
+   * `library` restricts results to one named sub-library (see
+   * `listLibraries`). A provider with no matching library returns `[]`.
    */
-  searchLibrary(query: string): Promise<Citation[]>;
+  searchLibrary(query: string, library?: string): Promise<Citation[]>;
+  /**
+   * Optional: enumerate the provider's sub-libraries (e.g. a Zotero personal
+   * library plus group libraries). When absent, the provider is treated as a
+   * single library named by `displayName`.
+   */
+  listLibraries?(): Promise<string[]>;
   /** Full BibTeX for one entry, identified by its citation key. */
   fetchEntry(key: string): Promise<BibTexEntry>;
   /**

@@ -1,17 +1,13 @@
 import {
-  Activity,
-  ArrowRight,
   ChevronDown,
   GripVertical,
   Settings2,
   X,
 } from "lucide-solid";
-import type { Component } from "solid-js";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import type { Component, JSX } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 
-import { navigateTo } from "~/commands/palette-store";
 import { installDismiss } from "~/lib/dismiss";
-import { projects } from "~/stores/projects-store";
 import { isTabletViewport } from "~/stores/viewport-store";
 import {
   dashboardOrder,
@@ -24,12 +20,20 @@ import {
 import "./builtins";
 import { listWidgets, type WidgetDef } from "./registry";
 
+interface RenderCard {
+  id: string;
+  title: string;
+  renderIcon: () => JSX.Element;
+  Body: Component;
+}
+
 /**
- * Projects-screen dashboard. One opt-in panel above the grid: a fixed
- * Activity card (library stats + jump back in) plus the registered cards,
- * each toggleable from the Customize menu and drag-reorderable (desktop).
- * Replaces the old free-floating widget shelf — the cards now live inside
- * a single panel the user turns on or off as a whole.
+ * Projects-screen Widgets panel. One opt-in panel above the toolbar holding
+ * the registered cards, each toggleable from the Customize menu and
+ * drag-reorderable. Reordering is pointer-based (a grip pointerdown + window
+ * pointermove/up + `elementFromPoint`) rather than HTML5 drag-and-drop, which
+ * proved unreliable inside the webview and gave no touch support; this works
+ * on desktop and tablet alike.
  *
  * Spec: /design/widgets.md
  */
@@ -41,16 +45,30 @@ export const DashboardPanel: Component = () => {
     return explicit === undefined ? w.defaultEnabled : explicit;
   };
 
-  // Persisted order first (unknown ids dropped), then any cards the order
-  // list doesn't know about yet, in registry order.
-  const orderedCards = createMemo<WidgetDef[]>(() => {
-    const enabled = listWidgets().filter(isOn);
-    const byId = new Map(enabled.map((w) => [w.id, w]));
-    const out: WidgetDef[] = [];
+  // Stable RenderCard references, cached by id. The `<For>` below is keyed by
+  // reference, so handing it fresh objects on every reorder would destroy and
+  // recreate each card's DOM mid-drag — which drops the dragged grip and wedges
+  // the panel in "drag mode". Reusing the same objects makes `<For>` move nodes
+  // instead. Card definitions are static (icon/body/title don't change).
+  const cardCache = new Map<string, RenderCard>();
+  const widgetCard = (w: WidgetDef): RenderCard => {
+    let c = cardCache.get(w.id);
+    if (!c) {
+      c = { id: w.id, title: w.title, renderIcon: () => w.icon(13), Body: w.Render };
+      cardCache.set(w.id, c);
+    }
+    return c;
+  };
+
+  // Persisted order first (unknown ids dropped), then anything not yet placed.
+  const orderedCards = createMemo<RenderCard[]>(() => {
+    const cards: RenderCard[] = listWidgets().filter(isOn).map(widgetCard);
+    const byId = new Map(cards.map((c) => [c.id, c]));
+    const out: RenderCard[] = [];
     for (const id of dashboardOrder()) {
-      const w = byId.get(id);
-      if (w) {
-        out.push(w);
+      const c = byId.get(id);
+      if (c) {
+        out.push(c);
         byId.delete(id);
       }
     }
@@ -59,7 +77,7 @@ export const DashboardPanel: Component = () => {
 
   const moveCard = (dragId: string, overId: string) => {
     if (dragId === overId) return;
-    const ids = orderedCards().map((w) => w.id);
+    const ids = orderedCards().map((c) => c.id);
     const from = ids.indexOf(dragId);
     const to = ids.indexOf(overId);
     if (from < 0 || to < 0) return;
@@ -67,24 +85,61 @@ export const DashboardPanel: Component = () => {
     setDashboardOrder(ids);
   };
 
+  // Window-level listeners (not the grip's own events) so the release is caught
+  // no matter where the pointer is or whether the grip node survived a reorder.
+  let activePointerId: number | null = null;
+
+  const onWindowMove = (e: PointerEvent) => {
+    if (e.pointerId !== activePointerId || !draggingId()) return;
+    const over = (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)
+      ?.closest("[data-card-id]")
+      ?.getAttribute("data-card-id");
+    if (over) moveCard(draggingId()!, over);
+  };
+
+  const stopListening = () => {
+    window.removeEventListener("pointermove", onWindowMove);
+    window.removeEventListener("pointerup", onWindowUp);
+    window.removeEventListener("pointercancel", onWindowUp);
+  };
+
+  const onWindowUp = (e: PointerEvent) => {
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    activePointerId = null;
+    setDraggingId(null);
+    stopListening();
+  };
+
+  const startDrag = (e: PointerEvent, id: string) => {
+    e.preventDefault();
+    activePointerId = e.pointerId;
+    setDraggingId(id);
+    window.addEventListener("pointermove", onWindowMove);
+    window.addEventListener("pointerup", onWindowUp);
+    window.addEventListener("pointercancel", onWindowUp);
+  };
+
+  onCleanup(stopListening);
+
   return (
     <div
       class="glass-soft flex flex-col gap-2 rounded-xl"
       style={{ padding: "var(--ui-pad-card)" }}
     >
-      <div class="flex items-center gap-2 px-1">
-        <Activity size={13} style={{ color: "var(--color-accent-1)" }} />
-        <span class="label-xs text-fg-2">Dashboard</span>
-        <Show when={!isTabletViewport() && orderedCards().length > 1}>
-          <span class="mono text-[10px] text-fg-4">drag cards to rearrange</span>
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1 px-1">
+        <span class="label-xs text-fg-2">Widgets</span>
+        <Show when={orderedCards().length > 1}>
+          <span class="mono hidden text-[10px] text-fg-4 sm:inline">
+            drag the grip to rearrange
+          </span>
         </Show>
         <div class="ml-auto flex items-center gap-1">
           <CustomizeMenu />
           <button
             type="button"
             onClick={() => setDashboardEnabled(false)}
-            title="Hide dashboard"
-            aria-label="Hide dashboard"
+            title="Hide widgets"
+            aria-label="Hide widgets"
             class="flex h-6 w-6 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
           >
             <X size={12} />
@@ -92,131 +147,80 @@ export const DashboardPanel: Component = () => {
         </div>
       </div>
 
-      <div
-        class={`flex gap-2 overflow-x-auto scroll pb-1 ${
-          isTabletViewport() ? "flex-col" : ""
-        }`}
+      <Show
+        when={orderedCards().length > 0}
+        fallback={
+          <div class="px-1 py-6 text-center text-[length:var(--ui-font-xs)] text-fg-3">
+            No cards enabled — turn some on from Customize.
+          </div>
+        }
       >
-        <DashboardCard title="Activity" icon={<Activity size={13} />}>
-          <ActivityBody />
-        </DashboardCard>
-
-        <For each={orderedCards()}>
-          {(w) => (
-            <DashboardCard
-              title={w.title}
-              icon={w.icon(13)}
-              draggable={!isTabletViewport()}
-              dragging={draggingId() === w.id}
-              onDragStart={(e) => {
-                setDraggingId(w.id);
-                e.dataTransfer?.setData("text/plain", w.id);
-                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-              }}
-              onDragOver={(e) => {
-                const dragId = draggingId();
-                if (!dragId) return;
-                e.preventDefault();
-                moveCard(dragId, w.id);
-              }}
-              onDragEnd={() => setDraggingId(null)}
-            >
-              <w.Render />
-            </DashboardCard>
-          )}
-        </For>
-      </div>
-    </div>
-  );
-};
-
-/** Library stats + "jump back in" — the panel's fixed first card. */
-const ActivityBody: Component = () => {
-  const byFormat = () => {
-    const counts = new Map<string, number>();
-    for (const p of projects()) {
-      counts.set(p.format, (counts.get(p.format) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  };
-  // The Rust listing's insertion order is the closest thing to "recent"
-  // until per-project opened-at metadata lands; same assumption as the
-  // Recent-projects card.
-  const latest = () => projects()[0];
-
-  return (
-    <div class="flex h-full flex-col justify-center gap-2.5 px-1">
-      <div class="flex items-baseline gap-2">
-        <span class="text-[28px] font-semibold tracking-tight text-fg-1">
-          {projects().length}
-        </span>
-        <span class="mono text-[length:var(--ui-font-xs)] text-fg-3">
-          project{projects().length === 1 ? "" : "s"} in your library
-        </span>
-      </div>
-      <div class="flex flex-wrap gap-1.5">
-        <For each={byFormat()}>
-          {([format, count]) => (
-            <span
-              class="mono rounded-full px-2 py-0.5 text-[10px] uppercase text-fg-2"
-              style={{ background: "var(--color-control-fill)" }}
-            >
-              {format} · {count}
-            </span>
-          )}
-        </For>
-      </div>
-      <Show when={latest()}>
-        <button
-          type="button"
-          onClick={() =>
-            navigateTo(`/editor?path=${encodeURIComponent(latest()!.rootPath)}`)
+        <div
+          class={`gap-2 pb-1 ${isTabletViewport() ? "flex flex-col" : "grid"}`}
+          style={
+            isTabletViewport()
+              ? undefined
+              : { "grid-template-columns": "repeat(auto-fill, minmax(260px, 1fr))" }
           }
-          class="lift glass-inset flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-control-fill)]"
         >
-          <span class="text-[length:var(--ui-font-xs)] text-fg-3">Continue</span>
-          <span class="truncate text-[length:var(--ui-font-sm)] font-medium text-fg-1">
-            {latest()!.name}
-          </span>
-          <ArrowRight size={11} class="ml-auto flex-shrink-0 text-fg-3" />
-        </button>
+          <For each={orderedCards()}>
+            {(card) => (
+              <DashboardCard
+                cardId={card.id}
+                title={card.title}
+                icon={card.renderIcon()}
+                dragging={draggingId() === card.id}
+                onHandlePointerDown={(e) => startDrag(e, card.id)}
+              >
+                <card.Body />
+              </DashboardCard>
+            )}
+          </For>
+        </div>
       </Show>
     </div>
   );
 };
 
 const DashboardCard: Component<{
+  cardId: string;
   title: string;
-  icon: ReturnType<WidgetDef["icon"]>;
-  draggable?: boolean;
+  icon: JSX.Element;
   dragging?: boolean;
-  onDragStart?: (e: DragEvent) => void;
-  onDragOver?: (e: DragEvent) => void;
-  onDragEnd?: () => void;
+  onHandlePointerDown?: (e: PointerEvent) => void;
   children: ReturnType<Component>;
 }> = (props) => (
   <div
-    draggable={props.draggable ? true : undefined}
-    onDragStart={(e) => props.onDragStart?.(e)}
-    onDragOver={(e) => props.onDragOver?.(e)}
-    onDragEnd={() => props.onDragEnd?.()}
-    class="flex flex-shrink-0 flex-col gap-2 rounded-xl"
+    data-card-id={props.cardId}
+    class="flex w-full min-w-0 flex-col gap-2 rounded-xl"
     style={{
-      width: isTabletViewport() ? "100%" : "300px",
-      height: "190px",
+      height: "236px",
       padding: "var(--ui-pad-card)",
       background: "var(--color-card-bg-soft)",
       border: "1px solid var(--color-glass-stroke)",
-      opacity: props.dragging ? "0.45" : undefined,
-      cursor: props.draggable ? "grab" : undefined,
+      opacity: props.dragging ? "0.4" : undefined,
+      "box-shadow": props.dragging
+        ? "0 0 0 1.5px var(--color-accent-1)"
+        : undefined,
+      transition: "opacity 120ms ease, box-shadow 120ms ease",
     }}
   >
     <div class="flex items-center gap-2">
       <span style={{ color: "var(--color-accent-1)" }}>{props.icon}</span>
       <span class="label-xs text-fg-2">{props.title}</span>
-      <Show when={props.draggable}>
-        <GripVertical size={11} class="ml-auto text-fg-4" />
-      </Show>
+      <button
+        type="button"
+        aria-label="Drag to reorder"
+        title="Drag to reorder"
+        onPointerDown={(e) => props.onHandlePointerDown?.(e)}
+        class="ml-auto flex h-6 w-6 items-center justify-center rounded text-fg-4 hover:bg-[var(--color-control-fill)] hover:text-fg-2"
+        style={{
+          cursor: props.dragging ? "grabbing" : "grab",
+          "touch-action": "none",
+        }}
+      >
+        <GripVertical size={12} />
+      </button>
     </div>
     <div class="min-h-0 flex-1">{props.children}</div>
   </div>
@@ -297,7 +301,7 @@ const CustomizeMenu: Component = () => {
             )}
           </For>
           <div class="mt-1.5 border-t border-glass-stroke px-1 pt-1.5 text-[10px] leading-relaxed text-fg-4">
-            The Activity card is always first; the rest drag to rearrange.
+            Toggle cards on or off; drag any card by its grip to rearrange.
           </div>
         </div>
       </Show>

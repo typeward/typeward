@@ -31,11 +31,12 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
   const auth = async (): Promise<Record<string, string>> => ({
     Authorization: `Bearer ${await getAccessToken(account.profileId)}`,
   });
+  const label = `Mendeley (${account.displayName})`;
 
   return {
     id: `mendeley:${account.profileId}`,
     category: "references",
-    displayName: `Mendeley (${account.displayName})`,
+    displayName: label,
 
     async status(): Promise<ProviderStatus> {
       try {
@@ -71,7 +72,9 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
       return chunks.join("\n\n");
     },
 
-    async searchLibrary(query: string): Promise<Citation[]> {
+    async searchLibrary(query: string, library?: string): Promise<Citation[]> {
+      // Single-library provider — its whole library is named by displayName.
+      if (library !== undefined && library !== label) return [];
       const params = new URLSearchParams({ limit: "50" });
       if (query.trim()) params.set("query", query.trim());
 
@@ -87,7 +90,7 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
         throw new Error(`Mendeley search failed (status ${res.status})`);
       }
       const docs = JSON.parse(res.body) as MendeleyDocument[];
-      return docs.map(toCitation);
+      return docs.map((doc) => ({ ...toCitation(doc), library: label }));
     },
 
     async fetchEntry(key: string) {

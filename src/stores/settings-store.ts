@@ -32,6 +32,7 @@ import {
   enableSpaces,
   enableTags,
   notificationsPanelDefault,
+  projectCardWords,
   type ProjectsSort,
   type ProjectsView,
   setDashboardEnabled,
@@ -41,7 +42,10 @@ import {
   setEnableSpaces,
   setEnableTags,
   setNotificationsPanelDefault,
+  setProjectCardWords,
+  setStatsCards,
   setWidgetEnabled,
+  statsCards,
   widgetEnabled,
 } from "~/stores/workspace-store";
 
@@ -94,7 +98,7 @@ const DEFAULT_EDITOR: EditorSettings = {
 
 const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
   references: {
-    betterBibTex: { enabled: false, libraryId: 1 },
+    betterBibTex: { enabled: false },
     zoteroWeb: {},
     mendeley: {},
   },
@@ -144,13 +148,15 @@ createRoot(() => {
       setDefaultSort(
         validEnum<ProjectsSort>(
           s.workspace.defaultSort,
-          ["last-opened", "created", "name", "modified", "format"],
+          ["last-opened", "created", "name", "name-desc", "modified", "deadline", "format"],
           "last-opened",
         ),
       );
       setWidgetEnabled(s.workspace.widgets);
       setDashboardEnabled(s.workspace.dashboardEnabled);
       setDashboardOrder(s.workspace.dashboardOrder);
+      setProjectCardWords(s.workspace.projectCardWords ?? false);
+      if (s.workspace.statsCards?.length) setStatsCards(s.workspace.statsCards);
 
       if (s.integrations) {
         setIntegrationsSettings({ ...DEFAULT_INTEGRATIONS, ...s.integrations });
@@ -189,6 +195,8 @@ createRoot(() => {
         widgets: widgetEnabled(),
         dashboardEnabled: dashboardEnabled(),
         dashboardOrder: dashboardOrder(),
+        projectCardWords: projectCardWords(),
+        statsCards: statsCards(),
       },
       integrations: integrationsSettings(),
     };

@@ -60,6 +60,7 @@ export const TopBar: Component<TopBarProps> = (props) => {
         <SyncStatusBadge />
         <button
           type="button"
+          data-notif-toggle
           onClick={() => props.onToggleNotifications?.()}
           aria-label="Notifications"
           class="lift relative flex h-9 w-9 items-center justify-center rounded-md text-fg-2 hover:bg-[var(--color-control-fill)]"

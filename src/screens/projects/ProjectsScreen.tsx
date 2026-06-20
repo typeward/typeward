@@ -1,9 +1,11 @@
 import { useNavigate } from "@solidjs/router";
 import {
   BookMarked,
+  CalendarClock,
   ChevronDown,
   Compass,
   FlaskConical,
+  FileText,
   Folder as FolderIcon,
   FolderOpen,
   GraduationCap,
@@ -12,6 +14,7 @@ import {
   Plus,
   Tag,
   Upload,
+  X,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from "solid-js";
@@ -46,7 +49,12 @@ import {
   loading,
   projects,
   refresh,
+  setDeadline,
 } from "~/stores/projects-store";
+import {
+  DEADLINE_TONE_COLOR,
+  deadlineStatus,
+} from "~/lib/deadlines";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
   dashboardEnabled,
@@ -55,6 +63,7 @@ import {
   enableSpaces,
   enableTags,
   notificationsPanelDefault,
+  projectCardWords,
   type ProjectsSort,
   type ProjectsView,
   setDashboardEnabled,
@@ -81,15 +90,25 @@ const FORMAT_ACCENT: Record<ProjectFormat, string> = {
 
 const SORT_LABEL: Record<ProjectsSort, string> = {
   "last-opened": "Default order",
-  created: "Created",
-  name: "Name",
-  modified: "Modified",
+  name: "Name (A–Z)",
+  "name-desc": "Name (Z–A)",
+  created: "Date created",
+  modified: "Last modified",
+  deadline: "Deadline",
   format: "Format",
 };
 
-// Created/Modified need disk metadata the Rust listing doesn't carry yet —
-// only offer sorts that actually do something.
-const AVAILABLE_SORTS: readonly ProjectsSort[] = ["last-opened", "name", "format"];
+// `list_projects` now carries fs created/modified timestamps + the user-set
+// deadline, so every sort below resolves against real data.
+const AVAILABLE_SORTS: readonly ProjectsSort[] = [
+  "last-opened",
+  "name",
+  "name-desc",
+  "created",
+  "modified",
+  "deadline",
+  "format",
+];
 
 // =================================================================
 // Screen root
@@ -99,10 +118,41 @@ const ProjectsScreen: Component = () => {
   const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = createSignal(false);
   const [notifOpen, setNotifOpen] = createSignal(notificationsPanelDefault());
+  const [importError, setImportError] = createSignal<string | null>(null);
 
   onMount(() => {
     void refresh();
   });
+
+  // Import an EXISTING folder (a manually-copied repo / unzipped project) as a
+  // Typeward project — distinct from "New project", which scaffolds a starter.
+  // The Rust gate only allows folders under the projects root, so default the
+  // picker there and surface an actionable error otherwise.
+  const importFolder = async () => {
+    setImportError(null);
+    const root = projectsRoot();
+    const picked = await openFileDialog({
+      title: "Pick a project folder to import",
+      directory: true,
+      multiple: false,
+      defaultPath: root || undefined,
+    });
+    if (!picked || typeof picked !== "string") return;
+    try {
+      const project = await ipc.importProjectFolder(picked);
+      await refresh();
+      openProject(project);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setImportError(
+        /outside the projects root/i.test(msg)
+          ? `Import only works for folders inside your projects root${
+              root ? ` (${root})` : ""
+            }. Move the folder there first, or use Clone / Overleaf import from New project.`
+          : `Could not import folder: ${msg}`,
+      );
+    }
+  };
 
   createEffect(() => {
     if (requestNewProject_()) {
@@ -120,10 +170,25 @@ const ProjectsScreen: Component = () => {
     switch (defaultSort()) {
       case "name":
         return list.sort((a, b) => a.name.localeCompare(b.name));
+      case "name-desc":
+        return list.sort((a, b) => b.name.localeCompare(a.name));
       case "format":
-        return list.sort((a, b) => a.format.localeCompare(b.format));
-      // The disk metadata doesn't carry created/modified/last-opened
-      // yet, so these fall back to insertion order from the Rust listing.
+        return list.sort(
+          (a, b) => a.format.localeCompare(b.format) || a.name.localeCompare(b.name),
+        );
+      case "created":
+        return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+      case "modified":
+        return list.sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0));
+      case "deadline":
+        // Soonest first; projects without a deadline sink to the bottom.
+        return list.sort((a, b) => {
+          const da = a.deadline ? Date.parse(a.deadline) : Number.POSITIVE_INFINITY;
+          const db = b.deadline ? Date.parse(b.deadline) : Number.POSITIVE_INFINITY;
+          return da - db || a.name.localeCompare(b.name);
+        });
+      // "last-opened" has no backing metadata yet — keep the Rust listing's
+      // name order as the stable default.
       default:
         return list;
     }
@@ -147,6 +212,7 @@ const ProjectsScreen: Component = () => {
         <div class="relative flex min-h-0 flex-1 gap-2 p-2">
           <Sidebar
             onNewProject={() => setDialogOpen(true)}
+            onImport={() => void importFolder()}
             totalCount={projects().length}
           />
 
@@ -165,12 +231,25 @@ const ProjectsScreen: Component = () => {
                 </div>
               </div>
             </div>
-            <Toolbar />
             <Show when={dashboardEnabled()}>
               <DashboardPanel />
             </Show>
+            <Toolbar />
 
             <div class="mt-1 flex-1 overflow-auto scroll px-1 pb-2">
+              <Show when={importError()}>
+                <div class="mb-3 flex items-start justify-between gap-3 rounded-lg border border-[var(--color-err)]/30 p-3 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+                  <span>{importError()}</span>
+                  <button
+                    type="button"
+                    onClick={() => setImportError(null)}
+                    class="flex-shrink-0 text-fg-3 hover:text-fg-1"
+                    aria-label="Dismiss"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </Show>
               <Show when={projectsError()}>
                 <div class="mb-3 rounded-lg border border-[var(--color-err)]/30 p-3 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
                   Failed to list projects: {projectsError()}
@@ -241,9 +320,11 @@ interface SidebarItem {
   tint?: string;
 }
 
-const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
-  props,
-) => {
+const Sidebar: Component<{
+  onNewProject: () => void;
+  onImport: () => void;
+  totalCount: number;
+}> = (props) => {
   const navigate = useNavigate();
   // Only views that exist. Recently-opened/Starred/Archive/Trash were dead
   // nav with no backing data — they return when their features do.
@@ -283,12 +364,13 @@ const Sidebar: Component<{ onNewProject: () => void; totalCount: number }> = (
           </span>
         </button>
         <div class="mt-2 grid grid-cols-1 gap-1.5">
-          {/* Clone + Overleaf import live in the New-project dialog. */}
+          {/* Imports an existing folder under the projects root. Clone +
+              Overleaf zip import live in the New-project dialog. */}
           <SidebarMiniButton
             icon={<Upload size={11} style={{ opacity: 0.7 }} />}
-            onClick={props.onNewProject}
+            onClick={props.onImport}
           >
-            Import
+            Import folder
           </SidebarMiniButton>
         </div>
       </div>
@@ -378,7 +460,7 @@ const SidebarMiniButton: Component<{
 );
 
 // =================================================================
-// Toolbar — Dashboard / Sort / View
+// Toolbar — Widgets / Sort / View
 // =================================================================
 
 const Toolbar: Component = () => {
@@ -393,7 +475,7 @@ const Toolbar: Component = () => {
         class={`lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-sm)] hover:bg-[var(--color-control-fill)] ${
           dashboardEnabled() ? "text-fg-1" : "text-fg-2"
         }`}
-        title={dashboardEnabled() ? "Hide the dashboard panel" : "Show activity and cards above the grid"}
+        title={dashboardEnabled() ? "Hide the widgets panel" : "Show activity and cards above the grid"}
       >
         <LayoutGrid
           size={12}
@@ -402,7 +484,7 @@ const Toolbar: Component = () => {
             color: dashboardEnabled() ? "var(--color-accent-1)" : undefined,
           }}
         />
-        <span>Dashboard</span>
+        <span>Widgets</span>
       </button>
 
       <div class="ml-auto flex items-center gap-1.5">
@@ -571,20 +653,29 @@ const NewProjectTile: Component<{ onClick: () => void }> = (props) => (
   </button>
 );
 
+const openOnKey = (onOpen: () => void) => (e: KeyboardEvent) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    onOpen();
+  }
+};
+
 const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props) => {
   const accentColor = FORMAT_ACCENT[props.project.format];
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabindex={0}
       onClick={props.onOpen}
-      class="card-glow group flex flex-col gap-2 rounded-xl text-left"
+      onKeyDown={openOnKey(props.onOpen)}
+      class="card-glow group flex cursor-pointer flex-col gap-2 rounded-xl text-left"
       style={{
         height: "180px",
         background: "var(--color-card-bg)",
         padding: "var(--ui-pad-card)",
       }}
     >
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between gap-2">
         <span
           class="mono rounded px-1.5 py-0.5 text-[10px] font-medium"
           style={{
@@ -595,6 +686,10 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
         >
           {FORMAT_LABEL[props.project.format]}
         </span>
+        <DeadlineEditor
+          deadline={props.project.deadline}
+          onChange={(d) => void setDeadline(props.project.rootPath, d)}
+        />
       </div>
 
       <div
@@ -610,25 +705,71 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
         {props.project.name}
       </div>
 
-      <div class="mono flex items-center justify-between text-[11px] text-fg-3">
-        <span class="flex items-center gap-1.5">
+      <div class="mono flex items-center justify-between gap-2 text-[11px] text-fg-3">
+        <span class="flex min-w-0 items-center gap-1.5">
           <FolderOpen size={10} style={{ opacity: 0.6 }} />
-          <span class="truncate" style={{ "max-width": "120px" }}>
-            {props.project.rootFile}
-          </span>
+          <span class="truncate">{props.project.rootFile}</span>
         </span>
+        <ProjectWordCount project={props.project} />
       </div>
-    </button>
+    </div>
   );
 };
+
+/**
+ * Approximate word count for the project's root file. Opt-in
+ * (`workspace.projectCardWords`) because it reads each project's root file
+ * when the library renders. Counts only the root file — `\input{}` children
+ * aren't followed — so it's labelled "~".
+ */
+const ProjectWordCount: Component<{ project: Project }> = (props) => {
+  const [count] = createResource(
+    () => (projectCardWords() ? props.project : null),
+    async (p) => {
+      try {
+        const text = await ipc.readProjectTextFile(p.rootPath, p.rootFile);
+        return approxWordCount(text, p.format);
+      } catch {
+        return null;
+      }
+    },
+  );
+  return (
+    <Show when={projectCardWords() && count() != null}>
+      <span
+        class="flex flex-shrink-0 items-center gap-1"
+        title="Approximate words in the root file"
+      >
+        <FileText size={9} style={{ opacity: 0.6 }} />
+        {count()!.toLocaleString()}w
+      </span>
+    </Show>
+  );
+};
+
+function approxWordCount(text: string, format: ProjectFormat): number {
+  let t = text;
+  // Drop line comments, then markup tokens, leaving prose words.
+  if (format === "latex") {
+    t = t.replace(/(^|[^\\])%.*$/gm, "$1");
+    t = t.replace(/\\[a-zA-Z@]+\*?/g, " ");
+  } else {
+    t = t.replace(/\/\/.*$/gm, "");
+    t = t.replace(/#[a-zA-Z][\w.]*/g, " ");
+  }
+  t = t.replace(/[{}[\]()\\$&#~^_*=]/g, " ");
+  return t.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length;
+}
 
 const ProjectRow: Component<{ project: Project; onOpen: () => void }> = (props) => {
   const accentColor = FORMAT_ACCENT[props.project.format];
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabindex={0}
       onClick={props.onOpen}
-      class="card-glow flex items-center gap-3 rounded-md px-3 text-left"
+      onKeyDown={openOnKey(props.onOpen)}
+      class="card-glow group flex cursor-pointer items-center gap-3 rounded-md px-3 text-left"
       style={{
         height: "var(--ui-row-lg)",
         background: "var(--color-card-bg)",
@@ -647,7 +788,94 @@ const ProjectRow: Component<{ project: Project; onOpen: () => void }> = (props) 
       <span class="mono ml-auto truncate text-[11px] text-fg-3" style={{ "max-width": "180px" }}>
         {props.project.rootFile}
       </span>
-    </button>
+      <DeadlineEditor
+        deadline={props.project.deadline}
+        onChange={(d) => void setDeadline(props.project.rootPath, d)}
+      />
+    </div>
+  );
+};
+
+/**
+ * Deadline chip + date popover. Shows the deadline (color-coded by urgency) or
+ * a hover-revealed "deadline" affordance when unset. Lives inside clickable
+ * project cards, so every interaction stops propagation to avoid opening the
+ * project underneath.
+ */
+const DeadlineEditor: Component<{
+  deadline?: string;
+  onChange: (deadline: string | null) => void;
+}> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  let rootRef: HTMLDivElement | undefined;
+  installDismiss(() => rootRef, open, () => setOpen(false));
+  const status = createMemo(() => deadlineStatus(props.deadline));
+
+  return (
+    <div
+      ref={rootRef}
+      class="relative flex-shrink-0"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={
+          status()
+            ? `Deadline: ${status()!.label} (${status()!.relative}) — click to change`
+            : "Set a deadline"
+        }
+        class="mono flex h-5 items-center gap-1 rounded px-1.5 text-[10px] hover:bg-[var(--color-control-fill)]"
+        style={{ color: status() ? DEADLINE_TONE_COLOR[status()!.tone] : "var(--color-fg-3)" }}
+      >
+        <CalendarClock size={10} />
+        <Show
+          when={status()}
+          fallback={
+            <span class="opacity-0 transition-opacity group-hover:opacity-100">
+              deadline
+            </span>
+          }
+        >
+          <span>{status()!.label}</span>
+        </Show>
+      </button>
+      <Show when={open()}>
+        <div
+          class="glass absolute right-0 top-full z-40 mt-1 flex w-[200px] flex-col gap-2 rounded-lg"
+          style={{ padding: "var(--ui-pad-section)", background: "var(--color-popover-bg)" }}
+        >
+          <span class="label-xs text-fg-3">Deadline</span>
+          <input
+            type="date"
+            value={props.deadline ?? ""}
+            onInput={(e) => props.onChange(e.currentTarget.value || null)}
+            class="glass-inset rounded-md px-2 py-1.5 text-[length:var(--ui-font-sm)] text-fg-1 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+          />
+          <Show when={status()}>
+            <div class="flex items-center justify-between">
+              <span
+                class="mono text-[10px]"
+                style={{ color: DEADLINE_TONE_COLOR[status()!.tone] }}
+              >
+                {status()!.relative}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  props.onChange(null);
+                  setOpen(false);
+                }}
+                class="text-[length:var(--ui-font-xs)] text-fg-3 hover:text-[var(--color-err)]"
+              >
+                Clear
+              </button>
+            </div>
+          </Show>
+        </div>
+      </Show>
+    </div>
   );
 };
 
@@ -667,6 +895,7 @@ const NewProjectDialog: Component<{
 }> = (props) => {
   const [name, setName] = createSignal("");
   const [format, setFormat] = createSignal<ProjectFormat>("latex");
+  const [deadlineInput, setDeadlineInput] = createSignal("");
   const [submitting, setSubmitting] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
   const [location, setLocation] = createSignal<"local" | "cloud">("local");
@@ -729,6 +958,7 @@ const NewProjectDialog: Component<{
   const reset = () => {
     setName("");
     setFormat("latex");
+    setDeadlineInput("");
     setErr(null);
     setSubmitting(false);
     setLocation("local");
@@ -764,6 +994,15 @@ const NewProjectDialog: Component<{
         project = result.project;
       } else {
         project = await create({ name: name().trim(), format: format() });
+      }
+      const dl = deadlineInput().trim();
+      if (dl) {
+        try {
+          await ipc.setProjectDeadline(project.rootPath, dl);
+          project = { ...project, deadline: dl };
+        } catch {
+          // Non-fatal — the project exists; the deadline just didn't stick.
+        }
       }
       reset();
       props.onCreated(project);
@@ -957,6 +1196,18 @@ const NewProjectDialog: Component<{
             onInput={(e) => setName(e.currentTarget.value)}
             placeholder="My thesis"
             class="glass-inset rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+          />
+        </label>
+
+        <label class="flex flex-col gap-1.5">
+          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+            Deadline <span class="text-[11px] font-normal text-fg-3">(optional)</span>
+          </span>
+          <input
+            type="date"
+            value={deadlineInput()}
+            onInput={(e) => setDeadlineInput(e.currentTarget.value)}
+            class="glass-inset w-fit rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
           />
         </label>
 

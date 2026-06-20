@@ -37,9 +37,7 @@ export function initReferenceProviders(): void {
 
       if (refs.betterBibTex.enabled) {
         desired.add(PROVIDER_IDS.betterBibTex);
-        registerCitationProvider(
-          createBetterBibTexProvider({ libraryId: refs.betterBibTex.libraryId }),
-        );
+        registerCitationProvider(createBetterBibTexProvider());
       }
 
       if (

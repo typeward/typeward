@@ -47,11 +47,12 @@ export function createZoteroWebProvider(config: ZoteroWebConfig): CitationProvid
     header: "Authorization",
     prefix: "Bearer ",
   };
+  const label = `Zotero (account ${config.userId})`;
 
   return {
     id: `zotero-web:${config.userId}`,
     category: "references",
-    displayName: `Zotero (account ${config.userId})`,
+    displayName: label,
 
     async status(): Promise<ProviderStatus> {
       try {
@@ -87,7 +88,9 @@ export function createZoteroWebProvider(config: ZoteroWebConfig): CitationProvid
       return chunks.join("\n\n");
     },
 
-    async searchLibrary(query: string): Promise<Citation[]> {
+    async searchLibrary(query: string, library?: string): Promise<Citation[]> {
+      // Single-library provider — its whole library is named by displayName.
+      if (library !== undefined && library !== label) return [];
       const params = new URLSearchParams({
         format: "json",
         limit: "50",
@@ -104,7 +107,7 @@ export function createZoteroWebProvider(config: ZoteroWebConfig): CitationProvid
         throw new Error(`Zotero search failed (status ${res.status})`);
       }
       const items = JSON.parse(res.body) as ZoteroJsonItem[];
-      return items.map(toCitation);
+      return items.map((it) => ({ ...toCitation(it), library: label }));
     },
 
     async fetchEntry(key: string) {

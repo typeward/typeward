@@ -127,12 +127,19 @@ struct CallbackQuery {
     error_description: Option<String>,
 }
 
+type CallbackResult = Result<String, OauthError>;
+type CallbackReceiver = oneshot::Receiver<CallbackResult>;
+type CallbackSender = oneshot::Sender<CallbackResult>;
+type SharedCallbackSender = Arc<std::sync::Mutex<Option<CallbackSender>>>;
+type ShutdownSender = oneshot::Sender<()>;
+type SharedShutdownSender = Arc<std::sync::Mutex<Option<ShutdownSender>>>;
+
 /// One pending OAuth flow. Held by [`OauthManager`] until either the
 /// callback fires (success/error) or the wait times out, at which point
 /// the entry is removed and the server task drops.
 struct PendingFlow {
     /// Set once on the callback. `oauth_wait` takes it and consumes the result.
-    rx: Mutex<Option<oneshot::Receiver<Result<String, OauthError>>>>,
+    rx: Mutex<Option<CallbackReceiver>>,
     code_verifier: String,
     token_url: String,
     client_id: String,
@@ -140,7 +147,7 @@ struct PendingFlow {
     /// Same handle the callback holds (shared `Arc`). Lets `oauth_wait` shut
     /// the loopback server down on timeout / channel-close, instead of leaking
     /// the bound port until process exit.
-    shutdown: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    shutdown: SharedShutdownSender,
 }
 
 impl PendingFlow {
@@ -181,8 +188,8 @@ impl OauthManager {
 struct CallbackState {
     expected_state: String,
     /// Held in an Arc<Mutex<Option<…>>> so the first callback consumes it.
-    tx: Arc<std::sync::Mutex<Option<oneshot::Sender<Result<String, OauthError>>>>>,
-    shutdown: Arc<std::sync::Mutex<Option<oneshot::Sender<()>>>>,
+    tx: SharedCallbackSender,
+    shutdown: SharedShutdownSender,
 }
 
 fn generate_state() -> String {
@@ -246,15 +253,13 @@ fn validate_oauth_endpoint(raw: &str, kind: OauthEndpointKind) -> Result<(), Oau
         OauthEndpointKind::Authorization => {
             matches!(
                 (host.as_str(), path),
-                ("www.dropbox.com", "/oauth2/authorize")
-                    | ("api.mendeley.com", "/oauth/authorize")
+                ("www.dropbox.com", "/oauth2/authorize") | ("api.mendeley.com", "/oauth/authorize")
             )
         }
         OauthEndpointKind::Token => {
             matches!(
                 (host.as_str(), path),
-                ("api.dropboxapi.com", "/oauth2/token")
-                    | ("api.mendeley.com", "/oauth/token")
+                ("api.dropboxapi.com", "/oauth2/token") | ("api.mendeley.com", "/oauth/token")
             )
         }
     };
