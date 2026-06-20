@@ -206,3 +206,16 @@ body {
    * text. Default `auto` lets the OS pick.
    */
 }
+
+/*
+ * Aurora is the implicit default (no data-theme on <html>), so unlike the other
+ * three themes it has no [data-theme] block. This minimal block exists ONLY so
+ * the Settings theme-preview probe can read Aurora's native accent off a
+ * detached [data-theme="aurora"] element like it does for the other themes —
+ * the running app never sets data-theme="aurora". Keep in sync with the @theme
+ * accent above.
+ */
+[data-theme="aurora"] {
+  --color-accent-1: #8e61f6;
+  --color-accent-2: #22d3ee;
+}
