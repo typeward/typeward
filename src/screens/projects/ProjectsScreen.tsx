@@ -280,7 +280,7 @@ const ProjectsScreen: Component = () => {
                   />
                 </Show>
                 <Show when={projects().length > 0}>
-                  <div class="mono py-6 text-center text-[11px] text-fg-4">
+                  <div class="mono py-6 text-center text-[11px] text-fg-3">
                     — end of {projects().length} project{projects().length === 1 ? "" : "s"} —
                   </div>
                 </Show>

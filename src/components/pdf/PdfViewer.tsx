@@ -474,7 +474,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                   onDblClick={(e) => triggerInverseSearch(e, pageNum)}
                   title="Double-click to jump to source"
                 >
-                  <div class="mono absolute -left-12 top-1.5 select-none text-[10px] text-fg-4">
+                  <div class="mono absolute -left-12 top-1.5 select-none text-[10px] text-fg-3">
                     p. {pageNum}
                   </div>
                   <PageCanvas canvas={canvas} />
@@ -495,7 +495,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                 </div>
               );
             })}
-            <div class="mono mt-2 text-[10px] text-fg-4">
+            <div class="mono mt-2 text-[10px] text-fg-3">
               — end of preview ({totalPages()} pages) —
             </div>
           </div>
