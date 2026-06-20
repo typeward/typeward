@@ -9,7 +9,7 @@
   --color-fg-1: #0b0e14;
   --color-fg-2: #475569;
   --color-fg-3: #64748b;
-  --color-fg-4: #94a3b8;
+  --color-fg-4: #828fa2; /* was #94a3b8 — darkened to 3.1:1 on bg (AA UI floor) */
 
   /* Glass — solid-leaning white over cream bg for visible separation. */
   --color-glass-fill: rgb(255 255 255 / 0.78);
@@ -43,7 +43,7 @@
   --syntax-cmd: #7c3aed;
   --syntax-env: #047857;
   --syntax-math: #0891b2;
-  --syntax-comment: #94a3b8;
+  --syntax-comment: #687281; /* was #94a3b8 — darkened to 4.6:1 on bg (AA) */
   --syntax-attr: #0f766e;
 
   --color-warn: #b45309;

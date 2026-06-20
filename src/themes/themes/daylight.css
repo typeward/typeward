@@ -10,8 +10,8 @@
 
   --color-fg-1: #22211e;
   --color-fg-2: #6e685f;
-  --color-fg-3: #8e8678;
-  --color-fg-4: #aba193;
+  --color-fg-3: #756e62; /* was #8e8678 — darkened to 4.6:1 on ivory (AA body) */
+  --color-fg-4: #938a7e; /* was #aba193 — darkened to 3.1:1 on ivory (AA UI floor) */
 
   /* Cards are paper-white sheets with soft paper-gray hairlines (#D8D0C2). */
   --color-glass-fill: rgb(251 248 239 / 0.78);
@@ -51,7 +51,7 @@
   --accent-text-2: #b79a5c;
 
   --color-ok: #3d7a4a;
-  --color-warn: #9a7b3f;
+  --color-warn: #866b37; /* was #9a7b3f — darkened to 4.6:1 on ivory (AA text) */
   --color-err: #a84935;
 
   /* Soft paper drops + crisp white inset highlight. */
@@ -65,7 +65,7 @@
   --syntax-cmd: #2456a6;
   --syntax-env: #3d7a4a;
   --syntax-math: #a84935;
-  --syntax-comment: rgb(34 33 30 / 0.40);
+  --syntax-comment: rgb(34 33 30 / 0.63); /* was 0.40 — 4.6:1 on ivory (AA) */
   --syntax-bracket: rgb(34 33 30 / 0.45);
   --syntax-attr: #2f7d62;
 
