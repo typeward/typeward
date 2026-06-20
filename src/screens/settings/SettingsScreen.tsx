@@ -410,8 +410,8 @@ interface AccentMeta {
 const THEME_NATIVE_ACCENT: Record<Theme, [string, string]> = {
   daylight: ["#101210", "#3A352B"],
   lamplight: ["#E8A34D", "#C2691E"],
-  aurora: ["#8B5CF6", "#22D3EE"],
-  paper: ["#7C3AED", "#0891B2"],
+  aurora: ["#8E61F6", "#22D3EE"],
+  paper: ["#7C3AED", "#07809D"],
 };
 
 const ACCENT_META: Record<Accent, AccentMeta> = {
@@ -421,7 +421,7 @@ const ACCENT_META: Record<Accent, AccentMeta> = {
   "violet-cyan": { id: "violet-cyan", label: "Theme default", a: "", b: "" },
   "amber-rose": { id: "amber-rose", label: "Ember", a: "#F43F5E", b: "#F59E0B" },
   "emerald-teal": { id: "emerald-teal", label: "Tide", a: "#10B981", b: "#14B8A6" },
-  "indigo-pink": { id: "indigo-pink", label: "Orchid", a: "#6366F1", b: "#EC4899" },
+  "indigo-pink": { id: "indigo-pink", label: "Orchid", a: "#6C6FF2", b: "#EC4899" },
 };
 
 // A custom theme only takes over once the switch is on AND a theme is
