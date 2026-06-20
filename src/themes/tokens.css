@@ -17,8 +17,8 @@
   /* Foreground levels */
   --color-fg-1: #e6e8ec;
   --color-fg-2: #9ca3af;
-  --color-fg-3: #6b7280;
-  --color-fg-4: #4b5563;
+  --color-fg-3: #747b88; /* was #6b7280 — lifted to 4.6:1 on bg (AA body) */
+  --color-fg-4: #57606d; /* was #4b5563 — lifted to 3.1:1 on bg (AA UI floor) */
 
   /* Glass surfaces (used by .glass, .glass-soft, .glass-inset utilities) */
   --color-glass-fill: rgb(255 255 255 / 0.035);

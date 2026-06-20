@@ -9,8 +9,8 @@
 
   --color-fg-1: #ede6d8;
   --color-fg-2: rgb(237 230 216 / 0.62);
-  --color-fg-3: rgb(237 230 216 / 0.42);
-  --color-fg-4: rgb(237 230 216 / 0.28);
+  --color-fg-3: rgb(237 230 216 / 0.51); /* was 0.42 — 4.6:1 on bg (AA body) */
+  --color-fg-4: rgb(237 230 216 / 0.38); /* was 0.28 — 3.1:1 on bg (AA UI floor) */
 
   /* Glass — t1 dark card tokens (4.5% white fill, 9% white stroke). */
   --color-glass-fill: rgb(255 255 255 / 0.045);
