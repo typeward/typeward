@@ -164,7 +164,7 @@
   --syntax-cmd: #c4b5fd;
   --syntax-env: #34d399;
   --syntax-math: #67e8f9;
-  --syntax-comment: #5f6878;
+  --syntax-comment: #737b89; /* was #5f6878 — lifted to 4.6:1 on bg (AA) */
   --syntax-bracket: var(--color-fg-3);
   --syntax-attr: #a7f3d0;
 }
