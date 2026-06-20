@@ -159,7 +159,7 @@ const GalleryGrid: Component<{
   onSelect: (t: ipc.TemplateManifest) => void;
 }> = (props) => (
   <div class="flex flex-col gap-3">
-    <div class="glass-inset flex h-9 items-center gap-2 rounded-md px-3">
+    <div class="glass-inset flex h-9 items-center gap-2 rounded-md px-3 focus-within:ring-1 focus-within:ring-[var(--color-accent-1)]">
       <Search class="ui-icon-sm text-fg-3" />
       <input
         type="search"
