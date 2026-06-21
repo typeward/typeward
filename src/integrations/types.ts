@@ -60,6 +60,23 @@ export interface LibraryChange {
   key: string;
 }
 
+/**
+ * A node in a provider's library tree — either a top-level library (a Zotero
+ * personal / group library, or a single-library provider's whole catalog) or a
+ * collection (folder) nested within one. The references picker renders these as
+ * an indented tree and passes the chosen node's `id` back as `searchLibrary`'s
+ * `library` argument.
+ */
+export interface LibraryNode {
+  /** Stable, provider-defined id. Opaque to the picker. */
+  id: string;
+  /** This node's own label (folder / library name), not the full path. */
+  name: string;
+  /** Parent node id; `undefined` for a top-level library root. */
+  parentId?: string;
+  kind: "library" | "collection";
+}
+
 export interface CitationProvider extends IntegrationProvider {
   category: "references";
   /**
@@ -67,16 +84,32 @@ export interface CitationProvider extends IntegrationProvider {
    * authors, year). Empty query is allowed and should surface "recent" or
    * "all" entries up to a sensible limit.
    *
-   * `library` restricts results to one named sub-library (see
-   * `listLibraries`). A provider with no matching library returns `[]`.
+   * `library` restricts results to one node (see `listLibraryNodes`) by its
+   * `id`. A provider that doesn't recognize the id returns `[]`.
    */
   searchLibrary(query: string, library?: string): Promise<Citation[]>;
   /**
-   * Optional: enumerate the provider's sub-libraries (e.g. a Zotero personal
-   * library plus group libraries). When absent, the provider is treated as a
-   * single library named by `displayName`.
+   * Optional: the provider's top-level libraries (a Zotero personal/group
+   * library, or a single-library provider's catalog), as `kind:"library"`
+   * nodes. **Fast** — must NOT discover collections; the picker loads those
+   * lazily via `listCollections` only once a library is selected. When absent,
+   * the provider is treated as a single library named by `displayName`.
    */
-  listLibraries?(): Promise<string[]>;
+  listLibraryNodes?(): Promise<LibraryNode[]>;
+  /**
+   * Optional: the collections (folders / subfolders) within one library, by its
+   * node id, as `kind:"collection"` nodes. `parentId` (another collection's id)
+   * nests subcollections; a top-level collection has `parentId` undefined.
+   * Loaded on demand when the user picks a library.
+   */
+  listCollections?(libraryNodeId: string): Promise<LibraryNode[]>;
+  /**
+   * Optional: drop any internal caches so the next call refetches from source.
+   * The references panel's Refresh button calls this before re-aggregating, so
+   * a freshly added item / collection shows up immediately rather than after a
+   * cache TTL lapses.
+   */
+  invalidate?(): void;
   /** Full BibTeX for one entry, identified by its citation key. */
   fetchEntry(key: string): Promise<BibTexEntry>;
   /**

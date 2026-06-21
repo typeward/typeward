@@ -19,7 +19,7 @@
 //! port and is keyed by state in [`OauthManager`].
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{broadcast, oneshot, Mutex};
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -46,6 +46,10 @@ const CALLBACK_HTML_SUCCESS: &str = "<!doctype html><html><head><title>Typeward<
 const CALLBACK_HTML_ERROR: &str = "<!doctype html><html><head><title>Typeward</title>\
 <style>body{font-family:system-ui;background:#0A0B0F;color:#F87171;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}div{text-align:center}</style>\
 </head><body><div><h1>Sign-in failed.</h1><p>Return to Typeward and try again.</p></div></body></html>";
+// Returned for stray requests that aren't an OAuth callback (e.g. a probe or a
+// manually opened loopback root), so they don't consume the result channel.
+const CALLBACK_HTML_WAITING: &str =
+    "<!doctype html><html><head><title>Typeward</title></head><body></body></html>";
 
 #[derive(Debug, Error, Serialize)]
 pub enum OauthError {
@@ -79,6 +83,16 @@ pub struct OauthBeginRequest {
     /// `token_access_type=offline` for Dropbox).
     #[serde(default)]
     pub extra_auth_params: HashMap<String, String>,
+    /// Exact, pre-registered loopback redirect URI for providers that don't
+    /// support dynamic ports (e.g. Mendeley). Must be an `http://` loopback URL
+    /// with an explicit port. `None` => OS-assigned `127.0.0.1` random port.
+    #[serde(default)]
+    pub redirect_uri: Option<String>,
+    /// When set, the token exchange authenticates as a *confidential* client
+    /// via HTTP Basic (`client_id:secret`) instead of PKCE. Required for
+    /// providers like Mendeley that don't support PKCE.
+    #[serde(default)]
+    pub client_secret: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,8 +145,6 @@ type CallbackResult = Result<String, OauthError>;
 type CallbackReceiver = oneshot::Receiver<CallbackResult>;
 type CallbackSender = oneshot::Sender<CallbackResult>;
 type SharedCallbackSender = Arc<std::sync::Mutex<Option<CallbackSender>>>;
-type ShutdownSender = oneshot::Sender<()>;
-type SharedShutdownSender = Arc<std::sync::Mutex<Option<ShutdownSender>>>;
 
 /// One pending OAuth flow. Held by [`OauthManager`] until either the
 /// callback fires (success/error) or the wait times out, at which point
@@ -144,17 +156,16 @@ struct PendingFlow {
     token_url: String,
     client_id: String,
     redirect_uri: String,
-    /// Same handle the callback holds (shared `Arc`). Lets `oauth_wait` shut
-    /// the loopback server down on timeout / channel-close, instead of leaking
-    /// the bound port until process exit.
-    shutdown: SharedShutdownSender,
+    /// Present only for confidential clients — drives HTTP Basic token exchange.
+    client_secret: Option<String>,
+    /// Broadcast so every bound loopback listener (IPv4 + IPv6) shuts down on
+    /// timeout / channel-close, instead of leaking its port until process exit.
+    shutdown: broadcast::Sender<()>,
 }
 
 impl PendingFlow {
     fn shutdown_server(&self) {
-        if let Some(tx) = self.shutdown.lock().expect("oauth shutdown lock").take() {
-            let _ = tx.send(());
-        }
+        let _ = self.shutdown.send(());
     }
 }
 
@@ -189,7 +200,7 @@ struct CallbackState {
     expected_state: String,
     /// Held in an Arc<Mutex<Option<…>>> so the first callback consumes it.
     tx: SharedCallbackSender,
-    shutdown: SharedShutdownSender,
+    shutdown: broadcast::Sender<()>,
 }
 
 fn generate_state() -> String {
@@ -297,10 +308,87 @@ fn validate_extra_auth_params(params: &HashMap<String, String>) -> Result<(), Oa
     Ok(())
 }
 
+/// Parse a user-registered loopback redirect URI into (port, path). Enforces
+/// http + loopback host + explicit port so the renderer can't point the
+/// redirect at an external host (which would exfiltrate the auth code).
+fn parse_loopback_redirect(uri: &str) -> Result<(u16, String), OauthError> {
+    let parsed = url::Url::parse(uri).map_err(|e| OauthError::InvalidAuthUrl(e.to_string()))?;
+    if parsed.scheme() != "http" {
+        return Err(OauthError::InvalidAuthUrl(
+            "redirect URL must be http:// on a loopback host".into(),
+        ));
+    }
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    if !matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1") {
+        return Err(OauthError::InvalidAuthUrl(format!(
+            "redirect host must be loopback (localhost / 127.0.0.1), got: {host}"
+        )));
+    }
+    let port = parsed
+        .port()
+        .ok_or_else(|| OauthError::InvalidAuthUrl("redirect URL must include a port".into()))?;
+    let mut path = parsed.path().to_string();
+    if path.is_empty() {
+        path = "/".into();
+    }
+    Ok((port, path))
+}
+
+/// Bind the loopback callback server. With an explicit `redirect_uri` (a
+/// confidential provider's exact registered URL) it binds both IPv4 and IPv6
+/// loopback on that URL's port so `localhost` resolves either way, and returns
+/// the URL verbatim. Without one it picks a random `127.0.0.1` port (the PKCE
+/// default). Returns `(listeners, redirect_uri, callback_path)`.
+async fn build_listeners(
+    redirect_uri: Option<&str>,
+) -> Result<(Vec<TcpListener>, String, String), OauthError> {
+    match redirect_uri {
+        Some(uri) => {
+            let (port, path) = parse_loopback_redirect(uri)?;
+            let mut listeners = Vec::new();
+            if let Ok(l) = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await {
+                listeners.push(l);
+            }
+            if let Ok(l) = TcpListener::bind(SocketAddr::from((Ipv6Addr::LOCALHOST, port))).await {
+                listeners.push(l);
+            }
+            if listeners.is_empty() {
+                return Err(OauthError::BindFailed(format!(
+                    "port {port} is already in use — close whatever is using it and retry, or \
+                     register a redirect URL on a free port (on macOS, AirPlay Receiver uses 5000)"
+                )));
+            }
+            Ok((listeners, uri.to_string(), path))
+        }
+        None => {
+            let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+                .await
+                .map_err(|e| OauthError::BindFailed(e.to_string()))?;
+            let port = listener
+                .local_addr()
+                .map_err(|e| OauthError::BindFailed(e.to_string()))?
+                .port();
+            Ok((
+                vec![listener],
+                format!("http://127.0.0.1:{port}/callback"),
+                "/callback".to_string(),
+            ))
+        }
+    }
+}
+
 async fn callback_handler(
     State(state): State<CallbackState>,
     Query(params): Query<CallbackQuery>,
 ) -> Html<&'static str> {
+    // A bare-root redirect (no path) makes "/" the callback route, so stray
+    // GETs (probes, prefetches, a manually opened loopback URL) would otherwise
+    // resolve the channel as an error and tear both listeners down before the
+    // real redirect lands. Ignore anything without OAuth params.
+    if params.code.is_none() && params.error.is_none() {
+        return Html(CALLBACK_HTML_WAITING);
+    }
+
     let result: Result<String, OauthError> = if let Some(error) = params.error {
         let desc = params
             .error_description
@@ -322,9 +410,7 @@ async fn callback_handler(
     if let Some(tx) = state.tx.lock().expect("oauth tx lock").take() {
         let _ = tx.send(result);
     }
-    if let Some(shutdown) = state.shutdown.lock().expect("oauth shutdown lock").take() {
-        let _ = shutdown.send(());
-    }
+    let _ = state.shutdown.send(());
 
     if is_ok {
         Html(CALLBACK_HTML_SUCCESS)
@@ -345,14 +431,8 @@ pub async fn oauth_begin(
     let state = generate_state();
     let (code_verifier, code_challenge) = generate_pkce();
 
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .map_err(|e| OauthError::BindFailed(e.to_string()))?;
-    let port = listener
-        .local_addr()
-        .map_err(|e| OauthError::BindFailed(e.to_string()))?
-        .port();
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let (listeners, redirect_uri, callback_path) =
+        build_listeners(req.redirect_uri.as_deref()).await?;
 
     let auth_url = build_auth_url(
         &req.auth_url,
@@ -365,29 +445,32 @@ pub async fn oauth_begin(
     )?;
 
     let (cb_tx, cb_rx) = oneshot::channel::<Result<String, OauthError>>();
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let shutdown = Arc::new(std::sync::Mutex::new(Some(shutdown_tx)));
+    let (shutdown_tx, _) = broadcast::channel::<()>(4);
 
     let callback_state = CallbackState {
         expected_state: state.clone(),
         tx: Arc::new(std::sync::Mutex::new(Some(cb_tx))),
-        shutdown: shutdown.clone(),
+        shutdown: shutdown_tx.clone(),
     };
 
     let app = Router::new()
-        .route("/callback", get(callback_handler))
+        .route(&callback_path, get(callback_handler))
         .with_state(callback_state);
 
-    // Park the server until either the callback fires (which signals
-    // shutdown_tx) or the wait times out (which drops the flow entry; the
-    // server then exits when the next graceful-shutdown poll runs).
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            })
-            .await;
-    });
+    // One server task per bound loopback address (IPv4 and, when available,
+    // IPv6) so `localhost` resolves to whichever the browser picks. Each parks
+    // until the broadcast fires — on callback (success/error) or wait timeout.
+    for listener in listeners {
+        let app = app.clone();
+        let mut shutdown_rx = shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_rx.recv().await;
+                })
+                .await;
+        });
+    }
 
     let flow = Arc::new(PendingFlow {
         rx: Mutex::new(Some(cb_rx)),
@@ -395,7 +478,8 @@ pub async fn oauth_begin(
         token_url: req.token_url,
         client_id: req.client_id,
         redirect_uri,
-        shutdown,
+        client_secret: req.client_secret,
+        shutdown: shutdown_tx,
     });
     manager.insert(state.clone(), flow);
 
@@ -455,16 +539,25 @@ async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, Oa
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
-    let response = client
+    let mut form: Vec<(&str, &str)> = vec![
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", flow.redirect_uri.as_str()),
+    ];
+    let mut builder = client
         .post(&flow.token_url)
-        .header("Accept", "application/json")
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", flow.redirect_uri.as_str()),
-            ("client_id", flow.client_id.as_str()),
-            ("code_verifier", flow.code_verifier.as_str()),
-        ])
+        .header("Accept", "application/json");
+    match flow.client_secret.as_deref() {
+        // Confidential client (e.g. Mendeley): authenticate with HTTP Basic.
+        // The provider doesn't support PKCE, so no code_verifier is sent.
+        Some(secret) => builder = builder.basic_auth(&flow.client_id, Some(secret)),
+        None => {
+            form.push(("client_id", flow.client_id.as_str()));
+            form.push(("code_verifier", flow.code_verifier.as_str()));
+        }
+    }
+    let response = builder
+        .form(&form)
         .send()
         .await
         .map_err(|e| OauthError::TokenExchange(e.to_string()))?;
@@ -615,6 +708,25 @@ mod tests {
         assert!(validate_extra_auth_params(&params).is_err());
         let params = HashMap::from([("prompt".into(), "consent".into())]);
         assert!(validate_extra_auth_params(&params).is_ok());
+    }
+
+    #[test]
+    fn parse_loopback_redirect_accepts_loopback_with_port() {
+        assert_eq!(
+            parse_loopback_redirect("http://localhost:5000/callback").unwrap(),
+            (5000, "/callback".to_string())
+        );
+        assert_eq!(
+            parse_loopback_redirect("http://127.0.0.1:5000").unwrap(),
+            (5000, "/".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_loopback_redirect_rejects_non_loopback_and_missing_port() {
+        assert!(parse_loopback_redirect("http://evil.example.com:5000/cb").is_err());
+        assert!(parse_loopback_redirect("https://localhost:5000/cb").is_err());
+        assert!(parse_loopback_redirect("http://localhost/cb").is_err());
     }
 
     #[test]

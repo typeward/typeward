@@ -206,7 +206,19 @@ const DesktopLayout: Component<ShellProps> = (props) => {
   const showPreview = () => editorLayout() !== "editor";
   const showDrawer = () => consolePosition() === "drawer";
 
-  const sidebar = createSidebarResize({ minPx: 200, maxPx: 320, defaultPx: 260 });
+  // The sidebar's initial width fits the full tab strip (measured by
+  // EditorSidebar) so Files / Refs / SCM / Review·n / TODO·n all show without
+  // clipping; the user can still drag from there.
+  const [tabsWidth, setTabsWidth] = createSignal<number | undefined>();
+  const sidebar = createSidebarResize({
+    minPx: 200,
+    maxPx: 400,
+    defaultPx: 260,
+    desiredPx: () => {
+      const w = tabsWidth();
+      return w ? w + 4 : undefined;
+    },
+  });
 
   const editorPane = () => (
     <CenterPane
@@ -295,13 +307,14 @@ const DesktopLayout: Component<ShellProps> = (props) => {
       {/* min-w-0 zeroes the panel's flex auto-minimum so wide tab content
           (long reference titles, search results) can't grow the pane past its
           corvu-controlled size; overflow-hidden clips the rest. */}
-      <Resizable.Panel minSize="200px" maxSize="320px" class="min-w-0 overflow-hidden">
+      <Resizable.Panel minSize="200px" maxSize="400px" class="min-w-0 overflow-hidden">
         <EditorSidebar
           tab={props.leftTab}
           setTab={props.setLeftTab}
           outlineCollapsed={props.outlineCollapsed}
           setOutlineCollapsed={props.setOutlineCollapsed}
           onSelectFile={props.onSelectFile}
+          onTabsMeasured={setTabsWidth}
         />
       </Resizable.Panel>
 

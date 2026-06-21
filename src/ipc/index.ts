@@ -272,7 +272,7 @@ export interface ReferencesProvidersSettings {
   activeProvider?: string;
   betterBibTex: { enabled: boolean };
   zoteroWeb: { userId?: string };
-  mendeley: { profileId?: string; displayName?: string };
+  mendeley: { profileId?: string; displayName?: string; redirectUri?: string };
 }
 
 export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");

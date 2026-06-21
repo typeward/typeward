@@ -8,47 +8,67 @@
  * 2. **Zotero's built-in local API** (Zotero 7+, no plugin needed):
  *    GET http://127.0.0.1:23119/api/users/0/items?format=bibtex
  *    Same server, web-API-compatible shape, paginated via Total-Results.
- *    It also enumerates group libraries (`/api/users/0/groups`), so the
- *    provider can discover and export every library the user belongs to
- *    without any manual library-id configuration. Requires "Allow other
- *    applications on this computer to communicate with Zotero" (Settings →
- *    Advanced).
+ *    It also enumerates group libraries (`/api/users/0/groups`) and each
+ *    library's collections (`/collections`), so the provider can discover and
+ *    export every library and folder without any manual configuration.
+ *    Requires "Allow other applications on this computer to communicate with
+ *    Zotero" (Settings → Advanced).
  *
- * The provider auto-discovers libraries: the personal library plus any group
- * libraries. The personal library exports via BBT when available (nicer keys)
+ * The provider auto-discovers libraries (personal + groups) and their
+ * collections. The personal library exports via BBT when available (nicer keys)
  * and falls back to the local API; group libraries always use the local API
- * (their BBT internal ids don't match the public group ids the API reports).
+ * (their BBT internal ids don't match the public group ids). Collection
+ * contents follow the same per-library choice so an inserted `\cite{key}`
+ * always resolves against the aggregated `library.bib`.
  *
- * Search is done in-process against the cached export, refreshed lazily with a
- * 60-second TTL. Each cached entry is tagged with its source library so the
- * references panel can list and filter by library.
+ * Search is done in-process against cached exports, refreshed lazily with a
+ * 60-second TTL. Each cached entry is tagged with its library so the references
+ * panel can list and filter by library or collection.
  */
 
 import { httpRequest } from "~/integrations/http";
-import type { Citation, CitationProvider, ProviderStatus } from "~/integrations/types";
+import type {
+  Citation,
+  CitationProvider,
+  LibraryNode,
+  ProviderStatus,
+} from "~/integrations/types";
 
 import { type CitationFields, extractFields, parseBibTex } from "../bibtex";
+import { mapLimit } from "../concurrency";
+import {
+  type CollectionRef,
+  type LibraryRef,
+  type RawCollection,
+  collNodeId,
+  isValidKey,
+  libNodeId,
+  pruneTrashedCollections,
+  resolveNode,
+} from "./nodes";
 
 const BASE = "http://127.0.0.1:23119";
 const PROBE_URL = `${BASE}/better-bibtex/`;
 const BBT_PERSONAL_URL = `${BASE}/better-bibtex/library?/1/library.bib`;
+// BBT pull-export for one collection by its Zotero key. `1` is the personal
+// library id (matches BBT_PERSONAL_URL); group collections go via the local API
+// instead because their keys aren't addressable through this personal-library
+// endpoint.
+const BBT_COLLECTION_URL = (collKey: string) =>
+  `${BASE}/better-bibtex/collection?/1/${encodeURIComponent(collKey)}.bibtex`;
 const GROUPS_URL = `${BASE}/api/users/0/groups?format=json`;
 const PERSONAL_ITEMS = `${BASE}/api/users/0/items`;
-const GROUP_ITEMS = (id: string) => `${BASE}/api/groups/${id}/items`;
 const PERSONAL_LIBRARY_NAME = "My Library";
 const CACHE_TTL_MS = 60_000;
 const LIST_LIMIT = 200;
-
-interface LibraryRef {
-  /** "user" for the personal library, or the numeric group id. */
-  id: string;
-  name: string;
-  kind: "user" | "group";
-}
+const MAX_COLLECTION_PAGES = 25; // 2500 collections cap during discovery
 
 interface TaggedEntry {
   key: string;
   source: string;
+  /** Stable library node id — unique even when display names collide. */
+  libId: string;
+  /** Human-readable library name for display. */
   library: string;
   fields: CitationFields;
 }
@@ -57,6 +77,19 @@ interface Cache {
   fetchedAt: number;
   bibtex: string;
   entries: TaggedEntry[];
+}
+
+interface Libraries {
+  libraries: LibraryRef[];
+  bbt: boolean;
+  localApi: boolean;
+}
+
+/** REST base for a library: personal under /users/0, groups under /groups/{id}. */
+function apiBase(lib: LibraryRef): string {
+  return lib.kind === "user"
+    ? `${BASE}/api/users/0`
+    : `${BASE}/api/groups/${lib.id}`;
 }
 
 /** `true` if the Better BibTeX HTTP server is reachable. */
@@ -106,27 +139,84 @@ async function discoverLibraries(localApi: boolean): Promise<LibraryRef[]> {
   return libs;
 }
 
-/** Full-library BibTeX via the built-in local API, draining all pages. */
-async function exportViaLocalApi(itemsUrl: string): Promise<string> {
+/** Discover one library's collections (flat list with parent links). */
+async function discoverCollections(lib: LibraryRef): Promise<CollectionRef[]> {
+  const base = apiBase(lib);
+  const raw: RawCollection[] = [];
   const limit = 100;
-  const pages: string[] = [];
   let start = 0;
-  for (;;) {
+  for (let page = 0; page < MAX_COLLECTION_PAGES; page++) {
     const res = await httpRequest({
       method: "GET",
-      url: `${itemsUrl}?format=bibtex&limit=${limit}&start=${start}`,
+      url: `${base}/collections?format=json&limit=${limit}&start=${start}`,
     });
-    if (res.status < 200 || res.status >= 300) {
-      throw new Error(`Zotero local API export failed (status ${res.status})`);
+    if (res.status < 200 || res.status >= 300) break;
+    const arr = JSON.parse(res.body) as Array<{
+      key?: string;
+      deleted?: boolean | number;
+      data?: {
+        key?: string;
+        name?: string;
+        parentCollection?: string | false;
+        deleted?: boolean | number;
+      };
+    }>;
+    for (const c of arr) {
+      const key = c.key ?? c.data?.key;
+      if (!key || !isValidKey(key)) continue;
+      const parentRaw = c.data?.parentCollection;
+      const parent =
+        typeof parentRaw === "string" && isValidKey(parentRaw) ? parentRaw : null;
+      raw.push({
+        key,
+        name: c.data?.name ?? key,
+        parent,
+        deleted: Boolean(c.data?.deleted ?? c.deleted),
+      });
     }
-    pages.push(res.body);
     const total = Number(
       res.headers["total-results"] ?? res.headers["Total-Results"] ?? 0,
     );
     start += limit;
-    if (!total || start >= total) break;
+    if (!total || start >= total || arr.length === 0) break;
   }
-  return pages.join("\n\n");
+  return pruneTrashedCollections(raw);
+}
+
+const PAGE = 100;
+const PAGE_CONCURRENCY = 5;
+
+/**
+ * Full BibTeX via the built-in local API. The first page reveals `Total-Results`;
+ * the remaining pages are fetched concurrently (bounded) rather than one IPC
+ * round-trip at a time — large libraries were the "loading slow" cost.
+ */
+async function exportViaLocalApi(itemsUrl: string): Promise<string> {
+  const page = async (start: number): Promise<string> => {
+    const res = await httpRequest({
+      method: "GET",
+      url: `${itemsUrl}?format=bibtex&limit=${PAGE}&start=${start}`,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`Zotero local API export failed (status ${res.status})`);
+    }
+    return res.body;
+  };
+  const first = await httpRequest({
+    method: "GET",
+    url: `${itemsUrl}?format=bibtex&limit=${PAGE}&start=0`,
+  });
+  if (first.status < 200 || first.status >= 300) {
+    throw new Error(`Zotero local API export failed (status ${first.status})`);
+  }
+  const total = Number(
+    first.headers["total-results"] ?? first.headers["Total-Results"] ?? 0,
+  );
+  if (!total || total <= PAGE) return first.body;
+  const starts: number[] = [];
+  for (let s = PAGE; s < total; s += PAGE) starts.push(s);
+  const rest = await mapLimit(starts, PAGE_CONCURRENCY, page);
+  return [first.body, ...rest].join("\n\n");
 }
 
 /** Export one library's BibTeX, preferring BBT for the personal library. */
@@ -146,20 +236,79 @@ async function exportLibrary(lib: LibraryRef, bbt: boolean): Promise<string> {
     }
     return exportViaLocalApi(PERSONAL_ITEMS);
   }
-  return exportViaLocalApi(GROUP_ITEMS(lib.id));
+  return exportViaLocalApi(`${apiBase(lib)}/items`);
+}
+
+/**
+ * BibTeX for the items in one collection. The personal library prefers BBT
+ * (so collection keys match the BBT-keyed `library.bib`); groups and the
+ * no-BBT case use the local API. `/items/top` excludes child notes/attachments.
+ */
+async function exportCollection(
+  lib: LibraryRef,
+  collKey: string,
+  bbt: boolean,
+): Promise<string> {
+  if (lib.kind === "user" && bbt) {
+    try {
+      const res = await httpRequest({
+        method: "GET",
+        url: BBT_COLLECTION_URL(collKey),
+        headers: { Accept: "application/x-bibtex; charset=utf-8" },
+      });
+      if (res.status >= 200 && res.status < 300 && res.body.includes("@")) {
+        return res.body;
+      }
+    } catch {
+      // Fall back to the local API below.
+    }
+  }
+  return exportViaLocalApi(
+    `${apiBase(lib)}/collections/${encodeURIComponent(collKey)}/items/top`,
+  );
 }
 
 export function createBetterBibTexProvider(): CitationProvider {
   let cache: Cache | undefined;
+  let libCache: (Libraries & { fetchedAt: number }) | undefined;
+  let nodeCache: { fetchedAt: number; nodes: LibraryNode[] } | undefined;
+  const collCache = new Map<string, { fetchedAt: number; entries: TaggedEntry[] }>();
+  // Per-library entry cache keyed by libId, so browsing one library exports
+  // only that library instead of the whole catalog (the full `refresh()` export
+  // is reserved for `exportAllAsBibTex` → library.bib).
+  const libEntriesCache = new Map<string, { fetchedAt: number; entries: TaggedEntry[] }>();
+
+  // Single source of truth for the library set + reachability, shared by the
+  // export cache, the node list, and node-id resolution so they never drift to
+  // different discovery snapshots. Failures aren't cached (so a transient
+  // outage self-heals on the next call).
+  const loadLibraries = async (): Promise<Libraries> => {
+    const now = Date.now();
+    if (libCache && now - libCache.fetchedAt < CACHE_TTL_MS) return libCache;
+    const [bbt, localApi] = await Promise.all([
+      probeBetterBibTex(),
+      probeZoteroLocalApi(),
+    ]);
+    if (!bbt && !localApi) return { libraries: [], bbt, localApi };
+    const libraries = await discoverLibraries(localApi);
+    libCache = { fetchedAt: now, libraries, bbt, localApi };
+    return libCache;
+  };
+
+  const tag = (bibtex: string, lib: LibraryRef): TaggedEntry[] =>
+    parseBibTex(bibtex).map((e) => ({
+      key: e.key,
+      source: e.source,
+      libId: libNodeId(lib),
+      library: lib.name,
+      fields: extractFields(e.source),
+    }));
 
   const refresh = async (): Promise<Cache> => {
     const now = Date.now();
     if (cache && now - cache.fetchedAt < CACHE_TTL_MS) return cache;
 
-    const [bbt, localApi] = await Promise.all([
-      probeBetterBibTex(),
-      probeZoteroLocalApi(),
-    ]);
+    const { libraries, bbt, localApi } = await loadLibraries();
     if (!bbt && !localApi) {
       throw new Error(
         "Zotero isn't reachable on 127.0.0.1:23119. Start Zotero 7 and enable " +
@@ -168,31 +317,71 @@ export function createBetterBibTexProvider(): CitationProvider {
       );
     }
 
-    const libraries = await discoverLibraries(localApi);
     const blocks: string[] = [];
     const entries: TaggedEntry[] = [];
+    let anySuccess = false;
     for (const lib of libraries) {
       let bibtex: string;
       try {
         bibtex = await exportLibrary(lib, bbt);
+        anySuccess = true;
       } catch {
         // Skip a single failing library rather than failing the whole refresh.
         continue;
       }
       if (bibtex.trim().length === 0) continue;
       blocks.push(bibtex);
-      for (const e of parseBibTex(bibtex)) {
-        entries.push({
-          key: e.key,
-          source: e.source,
-          library: lib.name,
-          fields: extractFields(e.source),
-        });
-      }
+      entries.push(...tag(bibtex, lib));
+    }
+
+    // Every export threw (transient outage) — don't cache the empty result, so
+    // the next call retries instead of serving blank for the full TTL.
+    if (!anySuccess && libraries.length > 0) {
+      throw new Error("Zotero export failed for every library.");
     }
 
     cache = { fetchedAt: now, bibtex: blocks.join("\n\n"), entries };
     return cache;
+  };
+
+  const collectionEntries = async (
+    nodeId: string,
+    lib: LibraryRef,
+    collKey: string,
+    bbt: boolean,
+  ): Promise<TaggedEntry[]> => {
+    const now = Date.now();
+    const hit = collCache.get(nodeId);
+    if (hit && now - hit.fetchedAt < CACHE_TTL_MS) return hit.entries;
+    const entries = tag(await exportCollection(lib, collKey, bbt), lib);
+    collCache.set(nodeId, { fetchedAt: now, entries });
+    return entries;
+  };
+
+  const libraryEntries = async (
+    lib: LibraryRef,
+    bbt: boolean,
+  ): Promise<TaggedEntry[]> => {
+    const libId = libNodeId(lib);
+    const now = Date.now();
+    const hit = libEntriesCache.get(libId);
+    if (hit && now - hit.fetchedAt < CACHE_TTL_MS) return hit.entries;
+    const entries = tag(await exportLibrary(lib, bbt), lib);
+    libEntriesCache.set(libId, { fetchedAt: now, entries });
+    return entries;
+  };
+
+  const matchesQuery = (e: TaggedEntry, q: string): boolean => {
+    if (!q) return true;
+    return [
+      e.key,
+      e.fields.title ?? "",
+      e.fields.authors.join(" "),
+      e.fields.year != null ? String(e.fields.year) : "",
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(q);
   };
 
   const toCitation = (e: TaggedEntry): Citation => ({
@@ -210,43 +399,78 @@ export function createBetterBibTexProvider(): CitationProvider {
     displayName: "Zotero (local)",
 
     async status(): Promise<ProviderStatus> {
-      const [bbt, localApi] = await Promise.all([
-        probeBetterBibTex(),
-        probeZoteroLocalApi(),
-      ]);
+      const { bbt, localApi } = await loadLibraries();
       return bbt || localApi ? "ready" : "error";
+    },
+
+    invalidate(): void {
+      cache = undefined;
+      libCache = undefined;
+      nodeCache = undefined;
+      collCache.clear();
+      libEntriesCache.clear();
     },
 
     async exportAllAsBibTex(): Promise<string> {
       return (await refresh()).bibtex;
     },
 
-    async listLibraries(): Promise<string[]> {
-      const [bbt, localApi] = await Promise.all([
-        probeBetterBibTex(),
-        probeZoteroLocalApi(),
-      ]);
+    async listLibraryNodes(): Promise<LibraryNode[]> {
+      const now = Date.now();
+      if (nodeCache && now - nodeCache.fetchedAt < CACHE_TTL_MS) return nodeCache.nodes;
+      const { libraries, bbt, localApi } = await loadLibraries();
       if (!bbt && !localApi) return [];
-      return (await discoverLibraries(localApi)).map((l) => l.name);
+      const nodes: LibraryNode[] = libraries.map((lib) => ({
+        id: libNodeId(lib),
+        name: lib.name,
+        kind: "library",
+      }));
+      nodeCache = { fetchedAt: now, nodes };
+      return nodes;
+    },
+
+    async listCollections(libraryNodeId: string): Promise<LibraryNode[]> {
+      // Not cached — the folder tree must mirror Zotero on every open/refresh
+      // (deleted folders shouldn't linger). Discovery is one cheap request; the
+      // heavy citation exports stay cached.
+      const { libraries } = await loadLibraries();
+      const node = resolveNode(libraryNodeId, libraries);
+      if (!node || node.kind !== "library") return [];
+      let colls: CollectionRef[] = [];
+      try {
+        colls = await discoverCollections(node.lib);
+      } catch {
+        // A library that won't enumerate collections simply has none here.
+      }
+      return colls.map((c) => ({
+        id: collNodeId(node.lib, c.key),
+        name: c.name,
+        parentId: c.parent ? collNodeId(node.lib, c.parent) : undefined,
+        kind: "collection",
+      }));
     },
 
     async searchLibrary(query: string, library?: string): Promise<Citation[]> {
-      const { entries } = await refresh();
       const q = query.trim().toLowerCase();
-      const matches = entries.filter((e) => {
-        if (library !== undefined && e.library !== library) return false;
-        if (!q) return true;
-        return [
-          e.key,
-          e.fields.title ?? "",
-          e.fields.authors.join(" "),
-          e.fields.year != null ? String(e.fields.year) : "",
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q);
-      });
-      return matches.slice(0, LIST_LIMIT).map(toCitation);
+
+      let pool: TaggedEntry[];
+      if (library === undefined) {
+        pool = (await refresh()).entries;
+      } else {
+        const { libraries, bbt } = await loadLibraries();
+        const node = resolveNode(library, libraries);
+        if (!node) return []; // Not one of this provider's nodes.
+        if (node.kind === "collection") {
+          pool = await collectionEntries(library, node.lib, node.collKey, bbt);
+        } else {
+          pool = await libraryEntries(node.lib, bbt);
+        }
+      }
+
+      return pool
+        .filter((e) => matchesQuery(e, q))
+        .slice(0, LIST_LIMIT)
+        .map(toCitation);
     },
 
     async fetchEntry(key: string) {

@@ -8,7 +8,15 @@ import {
 } from "lucide-solid";
 import { exists } from "@tauri-apps/plugin-fs";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createEffect, createResource, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createResource,
+  createSignal,
+  onCleanup,
+  onMount,
+} from "solid-js";
 import { FileTree } from "~/components/editor/FileTree";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
 import { CommitPanel } from "~/components/vcs/CommitPanel";
@@ -43,6 +51,8 @@ interface EditorSidebarProps {
   outlineCollapsed: boolean;
   setOutlineCollapsed: (fn: (v: boolean) => boolean) => void;
   onSelectFile: (relPath: string) => void;
+  /** Reports the tab strip's natural width so the shell can fit the sidebar. */
+  onTabsMeasured?: (px: number) => void;
 }
 
 export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
@@ -104,11 +114,45 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     }
   };
 
+  // The tab strip fits its tabs (Files / Refs / SCM / Review·n / TODO·n)
+  // without squishing them; we report its natural width so the shell can size
+  // the sidebar to show them all. Summing children (each `flex-shrink-0`) keeps
+  // the measurement independent of the current container width.
+  let tabStripRef: HTMLDivElement | undefined;
+  const measureTabs = () => {
+    const el = tabStripRef;
+    if (!el || !props.onTabsMeasured) return;
+    const style = getComputedStyle(el);
+    const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+    const gap = parseFloat(style.columnGap) || 0;
+    const kids = Array.from(el.children) as HTMLElement[];
+    let content = padX;
+    for (const k of kids) content += k.offsetWidth;
+    if (kids.length > 1) content += gap * (kids.length - 1);
+    props.onTabsMeasured(Math.ceil(content));
+  };
+  createEffect(() => {
+    // Track the reactive bits that add/remove tabs or change a counter width.
+    hasReferences();
+    isGitRepo();
+    allOpenThreadCount();
+    queueMicrotask(measureTabs);
+  });
+  onMount(() => {
+    if (!tabStripRef) return;
+    const ro = new ResizeObserver(() => measureTabs());
+    ro.observe(tabStripRef);
+    onCleanup(() => ro.disconnect());
+  });
+
   return (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
       {/* Tab row — Files / Review / TODO. SCM only inside git repos; Refs
           only when a citation provider is configured. */}
-      <div class="flex flex-shrink-0 items-center gap-0 border-b border-glass-stroke px-2 pt-1.5">
+      <div
+        ref={tabStripRef}
+        class="flex flex-shrink-0 items-center gap-0 overflow-x-auto scroll border-b border-glass-stroke px-2 pt-1.5"
+      >
         <For
           each={[
             { id: "files" as LeftTab, label: "Files" },
@@ -124,7 +168,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               <button
                 type="button"
                 onClick={() => props.setTab(t.id)}
-                class={`relative flex items-center gap-1.5 px-2.5 text-[length:var(--ui-font-base)] font-medium ${
+                class={`relative flex flex-shrink-0 items-center gap-1.5 px-2.5 text-[length:var(--ui-font-base)] font-medium ${
                   active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
                 }`}
                 style={{ height: "var(--ui-row)" }}
@@ -145,7 +189,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                 </Show>
                 <Show when={active()}>
                   <span
-                    class="absolute -bottom-px left-2.5 right-2.5 h-[2px] rounded"
+                    class="absolute bottom-0 left-2.5 right-2.5 h-[2px] rounded"
                     style={{
                       background:
                         "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))",
