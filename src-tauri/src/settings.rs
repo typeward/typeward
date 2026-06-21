@@ -140,6 +140,14 @@ pub struct MendeleyAccountSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub display_name: Option<String>,
+    /// The exact redirect URL registered in the user's Mendeley app. Mirrored
+    /// by the OAuth flow so it matches Mendeley's exact-match check. Not secret.
+    #[serde(
+        rename = "redirectUri",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub redirect_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -26,6 +26,17 @@ export interface OauthFlowOptions {
   scopes?: string[];
   /** Provider-specific extra params (e.g. `{ token_access_type: "offline" }`). */
   extraAuthParams?: Record<string, string>;
+  /**
+   * Exact registered loopback redirect URI for providers that exact-match it
+   * (e.g. Mendeley) — must be `http://` on a loopback host with a port. Omit
+   * for the default OS-assigned `127.0.0.1` port.
+   */
+  redirectUri?: string;
+  /**
+   * Client secret for confidential providers — the token exchange uses HTTP
+   * Basic auth instead of PKCE. Only providers without PKCE support need this.
+   */
+  clientSecret?: string;
 }
 
 export interface OauthTokens {
@@ -57,8 +68,19 @@ export async function runOauthFlow(opts: OauthFlowOptions): Promise<OauthTokens>
       clientId: opts.clientId,
       scopes: opts.scopes ?? [],
       extraAuthParams: opts.extraAuthParams ?? {},
+      redirectUri: opts.redirectUri,
+      clientSecret: opts.clientSecret,
     },
   });
+
+  // Diagnostic: the exact redirect_uri the provider sees must byte-match the
+  // one registered for the app, or it rejects the request before redirecting.
+  try {
+    const sent = new URL(begin.url).searchParams.get("redirect_uri");
+    console.info("[oauth] redirect_uri sent to provider:", sent);
+  } catch {
+    // begin.url is provider-built and always valid; ignore parse hiccups.
+  }
 
   await openUrl(begin.url);
 

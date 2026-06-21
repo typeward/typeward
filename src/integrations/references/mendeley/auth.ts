@@ -1,5 +1,5 @@
 /**
- * Mendeley OAuth (PKCE) + token storage.
+ * Mendeley OAuth (confidential authorization-code) + token storage.
  *
  * Note on Mendeley's status (2026): Mendeley Desktop was discontinued in
  * September 2022 and the web product is in maintenance mode. The REST
@@ -8,15 +8,25 @@
  * long-term — this provider exists for users migrating off Mendeley, not
  * for fresh adoption.
  *
+ * Unlike PKCE providers, Mendeley is a *confidential* OAuth client: it does
+ * not support PKCE and authenticates the token exchange with HTTP Basic
+ * (client_id:client_secret). It also exact-matches the redirect URI with no
+ * dynamic ports, so the user registers one redirect URL in their Mendeley app
+ * and the flow uses it verbatim (a loopback http URL with a port; default
+ * `http://localhost:5000/callback`). The loopback server binds both IPv4 and
+ * IPv6 so `localhost` resolves either way.
+ *
  * The client id is read from `import.meta.env.VITE_MENDELEY_CLIENT_ID`
- * (registered at dev.mendeley.com — public, not secret). Without it,
+ * (public, not secret). The client *secret* is entered in Settings and stored
+ * in the OS keyring (service `mendeley`, account `app-secret`). Without either,
  * `connectMendeley` throws with an actionable error.
  */
 
 import { runOauthFlow } from "~/integrations/auth/oauth-client";
 import {
-  deleteCredential,
+  credentialExists,
   getCredential,
+  deleteCredential,
   setCredential,
 } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
@@ -25,7 +35,21 @@ const AUTH_URL = "https://api.mendeley.com/oauth/authorize";
 const TOKEN_URL = "https://api.mendeley.com/oauth/token";
 const PROFILE_URL = "https://api.mendeley.com/profiles/me";
 const KEYRING_SERVICE = "mendeley";
+// Keyring account for the app's client secret. Distinct from token bundles,
+// which key on the Mendeley profile id (a UUID, never this literal).
+const SECRET_ACCOUNT = "app-secret";
+// Used when the user hasn't configured a redirect URL; must match whatever is
+// registered in their Mendeley app.
+const DEFAULT_REDIRECT_URI = "http://localhost:5000/callback";
 const SCOPES = ["all"];
+
+/** Base64 of `user:pass` for HTTP Basic — UTF-8 safe (btoa alone throws >0xFF). */
+function basicAuth(user: string, pass: string): string {
+  const bytes = new TextEncoder().encode(`${user}:${pass}`);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return `Basic ${btoa(bin)}`;
+}
 
 interface StoredTokens {
   accessToken: string;
@@ -49,16 +73,42 @@ function clientId(): string {
   return id;
 }
 
+async function clientSecret(): Promise<string> {
+  const secret = await getCredential({
+    service: KEYRING_SERVICE,
+    account: SECRET_ACCOUNT,
+  });
+  if (!secret) {
+    throw new Error(
+      "Mendeley client secret is not set — paste it in Settings → Integrations → References (Mendeley) first.",
+    );
+  }
+  return secret;
+}
+
+/** Persist the app's Mendeley client secret to the OS keyring. */
+export async function setMendeleyClientSecret(secret: string): Promise<void> {
+  await setCredential({ service: KEYRING_SERVICE, account: SECRET_ACCOUNT }, secret);
+}
+
+/** Whether a client secret has been stored (without reading it back). */
+export async function hasMendeleyClientSecret(): Promise<boolean> {
+  return credentialExists({ service: KEYRING_SERVICE, account: SECRET_ACCOUNT });
+}
+
 /**
  * Drive the full OAuth dance and return the authenticated account.
  * Persists the token bundle in the keyring under `mendeley` / profile id.
  */
-export async function connectMendeley(): Promise<MendeleyAccount> {
+export async function connectMendeley(redirectUri?: string): Promise<MendeleyAccount> {
+  const secret = await clientSecret();
   const tokens = await runOauthFlow({
     authUrl: AUTH_URL,
     tokenUrl: TOKEN_URL,
     clientId: clientId(),
     scopes: SCOPES,
+    clientSecret: secret,
+    redirectUri: redirectUri?.trim() || DEFAULT_REDIRECT_URI,
   });
 
   const account = await fetchProfile(tokens.accessToken);
@@ -126,10 +176,10 @@ async function fetchProfile(accessToken: string): Promise<MendeleyAccount> {
 }
 
 async function refresh(refreshToken: string): Promise<StoredTokens> {
+  const secret = await clientSecret();
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    client_id: clientId(),
   }).toString();
 
   const res = await httpRequest({
@@ -138,6 +188,8 @@ async function refresh(refreshToken: string): Promise<StoredTokens> {
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
       Accept: "application/json",
+      // Confidential client — Basic auth, not a client_id body param.
+      Authorization: basicAuth(clientId(), secret),
     },
     body,
   });

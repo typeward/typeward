@@ -31,6 +31,8 @@ import { createOllamaProvider } from "~/integrations/ai/ollama";
 import {
   connectMendeley,
   disconnectMendeley,
+  hasMendeleyClientSecret,
+  setMendeleyClientSecret,
 } from "~/integrations/references/mendeley";
 import { probeBetterBibTex, probeZoteroLocalApi } from "~/integrations/references/zotero";
 import {
@@ -278,20 +280,51 @@ const MendeleyRow: Component = () => {
   const settings = () => integrationsSettings().references.mendeley;
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [secretInput, setSecretInput] = createSignal("");
+  const [secretSaved, { refetch: refetchSecret }] = createResource(
+    hasMendeleyClientSecret,
+    { initialValue: false },
+  );
+  const [redirectInput, setRedirectInput] = createSignal(
+    settings().redirectUri ?? "http://localhost:5000/callback",
+  );
   const isConnected = () => Boolean(settings().profileId);
+
+  const persistMendeley = (
+    extra: { profileId?: string; displayName?: string } = {},
+  ) => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      references: {
+        ...integrationsSettings().references,
+        mendeley: { ...extra, redirectUri: redirectInput().trim() },
+      },
+    });
+  };
+
+  const handleSaveSecret = async () => {
+    const value = secretInput().trim();
+    if (!value) return;
+    setError(null);
+    try {
+      await setMendeleyClientSecret(value);
+      setSecretInput("");
+      await refetchSecret();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const handleConnect = async () => {
     setError(null);
     setBusy(true);
     try {
       assertEntitlement("integrations.references.mendeley");
-      const account = await connectMendeley();
-      setIntegrationsSettings({
-        ...integrationsSettings(),
-        references: {
-          ...integrationsSettings().references,
-          mendeley: { profileId: account.profileId, displayName: account.displayName },
-        },
+      persistMendeley(); // keep the redirect URL even if sign-in fails
+      const account = await connectMendeley(redirectInput().trim());
+      persistMendeley({
+        profileId: account.profileId,
+        displayName: account.displayName,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -304,13 +337,7 @@ const MendeleyRow: Component = () => {
     const profileId = settings().profileId;
     if (!profileId) return;
     await disconnectMendeley(profileId);
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      references: {
-        ...integrationsSettings().references,
-        mendeley: {},
-      },
-    });
+    persistMendeley(); // drop the account but keep the redirect URL for reconnect
   };
 
   return (
@@ -326,7 +353,12 @@ const MendeleyRow: Component = () => {
         <Show
           when={isConnected()}
           fallback={
-            <Button variant="primary" size="sm" onClick={handleConnect} disabled={busy()}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleConnect}
+              disabled={busy() || !secretSaved()}
+            >
               {busy() ? "Connecting…" : "Sign in"}
             </Button>
           }
@@ -337,6 +369,50 @@ const MendeleyRow: Component = () => {
         </Show>
       }
     >
+      <Show when={!isConnected()}>
+        <div class="mt-3 flex flex-col gap-2">
+          <div class="text-[11px] text-fg-3">
+            Mendeley is a confidential OAuth client. The Redirect URL below must match the
+            one registered in your app at dev.mendeley.com{" "}
+            <strong>character-for-character</strong> (host, port, path, and any trailing
+            slash). Set both to the same value — e.g.{" "}
+            <span class="mono">http://localhost:5000/callback</span> — then paste the app
+            secret (stored in your OS keyring).
+          </div>
+          <input
+            type="text"
+            placeholder="Redirect URL (must match Mendeley exactly)"
+            value={redirectInput()}
+            onInput={(e) => setRedirectInput(e.currentTarget.value)}
+            onChange={() => persistMendeley()}
+            class="glass-inset h-8 rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          />
+          <div class="text-[11px] text-fg-3">
+            App will send:{" "}
+            <span class="mono text-fg-2">
+              {redirectInput().trim() || "http://localhost:5000/callback"}
+            </span>
+            {" "}— this is what Mendeley must have registered.
+          </div>
+          <div class="flex gap-2">
+            <input
+              type="password"
+              placeholder={secretSaved() ? "Secret saved — paste to replace" : "Client secret"}
+              value={secretInput()}
+              onInput={(e) => setSecretInput(e.currentTarget.value)}
+              class="glass-inset h-8 flex-1 rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleSaveSecret}
+              disabled={!secretInput().trim()}
+            >
+              {secretSaved() ? "Update" : "Save secret"}
+            </Button>
+          </div>
+        </div>
+      </Show>
       <Show when={error()}>
         <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
       </Show>
