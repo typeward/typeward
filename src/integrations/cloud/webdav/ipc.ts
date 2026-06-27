@@ -7,6 +7,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import { unframeMetaBody } from "~/integrations/ipc-frame";
+
 /** Mirrors the Rust `WebdavAccount`. The password is never carried here — it is
  * read from the keyring in Rust under service `webdav` / account `accountId`. */
 export interface WebdavAccount {
@@ -48,10 +50,16 @@ export const webdavPropfind = (
 ): Promise<{ entries: WebdavEntry[] }> =>
   invoke("webdav_propfind", { account, relPath, depth });
 
-export const webdavGet = (
+export const webdavGet = async (
   account: WebdavAccount,
   relPath: string,
-): Promise<{ etag?: string; body: number[] }> => invoke("webdav_get", { account, relPath });
+): Promise<{ etag?: string; body: Uint8Array }> => {
+  // File bytes come back as a framed raw ArrayBuffer (etag in the JSON prefix,
+  // bytes raw) instead of a JSON number array — see ipc-frame.ts.
+  const buf = await invoke<ArrayBuffer>("webdav_get", { account, relPath });
+  const { meta, body } = unframeMetaBody<{ etag?: string }>(buf);
+  return { etag: meta.etag, body };
+};
 
 export const webdavPut = (
   account: WebdavAccount,

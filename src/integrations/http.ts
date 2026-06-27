@@ -8,6 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type { CredentialRef } from "./auth/credentials";
+import { unframeMetaBody } from "./ipc-frame";
 
 export interface HttpAuthRef extends CredentialRef {
   /** Header name. Defaults to `Authorization`. */
@@ -69,11 +70,10 @@ export interface BinaryHttpResponse {
 export const httpRequestBytes = async (
   req: BinaryHttpRequest,
 ): Promise<BinaryHttpResponse> => {
-  const res = await invoke<{
-    status: number;
-    headers: Record<string, string>;
-    body: number[];
-  }>("http_request_bytes", {
+  // The response body comes back as a framed raw ArrayBuffer (status + headers
+  // in the small JSON prefix, file bytes raw) so a download doesn't pay the
+  // ~3-4x JSON number-array bloat. The upload body still rides as a JSON array.
+  const buf = await invoke<ArrayBuffer>("http_request_bytes", {
     req: {
       method: req.method,
       url: req.url,
@@ -82,11 +82,11 @@ export const httpRequestBytes = async (
       authRef: req.authRef,
     },
   });
-  return {
-    status: res.status,
-    headers: res.headers,
-    body: Uint8Array.from(res.body),
-  };
+  const { meta, body } = unframeMetaBody<{
+    status: number;
+    headers: Record<string, string>;
+  }>(buf);
+  return { status: meta.status, headers: meta.headers, body };
 };
 
 /**

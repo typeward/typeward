@@ -158,7 +158,7 @@ export function createWebdavProvider(account: WebdavAccount): CloudFsProvider {
 
     async downloadFile(file: RemoteFile, destAbsPath: string): Promise<void> {
       const res = await webdavGet(account, file.id);
-      await writeFile(destAbsPath, Uint8Array.from(res.body));
+      await writeFile(destAbsPath, res.body);
     },
 
     async uploadFile(rootId: string, relPath: string, sourceAbsPath: string): Promise<RemoteFile> {
