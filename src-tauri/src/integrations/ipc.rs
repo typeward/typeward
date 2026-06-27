@@ -23,6 +23,53 @@ pub fn frame_meta_body(meta_json: &[u8], body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The raw byte body of a binary-upload command's request. The bytes arrive as
+/// the IPC ArrayBuffer body (not a JSON number array); a non-raw or absent body
+/// (e.g. a metadata-only call) reads as empty.
+pub fn raw_body(request: &tauri::ipc::Request<'_>) -> Vec<u8> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Decode a percent-encoded header value. Binary-upload commands carry their
+/// metadata as headers (the JSON arg slot is taken by the raw byte body); the
+/// renderer percent-encodes via `encodeURIComponent` so arbitrary Unicode
+/// survives the ASCII-only header channel. Pure, so it's unit-testable without
+/// constructing a `tauri::ipc::Request`.
+pub fn percent_decode(name: &str, raw: &str) -> Result<String, String> {
+    percent_encoding::percent_decode_str(raw)
+        .decode_utf8()
+        .map(|cow| cow.into_owned())
+        .map_err(|_| format!("invalid UTF-8 in `{name}` header"))
+}
+
+/// Required percent-encoded header → owned `String`.
+pub fn decode_header(request: &tauri::ipc::Request<'_>, name: &str) -> Result<String, String> {
+    let raw = request
+        .headers()
+        .get(name)
+        .ok_or_else(|| format!("missing `{name}` header"))?
+        .to_str()
+        .map_err(|_| format!("invalid `{name}` header"))?;
+    percent_decode(name, raw)
+}
+
+/// Optional percent-encoded header → owned `String` (absent ⇒ `None`).
+pub fn decode_opt_header(
+    request: &tauri::ipc::Request<'_>,
+    name: &str,
+) -> Result<Option<String>, String> {
+    match request.headers().get(name) {
+        None => Ok(None),
+        Some(v) => {
+            let raw = v.to_str().map_err(|_| format!("invalid `{name}` header"))?;
+            percent_decode(name, raw).map(Some)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +107,21 @@ mod tests {
         let (m, b) = split(&framed);
         assert!(m.is_empty());
         assert_eq!(b, [9, 9, 9]);
+    }
+
+    #[test]
+    fn percent_decode_round_trips_encode_uri_component() {
+        // Exactly what JS `encodeURIComponent("figures/a b%c.png")` emits.
+        assert_eq!(
+            percent_decode("h", "figures%2Fa%20b%25c.png").unwrap(),
+            "figures/a b%c.png"
+        );
+        assert_eq!(percent_decode("h", "caf%C3%A9").unwrap(), "café");
+    }
+
+    #[test]
+    fn percent_decode_rejects_invalid_utf8() {
+        assert!(percent_decode("h", "%FF%FE").is_err());
     }
 
     #[test]
