@@ -9,6 +9,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use chrono::Utc;
@@ -89,14 +90,23 @@ fn truncate_on_char_boundary(mut s: String, max: usize) -> String {
 }
 
 #[tauri::command]
-pub fn record_event(kind: String, summary: String, detail: Option<String>) -> Result<(), String> {
+pub async fn record_event(
+    kind: String,
+    summary: String,
+    detail: Option<String>,
+) -> Result<(), String> {
     let event = Event {
         at: Utc::now().to_rfc3339(),
         kind: truncate_on_char_boundary(kind, MAX_KIND_LEN),
         summary: truncate_on_char_boundary(summary, MAX_SUMMARY_LEN),
         detail: detail.map(|d| truncate_on_char_boundary(d, MAX_DETAIL_LEN)),
     };
-    append(&event).map_err(|e| e.to_string())
+    // Off the event-loop thread: append does file IO and (occasionally) a trim
+    // with fsync, and the frontend telemetry hook can fire bursts.
+    tokio::task::spawn_blocking(move || append(&event))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -121,6 +131,14 @@ pub fn list_recent_events(limit: Option<usize>) -> Result<Vec<Event>, String> {
     Ok(events)
 }
 
+/// Appends are O(1): the full-file `trim` runs only once every `TRIM_INTERVAL`
+/// events (and on the first append of the process, to clear growth accumulated
+/// across restarts) instead of rewriting the whole log on every event. This
+/// stops a frontend error burst from cascading into O(n^2) full-file rewrites +
+/// fsyncs. The log can transiently hold up to MAX_ENTRIES + TRIM_INTERVAL lines.
+const TRIM_INTERVAL: usize = 128;
+static APPEND_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 fn append(event: &Event) -> std::io::Result<()> {
     let path = LOG_PATH
         .lock()
@@ -132,8 +150,14 @@ fn append(event: &Event) -> std::io::Result<()> {
     let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(f, "{}", line)?;
 
-    // Trim to the last MAX_ENTRIES lines to bound disk growth.
-    trim(&path)?;
+    // Bound disk growth lazily; trim() still caps to the last MAX_ENTRIES lines
+    // whenever it runs (first append of the process, then every TRIM_INTERVAL).
+    if APPEND_COUNT
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(TRIM_INTERVAL)
+    {
+        trim(&path)?;
+    }
     Ok(())
 }
 

@@ -14,6 +14,8 @@ export interface HttpAuthRef extends CredentialRef {
   header?: string;
   /** Value prefix, e.g. `"Bearer "` (note trailing space). */
   prefix?: string;
+  /** Public OAuth client id used by Rust to refresh token bundles. */
+  clientId?: string;
 }
 
 export interface HttpRequest {

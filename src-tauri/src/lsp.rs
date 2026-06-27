@@ -84,6 +84,15 @@ pub async fn start_lsp(
     manager: State<'_, LspManager>,
     args: StartArgs,
 ) -> Result<StartResult, LspError> {
+    // Gate the renderer-supplied cwd to an opened project root, matching
+    // compile/synctex/watch_project. On Windows the child's cwd is in the
+    // default DLL search path, so an ungated cwd is a planted-DLL vector.
+    if !crate::project::is_registered_root(std::path::Path::new(&args.project_root)) {
+        return Err(LspError::Io(format!(
+            "project root is not an opened project: {}",
+            args.project_root
+        )));
+    }
     let bin = binary_for_language(&args.language_id)?;
     // Resolve to an absolute path and spawn that. A bare `Command::new("texlab")`
     // with `current_dir(project)` lets Windows execute a `texlab.exe`/`tinymist.exe`

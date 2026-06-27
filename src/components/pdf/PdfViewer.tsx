@@ -12,12 +12,13 @@ import * as pdfjs from "pdfjs-dist";
 // Vite-resolves the worker file to a URL and serves it as a separate chunk.
 import workerSrc from "pdfjs-dist/build/pdf.worker.mjs?url";
 import type { Component } from "solid-js";
-import { For, Match, Show, Switch, createEffect, createSignal, on, onCleanup } from "solid-js";
+import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { installDismiss } from "~/lib/dismiss";
 import { integrationsSettings } from "~/stores/settings-store";
+import { isTabletViewport } from "~/stores/viewport-store";
 import {
   animations,
   consolePosition,
@@ -26,6 +27,8 @@ import {
 } from "~/stores/ui-store";
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+
+type RenderTask = ReturnType<pdfjs.PDFPageProxy["render"]>;
 
 interface PdfViewerProps {
   /** Absolute path on disk. Reloaded whenever it changes (or version bumps). */
@@ -54,6 +57,19 @@ interface PdfViewerProps {
 
 const ZOOM_PRESETS = [50, 75, 90, 100, 110, 125, 150, 175, 200] as const;
 
+/** Pre-render this many CSS px above/below the viewport so a quick scroll
+ *  doesn't reveal blank pages before they paint. */
+const RENDER_MARGIN_PX = 800;
+
+interface PageSlot {
+  /** The canvas host (absolute inset-0 of the page box) the render mounts into. */
+  host: HTMLElement;
+  task: RenderTask | null;
+  canvas: HTMLCanvasElement | null;
+  /** Scale the current canvas was rendered at; null when nothing is mounted. */
+  renderedScale: number | null;
+}
+
 /**
  * Toolbar ported from `design_files/Editor.html` PdfPreview (line 7741+):
  *   - Recompile (hero, accent-grad, ⌘↵ kbd)
@@ -61,13 +77,19 @@ const ZOOM_PRESETS = [50, 75, 90, 100, 110, 125, 150, 175, 200] as const;
  *   - Zoom dropdown
  *   - Download
  *
- * Pages are rendered continuously, stacked vertically. Scroll position and
- * zoom are retained across recompiles.
+ * Pages stack vertically. Rendering is virtualized: every page gets a
+ * placeholder sized to its real dimensions (so the scrollbar + scroll
+ * positions are correct), but only pages near the viewport own a rendered
+ * canvas. Off-screen canvases are released to bound memory — a 300pp thesis
+ * at dpr 2-3 would otherwise allocate hundreds of MB and OOM mobile webviews.
+ * Scroll position and zoom are retained across recompiles.
  */
 export const PdfViewer: Component<PdfViewerProps> = (props) => {
-  let scrollEl!: HTMLDivElement;
+  let scrollEl: HTMLDivElement | undefined;
   let zoomRef: HTMLDivElement | undefined;
-  const [pages, setPages] = createSignal<HTMLCanvasElement[]>([]);
+  // Unscaled (scale=1) page dimensions in PDF points; placeholder CSS size is
+  // these times the current zoom scale. Drives the layout + scrollbar.
+  const [pageSizes, setPageSizes] = createSignal<{ w: number; h: number }[]>([]);
   const [scale, setScale] = createSignal(1.1);
   const [zoomOpen, setZoomOpen] = createSignal(false);
 
@@ -93,20 +115,190 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     { page: number; yCss: number } | null
   >(null);
   let savedScrollTop = 0;
+  // Captured at the moment a zoom starts so the content under the viewport top
+  // stays put across the reflow (scrollTop is in CSS px, which the zoom scales).
+  let zoomAnchorTop = 0;
+  let zoomAnchorScale = scale();
   let docRef: pdfjs.PDFDocumentProxy | null = null;
   // v6 removed PDFDocumentProxy.destroy(); teardown now goes through the
   // loading task. We keep both: docRef (proxy) for getPage/re-render, taskRef
   // (loading task) to destroy the doc + release the worker.
   let taskRef: pdfjs.PDFDocumentLoadingTask | null = null;
-  // Bumps on every load() / re-render request. Older async chains compare
-  // this to their captured `gen` after each await and exit if superseded —
-  // without this, a slow load completing after a newer one wipes the screen.
+  // Bumps on every load() / path change. Older async chains compare this to
+  // their captured `gen` after each await and bail if superseded — without it
+  // a slow load completing after a newer one wipes the screen.
   let loadGen = 0;
+
+  // Per-page render registry (imperative, non-reactive). Keyed by 1-based page
+  // number. Page proxies are cached for re-render; `visible` tracks which pages
+  // the observer currently considers in-or-near the viewport.
+  const slots = new Map<number, PageSlot>();
+  const pageProxies = new Map<number, pdfjs.PDFPageProxy>();
+  const visible = new Set<number>();
+  let observer: IntersectionObserver | null = null;
 
   const isCancellation = (e: unknown): boolean =>
     !!e &&
     typeof e === "object" &&
     (e as { name?: string }).name === "RenderingCancelledException";
+
+  // Cap device-pixel-ratio on small/touch viewports — full dpr on a 3× phone
+  // panel is the OOM lever; 2× is visually indistinguishable at those sizes.
+  const renderDpr = (): number =>
+    Math.min(window.devicePixelRatio || 1, isTabletViewport() ? 2 : 3);
+
+  const getPage = async (n: number): Promise<pdfjs.PDFPageProxy | null> => {
+    let p = pageProxies.get(n);
+    if (!p) {
+      if (!docRef) return null;
+      p = await docRef.getPage(n);
+      pageProxies.set(n, p);
+    }
+    return p;
+  };
+
+  const renderPage = async (pageNum: number) => {
+    const slot = slots.get(pageNum);
+    if (!slot || !docRef) return;
+    const s = scale();
+    if (slot.renderedScale === s && slot.canvas) return;
+    // Supersede any in-flight render for this page (e.g. a zoom mid-render).
+    slot.task?.cancel();
+    slot.task = null;
+    const gen = loadGen;
+    try {
+      const page = await getPage(pageNum);
+      if (!page || gen !== loadGen || s !== scale() || !slots.has(pageNum)) {
+        return;
+      }
+      const viewport = page.getViewport({ scale: s });
+      const dpr = renderDpr();
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+      canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      canvas.style.display = "block";
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.scale(dpr, dpr);
+      const task = page.render({ canvasContext: ctx, viewport, canvas });
+      slot.task = task;
+      await task.promise;
+      // Discard if the doc/scale moved on, the slot was torn down, or the page
+      // scrolled out of the buffer while we rendered.
+      if (
+        gen !== loadGen ||
+        s !== scale() ||
+        !slots.has(pageNum) ||
+        !visible.has(pageNum)
+      ) {
+        canvas.width = 0;
+        canvas.height = 0;
+        return;
+      }
+      if (slot.canvas) {
+        slot.canvas.width = 0;
+        slot.canvas.height = 0;
+      }
+      slot.host.replaceChildren(canvas);
+      slot.canvas = canvas;
+      slot.renderedScale = s;
+      slot.task = null;
+    } catch (e) {
+      if (isCancellation(e)) return;
+      // Swallow per-page render failures — keep the rest of the document
+      // intact rather than blanking the whole viewer on one bad page.
+    }
+  };
+
+  const unrenderPage = (pageNum: number) => {
+    const slot = slots.get(pageNum);
+    if (!slot) return;
+    slot.task?.cancel();
+    slot.task = null;
+    if (slot.canvas) {
+      slot.canvas.width = 0;
+      slot.canvas.height = 0;
+      slot.host.replaceChildren();
+      slot.canvas = null;
+    }
+    slot.renderedScale = null;
+    // Release the page's re-fetchable operator-list cache (not the proxy
+    // itself) to bound memory on a long scroll through a large doc. pdf.js
+    // no-ops this while a render is in flight and rebuilds it on the next
+    // render(), so re-entry still paints correctly.
+    pageProxies.get(pageNum)?.cleanup();
+  };
+
+  // Clear all slots ahead of a fresh load. Unobserves (rather than
+  // disconnecting) so the single observer instance stays alive for the
+  // component's life; the about-to-be-replaced rows still get a per-row
+  // onCleanup pass when Solid disposes them.
+  const resetSlots = () => {
+    for (const slot of slots.values()) {
+      observer?.unobserve(slot.host);
+      slot.task?.cancel();
+      if (slot.canvas) {
+        slot.canvas.width = 0;
+        slot.canvas.height = 0;
+      }
+    }
+    slots.clear();
+    visible.clear();
+  };
+
+  const onIntersect: IntersectionObserverCallback = (entries) => {
+    for (const entry of entries) {
+      const pageNum = Number((entry.target as HTMLElement).dataset.pidx);
+      if (!pageNum || !slots.has(pageNum)) continue;
+      if (entry.isIntersecting) {
+        visible.add(pageNum);
+        void renderPage(pageNum);
+      } else {
+        visible.delete(pageNum);
+        unrenderPage(pageNum);
+      }
+    }
+  };
+
+  // Ref on the scroll container. It's the IntersectionObserver root and mounts
+  // exactly once (the AI/console panes overlay it rather than unmounting it),
+  // so the observer + slots stay stable across preview-mode switches.
+  const setScrollEl = (el: HTMLDivElement) => {
+    scrollEl = el;
+    observer?.disconnect();
+    observer = new IntersectionObserver(onIntersect, {
+      root: el,
+      rootMargin: `${RENDER_MARGIN_PX}px 0px`,
+      threshold: 0,
+    });
+    for (const slot of slots.values()) observer.observe(slot.host);
+  };
+
+  const registerPage = (pageNum: number, host: HTMLElement) => {
+    const slot: PageSlot = {
+      host,
+      task: null,
+      canvas: null,
+      renderedScale: null,
+    };
+    slots.set(pageNum, slot);
+    observer?.observe(host);
+    // Self-clean when Solid disposes this row (new/smaller doc, path cleared,
+    // load error). The guarded delete prevents a stale teardown from evicting
+    // a freshly re-registered slot for the same page number.
+    onCleanup(() => {
+      observer?.unobserve(host);
+      slot.task?.cancel();
+      if (slot.canvas) {
+        slot.canvas.width = 0;
+        slot.canvas.height = 0;
+      }
+      visible.delete(pageNum);
+      if (slots.get(pageNum) === slot) slots.delete(pageNum);
+    });
+  };
 
   const load = async (path: string) => {
     const gen = ++loadGen;
@@ -126,58 +318,34 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       if (taskRef) taskRef.destroy();
       taskRef = task;
       docRef = doc;
-      await renderAll(doc, scale(), gen);
+      resetSlots();
+      pageProxies.clear();
+      // Page proxies are cheap (no rasterization); fetching them up front gives
+      // every placeholder its true size so the scrollbar + scroll math are
+      // correct before a single canvas is drawn.
+      const proxies = await Promise.all(
+        Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)),
+      );
+      if (gen !== loadGen) return;
+      proxies.forEach((p, i) => pageProxies.set(i + 1, p));
+      const dims = proxies.map((p) => {
+        const vp = p.getViewport({ scale: 1 });
+        return { w: vp.width, h: vp.height };
+      });
+      setPageSizes(dims);
+      requestAnimationFrame(() => {
+        if (scrollEl) scrollEl.scrollTop = savedScrollTop;
+      });
     } catch (e) {
       if (gen !== loadGen) return;
       // PDF.js throws this when an in-flight render is replaced by a newer
-      // one — expected behavior during quick recompile sequences, not an
-      // actual failure. Silently swallow.
+      // one — expected during quick recompile sequences, not a failure.
       if (isCancellation(e)) return;
       setErr(String(e));
-      setPages([]);
+      setPageSizes([]);
     } finally {
       if (gen === loadGen) setLoading(false);
     }
-  };
-
-  const renderAll = async (
-    doc: pdfjs.PDFDocumentProxy,
-    s: number,
-    gen: number = loadGen,
-  ) => {
-    const canvases: HTMLCanvasElement[] = [];
-    for (let i = 1; i <= doc.numPages; i++) {
-      if (gen !== loadGen) return;
-      const page = await doc.getPage(i);
-      if (gen !== loadGen) return;
-      const viewport = page.getViewport({ scale: s });
-      const canvas = document.createElement("canvas");
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.floor(viewport.width * dpr);
-      canvas.height = Math.floor(viewport.height * dpr);
-      canvas.style.width = `${Math.floor(viewport.width)}px`;
-      canvas.style.height = `${Math.floor(viewport.height)}px`;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.scale(dpr, dpr);
-        try {
-          await page.render({
-            canvasContext: ctx,
-            viewport,
-            canvas,
-          }).promise;
-        } catch (e) {
-          if (isCancellation(e)) return;
-          throw e;
-        }
-      }
-      canvases.push(canvas);
-    }
-    if (gen !== loadGen) return;
-    setPages(canvases);
-    requestAnimationFrame(() => {
-      if (scrollEl) scrollEl.scrollTop = savedScrollTop;
-    });
   };
 
   // Initial + path changes: reload the doc.
@@ -187,7 +355,10 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       ([path]) => {
         savedScrollTop = scrollEl?.scrollTop ?? 0;
         if (!path) {
-          setPages([]);
+          ++loadGen;
+          resetSlots();
+          pageProxies.clear();
+          setPageSizes([]);
           return;
         }
         void load(path);
@@ -195,22 +366,33 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     ),
   );
 
-  // Zoom changes: re-render at new scale (no fresh load). Bumps the
-  // generation so two quick zoom changes can't race — without it the
-  // slower render could land last and win over the newer scale.
+  // Zoom changes: the placeholder sizes update reactively (they read scale()),
+  // so the layout reflows on its own; here we anchor the scroll position to the
+  // pre-zoom content and re-render the pages currently in the buffer.
   createEffect(
     on(
       scale,
-      async (s) => {
+      (s) => {
         if (!docRef) return;
-        savedScrollTop = scrollEl?.scrollTop ?? 0;
-        await renderAll(docRef, s, ++loadGen);
+        if (scrollEl && zoomAnchorScale > 0) {
+          scrollEl.scrollTop = zoomAnchorTop * (s / zoomAnchorScale);
+        }
+        for (const pageNum of [...visible]) void renderPage(pageNum);
       },
       { defer: true },
     ),
   );
 
-  // Forward-search: scroll to (page, y) and pulse a highlight ribbon.
+  const applyZoom = (z: number) => {
+    zoomAnchorTop = scrollEl?.scrollTop ?? 0;
+    zoomAnchorScale = scale();
+    setScale(z / 100);
+    setZoomOpen(false);
+  };
+
+  // Forward-search: scroll to (page, y) and pulse a highlight ribbon. The
+  // scroll container is the page boxes' offsetParent (it's positioned), so
+  // offsetTop maps straight into scrollTop space.
   createEffect(
     on(
       () => props.scrollTarget?.generation ?? 0,
@@ -244,10 +426,8 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   // selection / pan affordances.
   const triggerInverseSearch = (e: MouseEvent, pageNum: number) => {
     if (!props.onPageClick) return;
-    const wrapper = e.currentTarget as HTMLElement;
-    const canvas = wrapper.querySelector("canvas");
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    // currentTarget is the page box, sized exactly to the page in CSS px.
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const xPx = e.clientX - rect.left;
     const yPx = e.clientY - rect.top;
     if (xPx < 0 || yPx < 0 || xPx > rect.width || yPx > rect.height) return;
@@ -262,17 +442,18 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   };
 
   onCleanup(() => {
+    observer?.disconnect();
+    for (const slot of slots.values()) slot.task?.cancel();
     taskRef?.destroy();
   });
 
-  const totalPages = () => pages().length;
+  const totalPages = () => pageSizes().length;
 
   const setPage = (n: number) => {
-    const pageEls = scrollEl?.querySelectorAll("[data-page]");
-    if (!pageEls) return;
+    if (!scrollEl) return;
     const clamped = Math.max(1, Math.min(totalPages(), n));
     setCurrentPage(clamped);
-    const el = pageEls[clamped - 1] as HTMLElement | undefined;
+    const el = scrollEl.querySelector<HTMLElement>(`[data-page="${clamped}"]`);
     if (el) el.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
   };
 
@@ -347,6 +528,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                 disabled={totalPages() === 0 || currentPage() <= 1}
                 class="lift flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)] disabled:opacity-40"
                 title="Previous page"
+                aria-label="Previous page"
               >
                 <ChevronUp size={12} class="opacity-70" />
               </button>
@@ -363,6 +545,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                 disabled={totalPages() === 0 || currentPage() >= totalPages()}
                 class="lift flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)] disabled:opacity-40"
                 title="Next page"
+                aria-label="Next page"
               >
                 <ChevronDown size={12} class="opacity-70" />
               </button>
@@ -395,10 +578,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                       {(z) => (
                         <button
                           type="button"
-                          onClick={() => {
-                            setScale(z / 100);
-                            setZoomOpen(false);
-                          }}
+                          onClick={() => applyZoom(z)}
                           class={`flex h-7 w-full items-center px-3 text-left text-[12px] hover:bg-[var(--color-control-fill)] ${
                             Math.round(scale() * 100) === z
                               ? "text-fg-1 font-medium"
@@ -421,88 +601,100 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         <div class="px-3 py-2 text-[11px] text-[var(--color-err)]">{err()}</div>
       </Show>
 
-      <Switch>
-        <Match when={previewMode() === "ai"}>
-          <div class="min-h-0 flex-1 overflow-hidden">
+      {/* Content area. The PDF scroll container stays mounted at all times so
+          the IntersectionObserver root + per-page slots survive preview-mode
+          switches; the AI / console panes overlay it and the scroll container
+          hides via display:none (which also frees its canvases while away). */}
+      <div class="relative min-h-0 flex-1 overflow-hidden">
+        <Show when={previewMode() === "ai"}>
+          <div class="absolute inset-0 overflow-hidden">
             <AiView />
           </div>
-        </Match>
-        <Match when={previewMode() === "console"}>
-          <div class="min-h-0 flex-1 overflow-hidden">
+        </Show>
+        <Show when={previewMode() === "console"}>
+          <div class="absolute inset-0 overflow-hidden">
             <LogsView />
           </div>
-        </Match>
-        <Match when={previewMode() === "pdf"}>
-          {/* Page viewport. `scrollbar-gutter: stable` reserves space for
-            the scrollbar even when content doesn't overflow, so switching
-            between PDF / Logs / AI modes never reflows the pane width. */}
-          <div
-            ref={scrollEl!}
-            class="scroll min-h-0 flex-1 overflow-auto"
-            style={{
-              background: "var(--color-overlay-dim)",
-              "scrollbar-gutter": "stable",
-            }}
-          >
-        <Show
-          when={pages().length > 0}
-          fallback={
-            <div class="flex h-full items-center justify-center text-[12px] text-fg-3">
-              <Show
-                when={loading()}
-                fallback={
-                  <span>
-                    {props.path
-                      ? "No PDF yet — click Recompile"
-                      : "Compile to render PDF"}
-                  </span>
-                }
-              >
-                <Loader2 size={14} class="animate-spin" />
-              </Show>
-            </div>
-          }
-        >
-          <div class="flex flex-col items-center gap-4 py-6">
-            {pages().map((canvas, i) => {
-              const pageNum = i + 1;
-              return (
-                <div
-                  data-page={pageNum}
-                  class="relative"
-                  onClick={(e) => handlePageClick(e, pageNum)}
-                  onDblClick={(e) => triggerInverseSearch(e, pageNum)}
-                  title="Double-click to jump to source"
-                >
-                  <div class="mono absolute -left-12 top-1.5 select-none text-[10px] text-fg-3">
-                    p. {pageNum}
-                  </div>
-                  <PageCanvas canvas={canvas} />
-                  <Show when={highlight()?.page === pageNum}>
-                    <div
-                      class="pointer-events-none absolute left-0 right-0"
-                      style={{
-                        top: `${highlight()!.yCss - 2}px`,
-                        height: "4px",
-                        background:
-                          "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))",
-                        "box-shadow":
-                          "0 0 12px var(--color-accent-1), 0 0 24px var(--color-accent-2)",
-                        animation: "synctex-pulse 1.6s ease-out forwards",
-                      }}
-                    />
-                  </Show>
-                </div>
-              );
-            })}
-            <div class="mono mt-2 text-[10px] text-fg-3">
-              — end of preview ({totalPages()} pages) —
-            </div>
-          </div>
         </Show>
-          </div>
-        </Match>
-      </Switch>
+        {/* `scrollbar-gutter: stable` reserves the scrollbar's width so
+            toggling PDF / Logs / AI never reflows the pane. */}
+        <div
+          ref={setScrollEl}
+          class="scroll absolute inset-0 overflow-auto"
+          style={{
+            background: "var(--color-overlay-dim)",
+            "scrollbar-gutter": "stable",
+            display: previewMode() === "pdf" ? undefined : "none",
+          }}
+        >
+          <Show
+            when={pageSizes().length > 0}
+            fallback={
+              <div class="flex h-full items-center justify-center text-[12px] text-fg-3">
+                <Show
+                  when={loading()}
+                  fallback={
+                    <span>
+                      {props.path
+                        ? "No PDF yet — click Recompile"
+                        : "Compile to render PDF"}
+                    </span>
+                  }
+                >
+                  <Loader2 size={14} class="animate-spin" />
+                </Show>
+              </div>
+            }
+          >
+            <div class="flex flex-col items-center gap-4 py-6">
+              <For each={pageSizes()}>
+                {(sz, i) => {
+                  const pageNum = i() + 1;
+                  return (
+                    <div
+                      data-page={pageNum}
+                      class="relative rounded-md bg-white shadow-[0_18px_60px_rgba(0,0,0,0.35),0_2px_6px_rgba(0,0,0,0.25)]"
+                      style={{
+                        width: `${Math.round(sz.w * scale())}px`,
+                        height: `${Math.round(sz.h * scale())}px`,
+                      }}
+                      onClick={(e) => handlePageClick(e, pageNum)}
+                      onDblClick={(e) => triggerInverseSearch(e, pageNum)}
+                      title="Double-click to jump to source"
+                    >
+                      <div class="mono absolute -left-12 top-1.5 select-none text-[10px] text-fg-3">
+                        p. {pageNum}
+                      </div>
+                      <div
+                        data-pidx={pageNum}
+                        ref={(el) => registerPage(pageNum, el)}
+                        class="absolute inset-0 overflow-hidden rounded-md"
+                      />
+                      <Show when={highlight()?.page === pageNum}>
+                        <div
+                          class="pointer-events-none absolute left-0 right-0"
+                          style={{
+                            top: `${highlight()!.yCss - 2}px`,
+                            height: "4px",
+                            background:
+                              "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))",
+                            "box-shadow":
+                              "0 0 12px var(--color-accent-1), 0 0 24px var(--color-accent-2)",
+                            animation: "synctex-pulse 1.6s ease-out forwards",
+                          }}
+                        />
+                      </Show>
+                    </div>
+                  );
+                }}
+              </For>
+              <div class="mono mt-2 text-[10px] text-fg-3">
+                — end of preview ({totalPages()} pages) —
+              </div>
+            </div>
+          </Show>
+        </div>
+      </div>
     </div>
   );
 };
@@ -576,21 +768,4 @@ const parseShortcut = (s: string): string[] => {
     else out.push(p.toUpperCase());
   }
   return out;
-};
-
-const PageCanvas: Component<{ canvas: HTMLCanvasElement }> = (props) => {
-  let host!: HTMLDivElement;
-  onCleanup(() => {
-    host?.replaceChildren();
-  });
-  const setup = (el: HTMLDivElement) => {
-    host = el;
-    el.replaceChildren(props.canvas);
-  };
-  return (
-    <div
-      ref={setup}
-      class="rounded-md bg-white shadow-[0_18px_60px_rgba(0,0,0,0.35),0_2px_6px_rgba(0,0,0,0.25)]"
-    />
-  );
 };

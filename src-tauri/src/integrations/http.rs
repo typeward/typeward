@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -73,6 +74,10 @@ pub struct AuthRef {
     /// Value prefix; e.g. `"Bearer "` (note trailing space). Empty by default.
     #[serde(default)]
     pub prefix: String,
+    /// Public OAuth client id for token-bundle services that Rust may refresh
+    /// before attaching the bearer (Dropbox, Mendeley).
+    #[serde(rename = "clientId", default)]
+    pub client_id: Option<String>,
 }
 
 fn default_header() -> String {
@@ -205,14 +210,18 @@ fn is_sensitive_header(name: &str) -> bool {
 }
 
 pub fn validate_auth_ref_for_host(auth: &AuthRef, host: &str) -> Result<(), HttpError> {
-    let allowed = matches!(
-        (auth.service.as_str(), host),
+    let allowed = match (auth.service.as_str(), host) {
         ("zotero-web", "api.zotero.org")
-            | ("git.github.com", "api.github.com")
-            | ("openai", "api.openai.com")
-            | ("anthropic", "api.anthropic.com")
-            | ("gemini", "generativelanguage.googleapis.com")
-    );
+        | ("git.github.com", "api.github.com")
+        | ("openai", "api.openai.com")
+        | ("anthropic", "api.anthropic.com")
+        | ("gemini", "generativelanguage.googleapis.com") => true,
+        ("dropbox", "api.dropboxapi.com" | "content.dropboxapi.com" | "notify.dropboxapi.com") => {
+            true
+        }
+        ("mendeley", "api.mendeley.com") if auth.account != "app-secret" => true,
+        _ => false,
+    };
 
     if allowed {
         Ok(())
@@ -289,6 +298,162 @@ pub(crate) async fn read_body_capped(
     Ok(buf)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredOAuthTokens {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthRefreshResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+}
+
+async fn keyring_get(service: &str, account: &str) -> Result<Option<String>, HttpError> {
+    let service = service.to_string();
+    let account = account.to_string();
+    tokio::task::spawn_blocking(move || credentials::get_secret(&service, &account))
+        .await
+        .map_err(|e| HttpError::Credential(e.to_string()))?
+        .map_err(|e| HttpError::Credential(e.to_string()))
+}
+
+async fn keyring_set(service: &str, account: &str, secret: String) -> Result<(), HttpError> {
+    let service = service.to_string();
+    let account = account.to_string();
+    tokio::task::spawn_blocking(move || credentials::set_secret(&service, &account, &secret))
+        .await
+        .map_err(|e| HttpError::Credential(e.to_string()))?
+        .map_err(|e| HttpError::Credential(e.to_string()))
+}
+
+fn now_unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn is_expiring_soon(expires_at: Option<i64>) -> bool {
+    expires_at.is_some_and(|ts| ts - 60 < now_unix_seconds())
+}
+
+fn is_oauth_bundle_auth(auth: &AuthRef, host: &str) -> bool {
+    matches!(
+        (auth.service.as_str(), host),
+        (
+            "dropbox",
+            "api.dropboxapi.com" | "content.dropboxapi.com" | "notify.dropboxapi.com"
+        ) | ("mendeley", "api.mendeley.com")
+    )
+}
+
+async fn oauth_bundle_access_token(auth: &AuthRef) -> Result<String, HttpError> {
+    let raw = keyring_get(&auth.service, &auth.account)
+        .await?
+        .ok_or_else(|| HttpError::Credential("missing OAuth token bundle".into()))?;
+    let mut stored: StoredOAuthTokens = serde_json::from_str(&raw)
+        .map_err(|e| HttpError::Credential(format!("invalid OAuth token bundle: {e}")))?;
+
+    if !is_expiring_soon(stored.expires_at) {
+        return Ok(stored.access_token);
+    }
+
+    let refresh_token = stored.refresh_token.clone().ok_or_else(|| {
+        HttpError::Credential("OAuth access token expired without refresh token".into())
+    })?;
+    let client_id = auth
+        .client_id
+        .as_deref()
+        .ok_or_else(|| HttpError::Credential("missing OAuth client id for refresh".into()))?;
+    let refreshed = refresh_oauth_token(&auth.service, client_id, &refresh_token).await?;
+
+    stored.access_token = refreshed.access_token;
+    stored.refresh_token = refreshed.refresh_token.or(stored.refresh_token);
+    stored.expires_at = refreshed
+        .expires_in
+        .map(|expires_in| now_unix_seconds() + expires_in)
+        .or(stored.expires_at);
+
+    let serialized = serde_json::to_string(&stored)
+        .map_err(|e| HttpError::Credential(format!("OAuth token serialize failed: {e}")))?;
+    keyring_set(&auth.service, &auth.account, serialized).await?;
+
+    Ok(stored.access_token)
+}
+
+async fn refresh_oauth_token(
+    service: &str,
+    client_id: &str,
+    refresh_token: &str,
+) -> Result<OAuthRefreshResponse, HttpError> {
+    let token_url = match service {
+        "dropbox" => "https://api.dropboxapi.com/oauth2/token",
+        "mendeley" => "https://api.mendeley.com/oauth/token",
+        _ => {
+            return Err(HttpError::Credential(format!(
+                "unsupported OAuth service: {service}"
+            )))
+        }
+    };
+
+    let body = {
+        let mut form = url::form_urlencoded::Serializer::new(String::new());
+        form.append_pair("grant_type", "refresh_token");
+        form.append_pair("refresh_token", refresh_token);
+        if service == "dropbox" {
+            form.append_pair("client_id", client_id);
+        }
+        form.finish()
+    };
+
+    let mut builder = client()
+        .post(token_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Accept", "application/json")
+        .body(body);
+
+    if service == "mendeley" {
+        let secret = keyring_get("mendeley", "app-secret")
+            .await?
+            .ok_or_else(|| HttpError::Credential("missing Mendeley client secret".into()))?;
+        let basic = BASE64_STANDARD.encode(format!("{client_id}:{secret}"));
+        builder = builder.header("Authorization", format!("Basic {basic}"));
+    }
+
+    let res = builder
+        .send()
+        .await
+        .map_err(|e| HttpError::Network(e.to_string()))?;
+    let status = res.status().as_u16();
+    let bytes = read_body_capped(res, MAX_TEXT_RESPONSE_BYTES).await?;
+    if !(200..300).contains(&status) {
+        return Err(HttpError::Credential(format!(
+            "OAuth refresh failed with status {status}"
+        )));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|e| HttpError::Credential(format!("OAuth refresh parse failed: {e}")))
+}
+
+async fn auth_header_value(auth: &AuthRef, host: &str) -> Result<Option<String>, HttpError> {
+    let secret = if is_oauth_bundle_auth(auth, host) {
+        Some(oauth_bundle_access_token(auth).await?)
+    } else {
+        keyring_get(&auth.service, &auth.account).await?
+    };
+
+    Ok(secret.map(|secret| format!("{}{}", auth.prefix, secret)))
+}
+
 async fn perform_once(
     req: &HttpRequest,
     auth: Option<&AuthRef>,
@@ -302,17 +467,8 @@ async fn perform_once(
     }
 
     if let Some(auth) = auth {
-        let secret = tokio::task::spawn_blocking({
-            let service = auth.service.clone();
-            let account = auth.account.clone();
-            move || credentials::get_secret(&service, &account)
-        })
-        .await
-        .map_err(|e| HttpError::Credential(e.to_string()))?
-        .map_err(|e| HttpError::Credential(e.to_string()))?;
-
-        if let Some(secret) = secret {
-            let value = format!("{}{}", auth.prefix, secret);
+        let host = normalized_host(&parse_url(&req.url)?)?;
+        if let Some(value) = auth_header_value(auth, &host).await? {
             builder = builder.header(&auth.header, value);
         }
     }
@@ -390,17 +546,8 @@ async fn perform_once_bytes(
     }
 
     if let Some(auth) = auth {
-        let secret = tokio::task::spawn_blocking({
-            let service = auth.service.clone();
-            let account = auth.account.clone();
-            move || credentials::get_secret(&service, &account)
-        })
-        .await
-        .map_err(|e| HttpError::Credential(e.to_string()))?
-        .map_err(|e| HttpError::Credential(e.to_string()))?;
-
-        if let Some(secret) = secret {
-            let value = format!("{}{}", auth.prefix, secret);
+        let host = normalized_host(&parse_url(&req.url)?)?;
+        if let Some(value) = auth_header_value(auth, &host).await? {
             builder = builder.header(&auth.header, value);
         }
     }
@@ -480,6 +627,7 @@ mod tests {
             account: "default".into(),
             header: "Authorization".into(),
             prefix: "Bearer ".into(),
+            client_id: None,
         };
         assert!(validate_outbound_url("https://api.openai.com/v1/models", Some(&auth)).is_ok());
         let err = validate_outbound_url("https://api.github.com/user", Some(&auth)).unwrap_err();

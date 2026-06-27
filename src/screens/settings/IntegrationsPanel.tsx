@@ -17,6 +17,7 @@ import type { Component, JSX } from "solid-js";
 import { Show, createResource, createSignal, For } from "solid-js";
 
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
+import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { Switch } from "~/components/forms/Switch";
 import { assertEntitlement } from "~/integrations/entitlements";
@@ -205,7 +206,12 @@ const ZoteroWebRow: Component = () => {
   const handleDisconnect = async () => {
     const userId = settings().userId;
     if (!userId) return;
-    await deleteCredential({ service: "zotero-web", account: userId });
+    try {
+      await deleteCredential({ service: "zotero-web", account: userId });
+    } catch (e) {
+      notifyError("Couldn't disconnect Zotero", errorText(e));
+      return;
+    }
     setIntegrationsSettings({
       ...integrationsSettings(),
       references: {
@@ -336,7 +342,12 @@ const MendeleyRow: Component = () => {
   const handleDisconnect = async () => {
     const profileId = settings().profileId;
     if (!profileId) return;
-    await disconnectMendeley(profileId);
+    try {
+      await disconnectMendeley(profileId);
+    } catch (e) {
+      notifyError("Couldn't disconnect Mendeley", errorText(e));
+      return;
+    }
     persistMendeley(); // drop the account but keep the redirect URL for reconnect
   };
 
@@ -497,7 +508,12 @@ const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) =
   const handleDisconnect = async () => {
     const current = account();
     if (!current) return;
-    await props.provider.disconnect(current.accountId);
+    try {
+      await props.provider.disconnect(current.accountId);
+    } catch (e) {
+      notifyError(`Couldn't disconnect ${props.provider.name}`, errorText(e));
+      return;
+    }
     setIntegrationsSettings({
       ...integrationsSettings(),
       cloud: {
@@ -605,7 +621,12 @@ const WebdavRow: Component = () => {
   };
 
   const handleDisconnect = async (accountId: string) => {
-    await disconnectWebdav(accountId);
+    try {
+      await disconnectWebdav(accountId);
+    } catch (e) {
+      notifyError("Couldn't disconnect WebDAV", errorText(e));
+      return;
+    }
     setIntegrationsSettings({
       ...integrationsSettings(),
       cloud: {
@@ -790,7 +811,12 @@ const GithubAccountRow: Component = () => {
   const handleDisconnect = async () => {
     const login = accountId();
     if (!login) return;
-    await disconnectGithub(login);
+    try {
+      await disconnectGithub(login);
+    } catch (e) {
+      notifyError("Couldn't disconnect GitHub", errorText(e));
+      return;
+    }
     setIntegrationsSettings({
       ...integrationsSettings(),
       vcs: {
@@ -1010,8 +1036,13 @@ const AiProviderRow: Component<{
   const removeKey = async () => {
     const service = props.provider.keyringService;
     if (!service) return;
-    const { deleteCredential } = await import("~/integrations/auth/credentials");
-    await deleteCredential({ service, account: "default" });
+    try {
+      const { deleteCredential } = await import("~/integrations/auth/credentials");
+      await deleteCredential({ service, account: "default" });
+    } catch (e) {
+      notifyError("Couldn't remove API key", errorText(e));
+      return;
+    }
     if (ai().activeProvider === props.provider.id) {
       props.onActivate(undefined);
     }

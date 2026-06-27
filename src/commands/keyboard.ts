@@ -1,4 +1,5 @@
 import { commands } from "./registry";
+import { dispatchCommand } from "./run";
 import { matches } from "~/lib/shortcuts";
 
 /**
@@ -66,7 +67,7 @@ const handler = (event: KeyboardEvent) => {
 
     event.preventDefault();
     event.stopPropagation();
-    void cmd.run();
+    dispatchCommand(cmd);
     return;
   }
 

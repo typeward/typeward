@@ -55,6 +55,7 @@ interface ConflictEntry {
 
 export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (props) => {
   const [refreshTick, setRefreshTick] = createSignal(0);
+  const [actionError, setActionError] = createSignal<string | null>(null);
 
   const [entries] = createResource(
     () => [allSyncStatuses(), project(), refreshTick()] as const,
@@ -91,14 +92,16 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
   const total = createMemo(() => entries()?.length ?? 0);
 
   const keepMine = async (entry: ConflictEntry) => {
-    if (!entry.conflictAbs) {
+    setActionError(null);
+    try {
+      if (entry.conflictAbs) await remove(entry.conflictAbs);
       clearConflict(entry.providerId, entry.projectId, entry.relPath);
       setRefreshTick((t) => t + 1);
-      return;
+    } catch (e) {
+      setActionError(
+        `Couldn't keep your copy of "${entry.relPath}": ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
-    await remove(entry.conflictAbs);
-    clearConflict(entry.providerId, entry.projectId, entry.relPath);
-    setRefreshTick((t) => t + 1);
   };
 
   const keepTheirs = async (entry: ConflictEntry) => {
@@ -127,11 +130,18 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
       );
     }
     if (!proceed) return;
-    const content = await readTextFile(entry.conflictAbs);
-    await writeTextFile(entry.originalAbs, content);
-    await remove(entry.conflictAbs);
-    clearConflict(entry.providerId, entry.projectId, entry.relPath);
-    setRefreshTick((t) => t + 1);
+    setActionError(null);
+    try {
+      const content = await readTextFile(entry.conflictAbs);
+      await writeTextFile(entry.originalAbs, content);
+      await remove(entry.conflictAbs);
+      clearConflict(entry.providerId, entry.projectId, entry.relPath);
+      setRefreshTick((t) => t + 1);
+    } catch (e) {
+      setActionError(
+        `Couldn't replace "${entry.relPath}" with the remote copy: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   };
 
   const openBoth = async (entry: ConflictEntry) => {
@@ -167,6 +177,17 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
         </Button>
       }
     >
+      <Show when={actionError()}>
+        <div
+          class="mb-2 rounded-md px-3 py-2 text-[11px]"
+          style={{
+            color: "var(--color-danger-fill)",
+            background: "color-mix(in srgb, var(--color-danger-fill) 12%, transparent)",
+          }}
+        >
+          {actionError()}
+        </div>
+      </Show>
       <Show
         when={total() > 0}
         fallback={

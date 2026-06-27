@@ -19,9 +19,9 @@
 
 import {
   deleteChunkedCredential,
-  getChunkedCredential,
   setChunkedCredential,
 } from "~/integrations/auth/chunked";
+import { readSupabaseSession } from "~/integrations/auth/credentials";
 
 const SERVICE = "supabase.session";
 const browserSessionFallback = new Map<string, string>();
@@ -48,7 +48,7 @@ export const keyringSupabaseStorage = {
   async getItem(key: string): Promise<string | null> {
     const account = sanitizeAccount(key);
     if (!hasTauriIpc()) return browserSessionFallback.get(account) ?? null;
-    return await getChunkedCredential(SERVICE, account);
+    return await readSupabaseSession(account);
   },
   async setItem(key: string, value: string): Promise<void> {
     const account = sanitizeAccount(key);

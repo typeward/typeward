@@ -6,6 +6,7 @@ use serde::Serialize;
 use tauri_plugin_shell::ShellExt;
 
 use crate::autosave::{self, Snapshot};
+#[cfg(desktop)]
 use crate::detect::{self, EngineProbe};
 use crate::fs_ops;
 use crate::project::{self, Project, ProjectFormat};
@@ -82,22 +83,35 @@ fn ensure_read_size(path: &Path, max_bytes: u64) -> CmdResult<()> {
     }
 }
 
+#[cfg(desktop)]
 #[tauri::command]
-pub fn detect_tex() -> EngineProbe {
-    detect::probe()
+pub async fn detect_tex() -> EngineProbe {
+    // Off the event-loop thread: probe() does up to seven blocking `which` +
+    // `<engine> --version` spawns in series, which would otherwise freeze the
+    // window during onboarding.
+    tokio::task::spawn_blocking(detect::probe)
+        .await
+        .unwrap_or(EngineProbe {
+            engines: Vec::new(),
+            any_latex_available: false,
+        })
 }
 
 #[tauri::command]
-pub fn list_projects(root: Option<String>) -> CmdResult<Vec<project::ProjectListing>> {
+pub async fn list_projects(root: Option<String>) -> CmdResult<Vec<project::ProjectListing>> {
     let root = root
         .map(PathBuf::from)
         .unwrap_or_else(settings::default_projects_root);
-    ensure_under_projects_root(&root)?;
-    let listings = project::list_project_listings(&root).map_err(err)?;
-    for l in &listings {
-        project::register_root(Path::new(&l.project.root_path));
-    }
-    Ok(listings)
+    tokio::task::spawn_blocking(move || -> CmdResult<Vec<project::ProjectListing>> {
+        ensure_under_projects_root(&root)?;
+        let listings = project::list_project_listings(&root).map_err(err)?;
+        for l in &listings {
+            project::register_root(Path::new(&l.project.root_path));
+        }
+        Ok(listings)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
@@ -182,67 +196,121 @@ fn is_iso_date(s: &str) -> bool {
 }
 
 #[tauri::command]
-pub fn read_project_text_file(project_root: String, rel_path: String) -> CmdResult<String> {
-    ensure_registered(&project_root)?;
-    let path =
-        project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
-    ensure_read_size(&path, MAX_PROJECT_TEXT_READ_BYTES)?;
-    fs_ops::read_text(&path).map_err(err)
+pub async fn read_project_text_file(project_root: String, rel_path: String) -> CmdResult<String> {
+    tokio::task::spawn_blocking(move || -> CmdResult<String> {
+        ensure_registered(&project_root)?;
+        let path = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)
+            .map_err(err)?;
+        ensure_read_size(&path, MAX_PROJECT_TEXT_READ_BYTES)?;
+        fs_ops::read_text(&path).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Read raw bytes for a project-relative file. Used by the WASM
 /// CompileProvider to pull binary figure assets (.png/.jpg/.pdf) into
 /// the WASM in-memory FS so `\includegraphics{...}` resolves.
+///
+/// Returns a raw [`tauri::ipc::Response`] (ArrayBuffer on the JS side) rather
+/// than `Vec<u8>`: a serde `Vec<u8>` crosses the bridge as a JSON number array
+/// (~3-4 ASCII chars/byte, held simultaneously as Rust Vec + JSON + JS array),
+/// which the mobile compile asset walk pays per figure. The raw body skips JSON
+/// entirely.
 #[tauri::command]
-pub fn read_project_binary_file(project_root: String, rel_path: String) -> CmdResult<Vec<u8>> {
-    ensure_registered(&project_root)?;
-    let path =
-        project::resolve_existing_project_path(Path::new(&project_root), &rel_path).map_err(err)?;
-    ensure_read_size(&path, MAX_PROJECT_BINARY_READ_BYTES)?;
-    std::fs::read(&path).map_err(err)
+pub async fn read_project_binary_file(
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<tauri::ipc::Response> {
+    let bytes = tokio::task::spawn_blocking(move || -> CmdResult<Vec<u8>> {
+        ensure_registered(&project_root)?;
+        let path = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)
+            .map_err(err)?;
+        ensure_read_size(&path, MAX_PROJECT_BINARY_READ_BYTES)?;
+        std::fs::read(&path).map_err(err)
+    })
+    .await
+    .map_err(err)??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
-pub fn write_project_text_file(
+pub async fn write_project_text_file(
     project_root: String,
     rel_path: String,
     content: String,
 ) -> CmdResult<()> {
-    ensure_registered(&project_root)?;
-    let path =
-        project::resolve_project_write_path(Path::new(&project_root), &rel_path).map_err(err)?;
-    fs_ops::write_text(&path, &content).map_err(err)
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
+            .map_err(err)?;
+        fs_ops::write_text(&path, &content).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Decode a percent-encoded request header into an owned `String`. The binary
+/// upload commands carry their path metadata as headers (the JSON arg slot is
+/// taken by the raw byte body); the renderer percent-encodes via
+/// `encodeURIComponent` so arbitrary Unicode paths survive the ASCII-only
+/// header channel.
+fn percent_decode_header(name: &str, raw: &str) -> CmdResult<String> {
+    percent_encoding::percent_decode_str(raw)
+        .decode_utf8()
+        .map(|cow| cow.into_owned())
+        .map_err(|_| format!("invalid UTF-8 in `{name}` header"))
+}
+
+fn decode_path_header(request: &tauri::ipc::Request<'_>, name: &str) -> CmdResult<String> {
+    let raw = request
+        .headers()
+        .get(name)
+        .ok_or_else(|| format!("missing `{name}` header"))?
+        .to_str()
+        .map_err(|_| format!("invalid `{name}` header"))?;
+    percent_decode_header(name, raw)
 }
 
 /// Persist binary bytes (e.g. a PDF emitted by the WASM engine)
 /// to the given absolute path. Bypasses the fs plugin scope like the
 /// rest of our project-internal IO. Parent directories are created on
 /// demand so callers don't need a separate mkdir step.
+///
+/// Takes a raw [`tauri::ipc::Request`] (the bytes arrive as the ArrayBuffer
+/// body, not a JSON number array — see `read_project_binary_file`); the project
+/// root and relative path ride along as percent-encoded headers.
 #[tauri::command]
-pub fn write_project_binary_file(
-    project_root: String,
-    rel_path: String,
-    bytes: Vec<u8>,
-) -> CmdResult<()> {
-    ensure_registered(&project_root)?;
-    let path =
-        project::resolve_project_write_path(Path::new(&project_root), &rel_path).map_err(err)?;
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(err)?;
+pub async fn write_project_binary_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("expected a raw request body".to_string());
+    };
+    let bytes = bytes.clone();
+    let project_root = decode_path_header(&request, "x-project-root")?;
+    let rel_path = decode_path_header(&request, "x-rel-path")?;
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
+            .map_err(err)?;
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(err)?;
+            }
         }
-    }
-    // Refuse to write through an existing symlink: a malicious cloned repo or
-    // extracted zip can plant a symlink at a project-relative path so a later
-    // binary write (e.g. the WASM engine's PDF) lands outside the project root.
-    // `resolve_project_write_path` only canonicalizes the parent, so the leaf
-    // is checked here. The text path is already safe via atomic temp+rename.
-    if let Ok(meta) = std::fs::symlink_metadata(&path) {
-        if meta.file_type().is_symlink() {
-            return Err("refusing to write through a symlink".to_string());
+        // Refuse to write through an existing symlink: a malicious cloned repo or
+        // extracted zip can plant a symlink at a project-relative path so a later
+        // binary write (e.g. the WASM engine's PDF) lands outside the project root.
+        // `resolve_project_write_path` only canonicalizes the parent, so the leaf
+        // is checked here. The text path is already safe via atomic temp+rename.
+        if let Ok(meta) = std::fs::symlink_metadata(&path) {
+            if meta.file_type().is_symlink() {
+                return Err("refusing to write through a symlink".to_string());
+            }
         }
-    }
-    std::fs::write(path, &bytes).map_err(err)
+        std::fs::write(path, &bytes).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Exposes the existing `parse_latex_log` diagnostic extractor over IPC
@@ -600,6 +668,37 @@ mod tests {
     }
 
     #[test]
+    fn percent_decode_header_round_trips_encodeuricomponent() {
+        // The renderer percent-encodes path metadata via `encodeURIComponent`
+        // before stuffing it into the ASCII-only header channel of the binary
+        // write IPC. Confirm Unicode, spaces, and separators decode faithfully.
+        // Values below are exactly what JS `encodeURIComponent` emits.
+        assert_eq!(
+            percent_decode_header("x-rel-path", "r%C3%A9sum%C3%A9%2Fmain.tex").unwrap(),
+            "résumé/main.tex"
+        );
+        assert_eq!(
+            percent_decode_header("x-rel-path", "my%20project%2Ffig%201.png").unwrap(),
+            "my project/fig 1.png"
+        );
+        assert_eq!(
+            percent_decode_header("x-project-root", "C%3A%5CUsers%5Cme%5CDocs").unwrap(),
+            "C:\\Users\\me\\Docs"
+        );
+        // Unencoded ASCII (encodeURIComponent leaves these untouched) passes through.
+        assert_eq!(
+            percent_decode_header("x-rel-path", "build/out.pdf").unwrap(),
+            "build/out.pdf"
+        );
+    }
+
+    #[test]
+    fn percent_decode_header_rejects_invalid_utf8() {
+        // `%FF` is not a valid UTF-8 lead byte — must error, not lossily decode.
+        assert!(percent_decode_header("x-rel-path", "%FF%FE").is_err());
+    }
+
+    #[test]
     fn parse_typst_log_picks_up_error_and_warning_lines() {
         let log = "  error: undefined variable `x`\nnote: at main.typ:3:1\nwarning: unused parameter\nrandom line\n";
         let diags = parse_typst_log(log, "main.typ");
@@ -676,9 +775,19 @@ pub async fn export_project_zip(project: Project) -> CmdResult<String> {
 // ---------- Autosave / crash recovery -------------------------------------
 
 #[tauri::command]
-pub fn write_snapshot(project_root: String, rel_path: String, content: String) -> CmdResult<()> {
-    ensure_registered(&project_root)?;
-    autosave::write(Path::new(&project_root), &rel_path, &content).map_err(err)
+pub async fn write_snapshot(
+    project_root: String,
+    rel_path: String,
+    content: String,
+) -> CmdResult<()> {
+    // Autosave fires on a 500ms debounce while typing and atomic_write does a
+    // full fsync; keep that off the event-loop thread so it never hitches typing.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        autosave::write(Path::new(&project_root), &rel_path, &content).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]

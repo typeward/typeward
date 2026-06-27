@@ -11,11 +11,13 @@ import type { Component } from "solid-js";
 import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
+import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { citationProviders } from "~/integrations/references/registry";
 import type { Citation, LibraryNode } from "~/integrations/types";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { insertAtCursor } from "~/stores/editor-view-store";
 import { project } from "~/stores/editor-store";
 
@@ -269,7 +271,12 @@ export const ReferencesPanel: Component = () => {
     const proj = project();
     if (!proj) return;
     for (const p of citationProviders()) p.invalidate?.();
-    await refreshLibraryBib(proj);
+    try {
+      await refreshLibraryBib(proj);
+    } catch (e) {
+      notifyError("Couldn't refresh references", errorText(e));
+      return;
+    }
     setRefreshTick((t) => t + 1);
   };
 
@@ -478,6 +485,7 @@ const FlatSelect: Component<{
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
 
   const label = () => {
     const sel = props.items.find((p) => p.id === props.selectedId)?.name ?? props.selectedName;
@@ -495,6 +503,8 @@ const FlatSelect: Component<{
             type="button"
             onClick={() => setOpen((v) => !v)}
             disabled={props.items.length === 0 && !props.loading}
+            aria-haspopup="listbox"
+            aria-expanded={open()}
             title={props.selectedName}
             class="glass-inset flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-2.5 text-left disabled:opacity-60"
           >
@@ -512,6 +522,8 @@ const FlatSelect: Component<{
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
+          aria-haspopup="listbox"
+          aria-expanded={open()}
           title={props.selectedName}
           class="glass-inset flex h-7 flex-shrink-0 items-center gap-0.5 rounded-md px-1.5"
         >
@@ -521,6 +533,9 @@ const FlatSelect: Component<{
       </Show>
       <Show when={open() && props.items.length > 0}>
         <div
+          role="listbox"
+          tabindex={-1}
+          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class={`glass absolute top-full z-40 mt-1 max-h-[280px] overflow-auto scroll rounded-lg ${
             props.compact ? "left-0" : "left-0 right-0"
           }`}
@@ -536,6 +551,9 @@ const FlatSelect: Component<{
               return (
                 <button
                   type="button"
+                  role="option"
+                  aria-selected={active()}
+                  tabindex={-1}
                   onClick={() => {
                     props.onSelect(item.id);
                     setOpen(false);
@@ -572,6 +590,7 @@ const TreeSelect: Component<{
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
 
   const ordered = createMemo(() => orderedTree(props.nodes));
   const label = () =>
@@ -584,6 +603,8 @@ const TreeSelect: Component<{
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={props.disabled || props.nodes.length === 0}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
         title={nodePath(props.selected?.id ?? null, props.nodes)}
         class="glass-inset flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-2.5 text-left disabled:opacity-60"
       >
@@ -598,6 +619,9 @@ const TreeSelect: Component<{
       </button>
       <Show when={open() && props.nodes.length > 0}>
         <div
+          role="listbox"
+          tabindex={-1}
+          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute left-0 right-0 top-full z-40 mt-1 max-h-[280px] overflow-auto scroll rounded-lg"
           style={{ padding: "4px", background: "var(--color-popover-bg)" }}
         >
@@ -607,6 +631,9 @@ const TreeSelect: Component<{
               return (
                 <button
                   type="button"
+                  role="option"
+                  aria-selected={active()}
+                  tabindex={-1}
                   onClick={() => {
                     props.onSelect(row.node.id);
                     setOpen(false);

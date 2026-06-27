@@ -161,6 +161,7 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
               type="button"
               onClick={() => setMinimized((v) => !v)}
               title={minimized() ? "Expand" : "Minimize"}
+              aria-label={minimized() ? "Expand logs" : "Minimize logs"}
               class="lift flex h-7 w-7 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
             >
               <Show when={minimized()} fallback={<ChevronsDown size={12} class="opacity-60" />}>

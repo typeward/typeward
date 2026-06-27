@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
-use crate::integrations::credentials;
+use crate::{integrations::credentials, settings};
 
 const KEYRING_SERVICE: &str = "webdav";
 
@@ -81,6 +81,10 @@ pub enum WebdavError {
     Network(String),
     #[error("response too large: {0}")]
     TooLarge(String),
+    #[error("WebDAV account is not enrolled or does not match settings: {0}")]
+    AccountNotTrusted(String),
+    #[error("settings lookup failed: {0}")]
+    Settings(String),
     #[error("server returned {status}: {detail}")]
     Status { status: u16, detail: String },
     #[error("credential lookup failed: {0}")]
@@ -104,6 +108,49 @@ pub struct WebdavAccount {
     pub username: String,
     #[serde(default)]
     pub allow_private_host: bool,
+}
+fn trusted_webdav_account(
+    settings: &settings::Settings,
+    requested: &WebdavAccount,
+) -> Result<WebdavAccount, WebdavError> {
+    let stored = settings
+        .integrations
+        .cloud
+        .accounts
+        .iter()
+        .find(|account| {
+            account.provider.eq_ignore_ascii_case(KEYRING_SERVICE)
+                && account.account_id == requested.account_id
+        })
+        .ok_or_else(|| WebdavError::AccountNotTrusted(requested.account_id.clone()))?;
+
+    let base_url = stored
+        .base_url
+        .clone()
+        .ok_or_else(|| WebdavError::AccountNotTrusted(requested.account_id.clone()))?;
+    let username = stored
+        .username
+        .clone()
+        .ok_or_else(|| WebdavError::AccountNotTrusted(requested.account_id.clone()))?;
+
+    Ok(WebdavAccount {
+        account_id: stored.account_id.clone(),
+        base_url,
+        username,
+        allow_private_host: stored.allow_private_host.unwrap_or(false),
+    })
+}
+
+async fn trusted_webdav_account_for_app(
+    app: tauri::AppHandle,
+    requested: WebdavAccount,
+) -> Result<WebdavAccount, WebdavError> {
+    tokio::task::spawn_blocking(move || {
+        let settings = settings::load(&app).map_err(|e| WebdavError::Settings(e.to_string()))?;
+        trusted_webdav_account(&settings, &requested)
+    })
+    .await
+    .map_err(|e| WebdavError::Join(e.to_string()))?
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,7 +245,10 @@ fn parse_ipv4_relaxed(host: &str) -> Option<Ipv4Addr> {
     if parts.len() > 4 {
         return None;
     }
-    let nums: Vec<u32> = parts.iter().map(|p| parse_u32_radix(p)).collect::<Option<Vec<_>>>()?;
+    let nums: Vec<u32> = parts
+        .iter()
+        .map(|p| parse_u32_radix(p))
+        .collect::<Option<Vec<_>>>()?;
     let value: u32 = match nums.as_slice() {
         [a] => *a,
         [a, b] => {
@@ -328,7 +378,11 @@ async fn resolve_and_screen(
 
 fn host_of(url: &Url) -> Result<String, WebdavError> {
     url.host_str()
-        .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase())
+        .map(|h| {
+            h.trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_ascii_lowercase()
+        })
         .ok_or_else(|| WebdavError::InvalidUrl(url.as_str().to_string()))
 }
 
@@ -343,7 +397,9 @@ fn normalize_base(base_url: &str) -> Result<(Url, String), WebdavError> {
         let p = format!("{}/", url.path());
         url.set_path(&p);
     }
-    let decoded_path = percent_decode_str(url.path()).decode_utf8_lossy().into_owned();
+    let decoded_path = percent_decode_str(url.path())
+        .decode_utf8_lossy()
+        .into_owned();
     Ok((url, decoded_path))
 }
 
@@ -372,7 +428,10 @@ fn request_url(account: &WebdavAccount, rel_path: &str, is_dir: bool) -> Result<
 
 fn normalize_etag(raw: &str) -> Option<String> {
     let t = raw.trim();
-    let t = t.strip_prefix("W/").or_else(|| t.strip_prefix("w/")).unwrap_or(t);
+    let t = t
+        .strip_prefix("W/")
+        .or_else(|| t.strip_prefix("w/"))
+        .unwrap_or(t);
     let t = t.trim().trim_matches('"').trim();
     if t.is_empty() {
         None
@@ -450,9 +509,10 @@ async fn execute(
     let client = build_client(&host, &addrs)?;
     let password = account_password(&account.account_id).await?;
 
-    let mut builder = client
-        .request(method, url.clone())
-        .header("Authorization", basic_auth_header(&account.username, &password));
+    let mut builder = client.request(method, url.clone()).header(
+        "Authorization",
+        basic_auth_header(&account.username, &password),
+    );
     for (name, value) in headers {
         builder = builder.header(*name, value);
     }
@@ -779,7 +839,10 @@ fn trim_trailing_slash(s: &str) -> &str {
 /// Requires https and screens the host (resolve + deny-table, honoring the
 /// private opt-in). Returns the normalized base URL to persist.
 #[tauri::command]
-pub async fn webdav_validate_host(url: String, allow_private: bool) -> Result<HostVerdict, WebdavError> {
+pub async fn webdav_validate_host(
+    url: String,
+    allow_private: bool,
+) -> Result<HostVerdict, WebdavError> {
     let (base, base_path) = normalize_base(&url)?;
     let host = host_of(&base)?;
     let port = base
@@ -809,14 +872,25 @@ pub async fn webdav_validate_host(url: String, allow_private: bool) -> Result<Ho
 
 /// Cheap auth/reachability probe: PROPFIND Depth:0 on the account base.
 #[tauri::command]
-pub async fn webdav_status_probe(account: WebdavAccount) -> Result<bool, WebdavError> {
-    let url = request_url(&account, "", true)?;
+pub async fn webdav_status_probe(
+    app: tauri::AppHandle,
+    account: WebdavAccount,
+) -> Result<bool, WebdavError> {
+    let account = trusted_webdav_account_for_app(app, account).await?;
+    webdav_status_probe_inner(&account).await
+}
+
+async fn webdav_status_probe_inner(account: &WebdavAccount) -> Result<bool, WebdavError> {
+    let url = request_url(account, "", true)?;
     let body = PROPFIND_BODY.as_bytes().to_vec();
     let res = execute(
-        &account,
+        account,
         propfind_method()?,
         &url,
-        &[("Depth", "0".into()), ("Content-Type", "application/xml; charset=utf-8".into())],
+        &[
+            ("Depth", "0".into()),
+            ("Content-Type", "application/xml; charset=utf-8".into()),
+        ],
         Some(body),
         MAX_XML_BYTES,
     )
@@ -827,15 +901,25 @@ pub async fn webdav_status_probe(account: WebdavAccount) -> Result<bool, WebdavE
 /// PROPFIND Depth:1 listing of `rel_path` under the account base.
 #[tauri::command]
 pub async fn webdav_propfind(
+    app: tauri::AppHandle,
     account: WebdavAccount,
     rel_path: String,
     depth: u8,
 ) -> Result<WebdavListResult, WebdavError> {
-    let url = request_url(&account, &rel_path, true)?;
+    let account = trusted_webdav_account_for_app(app, account).await?;
+    webdav_propfind_inner(&account, &rel_path, depth).await
+}
+
+async fn webdav_propfind_inner(
+    account: &WebdavAccount,
+    rel_path: &str,
+    depth: u8,
+) -> Result<WebdavListResult, WebdavError> {
+    let url = request_url(account, rel_path, true)?;
     let depth_header = if depth == 0 { "0" } else { "1" };
     let body = PROPFIND_BODY.as_bytes().to_vec();
     let res = execute(
-        &account,
+        account,
         propfind_method()?,
         &url,
         &[
@@ -850,7 +934,9 @@ pub async fn webdav_propfind(
         return Err(status_err(res.status, &res.body));
     }
     let (_, base_path) = normalize_base(&account.base_url)?;
-    let request_path = percent_decode_str(url.path()).decode_utf8_lossy().into_owned();
+    let request_path = percent_decode_str(url.path())
+        .decode_utf8_lossy()
+        .into_owned();
     let raw = parse_multistatus(&res.body)?;
     Ok(WebdavListResult {
         entries: to_entries(raw, &base_path, &request_path),
@@ -859,7 +945,12 @@ pub async fn webdav_propfind(
 
 /// GET file bytes + ETag.
 #[tauri::command]
-pub async fn webdav_get(account: WebdavAccount, rel_path: String) -> Result<WebdavGetResult, WebdavError> {
+pub async fn webdav_get(
+    app: tauri::AppHandle,
+    account: WebdavAccount,
+    rel_path: String,
+) -> Result<WebdavGetResult, WebdavError> {
+    let account = trusted_webdav_account_for_app(app, account).await?;
     let url = request_url(&account, &rel_path, false)?;
     let res = execute(&account, Method::GET, &url, &[], None, MAX_FILE_BYTES).await?;
     if !http_ok(res.status) {
@@ -875,22 +966,40 @@ pub async fn webdav_get(account: WebdavAccount, rel_path: String) -> Result<Webd
 /// and uses `If-Match` for optimistic concurrency when a known rev is given.
 #[tauri::command]
 pub async fn webdav_put(
+    app: tauri::AppHandle,
     account: WebdavAccount,
     rel_path: String,
     body: Vec<u8>,
     if_match: Option<String>,
 ) -> Result<WebdavPutResult, WebdavError> {
+    let account = trusted_webdav_account_for_app(app, account).await?;
     let url = request_url(&account, &rel_path, false)?;
     let mut headers: Vec<(&str, String)> = Vec::new();
     if let Some(rev) = &if_match {
         headers.push(("If-Match", format!("\"{rev}\"")));
     }
 
-    let res = execute(&account, Method::PUT, &url, &headers, Some(body.clone()), MAX_XML_BYTES).await?;
+    let res = execute(
+        &account,
+        Method::PUT,
+        &url,
+        &headers,
+        Some(body.clone()),
+        MAX_XML_BYTES,
+    )
+    .await?;
     if res.status == 409 {
         // missing parent collection — create the chain and retry once
         ensure_ancestors(&account, &rel_path).await?;
-        let retry = execute(&account, Method::PUT, &url, &headers, Some(body), MAX_XML_BYTES).await?;
+        let retry = execute(
+            &account,
+            Method::PUT,
+            &url,
+            &headers,
+            Some(body),
+            MAX_XML_BYTES,
+        )
+        .await?;
         if !http_ok(retry.status) {
             return Err(status_err(retry.status, &retry.body));
         }
@@ -909,16 +1018,26 @@ pub async fn webdav_put(
 /// DELETE a file (or collection). 404 is treated as already-converged.
 #[tauri::command]
 pub async fn webdav_delete(
+    app: tauri::AppHandle,
     account: WebdavAccount,
     rel_path: String,
     if_match: Option<String>,
 ) -> Result<(), WebdavError> {
+    let account = trusted_webdav_account_for_app(app, account).await?;
     let url = request_url(&account, &rel_path, false)?;
     let mut headers: Vec<(&str, String)> = Vec::new();
     if let Some(rev) = &if_match {
         headers.push(("If-Match", format!("\"{rev}\"")));
     }
-    let res = execute(&account, Method::DELETE, &url, &headers, None, MAX_XML_BYTES).await?;
+    let res = execute(
+        &account,
+        Method::DELETE,
+        &url,
+        &headers,
+        None,
+        MAX_XML_BYTES,
+    )
+    .await?;
     if http_ok(res.status) || res.status == 404 {
         Ok(())
     } else {
@@ -977,32 +1096,113 @@ async fn resolve_put_etag(
     if from_put.is_some() {
         return from_put;
     }
-    let list = webdav_propfind(account.clone(), rel_path.to_string(), 0).await.ok()?;
-    list.entries.into_iter().find(|e| !e.is_dir).and_then(|e| e.etag)
+    let list = webdav_propfind_inner(account, rel_path, 0).await.ok()?;
+    list.entries
+        .into_iter()
+        .find(|e| !e.is_dir)
+        .and_then(|e| e.etag)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::settings::{CloudAccountRef, Settings};
+
+    fn settings_with_webdav_account() -> Settings {
+        let mut settings = Settings::default();
+        settings.integrations.cloud.accounts.push(CloudAccountRef {
+            provider: "webdav".into(),
+            account_id: "acct-1".into(),
+            label: Some("Team DAV".into()),
+            base_url: Some("https://dav.example.com/remote.php/dav/files/alice/".into()),
+            username: Some("alice".into()),
+            allow_private_host: Some(false),
+        });
+        settings
+    }
+
+    #[test]
+    fn trusted_account_uses_persisted_webdav_metadata() {
+        let settings = settings_with_webdav_account();
+        let requested = WebdavAccount {
+            account_id: "acct-1".into(),
+            base_url: "https://attacker.example/".into(),
+            username: "mallory".into(),
+            allow_private_host: true,
+        };
+
+        let trusted = trusted_webdav_account(&settings, &requested).unwrap();
+
+        assert_eq!(trusted.account_id, "acct-1");
+        assert_eq!(
+            trusted.base_url,
+            "https://dav.example.com/remote.php/dav/files/alice/"
+        );
+        assert_eq!(trusted.username, "alice");
+        assert!(!trusted.allow_private_host);
+    }
+
+    #[test]
+    fn trusted_account_rejects_unenrolled_webdav_account() {
+        let settings = settings_with_webdav_account();
+        let requested = WebdavAccount {
+            account_id: "missing".into(),
+            base_url: "https://dav.example.com/".into(),
+            username: "alice".into(),
+            allow_private_host: false,
+        };
+
+        assert!(matches!(
+            trusted_webdav_account(&settings, &requested),
+            Err(WebdavError::AccountNotTrusted(_))
+        ));
+    }
     #[test]
     fn parses_decimal_hex_octal_ipv4_literals() {
-        assert_eq!(parse_ipv4_relaxed("2130706433"), Some(Ipv4Addr::new(127, 0, 0, 1)));
-        assert_eq!(parse_ipv4_relaxed("0x7f000001"), Some(Ipv4Addr::new(127, 0, 0, 1)));
-        assert_eq!(parse_ipv4_relaxed("0177.0.0.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
-        assert_eq!(parse_ipv4_relaxed("127.1"), Some(Ipv4Addr::new(127, 0, 0, 1)));
-        assert_eq!(parse_ipv4_relaxed("192.168.0.1"), Some(Ipv4Addr::new(192, 168, 0, 1)));
+        assert_eq!(
+            parse_ipv4_relaxed("2130706433"),
+            Some(Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_eq!(
+            parse_ipv4_relaxed("0x7f000001"),
+            Some(Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_eq!(
+            parse_ipv4_relaxed("0177.0.0.1"),
+            Some(Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_eq!(
+            parse_ipv4_relaxed("127.1"),
+            Some(Ipv4Addr::new(127, 0, 0, 1))
+        );
+        assert_eq!(
+            parse_ipv4_relaxed("192.168.0.1"),
+            Some(Ipv4Addr::new(192, 168, 0, 1))
+        );
         assert_eq!(parse_ipv4_relaxed("cloud.example.com"), None);
     }
 
     #[test]
     fn hard_blocks_loopback_linklocal_metadata() {
-        for h in ["127.0.0.1", "169.254.169.254", "0.0.0.0", "0x7f000001", "2130706433"] {
+        for h in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "0x7f000001",
+            "2130706433",
+        ] {
             let ip = parse_ip_literal(h).expect(h);
-            assert!(is_blocked_ip(ip, true), "{h} must stay blocked even with opt-in");
+            assert!(
+                is_blocked_ip(ip, true),
+                "{h} must stay blocked even with opt-in"
+            );
         }
         let v6_meta = parse_ip_literal("[fd00:ec2::254]").unwrap();
-        assert!(is_blocked_ip(v6_meta, true), "ipv6 metadata must stay blocked with opt-in");
+        assert!(
+            is_blocked_ip(v6_meta, true),
+            "ipv6 metadata must stay blocked with opt-in"
+        );
         let v6_loop = parse_ip_literal("[::1]").unwrap();
         assert!(is_blocked_ip(v6_loop, true));
     }
@@ -1035,7 +1235,10 @@ mod tests {
     fn encodes_path_segments_preserving_separators() {
         assert_eq!(encode_rel("figures/plot 1.pdf"), "figures/plot%201.pdf");
         assert_eq!(encode_rel("a/b#c.tex"), "a/b%23c.tex");
-        assert_eq!(encode_rel("café/résumé.tex"), "caf%C3%A9/r%C3%A9sum%C3%A9.tex");
+        assert_eq!(
+            encode_rel("café/résumé.tex"),
+            "caf%C3%A9/r%C3%A9sum%C3%A9.tex"
+        );
     }
 
     #[test]
@@ -1107,14 +1310,21 @@ mod tests {
           </d:response>
         </d:multistatus>"#;
         let raw = parse_multistatus(xml).unwrap();
-        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/figures/");
+        let entries = to_entries(
+            raw,
+            "/dav/files/me/project/",
+            "/dav/files/me/project/figures/",
+        );
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].rel_path, "figures/plot.pdf");
     }
 
     #[test]
     fn href_decoding_handles_percent_and_unicode() {
-        assert_eq!(href_to_path("/dav/a%20test/r%C3%A9sum%C3%A9.tex"), "/dav/a test/résumé.tex");
+        assert_eq!(
+            href_to_path("/dav/a%20test/r%C3%A9sum%C3%A9.tex"),
+            "/dav/a test/résumé.tex"
+        );
         assert_eq!(href_to_path("https://h.example/dav/x%23y"), "/dav/x#y");
     }
 

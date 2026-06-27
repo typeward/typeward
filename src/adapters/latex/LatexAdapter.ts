@@ -7,6 +7,7 @@ import type {
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
 import { compileEngine, editorSettings } from "~/stores/settings-store";
+import { compileActiveProject, syncForwardFromCursor } from "~/commands/actions";
 
 const compile = async (project: Project): Promise<CompileResult> => {
   const engine = compileEngine();
@@ -37,7 +38,6 @@ const commands: EditorCommand[] = [
     scope: "editor",
     when: () => true,
     run: async () => {
-      const { compileActiveProject } = await import("~/commands/actions");
       await compileActiveProject();
     },
   },
@@ -50,7 +50,6 @@ const commands: EditorCommand[] = [
     scope: "editor",
     when: () => true,
     run: async () => {
-      const { syncForwardFromCursor } = await import("~/commands/actions");
       await syncForwardFromCursor();
     },
   },

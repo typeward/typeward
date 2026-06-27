@@ -77,6 +77,16 @@ pub async fn overleaf_import_zip(
             return Err(OverleafError::InvalidName(name));
         }
         let dest = parent.join(&safe_name);
+        // Gate the renderer-supplied destination to the configured projects
+        // root, mirroring git_clone/create_project. Zip contents are untrusted,
+        // so without this an XSS-driven call could extract a file tree anywhere
+        // the OS user can write.
+        if !project::is_new_path_under_projects_root(&dest) {
+            return Err(OverleafError::UnsafeEntry(format!(
+                "destination is outside the configured projects root: {}",
+                dest.display()
+            )));
+        }
         if dest.exists() {
             return Err(OverleafError::AlreadyExists(dest.to_string_lossy().into()));
         }

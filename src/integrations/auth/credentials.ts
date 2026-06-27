@@ -31,3 +31,12 @@ export const credentialExists = (ref: CredentialRef): Promise<boolean> =>
 
 export const deleteCredential = (ref: CredentialRef): Promise<void> =>
   invoke("credential_delete", { service: ref.service, account: ref.account });
+
+/**
+ * Dedicated read for the Supabase session bundle. supabase-js needs the
+ * session value in the webview, so it is read through this purpose-specific
+ * command rather than the generic, allowlist-locked `credential_get`. Rust
+ * reassembles the chunked value that `setChunkedCredential` wrote.
+ */
+export const readSupabaseSession = (account: string): Promise<string | null> =>
+  invoke<string | null>("supabase_session_read", { account });

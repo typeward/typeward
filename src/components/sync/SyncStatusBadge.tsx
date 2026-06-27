@@ -11,6 +11,7 @@ import { AlertTriangle, Check, Cloud, Loader2, X } from "lucide-solid";
 import type { Component } from "solid-js";
 import { Show, createMemo, createSignal } from "solid-js";
 
+import { notifyError } from "~/components/feedback/Toaster";
 import { allSyncStatuses } from "~/integrations/cloud/core";
 import type { SyncPhase } from "~/integrations/types";
 
@@ -28,6 +29,8 @@ interface Aggregated {
   phase: SyncPhase;
   count: number;
   conflicts: number;
+  /** Free-form detail from the worst status, surfaced on error click. */
+  message?: string;
 }
 
 export const SyncStatusBadge: Component = () => {
@@ -42,7 +45,8 @@ export const SyncStatusBadge: Component = () => {
       if (PHASE_RANK[s.phase] > PHASE_RANK[worst]) worst = s.phase;
       conflicts += s.conflicts.length;
     }
-    return { phase: worst, count: all.length, conflicts };
+    const message = all.find((s) => s.phase === worst && s.message)?.message;
+    return { phase: worst, count: all.length, conflicts, message };
   });
 
   return (
@@ -52,8 +56,12 @@ export const SyncStatusBadge: Component = () => {
           <button
             type="button"
             class="lift flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--ui-font-xs)] disabled:cursor-default"
-            disabled={agg().conflicts === 0}
-            onClick={() => setResolverOpen(true)}
+            disabled={agg().conflicts === 0 && agg().phase !== "error"}
+            onClick={() => {
+              if (agg().conflicts > 0) setResolverOpen(true);
+              else if (agg().phase === "error")
+                notifyError("Sync error", agg().message ?? "A cloud sync operation failed.");
+            }}
             style={{
               background: agg().phase === "idle"
                 ? "var(--color-control-fill)"
@@ -69,7 +77,9 @@ export const SyncStatusBadge: Component = () => {
             title={
               agg().conflicts > 0
                 ? `${agg().conflicts} unresolved conflict${agg().conflicts === 1 ? "" : "s"} — click to resolve`
-                : `${agg().count} cloud-backed project${agg().count === 1 ? "" : "s"}`
+                : agg().phase === "error"
+                  ? `${agg().message ?? "Sync error"} — click for details`
+                  : `${agg().count} cloud-backed project${agg().count === 1 ? "" : "s"}`
             }
           >
             <PhaseIcon phase={agg().phase} />

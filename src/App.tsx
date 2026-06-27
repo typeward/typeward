@@ -11,23 +11,18 @@ import { bootCoreCommands } from "~/commands/boot";
 import { initAiProviders } from "~/integrations/ai/init";
 import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
-import { initSupabaseEntitlements } from "~/integrations/supabase/entitlements-source";
-import { startSupabaseSession } from "~/integrations/supabase/session";
 import { initCustomThemes } from "~/themes/custom-themes";
+import { loadSupabaseConfig } from "~/config/supabase";
 import {
   installGlobalShortcuts,
   uninstallGlobalShortcuts,
 } from "~/commands/keyboard";
 import { setNavigator } from "~/commands/palette-store";
 import { CommandPalette } from "~/components/CommandPalette";
+import { Toaster } from "~/components/feedback/Toaster";
 import { SaveTemplateDialog } from "~/components/templates/SaveTemplateDialog";
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/500.css";
-import "@fontsource/inter/600.css";
-import "@fontsource/inter/700.css";
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/500.css";
-import "@fontsource/jetbrains-mono/600.css";
+import "@fontsource-variable/inter/index.css";
+import "@fontsource-variable/jetbrains-mono/index.css";
 
 const OnboardingScreen = lazy(() => import("~/screens/onboarding/OnboardingScreen"));
 const ProjectsScreen = lazy(() => import("~/screens/projects/ProjectsScreen"));
@@ -37,12 +32,33 @@ const SettingsScreen = lazy(() => import("~/screens/settings/SettingsScreen"));
 setupAutosave();
 installFrontendErrorHook();
 bootCoreCommands();
-startSupabaseSession();
-initSupabaseEntitlements();
 initReferenceProviders();
 initCloudSync();
 initAiProviders();
 initCustomThemes();
+
+/**
+ * Supabase auth/session + entitlement boot is deferred behind a dynamic
+ * import so `@supabase/supabase-js` stays out of the entry chunk and never
+ * parses during cold launch (to first paint). When Supabase isn't configured
+ * (no env vars) the chunk is never fetched — `loadSupabaseConfig()` only reads
+ * `import.meta.env` and doesn't pull in the client. Scheduled post-first-paint
+ * from AppShell's onMount. Entitlement consumers stay on the synchronous
+ * free-tier default until the source swap resolves (FeatureGate defaults
+ * closed and is reactive), matching the pre-existing async behavior.
+ */
+function bootSupabaseDeferred(): void {
+  if (!loadSupabaseConfig()) return;
+  void (async () => {
+    const [{ startSupabaseSession }, { initSupabaseEntitlements }] =
+      await Promise.all([
+        import("~/integrations/supabase/session"),
+        import("~/integrations/supabase/entitlements-source"),
+      ]);
+    startSupabaseSession();
+    initSupabaseEntitlements();
+  })();
+}
 
 /**
  * Default `/` route. After settings load, if the user hasn't completed
@@ -77,6 +93,7 @@ const AppShell: Component<{ children?: any }> = (props) => {
 
   onMount(() => {
     installGlobalShortcuts();
+    bootSupabaseDeferred();
   });
 
   onCleanup(() => {
@@ -88,6 +105,7 @@ const AppShell: Component<{ children?: any }> = (props) => {
       {props.children}
       <CommandPalette />
       <SaveTemplateDialog />
+      <Toaster />
     </>
   );
 };

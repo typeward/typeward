@@ -26,6 +26,7 @@ import { KbdHint } from "~/components/primitives/KbdHint";
 import { commands } from "~/commands/registry";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { currentTier } from "~/integrations/entitlements";
 import { signOut, supabaseUser } from "~/integrations/supabase/session";
 import { AccountSection } from "./AccountSection";
@@ -927,11 +928,14 @@ const SelectStub: Component<{
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
   return (
     <div class="relative" ref={rootRef}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
         class="glass-inset flex h-8 w-[180px] items-center gap-2 rounded-md px-2.5 text-[12px] text-fg-1 hover:bg-[var(--color-control-fill)]"
       >
         <span class="flex-1 text-left">{props.value}</span>
@@ -939,6 +943,9 @@ const SelectStub: Component<{
       </button>
       <Show when={open()}>
         <div
+          role="listbox"
+          tabindex={-1}
+          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute right-0 z-20 mt-1 w-[180px] overflow-hidden rounded-md py-1"
           style={{ background: "var(--color-popover-bg)" }}
           onClick={(e) => e.stopPropagation()}
@@ -947,6 +954,9 @@ const SelectStub: Component<{
             {(o) => (
               <button
                 type="button"
+                role="option"
+                aria-selected={o.label === props.value}
+                tabindex={-1}
                 onClick={() => {
                   props.onChange(o.value);
                   setOpen(false);

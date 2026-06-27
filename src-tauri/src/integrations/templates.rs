@@ -157,6 +157,15 @@ pub async fn template_instantiate(
             ));
         }
         let dest = parent.join(&safe_name);
+        // Gate the renderer-supplied destination to the projects root, as
+        // create_project does — keeps template materialization inside the
+        // sandbox even if the webview is compromised.
+        if !project::is_new_path_under_projects_root(&dest) {
+            return Err(TemplateError::BadPath(format!(
+                "destination is outside the configured projects root: {}",
+                dest.display()
+            )));
+        }
         if dest.exists() {
             return Err(TemplateError::AlreadyExists(dest.to_string_lossy().into()));
         }
@@ -225,6 +234,14 @@ pub async fn template_save(
 
     tokio::task::spawn_blocking(move || -> Result<TemplateManifest, TemplateError> {
         let src_root = PathBuf::from(&project.root_path).canonicalize()?;
+        // Only capture from a project root the user actually opened — mirrors
+        // export_project_zip's gate. Without this an XSS-driven call could copy
+        // ~/.ssh, .env, etc. into app-data and read them back via a template.
+        if !project::is_registered_root(&src_root) {
+            return Err(TemplateError::BadPath(
+                "project root is not an opened project".into(),
+            ));
+        }
         // root_file must be a sane project-relative path (it becomes the
         // template's entry point and is re-validated on instantiate).
         project::validate_project_relative_path(&project.root_file)?;

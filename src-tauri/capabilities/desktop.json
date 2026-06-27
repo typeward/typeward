@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Desktop-only grants. The tectonic sidecar exists only on desktop, so its shell-execute permission must not ship to iOS/Android.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/tectonic",
+          "sidecar": true,
+          "args": [
+            "-X",
+            "compile",
+            { "validator": "^[A-Za-z0-9_](?:\\.?[A-Za-z0-9_/-])*$" },
+            "--keep-logs",
+            "--synctex"
+          ]
+        }
+      ]
+    }
+  ]
+}
