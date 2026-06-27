@@ -17,6 +17,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
+export interface CredentialRef {
+  service: string;
+  account: string;
+}
+
 export interface OauthFlowOptions {
   /** Provider's authorization endpoint, e.g. `https://www.dropbox.com/oauth2/authorize`. */
   authUrl: string;
@@ -37,6 +42,8 @@ export interface OauthFlowOptions {
    * Basic auth instead of PKCE. Only providers without PKCE support need this.
    */
   clientSecret?: string;
+  /** Preferred confidential-client path: Rust reads the secret from keyring. */
+  clientSecretRef?: CredentialRef;
 }
 
 export interface OauthTokens {
@@ -70,6 +77,7 @@ export async function runOauthFlow(opts: OauthFlowOptions): Promise<OauthTokens>
       extraAuthParams: opts.extraAuthParams ?? {},
       redirectUri: opts.redirectUri,
       clientSecret: opts.clientSecret,
+      clientSecretRef: opts.clientSecretRef,
     },
   });
 

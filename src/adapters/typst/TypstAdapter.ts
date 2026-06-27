@@ -6,6 +6,7 @@ import type {
   Project,
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
+import { compileActiveProject } from "~/commands/actions";
 
 const compile = (project: Project): Promise<CompileResult> => {
   return ipc.compileTypst(project);
@@ -26,7 +27,6 @@ const commands: EditorCommand[] = [
     scope: "editor",
     when: () => true,
     run: async () => {
-      const { compileActiveProject } = await import("~/commands/actions");
       await compileActiveProject();
     },
   },

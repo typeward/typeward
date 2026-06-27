@@ -79,4 +79,18 @@ describe("MarkdownPreview", () => {
     expect(container.querySelector("a")).toBeNull();
     expect(container.querySelector("img")).toBeNull();
   });
+
+  it("drops remote http(s) images (no phone-home from untrusted content)", async () => {
+    const [content] = createSignal(
+      "before ![alt](https://attacker.example/track.png) after",
+    );
+    const { container } = render(() => (
+      <MarkdownPreview content={content} baseDir="/proj/sub" theme={() => "dark"} />
+    ));
+    await waitFor(() => {
+      expect(container.textContent).toContain("before");
+    });
+    expect(container.textContent).toContain("after");
+    expect(container.querySelector("img")).toBeNull();
+  });
 });

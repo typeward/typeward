@@ -95,6 +95,8 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded()}
+          aria-label={`${expanded() ? "Collapse" : "Expand"} ${props.name}`}
           class="lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[length:var(--ui-font-base)] text-fg-2 hover:bg-[var(--color-control-fill)]"
           style={{ "padding-left": `${4 + props.depth * 12}px` }}
         >
@@ -106,27 +108,42 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
         </button>
       </Show>
       <Show when={expanded() || props.depth === 0}>
-        <For each={children() ?? []}>
-          {(child) =>
-            child.isDir ? (
-              <DirectoryNode
-                path={child.path}
-                relPath={child.relPath}
-                name={child.name}
-                depth={props.depth + 1}
-                activeRelPath={props.activeRelPath}
-                onOpen={props.onOpen}
-              />
-            ) : (
-              <FileEntry
-                node={child}
-                depth={props.depth + 1}
-                active={props.activeRelPath === child.relPath}
-                onOpen={props.onOpen}
-              />
-            )
-          }
-        </For>
+        <Show when={children.error}>
+          <div
+            class="flex items-center gap-1.5 px-1.5 py-1 text-[length:var(--ui-font-xs)] text-[var(--color-err)]"
+            style={{ "padding-left": `${22 + props.depth * 12}px` }}
+            title={String(children.error)}
+          >
+            <span class="truncate">Couldn't read this folder</span>
+          </div>
+        </Show>
+        {/* Guard the For: a Solid resource value accessor re-throws once the
+            fetcher rejected, so reading children() while errored would abort
+            this node's render (the error row above would never commit) and
+            emit a recurring unhandled rejection on each watcher re-key. */}
+        <Show when={!children.error}>
+          <For each={children() ?? []}>
+            {(child) =>
+              child.isDir ? (
+                <DirectoryNode
+                  path={child.path}
+                  relPath={child.relPath}
+                  name={child.name}
+                  depth={props.depth + 1}
+                  activeRelPath={props.activeRelPath}
+                  onOpen={props.onOpen}
+                />
+              ) : (
+                <FileEntry
+                  node={child}
+                  depth={props.depth + 1}
+                  active={props.activeRelPath === child.relPath}
+                  onOpen={props.onOpen}
+                />
+              )
+            }
+          </For>
+        </Show>
       </Show>
     </div>
   );

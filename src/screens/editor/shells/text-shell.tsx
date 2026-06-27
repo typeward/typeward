@@ -70,6 +70,7 @@ import {
   saveActiveFile,
   syncInverseFromPdfClick,
 } from "~/commands/actions";
+import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { installSwipeListener } from "~/lib/gestures";
 import { pathToFileUri } from "~/lib/lsp/cm6";
 import { createSidebarResize } from "~/lib/sidebar-resize";
@@ -88,7 +89,10 @@ export const TextShell: Component<{
     updateActiveFile({ content: next, dirty: true });
   };
 
-  const save = () => void saveActiveFile();
+  const save = () =>
+    void saveActiveFile().catch((e) =>
+      notifyError("Couldn't save file", errorText(e)),
+    );
   const compile = () => void compileActiveProject();
 
   // Surface diagnostics on compile failure. When the console lives in the
@@ -581,7 +585,7 @@ const CenterPane: Component<{
                       void requestCloseFile(i());
                     }}
                     class={`-mr-1 flex items-center justify-center rounded opacity-60 hover:bg-[var(--color-control-fill-hover)] hover:opacity-100 ${
-                      isTabletViewport() ? "h-9 w-9" : "h-4 w-4"
+                      isTabletViewport() ? "h-11 w-11" : "h-4 w-4"
                     }`}
                     aria-label={`Close ${f.relPath}`}
                   >

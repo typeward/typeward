@@ -78,24 +78,7 @@
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
         { "url": "https://tug.org/*" },
-        { "url": "https://typeward.app/*" },
-        { "url": "http://127.0.0.1:*" }
-      ]
-    },
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/tectonic",
-          "sidecar": true,
-          "args": [
-            "-X",
-            "compile",
-            { "validator": "^[A-Za-z0-9_](?:\\.?[A-Za-z0-9_/-])*$" },
-            "--keep-logs",
-            "--synctex"
-          ]
-        }
+        { "url": "https://typeward.app/*" }
       ]
     }
   ]

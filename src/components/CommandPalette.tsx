@@ -5,6 +5,7 @@ import type { EditorCommand, Project } from "~/adapters/types";
 import { closePalette } from "~/commands/actions";
 import { navigateTo, paletteOpen_ } from "~/commands/palette-store";
 import { commands as registryCommands } from "~/commands/registry";
+import { dispatchCommand } from "~/commands/run";
 import { shortcutTokens } from "~/lib/shortcuts";
 import { projects } from "~/stores/projects-store";
 
@@ -79,7 +80,7 @@ export const CommandPalette: Component = () => {
         group: c.group ?? "Commands",
         run: () => {
           closePalette();
-          void c.run();
+          dispatchCommand(c);
         },
       }));
 

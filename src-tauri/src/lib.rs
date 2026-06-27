@@ -1,11 +1,19 @@
 mod autosave;
 mod commands;
+// Subprocess-backed modules are desktop-only: mobile (iOS/Android) has no
+// system TeX / language-server / synctex binaries on a PATH to spawn, and the
+// frontend never reaches their IPC there (compile routes through texlive-wasm,
+// LSP/synctex calls are engine-gated or caught). Gating them keeps the
+// subprocess IPC surface off the mobile webview entirely.
+#[cfg(desktop)]
 mod detect;
 mod fs_ops;
 mod integrations;
+#[cfg(desktop)]
 mod lsp;
 mod project;
 mod settings;
+#[cfg(desktop)]
 mod synctex;
 mod telemetry;
 mod themes;
@@ -13,7 +21,7 @@ mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -31,13 +39,20 @@ pub fn run() {
             project::set_projects_root(&projects_root);
             Ok(())
         })
-        .manage(lsp::LspManager::default())
         .manage(watcher::WatcherManager::default())
         .manage(integrations::oauth::OauthManager::default())
         .manage(std::sync::Arc::new(
             integrations::ai::streaming::AiStreamManager::default(),
-        ))
+        ));
+
+    // The LSP child-process manager backs only the desktop texlab/tinymist
+    // commands; mobile uses no language servers.
+    #[cfg(desktop)]
+    let builder = builder.manage(lsp::LspManager::default());
+
+    builder
         .invoke_handler(tauri::generate_handler![
+            #[cfg(desktop)]
             commands::detect_tex,
             commands::list_projects,
             commands::create_project,
@@ -52,7 +67,9 @@ pub fn run() {
             commands::parse_latex_log_cmd,
             commands::compile_latex,
             commands::compile_typst,
+            #[cfg(desktop)]
             synctex::synctex_forward,
+            #[cfg(desktop)]
             synctex::synctex_inverse,
             commands::load_settings,
             commands::save_settings,
@@ -61,8 +78,11 @@ pub fn run() {
             themes::custom_themes_list,
             themes::custom_theme_write_sample,
             themes::custom_themes_open_dir,
+            #[cfg(desktop)]
             lsp::start_lsp,
+            #[cfg(desktop)]
             lsp::send_lsp_message,
+            #[cfg(desktop)]
             lsp::stop_lsp,
             watcher::watch_project,
             watcher::unwatch_project,
@@ -73,6 +93,7 @@ pub fn run() {
             telemetry::list_recent_events,
             integrations::credentials::credential_set,
             integrations::credentials::credential_get,
+            integrations::credentials::supabase_session_read,
             integrations::credentials::credential_exists,
             integrations::credentials::credential_delete,
             integrations::http::http_request,

@@ -65,16 +65,19 @@ export const readProjectTextFile = (
  * Read raw bytes for a project-relative file. The WASM compile provider
  * pulls figure assets (`.png`/`.jpg`/`.pdf`) through this so
  * `\includegraphics{...}` resolves inside the engine's in-memory FS.
+ *
+ * The command returns a raw IPC body (ArrayBuffer), not a JSON number array,
+ * so large reads don't pay the ~3-4x serialization bloat.
  */
 export const readProjectBinaryFile = async (
   projectRoot: string,
   relPath: string,
 ): Promise<Uint8Array> => {
-  const bytes = await invoke<number[]>("read_project_binary_file", {
+  const buf = await invoke<ArrayBuffer>("read_project_binary_file", {
     projectRoot,
     relPath,
   });
-  return Uint8Array.from(bytes);
+  return new Uint8Array(buf);
 };
 
 export const writeProjectTextFile = (
@@ -88,16 +91,21 @@ export const writeProjectTextFile = (
  * Persist arbitrary binary bytes. Used by the WASM compile provider to
  * write the engine-emitted PDF into `<project>/.typeward/build/<base>.pdf`
  * so the file-backed PdfViewer can render it without changes.
+ *
+ * The bytes ride as the raw IPC request body (ArrayBuffer) rather than a JSON
+ * number array; the path metadata travels as percent-encoded headers (the JSON
+ * arg slot is taken by the raw body, and header values must be ASCII).
  */
 export const writeProjectBinaryFile = (
   projectRoot: string,
   relPath: string,
   bytes: Uint8Array,
 ): Promise<void> =>
-  invoke("write_project_binary_file", {
-    projectRoot,
-    relPath,
-    bytes: Array.from(bytes),
+  invoke("write_project_binary_file", bytes, {
+    headers: {
+      "x-project-root": encodeURIComponent(projectRoot),
+      "x-rel-path": encodeURIComponent(relPath),
+    },
   });
 
 /**

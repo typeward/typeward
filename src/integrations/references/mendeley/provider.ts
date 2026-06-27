@@ -41,7 +41,7 @@ import {
   libNodeId,
   resolveNode,
 } from "../zotero/nodes";
-import { getAccessToken, type MendeleyAccount } from "./auth";
+import { hasMendeleyTokens, mendeleyAuthRef, type MendeleyAccount } from "./auth";
 
 const API_ROOT = "https://api.mendeley.com";
 const PAGE_LIMIT = 500; // Mendeley's documented max
@@ -80,9 +80,7 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
   let nodeCache: { fetchedAt: number; nodes: LibraryNode[] } | undefined;
   const folderCache = new Map<string, { fetchedAt: number; entries: TaggedEntry[] }>();
 
-  const auth = async (): Promise<Record<string, string>> => ({
-    Authorization: `Bearer ${await getAccessToken(account.profileId)}`,
-  });
+  const authRef = () => mendeleyAuthRef(account.profileId);
 
   const tag = (bibtex: string): TaggedEntry[] =>
     parseBibTex(bibtex).map((e) => ({
@@ -93,11 +91,11 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
 
   /** Full-library BibTeX, following Mendeley's `Link: rel="next"` cursor. */
   const exportLibraryBibtex = async (): Promise<string> => {
-    const headers = { ...(await auth()), Accept: "application/x-bibtex" };
+    const headers = { Accept: "application/x-bibtex" };
     const chunks: string[] = [];
     let url: string | null = `${API_ROOT}/documents?view=bib&limit=${PAGE_LIMIT}`;
     for (let page = 0; page < MAX_PAGES && url; page++) {
-      const res = await httpRequest({ method: "GET", url, headers });
+      const res = await httpRequest({ method: "GET", url, headers, authRef: authRef() });
       if (res.status < 200 || res.status >= 300) {
         throw new Error(`Mendeley export failed (status ${res.status})`);
       }
@@ -109,13 +107,12 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
 
   const discoverFolders = async (): Promise<CollectionRef[]> => {
     const headers = {
-      ...(await auth()),
       Accept: "application/vnd.mendeley-folder.1+json",
     };
     const out: CollectionRef[] = [];
     let url: string | null = `${API_ROOT}/folders?limit=${PAGE_LIMIT}`;
     for (let page = 0; page < MAX_PAGES && url; page++) {
-      const res = await httpRequest({ method: "GET", url, headers });
+      const res = await httpRequest({ method: "GET", url, headers, authRef: authRef() });
       if (res.status < 200 || res.status >= 300) break;
       const arr = JSON.parse(res.body) as Array<{
         id?: string;
@@ -135,7 +132,6 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
   /** Document ids in a folder (`/folders/{id}/documents` returns ids only). */
   const folderDocumentIds = async (folderId: string): Promise<string[]> => {
     const headers = {
-      ...(await auth()),
       Accept: "application/vnd.mendeley-document.1+json",
     };
     const ids: string[] = [];
@@ -143,7 +139,7 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
       folderId,
     )}/documents?limit=${PAGE_LIMIT}`;
     for (let page = 0; page < MAX_PAGES && url && ids.length < MAX_FOLDER_DOCS; page++) {
-      const res = await httpRequest({ method: "GET", url, headers });
+      const res = await httpRequest({ method: "GET", url, headers, authRef: authRef() });
       if (res.status < 200 || res.status >= 300) break;
       const arr = JSON.parse(res.body) as Array<{ id?: string }>;
       for (const d of arr) if (d.id && isValidKey(d.id)) ids.push(d.id);
@@ -160,6 +156,7 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
       method: "GET",
       url: `${API_ROOT}/documents/${encodeURIComponent(id)}?view=bib`,
       headers,
+      authRef: authRef(),
     });
     return res.status >= 200 && res.status < 300 ? res.body : "";
   };
@@ -180,7 +177,7 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
     // pull each document's BibTeX (bounded concurrency + cap).
     const ids = (await folderDocumentIds(folderId)).slice(0, MAX_FOLDER_DOCS);
     // Resolve the bearer once and reuse it across the n per-document fetches.
-    const headers = { ...(await auth()), Accept: "application/x-bibtex" };
+    const headers = { Accept: "application/x-bibtex" };
     const bibs = await mapLimit(ids, DOC_FETCH_CONCURRENCY, (id) =>
       fetchDocBibtex(id, headers),
     );
@@ -218,7 +215,7 @@ export function createMendeleyProvider(account: MendeleyAccount): CitationProvid
 
     async status(): Promise<ProviderStatus> {
       try {
-        await getAccessToken(account.profileId);
+        if (!(await hasMendeleyTokens(account.profileId))) throw new Error("missing token bundle");
         return "ready";
       } catch {
         return "unconfigured";

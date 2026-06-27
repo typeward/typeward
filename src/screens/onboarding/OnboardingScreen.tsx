@@ -16,6 +16,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Component } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
+import { dismissBootSplash } from "~/lib/boot-splash";
 import * as ipc from "~/ipc";
 import { setCompileEngine, setOnboarded } from "~/stores/settings-store";
 
@@ -73,6 +74,8 @@ const OnboardingScreen: Component = () => {
   const [probeError, setProbeError] = createSignal<string | null>(null);
 
   const stepIndex = createMemo(() => STEP_ORDER.indexOf(step()));
+
+  onMount(() => dismissBootSplash());
 
   const goNext = () => {
     const i = stepIndex();

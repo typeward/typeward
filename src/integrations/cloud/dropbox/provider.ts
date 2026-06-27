@@ -24,7 +24,7 @@ import type {
   RemoteFolder,
 } from "~/integrations/types";
 
-import { type DropboxAccount, getAccessToken } from "./auth";
+import { dropboxAuthRef, hasDropboxTokens, type DropboxAccount } from "./auth";
 
 const API = "https://api.dropboxapi.com";
 const CONTENT = "https://content.dropboxapi.com";
@@ -64,19 +64,17 @@ interface ListFolderResult {
 }
 
 export function createDropboxProvider(account: DropboxAccount): CloudFsProvider {
-  const auth = async (): Promise<Record<string, string>> => ({
-    Authorization: `Bearer ${await getAccessToken(account.accountId)}`,
-  });
+  const authRef = () => dropboxAuthRef(account.accountId);
 
   const apiCall = async <T>(path: string, body: object): Promise<T> => {
     const res = await httpRequest({
       method: "POST",
       url: `${API}${path}`,
       headers: {
-        ...(await auth()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
+      authRef: authRef(),
     });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`Dropbox ${path} failed (status ${res.status}): ${res.body}`);
@@ -91,7 +89,7 @@ export function createDropboxProvider(account: DropboxAccount): CloudFsProvider 
 
     async status(): Promise<ProviderStatus> {
       try {
-        await getAccessToken(account.accountId);
+        if (!(await hasDropboxTokens(account.accountId))) throw new Error("missing token bundle");
         return "ready";
       } catch {
         return "unconfigured";
@@ -176,12 +174,12 @@ export function createDropboxProvider(account: DropboxAccount): CloudFsProvider 
         method: "POST",
         url: `${CONTENT}/2/files/download`,
         headers: {
-          ...(await auth()),
           // The Dropbox-API-Arg header carries the JSON payload that
           // would normally be the body — the body itself is reserved
           // for the file bytes (download) or upload bytes.
           "Dropbox-API-Arg": JSON.stringify({ path: file.id }),
         },
+        authRef: authRef(),
       });
       if (res.status < 200 || res.status >= 300) {
         const text = new TextDecoder().decode(res.body);
@@ -197,7 +195,6 @@ export function createDropboxProvider(account: DropboxAccount): CloudFsProvider 
         method: "POST",
         url: `${CONTENT}/2/files/upload`,
         headers: {
-          ...(await auth()),
           "Content-Type": "application/octet-stream",
           "Dropbox-API-Arg": JSON.stringify({
             path: target,
@@ -206,6 +203,7 @@ export function createDropboxProvider(account: DropboxAccount): CloudFsProvider 
           }),
         },
         body: bytes,
+        authRef: authRef(),
       });
       if (res.status < 200 || res.status >= 300) {
         const text = new TextDecoder().decode(res.body);

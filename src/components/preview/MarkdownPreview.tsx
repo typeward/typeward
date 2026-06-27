@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import katex from "katex";
+import "katex/dist/katex.min.css";
 import MarkdownIt from "markdown-it";
 import mdAnchor from "markdown-it-anchor";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
@@ -15,7 +16,6 @@ interface Props {
 
 const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
-const SAFE_IMAGE_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]+=*$/i;
 
 function renderMath(source: string, displayMode: boolean): string {
@@ -123,14 +123,10 @@ function buildMd(baseDir: string): MarkdownIt {
     const trimmed = url.trim();
     if (!trimmed) return null;
     if (SAFE_DATA_IMAGE.test(trimmed)) return trimmed;
-    if (URL_SCHEME.test(trimmed)) {
-      try {
-        const parsed = new URL(trimmed);
-        return SAFE_IMAGE_PROTOCOLS.has(parsed.protocol.toLowerCase()) ? trimmed : null;
-      } catch {
-        return null;
-      }
-    }
+    // Remote (and any explicit-scheme) images are dropped: a malicious project
+    // .md could otherwise beacon the user's IP / open-time to an attacker via
+    // <img src>. Only data: images and local project-relative figures render.
+    if (URL_SCHEME.test(trimmed)) return null;
 
     const safeRel = safeRelativePath(trimmed);
     if (!safeRel) return null;
@@ -147,7 +143,9 @@ function buildMd(baseDir: string): MarkdownIt {
       if (rewritten) {
         token.attrs![srcAttr]![1] = rewritten;
       } else {
-        token.attrs!.splice(srcAttr, 1);
+        // Unresolvable / remote image: drop the element entirely rather than
+        // emit a src-less <img> (broken icon) or load a remote beacon.
+        return "";
       }
     }
     return origImage

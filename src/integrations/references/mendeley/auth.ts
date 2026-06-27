@@ -25,11 +25,10 @@
 import { runOauthFlow } from "~/integrations/auth/oauth-client";
 import {
   credentialExists,
-  getCredential,
   deleteCredential,
   setCredential,
 } from "~/integrations/auth/credentials";
-import { httpRequest } from "~/integrations/http";
+import { httpRequest, type HttpAuthRef } from "~/integrations/http";
 
 const AUTH_URL = "https://api.mendeley.com/oauth/authorize";
 const TOKEN_URL = "https://api.mendeley.com/oauth/token";
@@ -42,14 +41,6 @@ const SECRET_ACCOUNT = "app-secret";
 // registered in their Mendeley app.
 const DEFAULT_REDIRECT_URI = "http://localhost:5000/callback";
 const SCOPES = ["all"];
-
-/** Base64 of `user:pass` for HTTP Basic — UTF-8 safe (btoa alone throws >0xFF). */
-function basicAuth(user: string, pass: string): string {
-  const bytes = new TextEncoder().encode(`${user}:${pass}`);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return `Basic ${btoa(bin)}`;
-}
 
 interface StoredTokens {
   accessToken: string;
@@ -73,17 +64,12 @@ function clientId(): string {
   return id;
 }
 
-async function clientSecret(): Promise<string> {
-  const secret = await getCredential({
-    service: KEYRING_SERVICE,
-    account: SECRET_ACCOUNT,
-  });
-  if (!secret) {
+async function assertClientSecretConfigured(): Promise<void> {
+  if (!(await hasMendeleyClientSecret())) {
     throw new Error(
       "Mendeley client secret is not set — paste it in Settings → Integrations → References (Mendeley) first.",
     );
   }
-  return secret;
 }
 
 /** Persist the app's Mendeley client secret to the OS keyring. */
@@ -101,13 +87,13 @@ export async function hasMendeleyClientSecret(): Promise<boolean> {
  * Persists the token bundle in the keyring under `mendeley` / profile id.
  */
 export async function connectMendeley(redirectUri?: string): Promise<MendeleyAccount> {
-  const secret = await clientSecret();
+  await assertClientSecretConfigured();
   const tokens = await runOauthFlow({
     authUrl: AUTH_URL,
     tokenUrl: TOKEN_URL,
     clientId: clientId(),
     scopes: SCOPES,
-    clientSecret: secret,
+    clientSecretRef: { service: KEYRING_SERVICE, account: SECRET_ACCOUNT },
     redirectUri: redirectUri?.trim() || DEFAULT_REDIRECT_URI,
   });
 
@@ -124,29 +110,18 @@ export async function disconnectMendeley(profileId: string): Promise<void> {
   await deleteCredential({ service: KEYRING_SERVICE, account: profileId });
 }
 
-/**
- * Returns a non-expired access token, refreshing once if needed. Throws
- * if no stored credentials exist for the account — caller should drive
- * a fresh `connectMendeley()`.
- */
-export async function getAccessToken(profileId: string): Promise<string> {
-  const stored = await readTokens(profileId);
-  if (!stored) {
-    throw new Error("Mendeley account not connected");
-  }
-
-  if (!isExpiringSoon(stored.expiresAt)) {
-    return stored.accessToken;
-  }
-
-  if (!stored.refreshToken) {
-    throw new Error("Mendeley access token expired and no refresh token is available");
-  }
-
-  const refreshed = await refresh(stored.refreshToken);
-  await persistTokens(profileId, refreshed);
-  return refreshed.accessToken;
+export function mendeleyAuthRef(profileId: string): HttpAuthRef {
+  return {
+    service: KEYRING_SERVICE,
+    account: profileId,
+    header: "Authorization",
+    prefix: "Bearer ",
+    clientId: clientId(),
+  };
 }
+
+export const hasMendeleyTokens = (profileId: string): Promise<boolean> =>
+  credentialExists({ service: KEYRING_SERVICE, account: profileId });
 
 async function fetchProfile(accessToken: string): Promise<MendeleyAccount> {
   const res = await httpRequest({
@@ -175,59 +150,9 @@ async function fetchProfile(accessToken: string): Promise<MendeleyAccount> {
   };
 }
 
-async function refresh(refreshToken: string): Promise<StoredTokens> {
-  const secret = await clientSecret();
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-  }).toString();
-
-  const res = await httpRequest({
-    method: "POST",
-    url: TOKEN_URL,
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-      // Confidential client — Basic auth, not a client_id body param.
-      Authorization: basicAuth(clientId(), secret),
-    },
-    body,
-  });
-
-  if (res.status < 200 || res.status >= 300) {
-    throw new Error(`Mendeley token refresh failed (status ${res.status})`);
-  }
-
-  const parsed = JSON.parse(res.body) as {
-    access_token: string;
-    refresh_token?: string;
-    expires_in?: number;
-  };
-  return {
-    accessToken: parsed.access_token,
-    refreshToken: parsed.refresh_token ?? refreshToken,
-    expiresAt: parsed.expires_in ? Math.floor(Date.now() / 1000) + parsed.expires_in : undefined,
-  };
-}
-
-async function readTokens(profileId: string): Promise<StoredTokens | undefined> {
-  const raw = await getCredential({ service: KEYRING_SERVICE, account: profileId });
-  if (!raw) return undefined;
-  try {
-    return JSON.parse(raw) as StoredTokens;
-  } catch {
-    return undefined;
-  }
-}
-
 async function persistTokens(profileId: string, tokens: StoredTokens): Promise<void> {
   await setCredential(
     { service: KEYRING_SERVICE, account: profileId },
     JSON.stringify(tokens),
   );
-}
-
-function isExpiringSoon(expiresAt: number | undefined): boolean {
-  if (!expiresAt) return false;
-  return expiresAt - 60 < Math.floor(Date.now() / 1000);
 }

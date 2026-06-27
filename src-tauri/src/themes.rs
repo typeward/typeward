@@ -161,10 +161,9 @@ pub fn custom_themes_list(app: tauri::AppHandle) -> CmdResult<CustomThemesResult
             ));
             continue;
         };
-        let parsed: Result<ThemeFile, _> =
-            fs::read_to_string(&path)
-                .map_err(|e| e.to_string())
-                .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
+        let parsed: Result<ThemeFile, _> = fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
         match parsed {
             Ok(file) => match validate(&file) {
                 Ok(()) => themes.push(CustomTheme {
@@ -290,7 +289,13 @@ mod tests {
 
     #[test]
     fn rejects_css_injection_in_values() {
-        for bad in ["#fff; background: red", "#fff }", "url(x) {", "a\\62", "<img>"] {
+        for bad in [
+            "#fff; background: red",
+            "#fff }",
+            "url(x) {",
+            "a\\62",
+            "<img>",
+        ] {
             let f = theme_file(&[("--color-bg-base", bad)]);
             assert!(validate(&f).is_err(), "should reject {bad:?}");
         }
@@ -308,7 +313,10 @@ mod tests {
     #[test]
     fn accepts_color_mix_and_gradients() {
         let f = theme_file(&[
-            ("--color-text-selection", "color-mix(in srgb, #5ec4c0 35%, transparent)"),
+            (
+                "--color-text-selection",
+                "color-mix(in srgb, #5ec4c0 35%, transparent)",
+            ),
             ("--blob-1-op", "0.55"),
         ]);
         assert!(validate(&f).is_ok());

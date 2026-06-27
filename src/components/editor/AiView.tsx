@@ -1,6 +1,6 @@
 import { Send, Sparkles, Square } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createMemo, createResource, createSignal } from "solid-js";
+import { For, Show, createMemo, createResource, createSignal, onCleanup } from "solid-js";
 
 import {
   activeProvider,
@@ -109,6 +109,11 @@ export const AiView: Component = () => {
   };
 
   const empty = createMemo(() => messages().length === 0 && !streaming());
+
+  // Abort any in-flight stream when the pane unmounts (pane switch, project
+  // close, navigation). Without this the Rust task + upstream HTTP request keep
+  // running and billing tokens with no UI left to stop them.
+  onCleanup(() => abortController?.abort());
 
   return (
     <div class="flex h-full flex-col" style={{ background: "var(--color-overlay-dim)" }}>

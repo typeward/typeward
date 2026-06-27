@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 use serde::Serialize;
@@ -37,10 +38,14 @@ pub fn probe() -> EngineProbe {
 }
 
 fn probe_one(name: &str) -> TexEngine {
-    let path = which::which(name)
-        .ok()
+    let resolved = which::which(name).ok();
+    let path = resolved
+        .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
-    let version = path.as_ref().and_then(|_| run_version(name));
+    // Spawn the which-resolved absolute path, never the bare name: on Windows
+    // CreateProcess searches the CWD before PATH, so a bare name could run a
+    // binary planted in the current directory.
+    let version = resolved.as_ref().and_then(|exe| run_version(name, exe));
     TexEngine {
         installed: path.is_some(),
         name: name.to_string(),
@@ -49,7 +54,7 @@ fn probe_one(name: &str) -> TexEngine {
     }
 }
 
-fn run_version(name: &str) -> Option<String> {
+fn run_version(name: &str, exe: &Path) -> Option<String> {
     let flag = match name {
         "tectonic" => "--version",
         "typst" => "--version",
@@ -57,7 +62,7 @@ fn run_version(name: &str) -> Option<String> {
         // TeX engines support --version too; latexmk uses -v but accepts --version on modern installs
         _ => "--version",
     };
-    let output = Command::new(name).arg(flag).output().ok()?;
+    let output = Command::new(exe).arg(flag).output().ok()?;
     if !output.status.success() && output.stdout.is_empty() {
         return None;
     }

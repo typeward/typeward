@@ -27,7 +27,7 @@ which = "7"
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
-dirs = "5"
+dirs = "6"
 
 # Integrations foundation (Phase 0): outbound HTTP, OS keyring, OAuth PKCE,
 # loopback redirect server. Kept behind project-scoped IPC commands so the
@@ -36,7 +36,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
 base64 = "0.22"
-rand = "0.8"
+rand = "0.9"
 url = "2"
 sha2 = "0.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

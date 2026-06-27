@@ -38,6 +38,8 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
+use crate::integrations::credentials;
+
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 1024 * 1024;
 const CALLBACK_HTML_SUCCESS: &str = "<!doctype html><html><head><title>Typeward</title>\
@@ -67,6 +69,15 @@ pub enum OauthError {
     TokenExchange(String),
     #[error("response parse failed: {0}")]
     ResponseParse(String),
+    #[error("credential lookup failed: {0}")]
+    Credential(String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialRef {
+    pub service: String,
+    pub account: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +104,10 @@ pub struct OauthBeginRequest {
     /// providers like Mendeley that don't support PKCE.
     #[serde(default)]
     pub client_secret: Option<String>,
+    /// Preferred confidential-client path: Rust reads the client secret from
+    /// the keyring instead of receiving it from the renderer.
+    #[serde(rename = "clientSecretRef", default)]
+    pub client_secret_ref: Option<CredentialRef>,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,13 +220,13 @@ struct CallbackState {
 
 fn generate_state() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn generate_pkce() -> (String, String) {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let verifier = URL_SAFE_NO_PAD.encode(bytes);
     let digest = Sha256::digest(verifier.as_bytes());
     let challenge = URL_SAFE_NO_PAD.encode(digest);
@@ -419,6 +434,22 @@ async fn callback_handler(
     }
 }
 
+async fn resolve_client_secret_ref(reference: CredentialRef) -> Result<String, OauthError> {
+    if reference.service != "mendeley" || reference.account != "app-secret" {
+        return Err(OauthError::Credential(format!(
+            "client secret ref is not allowed: {}/{}",
+            reference.service, reference.account
+        )));
+    }
+    tokio::task::spawn_blocking(move || {
+        credentials::get_secret(&reference.service, &reference.account)
+    })
+    .await
+    .map_err(|e| OauthError::Credential(e.to_string()))?
+    .map_err(|e| OauthError::Credential(e.to_string()))?
+    .ok_or_else(|| OauthError::Credential("missing Mendeley client secret".into()))
+}
+
 #[tauri::command]
 pub async fn oauth_begin(
     req: OauthBeginRequest,
@@ -430,6 +461,16 @@ pub async fn oauth_begin(
 
     let state = generate_state();
     let (code_verifier, code_challenge) = generate_pkce();
+
+    if req.client_secret.is_some() && req.client_secret_ref.is_some() {
+        return Err(OauthError::Credential(
+            "clientSecret and clientSecretRef are mutually exclusive".into(),
+        ));
+    }
+    let client_secret = match req.client_secret_ref.clone() {
+        Some(reference) => Some(resolve_client_secret_ref(reference).await?),
+        None => req.client_secret.clone(),
+    };
 
     let (listeners, redirect_uri, callback_path) =
         build_listeners(req.redirect_uri.as_deref()).await?;
@@ -478,7 +519,7 @@ pub async fn oauth_begin(
         token_url: req.token_url,
         client_id: req.client_id,
         redirect_uri,
-        client_secret: req.client_secret,
+        client_secret,
         shutdown: shutdown_tx,
     });
     manager.insert(state.clone(), flow);

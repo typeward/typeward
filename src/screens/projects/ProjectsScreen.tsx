@@ -37,7 +37,9 @@ import { Button } from "~/components/primitives/Button";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { NotificationsPanel, unreadCount } from "~/components/projects/NotificationsPanel";
 import { currentTier } from "~/integrations/entitlements";
+import { dismissBootSplash } from "~/lib/boot-splash";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { openPalette } from "~/commands/actions";
 import {
   requestNewProject_,
@@ -121,6 +123,7 @@ const ProjectsScreen: Component = () => {
   const [importError, setImportError] = createSignal<string | null>(null);
 
   onMount(() => {
+    dismissBootSplash();
     void refresh();
   });
 
@@ -467,6 +470,7 @@ const Toolbar: Component = () => {
   const [sortOpen, setSortOpen] = createSignal(false);
   let sortRef: HTMLDivElement | undefined;
   installDismiss(() => sortRef, sortOpen, () => setSortOpen(false));
+  useListboxOpenFocus(sortOpen, () => sortRef);
   return (
     <div class="flex items-center gap-2 px-1 pt-1">
       <button
@@ -492,6 +496,8 @@ const Toolbar: Component = () => {
           <button
             type="button"
             onClick={() => setSortOpen((v) => !v)}
+            aria-haspopup="listbox"
+            aria-expanded={sortOpen()}
             class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
             <span>
@@ -501,6 +507,9 @@ const Toolbar: Component = () => {
           </button>
           <Show when={sortOpen()}>
             <div
+              role="listbox"
+              tabindex={-1}
+              onKeyDown={(e) => handleListboxKeydown(e, sortRef, () => setSortOpen(false))}
               class="glass absolute right-0 top-full z-30 mt-1 w-[180px] rounded-lg"
               style={{ padding: "6px", background: "var(--color-popover-bg)" }}
             >
@@ -510,6 +519,9 @@ const Toolbar: Component = () => {
                   return (
                     <button
                       type="button"
+                      role="option"
+                      aria-selected={active()}
+                      tabindex={-1}
                       onClick={() => {
                         setDefaultSort(key);
                         setSortOpen(false);
