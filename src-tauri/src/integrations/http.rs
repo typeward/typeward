@@ -517,20 +517,43 @@ pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
     }
 }
 
-/// Binary-safe variant of [`http_request`] — body in and body out are
-/// raw bytes. Used for cloud-provider file upload / download where the
-/// payload is arbitrary binary content that can't survive a UTF-8 round
-/// trip.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BinaryRespMeta<'a> {
+    status: u16,
+    headers: &'a HashMap<String, String>,
+}
+
+/// Binary-safe variant of [`http_request`] — the upload body is raw bytes and
+/// the response body comes back through the raw IPC channel.
+///
+/// The response is returned as a framed [`tauri::ipc::Response`]
+/// (`[u32 LE meta_len][meta JSON][body]`, see [`crate::integrations::ipc`])
+/// instead of a `{status, headers, body: Vec<u8>}` struct: a serde `Vec<u8>`
+/// crosses the bridge as a JSON number array (~3-4x bloat, triple-buffered),
+/// which every cloud download/upload would pay. The status + headers ride in
+/// the small JSON prefix; the bytes stay raw. (The request body is still a JSON
+/// array for now — the upload-side raw-request conversion is the remaining
+/// half of this change.)
 #[tauri::command]
-pub async fn http_request_bytes(req: BinaryHttpRequest) -> Result<BinaryHttpResponse, HttpError> {
-    match perform_once_bytes(&req, req.auth_ref.as_ref()).await {
-        Ok(res) => Ok(res),
+pub async fn http_request_bytes(req: BinaryHttpRequest) -> Result<tauri::ipc::Response, HttpError> {
+    let res = match perform_once_bytes(&req, req.auth_ref.as_ref()).await {
+        Ok(res) => res,
         Err(HttpError::Network(_)) => {
             tokio::time::sleep(Duration::from_millis(250)).await;
-            perform_once_bytes(&req, req.auth_ref.as_ref()).await
+            perform_once_bytes(&req, req.auth_ref.as_ref()).await?
         }
-        Err(other) => Err(other),
-    }
+        Err(other) => return Err(other),
+    };
+    let meta = BinaryRespMeta {
+        status: res.status,
+        headers: &res.headers,
+    };
+    let meta_json = serde_json::to_vec(&meta)
+        .map_err(|e| HttpError::Network(format!("response meta encode: {e}")))?;
+    Ok(tauri::ipc::Response::new(
+        crate::integrations::ipc::frame_meta_body(&meta_json, &res.body),
+    ))
 }
 
 async fn perform_once_bytes(

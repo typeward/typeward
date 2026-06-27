@@ -173,13 +173,13 @@ pub struct WebdavListResult {
     pub entries: Vec<WebdavEntry>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Metadata prefix for a framed `webdav_get` response — the file bytes ride
+/// raw in the body half (see [`crate::integrations::ipc`]) instead of as a
+/// JSON number array.
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct WebdavGetResult {
-    pub etag: Option<String>,
-    /// File bytes. Tauri serializes `Vec<u8>` as a JSON number array; the
-    /// frontend writes them to the cache via the scoped fs plugin.
-    pub body: Vec<u8>,
+struct WebdavGetMeta {
+    etag: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -949,17 +949,18 @@ pub async fn webdav_get(
     app: tauri::AppHandle,
     account: WebdavAccount,
     rel_path: String,
-) -> Result<WebdavGetResult, WebdavError> {
+) -> Result<tauri::ipc::Response, WebdavError> {
     let account = trusted_webdav_account_for_app(app, account).await?;
     let url = request_url(&account, &rel_path, false)?;
     let res = execute(&account, Method::GET, &url, &[], None, MAX_FILE_BYTES).await?;
     if !http_ok(res.status) {
         return Err(status_err(res.status, &res.body));
     }
-    Ok(WebdavGetResult {
-        etag: res.etag,
-        body: res.body,
-    })
+    let meta_json = serde_json::to_vec(&WebdavGetMeta { etag: res.etag })
+        .map_err(|e| WebdavError::Network(format!("response meta encode: {e}")))?;
+    Ok(tauri::ipc::Response::new(
+        crate::integrations::ipc::frame_meta_body(&meta_json, &res.body),
+    ))
 }
 
 /// PUT file bytes. Creates missing ancestor collections (MKCOL chain) on 409,
