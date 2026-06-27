@@ -968,11 +968,21 @@ pub async fn webdav_get(
 #[tauri::command]
 pub async fn webdav_put(
     app: tauri::AppHandle,
-    account: WebdavAccount,
-    rel_path: String,
-    body: Vec<u8>,
-    if_match: Option<String>,
+    request: tauri::ipc::Request<'_>,
 ) -> Result<WebdavPutResult, WebdavError> {
+    // Upload bytes ride as the raw IPC body; account/path/if-match as
+    // percent-encoded headers (the JSON arg slot is taken by the raw body).
+    let body = crate::integrations::ipc::raw_body(&request);
+    let account: WebdavAccount = serde_json::from_str(
+        &crate::integrations::ipc::decode_header(&request, "x-webdav-account")
+            .map_err(WebdavError::Network)?,
+    )
+    .map_err(|e| WebdavError::Network(format!("account decode: {e}")))?;
+    let rel_path = crate::integrations::ipc::decode_header(&request, "x-rel-path")
+        .map_err(WebdavError::Network)?;
+    let if_match = crate::integrations::ipc::decode_opt_header(&request, "x-if-match")
+        .map_err(WebdavError::Network)?;
+
     let account = trusted_webdav_account_for_app(app, account).await?;
     let url = request_url(&account, &rel_path, false)?;
     let mut headers: Vec<(&str, String)> = Vec::new();

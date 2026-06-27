@@ -164,7 +164,7 @@ export function createWebdavProvider(account: WebdavAccount): CloudFsProvider {
     async uploadFile(rootId: string, relPath: string, sourceAbsPath: string): Promise<RemoteFile> {
       const bytes = await readFile(sourceAbsPath);
       const idUnderBase = joinUnderBase(rootId, relPath);
-      const res = await webdavPut(account, idUnderBase, Array.from(bytes));
+      const res = await webdavPut(account, idUnderBase, bytes);
       return { id: idUnderBase, relPath, rev: res.etag, size: bytes.length };
     },
 

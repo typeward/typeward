@@ -64,9 +64,18 @@ export const webdavGet = async (
 export const webdavPut = (
   account: WebdavAccount,
   relPath: string,
-  body: number[],
+  body: Uint8Array,
   ifMatch?: string,
-): Promise<{ etag?: string }> => invoke("webdav_put", { account, relPath, body, ifMatch });
+): Promise<{ etag?: string }> =>
+  // Upload bytes ride as the raw IPC body (no JSON number-array bloat); the
+  // account/path/if-match metadata travels as percent-encoded headers.
+  invoke("webdav_put", body, {
+    headers: {
+      "x-webdav-account": encodeURIComponent(JSON.stringify(account)),
+      "x-rel-path": encodeURIComponent(relPath),
+      ...(ifMatch ? { "x-if-match": encodeURIComponent(ifMatch) } : {}),
+    },
+  });
 
 export const webdavDelete = (
   account: WebdavAccount,
