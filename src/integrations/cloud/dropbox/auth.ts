@@ -3,9 +3,16 @@
  *
  * App registration: https://www.dropbox.com/developers/apps. Pick
  * "Scoped access" → "Full Dropbox" (or "App folder" if you'd rather
- * sandbox per-user under `/Apps/Typeward`). Required scopes:
- *   files.content.read  files.content.write
- *   files.metadata.read files.metadata.write
+ * sandbox per-user under `/Apps/Typeward`). These must be enabled in the
+ * app's Permissions tab (a new scoped app has none — without them the
+ * authorize step fails with "No scope requested can be granted for this app"):
+ *   account_info.read    (get_current_account, called right after auth)
+ *   files.content.read   files.content.write
+ *   files.metadata.read  files.metadata.write
+ *
+ * Also add `http://localhost:48121/callback` exactly (including the path) under
+ * Settings -> "OAuth 2 -> Redirect URIs", or the authorize step fails with
+ * "Invalid redirect_uri".
  *
  * Client id is read from `VITE_DROPBOX_CLIENT_ID` at build time. The
  * PKCE flow never needs the client secret.
@@ -22,7 +29,15 @@ import { httpRequest, type HttpAuthRef } from "~/integrations/http";
 const AUTH_URL = "https://www.dropbox.com/oauth2/authorize";
 const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
 const KEYRING_SERVICE = "dropbox";
+// Dropbox requires redirect_uri to EXACTLY match a pre-registered URI and does
+// not allow the dynamic loopback port that other PKCE providers accept, so we
+// pin a fixed loopback URL. Register this EXACT value (including the path) under
+// the app's Settings -> "OAuth 2 -> Redirect URIs" in the Dropbox App Console.
+const REDIRECT_URI = "http://localhost:48121/callback";
 const SCOPES = [
+  // get_current_account (fetchAccount, run immediately after the token
+  // exchange) needs this — without it the post-auth profile call 401s.
+  "account_info.read",
   "files.content.read",
   "files.content.write",
   "files.metadata.read",
@@ -57,6 +72,9 @@ export async function connectDropbox(): Promise<DropboxAccount> {
     tokenUrl: TOKEN_URL,
     clientId: clientId(),
     scopes: SCOPES,
+    // Fixed loopback URI (must match the Dropbox app registration exactly) —
+    // Dropbox rejects the dynamic-port default with "Invalid redirect_uri".
+    redirectUri: REDIRECT_URI,
     // `token_access_type=offline` is required to receive a refresh token.
     extraAuthParams: { token_access_type: "offline" },
   });
