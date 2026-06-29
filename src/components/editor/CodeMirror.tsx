@@ -6,7 +6,6 @@ import { markdown } from "@codemirror/lang-markdown";
 import { search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
-import { vim } from "@replit/codemirror-vim";
 import { tags as t } from "@lezer/highlight";
 import type { Component } from "solid-js";
 import { createEffect, on, onCleanup, onMount } from "solid-js";
@@ -23,6 +22,12 @@ interface CodeMirrorProps {
   lineWrap?: boolean;
   /** Modal Vim bindings via @replit/codemirror-vim. */
   vimMode?: boolean;
+  /**
+   * True when an LSP session supplies its own `autocompletion({ override })`
+   * via `extraExtensions`. The base `autocompletion()` is then suppressed so
+   * the two configs don't both surface completions for the same buffer.
+   */
+  lspActive?: boolean;
   /** Optional callback that receives the EditorView once mounted. */
   onReady?: (view: EditorView) => void;
   /**
@@ -103,13 +108,31 @@ const latexHighlight = HighlightStyle.define([
 export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   let parent!: HTMLDivElement;
   let view: EditorView | undefined;
+  // Last string we emitted via onChange. Lets the value-sync effect skip a
+  // full doc.toString() when props.value is just our own echo coming back.
+  let lastEmitted: string | null = null;
 
   const langCompartment = new Compartment();
   const lineWrapCompartment = new Compartment();
   const fontSizeCompartment = new Compartment();
   const vimCompartment = new Compartment();
 
-  const vimExtension = (on: boolean) => (on ? vim() : []);
+  // Vim is dynamically imported so the engine stays out of the editor's
+  // critical chunk for the default (vim-off) config; it loads only when the
+  // user turns vim on.
+  let vimFactory: (() => Extension) | null = null;
+  const applyVim = async (on: boolean) => {
+    if (!on) {
+      view?.dispatch({ effects: vimCompartment.reconfigure([]) });
+      return;
+    }
+    if (!vimFactory) {
+      vimFactory = (await import("@replit/codemirror-vim")).vim;
+    }
+    // A toggle-off may have landed while the chunk was loading.
+    if (!(props.vimMode ?? false)) return;
+    view?.dispatch({ effects: vimCompartment.reconfigure(vimFactory()) });
+  };
 
   const langExtension = (lang: CodeMirrorProps["language"]) => {
     if (lang === "markdown") return markdown();
@@ -129,13 +152,16 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
       doc: props.value,
       extensions: [
         // Vim must precede the other keymaps so its handlers win in
-        // normal/visual mode.
-        vimCompartment.of(vimExtension(props.vimMode ?? false)),
+        // normal/visual mode. Loaded on demand once vim is enabled.
+        vimCompartment.of([]),
         lineNumbers(),
         history(),
         drawSelection(),
         highlightActiveLine(),
-        autocompletion(),
+        // Suppress the base completion when an LSP session injects its own
+        // `autocompletion({ override })` via extraExtensions — otherwise both
+        // configs merge and the default source surfaces alongside LSP results.
+        ...(props.lspActive ? [] : [autocompletion()]),
         search(),
         // Mod+S and Mod+Enter intentionally aren't bound here — they go
         // through the global keyboard router (src/commands/keyboard.ts)
@@ -156,7 +182,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         fontSizeCompartment.of(fontSizeExtension(props.fontSize ?? 13)),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
-            props.onChange(update.state.doc.toString());
+            const text = update.state.doc.toString();
+            lastEmitted = text;
+            props.onChange(text);
           }
           if (update.selectionSet || update.docChanged) {
             const pos = update.state.selection.main.head;
@@ -190,6 +218,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
       () => props.value,
       (next) => {
         if (!view) return;
+        // Our own change echoing back through the store — nothing to apply,
+        // and skipping the doc.toString() avoids a per-keystroke allocation.
+        if (next === lastEmitted) return;
         const current = view.state.doc.toString();
         if (current === next) return;
         view.dispatch({
@@ -217,10 +248,7 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   });
 
   createEffect(() => {
-    if (!view) return;
-    view.dispatch({
-      effects: vimCompartment.reconfigure(vimExtension(props.vimMode ?? false)),
-    });
+    void applyVim(props.vimMode ?? false);
   });
 
   createEffect(() => {

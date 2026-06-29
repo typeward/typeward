@@ -6,10 +6,31 @@ import { fileURLToPath, URL } from "node:url";
 
 const host = process.env.TAURI_DEV_HOST;
 
+// KaTeX ships woff2 + woff + ttf for all 20 math faces; every Tauri webview
+// target (WebKitGTK / WKWebView / WebView2 / Android WebView) supports woff2,
+// so the woff/ttf fallbacks (~876 KB) are dead weight. Strip them from the
+// stylesheet before Vite resolves url()s, so those files are never emitted.
+function katexWoff2Only() {
+  return {
+    name: "katex-woff2-only",
+    enforce: "pre" as const,
+    transform(code: string, id: string) {
+      if (!id.replace(/\\/g, "/").includes("katex/dist/katex.min.css")) {
+        return null;
+      }
+      const stripped = code.replace(
+        /,url\([^)]+\)\s*format\("(?:woff|truetype)"\)/g,
+        "",
+      );
+      return stripped === code ? null : { code: stripped, map: null };
+    },
+  };
+}
+
 export default defineConfig({
   // hot:false under Vitest — solid-refresh's virtual module ("/@solid-refresh")
   // can't be loaded by the vitest module runner and kills .tsx test suites.
-  plugins: [solid({ hot: !process.env.VITEST }), tailwindcss()],
+  plugins: [solid({ hot: !process.env.VITEST }), tailwindcss(), katexWoff2Only()],
   resolve: {
     alias: {
       "~": fileURLToPath(new URL("./src", import.meta.url)),
@@ -62,6 +83,35 @@ export default defineConfig({
     // deprecated under Rolldown-Vite and mishandled __VITE_PRELOAD__ markers.
     minify: !process.env.TAURI_ENV_DEBUG,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // The codemirror vendor chunk is a deliberately-split, long-cached vendor
+    // bundle (~240 KB gzip); it legitimately exceeds the 500 KB raw default.
+    chunkSizeWarningLimit: 800,
+    rolldownOptions: {
+      output: {
+        // The editor screen otherwise collapses CodeMirror + PDF.js + the
+        // markdown stack into one ~1.5 MB chunk. Splitting the heavy vendors
+        // into their own cacheable chunks lets the webview parse them in
+        // parallel and keeps an editor-code edit from busting the vendor cache.
+        // (katex/markdown-it only load via the lazy MarkdownPreview import, so
+        // that group just gives the async chunk a stable name.)
+        // @replit/codemirror-vim is intentionally NOT grouped here — it's
+        // dynamically imported and must stay in its own async chunk so the
+        // default vim-off config never loads it.
+        advancedChunks: {
+          groups: [
+            {
+              name: "codemirror",
+              test: /[\\/]node_modules[\\/](@codemirror|@lezer)[\\/]/,
+            },
+            { name: "pdfjs", test: /[\\/]node_modules[\\/]pdfjs-dist[\\/]/ },
+            {
+              name: "markdown",
+              test: /[\\/]node_modules[\\/](katex|markdown-it|markdown-it-anchor|dompurify|entities|linkify-it|mdurl|uc\.micro|punycode\.js)[\\/]/,
+            },
+          ],
+        },
+      },
+    },
   },
 
   test: {
