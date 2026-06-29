@@ -30,7 +30,9 @@ const typstParser: StreamParser<TypstState> = {
         state.inMath = false;
         return "string";
       }
-      stream.next();
+      // Consume the whole run up to the closing `$` as one token. The close
+      // is handled by the eat above, so this always advances by ≥1 char.
+      stream.eatWhile((c) => c !== "$");
       return "atom";
     }
 

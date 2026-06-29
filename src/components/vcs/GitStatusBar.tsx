@@ -8,7 +8,14 @@
 
 import { ChevronDown, ChevronUp, GitBranch } from "lucide-solid";
 import type { Component } from "solid-js";
-import { Show, createResource, createSignal, onCleanup } from "solid-js";
+import {
+  Show,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+  onCleanup,
+} from "solid-js";
 
 import * as ipc from "~/ipc";
 import { project } from "~/stores/editor-store";
@@ -17,18 +24,41 @@ const POLL_INTERVAL_MS = 4_000;
 
 export const GitStatusBar: Component = () => {
   const [tick, setTick] = createSignal(0);
-  const handle = setInterval(() => setTick((t) => t + 1), POLL_INTERVAL_MS);
-  onCleanup(() => clearInterval(handle));
+  let handle: ReturnType<typeof setInterval> | undefined;
+  const stopPolling = () => {
+    if (handle !== undefined) {
+      clearInterval(handle);
+      handle = undefined;
+    }
+  };
+  // Re-arm polling whenever the active project changes; a non-repo result
+  // halts it (see the fetcher) so we don't run a libgit2 status walk every
+  // 4s forever on plain folders for the whole session.
+  createEffect(
+    on(
+      () => project()?.rootPath,
+      () => {
+        stopPolling();
+        handle = setInterval(() => setTick((t) => t + 1), POLL_INTERVAL_MS);
+      },
+    ),
+  );
+  onCleanup(stopPolling);
 
   const [summary] = createResource(
     () => [project()?.rootPath, tick()] as const,
     async ([rootPath]) => {
-      if (!rootPath) return null;
+      if (!rootPath) {
+        stopPolling();
+        return null;
+      }
       try {
         return await ipc.gitStatus(rootPath);
       } catch {
-        // Not a git repo, or some transient error. Return null and the
-        // bar collapses — quieter than surfacing a "not a repo" pill.
+        // Not a git repo, or some transient error. Stop polling and collapse
+        // the bar — quieter than a "not a repo" pill, and avoids a pointless
+        // status walk every 4s on non-repo projects.
+        stopPolling();
         return null;
       }
     },

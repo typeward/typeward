@@ -7,13 +7,15 @@ import {
 } from "lucide-solid";
 import type { Component } from "solid-js";
 import {
-  For,
+  Index,
   Match,
   Show,
+  Suspense,
   Switch,
   createEffect,
   createMemo,
   createSignal,
+  lazy,
   on,
   onCleanup,
   onMount,
@@ -26,8 +28,18 @@ import {
 import { FormatToolbar } from "~/components/editor/FormatToolbar";
 import { LogsDrawer } from "~/components/editor/LogsDrawer";
 import { PaneSwitcher } from "~/components/layout/PaneSwitcher";
-import { MarkdownPreview } from "~/components/preview/MarkdownPreview";
 import { PdfViewer } from "~/components/pdf/PdfViewer";
+
+// Defer the markdown preview stack (katex + markdown-it + dompurify, ~300 KB
+// raw) out of the editor's critical chunk — it loads only when a .md tab is
+// opened, which is occasional for LaTeX/Typst projects. Named export, hence
+// the default-mapping. Lazy-loading changes load timing only, not the
+// DOMPurify-sandboxed render path.
+const MarkdownPreview = lazy(() =>
+  import("~/components/preview/MarkdownPreview").then((m) => ({
+    default: m.MarkdownPreview,
+  })),
+);
 import {
   activeFile,
   activeIndex,
@@ -235,11 +247,13 @@ const DesktopLayout: Component<ShellProps> = (props) => {
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
       <Switch>
         <Match when={props.previewKind === "markdown"}>
-          <MarkdownPreview
-            content={() => activeFile()?.content ?? ""}
-            baseDir={props.mdBaseDir}
-            theme={() => props.mdTheme}
-          />
+          <Suspense fallback={null}>
+            <MarkdownPreview
+              content={() => activeFile()?.content ?? ""}
+              baseDir={props.mdBaseDir}
+              theme={() => props.mdTheme}
+            />
+          </Suspense>
         </Match>
         <Match when={props.previewKind === "pdf"}>
           <PdfViewer
@@ -412,11 +426,13 @@ const TabletLayout: Component<ShellProps> = (props) => {
             <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
               <Switch>
                 <Match when={props.previewKind === "markdown"}>
-                  <MarkdownPreview
-                    content={() => activeFile()?.content ?? ""}
-                    baseDir={props.mdBaseDir}
-                    theme={() => props.mdTheme}
-                  />
+                  <Suspense fallback={null}>
+                    <MarkdownPreview
+                      content={() => activeFile()?.content ?? ""}
+                      baseDir={props.mdBaseDir}
+                      theme={() => props.mdTheme}
+                    />
+                  </Suspense>
                 </Match>
                 <Match when={props.previewKind === "pdf"}>
                   <PdfViewer
@@ -544,19 +560,19 @@ const CenterPane: Component<{
             <span class="px-2 text-[12px] text-fg-3">No file open</span>
           }
         >
-          <For each={openFiles()}>
+          <Index each={openFiles()}>
             {(f, i) => {
-              const active = () => activeIndex() === i();
+              const active = () => activeIndex() === i;
               return (
                 <div
                   role="tab"
                   aria-selected={active()}
                   tabIndex={active() ? 0 : -1}
-                  onClick={() => setActiveIndex(i())}
+                  onClick={() => setActiveIndex(i)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      setActiveIndex(i());
+                      setActiveIndex(i);
                     }
                   }}
                   class={`lift flex ${tabRowHeight()} flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium ${
@@ -571,8 +587,8 @@ const CenterPane: Component<{
                       : undefined
                   }
                 >
-                  <span class="mono">{f.relPath}</span>
-                  <Show when={f.dirty}>
+                  <span class="mono">{f().relPath}</span>
+                  <Show when={f().dirty}>
                     <span
                       class="h-1.5 w-1.5 rounded-full"
                       style={{ background: "var(--color-accent-1)" }}
@@ -582,19 +598,19 @@ const CenterPane: Component<{
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      void requestCloseFile(i());
+                      void requestCloseFile(i);
                     }}
                     class={`-mr-1 flex items-center justify-center rounded opacity-60 hover:bg-[var(--color-control-fill-hover)] hover:opacity-100 ${
                       isTabletViewport() ? "h-11 w-11" : "h-4 w-4"
                     }`}
-                    aria-label={`Close ${f.relPath}`}
+                    aria-label={`Close ${f().relPath}`}
                   >
                     <XIcon size={isTabletViewport() ? 16 : 10} />
                   </button>
                 </div>
               );
             }}
-          </For>
+          </Index>
         </Show>
         {/* Save + Compile buttons were removed 2026-05-15. Save is on Mod+S;
             Compile is the PDF panel's Recompile button. */}
@@ -619,8 +635,9 @@ const CenterPane: Component<{
             const f = activeFile()!;
             const lang = languageFor(f.relPath);
             const lspLang = languageToLspLanguage(lang);
-            const extras = lspLang
-              ? findSession(lspLang)?.document({
+            const lspSession = lspLang ? findSession(lspLang) : undefined;
+            const extras = lspSession
+              ? lspSession.document({
                   uri: pathToFileUri(f.path),
                   languageId: lang,
                 }) ?? []
@@ -665,6 +682,7 @@ const CenterPane: Component<{
                 fontSize={editorSettings().fontSize}
                 lineWrap={editorSettings().lineWrap}
                 vimMode={editorSettings().vimMode}
+                lspActive={!!lspSession}
                 extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
               />
             );

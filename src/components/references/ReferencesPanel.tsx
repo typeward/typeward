@@ -201,14 +201,14 @@ export const ReferencesPanel: Component = () => {
     { initialValue: { pid: null, cols: [] } },
   );
 
-  const nodes = () => {
+  const nodes = createMemo(() => {
     const pid = selectedProviderId();
     const lr = librariesRes();
     const cr = collectionsRes();
     const libs = lr.pid === pid ? lr.libs : [];
     const cols = cr.pid === pid ? cr.cols : [];
     return [...libs, ...cols];
-  };
+  });
 
   // ----- Selected node (library or collection) — the browse target -----
   const nodeKey = () => {
