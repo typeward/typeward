@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { Save } from "lucide-solid";
 import type { Component } from "solid-js";
 import { createEffect, createSignal, Show } from "solid-js";
@@ -53,7 +54,7 @@ export const SaveTemplateDialog: Component = () => {
       const manifest = await ipc.templateSave(p, name().trim(), description().trim());
       setSuccess(`Saved "${manifest.name}" — it now appears under Custom in the template gallery.`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeIpcError(err);
       // A duplicate id is the common, expected failure — keep it actionable.
       setError(
         /already exists/i.test(message)
@@ -95,37 +96,37 @@ export const SaveTemplateDialog: Component = () => {
     >
       <div class="flex flex-col gap-3">
         <label class="flex flex-col gap-1">
-          <span class="text-[length:var(--ui-font-sm)] text-fg-2">Name</span>
+          <span class="text-sm text-fg-2">Name</span>
           <input
             type="text"
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
             placeholder="My thesis template"
-            class="glass-inset h-10 w-full rounded-md px-3 text-[length:var(--ui-font-base)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-10 w-full rounded-md px-3 text-base text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             autofocus
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !busy() && name().trim()) handleSave();
+              if (e.key === "Enter" && !e.isComposing && !busy() && name().trim()) handleSave();
             }}
           />
         </label>
         <label class="flex flex-col gap-1">
-          <span class="text-[length:var(--ui-font-sm)] text-fg-2">Description (optional)</span>
+          <span class="text-sm text-fg-2">Description (optional)</span>
           <textarea
             value={description()}
             onInput={(e) => setDescription(e.currentTarget.value)}
             placeholder="What this template is for."
             rows={2}
-            class="glass-inset w-full resize-none rounded-md px-3 py-2 text-[length:var(--ui-font-base)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset w-full resize-none rounded-md px-3 py-2 text-base text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </label>
 
         <Show when={error()}>
-          <div class="rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+          <div class="select-text rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
             {error()}
           </div>
         </Show>
         <Show when={success()}>
-          <div class="rounded-md border border-[var(--color-ok)]/40 bg-[var(--color-ok)]/10 px-3 py-2 text-[length:var(--ui-font-sm)] text-[var(--color-ok)]">
+          <div class="select-text rounded-md border border-[var(--color-ok)]/40 bg-[var(--color-ok)]/10 px-3 py-2 text-sm text-[var(--color-ok)]">
             {success()}
           </div>
         </Show>

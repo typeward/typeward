@@ -15,6 +15,8 @@ import {
   ViewPlugin,
   type ViewUpdate,
 } from "@codemirror/view";
+import type { CommentThread } from "~/lib/reviews/types";
+import { recoverThreads } from "~/lib/reviews/recovery";
 
 class CommentMark extends RangeValue {
   startSide = 1;
@@ -140,41 +142,57 @@ export interface ReviewExtensionCallbacks {
 }
 
 function persistenceBridge(callbacks: ReviewExtensionCallbacks): Extension {
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
   return ViewPlugin.fromClass(
     class {
+      view: EditorView;
+      debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+      constructor(view: EditorView) {
+        this.view = view;
+      }
+
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
-        if (debounceTimer) clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-          debounceTimer = null;
-          const ranges = update.state.field(commentField);
-          const doc = update.state.doc;
-          const updates: Array<{
-            id: string;
-            from: number;
-            to: number;
-            anchorText: string;
-          }> = [];
-          const cursor = ranges.iter();
-          while (cursor.value) {
-            updates.push({
-              id: cursor.value.threadId,
-              from: cursor.from,
-              to: cursor.to,
-              anchorText: doc.sliceString(cursor.from, cursor.to).slice(0, 80),
-            });
-            cursor.next();
-          }
-          if (updates.length > 0) {
-            callbacks.onOffsetsChanged(updates);
-          }
+        if (this.debounceTimer) clearTimeout(this.debounceTimer);
+        this.debounceTimer = setTimeout(() => {
+          this.debounceTimer = null;
+          this.flush();
         }, 2_000);
       }
 
+      flush() {
+        const ranges = this.view.state.field(commentField);
+        const doc = this.view.state.doc;
+        const updates: Array<{
+          id: string;
+          from: number;
+          to: number;
+          anchorText: string;
+        }> = [];
+        const cursor = ranges.iter();
+        while (cursor.value) {
+          updates.push({
+            id: cursor.value.threadId,
+            from: cursor.from,
+            to: cursor.to,
+            anchorText: doc.sliceString(cursor.from, cursor.to).slice(0, 80),
+          });
+          cursor.next();
+        }
+        if (updates.length > 0) {
+          callbacks.onOffsetsChanged(updates);
+        }
+      }
+
       destroy() {
-        if (debounceTimer) clearTimeout(debounceTimer);
+        // Tab switches remount the editor per file; dropping a pending remap
+        // would silently discard up to 2s of offset updates and leave the
+        // store anchoring against stale positions. Flush instead of drop.
+        if (this.debounceTimer) {
+          clearTimeout(this.debounceTimer);
+          this.debounceTimer = null;
+          this.flush();
+        }
       }
     },
   );
@@ -218,6 +236,68 @@ export function dispatchSetThreads(
   threads: ThreadInput[],
 ): void {
   view.dispatch({ effects: setThreads.of(threads) });
+}
+
+function rangesEqual(
+  desired: ThreadInput[],
+  current: Map<string, { from: number; to: number; status: "open" | "resolved" }>,
+): boolean {
+  if (desired.length !== current.size) return false;
+  for (const d of desired) {
+    const c = current.get(d.id);
+    if (!c || c.from !== d.from || c.to !== d.to || c.status !== d.status) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Reconcile the editor's comment decorations against the review store, which
+ * is the single source of truth for which threads exist and their status.
+ *
+ * Live anchor positions (mapped through edits by CodeMirror's RangeSet) win
+ * for threads already present in the view; only brand-new threads are placed
+ * by recovering their store offset against the current document. A dispatch
+ * fires only when the derived set actually differs from what's rendered, so
+ * calling this on every store change (including per-keystroke re-runs of the
+ * driving effect) is cheap and never clobbers live positions.
+ */
+export function syncThreadsToView(
+  view: EditorView,
+  storeThreads: CommentThread[],
+  fileRelPath: string,
+  fileContent: string,
+): void {
+  const current = new Map(
+    getCurrentRanges(view).map((r) => [r.id, r] as const),
+  );
+  const fileThreads = storeThreads.filter((t) => t.fileRelPath === fileRelPath);
+
+  const desired: ThreadInput[] = [];
+  const absent: CommentThread[] = [];
+  for (const t of fileThreads) {
+    const live = current.get(t.id);
+    if (live) {
+      desired.push({ id: t.id, from: live.from, to: live.to, status: t.status });
+    } else {
+      absent.push(t);
+    }
+  }
+  if (absent.length > 0) {
+    for (const r of recoverThreads(absent, fileContent, fileRelPath)) {
+      if (r.recoveryStatus === "orphaned") continue;
+      desired.push({
+        id: r.thread.id,
+        from: r.fromOffset,
+        to: r.toOffset,
+        status: r.thread.status,
+      });
+    }
+  }
+
+  if (rangesEqual(desired, current)) return;
+  dispatchSetThreads(view, desired);
 }
 
 export function getCurrentRanges(view: EditorView): Array<{

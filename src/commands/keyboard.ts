@@ -1,6 +1,7 @@
 import { commands } from "./registry";
 import { dispatchCommand } from "./run";
 import { matches } from "~/lib/shortcuts";
+import type { EditorCommand } from "~/adapters/types";
 
 /**
  * Decides whether an "editor"-scoped shortcut should fire. The user has the
@@ -40,13 +41,21 @@ const isTypingInNonEditorInput = (target: EventTarget | null): boolean => {
   return false;
 };
 
-const handler = (event: KeyboardEvent) => {
+/**
+ * Pure dispatch decision, factored out of the window listener so the routing
+ * rules (scope/when gating, matched-but-gated preventDefault, first-match-wins)
+ * are testable against a synthesized event and an explicit command list.
+ */
+export const handleKeydown = (
+  event: KeyboardEvent,
+  cmds: readonly EditorCommand[],
+): void => {
   // Tracks "a registered Mod-shortcut matched the key but its when()/scope
   // gate failed". Without preventDefault in that case the webview's native
   // default (e.g. Ctrl+S save dialog) falls through on a key the app owns.
   let matchedButGated = false;
 
-  for (const cmd of commands()) {
+  for (const cmd of cmds) {
     if (!cmd.shortcut) continue;
     if (!matches(event, cmd.shortcut)) continue;
 
@@ -73,6 +82,8 @@ const handler = (event: KeyboardEvent) => {
 
   if (matchedButGated) event.preventDefault();
 };
+
+const handler = (event: KeyboardEvent) => handleKeydown(event, commands());
 
 let installed = false;
 

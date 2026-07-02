@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { useNavigate } from "@solidjs/router";
 import {
   ArrowLeft,
@@ -19,10 +20,13 @@ import {
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
+import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Switch } from "~/components/forms/Switch";
+import { Button } from "~/components/primitives/Button";
 import { KbdHint } from "~/components/primitives/KbdHint";
+import { SoonBadge } from "~/components/primitives/SoonBadge";
 import { commands } from "~/commands/registry";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
@@ -46,6 +50,7 @@ import {
   ACCENTS,
   type Accent,
   THEMES,
+  THEME_ROSTER,
   type Theme,
   accent,
   setAccent,
@@ -156,6 +161,13 @@ const SettingsScreen: Component = () => {
     setPreviousRoute(null);
     navigate(prev ?? "/projects");
   };
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch (e) {
+      notifyError("Couldn't sign out", errorText(e));
+    }
+  };
 
   return (
     <div class="no-emoji relative h-full w-full overflow-hidden bg-bg-base">
@@ -174,13 +186,13 @@ const SettingsScreen: Component = () => {
           <button
             type="button"
             onClick={goBack}
-            class="lift flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)]"
+            class="lift flex h-7 items-center gap-1.5 rounded-md px-2 text-sm text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
             <ArrowLeft size={12} style={{ opacity: 0.6 }} />
             <span>{backLabel()}</span>
           </button>
           <span class="text-fg-4">/</span>
-          <span class="text-[12px] font-medium text-fg-1">Settings</span>
+          <span class="text-sm font-medium text-fg-1">Settings</span>
           <div class="flex-1" />
         </div>
 
@@ -188,7 +200,7 @@ const SettingsScreen: Component = () => {
           {/* Sidebar */}
           <div
             class="glass flex flex-col overflow-hidden rounded-xl"
-            style={{ width: "236px", height: "100%" }}
+            style={{ width: "240px", height: "100%" }}
           >
             <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
               <For each={NAV}>
@@ -202,7 +214,7 @@ const SettingsScreen: Component = () => {
                           <button
                             type="button"
                             onClick={() => setActive(item.id)}
-                            class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-[length:var(--ui-font-base)] ${
+                            class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-base ${
                               isActive()
                                 ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
                                 : "text-fg-2 hover:bg-[var(--color-control-fill)]"
@@ -214,12 +226,12 @@ const SettingsScreen: Component = () => {
                               {item.label}
                             </span>
                             <Show when={item.badge}>
-                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-[length:var(--ui-font-xs)] font-semibold">
+                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
                                 {item.badge}
                               </span>
                             </Show>
                             <Show when={item.id === "account"}>
-                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-[length:var(--ui-font-xs)] font-semibold capitalize">
+                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
                                 {currentTier()}
                               </span>
                             </Show>
@@ -233,15 +245,15 @@ const SettingsScreen: Component = () => {
             </div>
             <Show when={supabaseUser()}>
               <div class="border-t border-glass-stroke p-3">
-                <button
-                  type="button"
-                  onClick={() => void signOut()}
-                  class="lift glass-soft flex h-8 w-full items-center justify-center gap-1.5 rounded-md text-[11px] hover:bg-[var(--color-control-fill-hover)]"
-                  style={{ color: "var(--color-err)" }}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="h-8 w-full"
+                  leadingIcon={<LogOut class="ui-icon-sm" />}
+                  onClick={() => void handleSignOut()}
                 >
-                  <LogOut size={12} style={{ opacity: 0.8 }} />
-                  <span>Sign out</span>
-                </button>
+                  Sign out
+                </Button>
               </div>
             </Show>
           </div>
@@ -305,11 +317,11 @@ const Card: Component<{
   <div class="glass overflow-hidden rounded-xl">
     <div class="flex items-start justify-between border-b border-glass-stroke px-5 py-4">
       <div>
-        <div class="text-[14px] font-semibold tracking-tight text-fg-1">
+        <div class="text-base font-semibold tracking-tight text-fg-1">
           {props.title}
         </div>
         <Show when={props.subtitle}>
-          <div class="mt-0.5 text-[12px] leading-relaxed text-fg-2">
+          <div class="mt-0.5 text-sm leading-relaxed text-fg-2">
             {props.subtitle}
           </div>
         </Show>
@@ -327,38 +339,13 @@ const Row: Component<{
 }> = (props) => (
   <div class="flex items-center gap-4 border-t border-glass-stroke px-5 py-3.5 first:border-t-0">
     <div class="min-w-0 flex-1">
-      <div class="text-[13px] font-medium text-fg-1">{props.label}</div>
+      <div class="text-base font-medium text-fg-1">{props.label}</div>
       <Show when={props.hint}>
-        <div class="mt-0.5 text-[11px] leading-relaxed text-fg-3">{props.hint}</div>
+        <div class="mt-0.5 text-xs leading-relaxed text-fg-3">{props.hint}</div>
       </Show>
     </div>
     <div class="flex-shrink-0">{props.children}</div>
   </div>
-);
-
-const Pill: Component<{
-  color: string;
-  bg: string;
-  children: JSX.Element;
-  icon?: JSX.Element;
-}> = (props) => (
-  <span
-    class="mono flex items-center gap-1 rounded-full px-2 py-1 text-[11px]"
-    style={{ background: props.bg, color: props.color }}
-  >
-    {props.icon}
-    <span>{props.children}</span>
-  </span>
-);
-
-/** House pattern for visible-but-unbuilt controls (matches ExportMenu). */
-const SoonPill: Component = () => (
-  <span
-    class="mono rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
-    style={{ background: "var(--color-control-fill)", color: "var(--color-fg-3)" }}
-  >
-    soon
-  </span>
 );
 
 // =================================================================
@@ -372,30 +359,29 @@ interface ThemeMeta {
   dark: boolean;
 }
 
-const THEME_META: Record<Theme, ThemeMeta> = {
-  daylight: {
-    id: "daylight",
-    name: "Daylight",
-    vibe:
-      "radial-gradient(circle at 75% 20%, #F0E7CF, transparent 60%), radial-gradient(circle at 25% 80%, #ECDFC2, transparent 60%), #F8F4EA",
-    dark: false,
-  },
-  lamplight: {
-    id: "lamplight",
-    name: "Lamplight",
-    vibe:
-      "radial-gradient(circle at 75% 15%, #C2691E, transparent 55%), radial-gradient(circle at 60% 45%, rgba(232,163,77,0.45), transparent 60%), #0D0C0A",
-    dark: true,
-  },
-  aurora: {
-    id: "aurora",
-    name: "Aurora",
-    vibe:
-      "radial-gradient(circle at 20% 30%, #4C1D95, transparent 60%), radial-gradient(circle at 80% 70%, #155E75, transparent 60%), #0A0B0F",
-    dark: true,
-  },
-  paper: { id: "paper", name: "Paper", vibe: "#FAF9F6", dark: false },
+// Preview swatch backgrounds only. `name` and `dark` derive from THEME_ROSTER
+// (theme-store) so the light/dark truth and labels have a single source.
+const THEME_VIBE: Record<Theme, string> = {
+  daylight:
+    "radial-gradient(circle at 75% 20%, #F0E7CF, transparent 60%), radial-gradient(circle at 25% 80%, #ECDFC2, transparent 60%), #F8F4EA",
+  lamplight:
+    "radial-gradient(circle at 75% 15%, #C2691E, transparent 55%), radial-gradient(circle at 60% 45%, rgba(232,163,77,0.45), transparent 60%), #0D0C0A",
+  aurora:
+    "radial-gradient(circle at 20% 30%, #4C1D95, transparent 60%), radial-gradient(circle at 80% 70%, #155E75, transparent 60%), #0A0B0F",
+  paper: "#FAF9F6",
 };
+
+const THEME_META: Record<Theme, ThemeMeta> = Object.fromEntries(
+  THEMES.map((t) => [
+    t,
+    {
+      id: t,
+      name: THEME_ROSTER[t].label,
+      vibe: THEME_VIBE[t],
+      dark: THEME_ROSTER[t].dark,
+    },
+  ]),
+) as Record<Theme, ThemeMeta>;
 
 interface AccentMeta {
   id: Accent;
@@ -404,17 +390,22 @@ interface AccentMeta {
 
 // Preview swatch colors are read straight off the CSS tokens via a detached
 // probe element, so they can never drift from the themes. The [data-theme] /
-// [data-accent] rules set the vars on the probe directly, so this resolves each
-// theme's NATIVE accent (probe carries no data-accent) regardless of whatever
-// theme/accent is currently active on <html>. Cached — theme CSS is static.
+// [data-accent] rules set the vars on the probe directly: a theme alone
+// resolves that theme's NATIVE accent (no data-accent), while accent probes
+// also carry the active theme so the light-theme deepened palettes (compound
+// [data-theme][data-accent] rules) resolve. Cached — theme CSS is static.
 const _accentProbeCache = new Map<string, [string, string]>();
-function probeAccentPair(attr: "data-theme" | "data-accent", value: string): [string, string] {
-  const key = `${attr}=${value}`;
+function probeAccentPair(
+  attrs: Partial<Record<"data-theme" | "data-accent", string>>,
+): [string, string] {
+  const key = `${attrs["data-theme"] ?? ""}|${attrs["data-accent"] ?? ""}`;
   const hit = _accentProbeCache.get(key);
   if (hit) return hit;
   const el = document.createElement("span");
   el.style.cssText = "position:absolute;visibility:hidden;pointer-events:none";
-  el.setAttribute(attr, value);
+  for (const [attr, value] of Object.entries(attrs)) {
+    if (value) el.setAttribute(attr, value);
+  }
   document.body.appendChild(el);
   const cs = getComputedStyle(el);
   const pair: [string, string] = [
@@ -425,8 +416,10 @@ function probeAccentPair(attr: "data-theme" | "data-accent", value: string): [st
   if (pair[0]) _accentProbeCache.set(key, pair);
   return pair;
 }
-const themeNativeAccent = (t: Theme): [string, string] => probeAccentPair("data-theme", t);
-const accentPalette = (a: Accent): [string, string] => probeAccentPair("data-accent", a);
+const themeNativeAccent = (t: Theme): [string, string] =>
+  probeAccentPair({ "data-theme": t });
+const accentPalette = (a: Accent): [string, string] =>
+  probeAccentPair({ "data-theme": theme(), "data-accent": a });
 
 const ACCENT_META: Record<Accent, AccentMeta> = {
   // "violet-cyan" is the stored id for "no data-accent" — the active theme's
@@ -510,7 +503,7 @@ const AppearancePanel: Component = () => {
                         "box-shadow": "inset 0 1px 0 rgba(255,255,255,0.2)",
                       }}
                     />
-                    <span class="text-[12px] font-medium text-fg-1">
+                    <span class="text-sm font-medium text-fg-1">
                       {meta.label}
                     </span>
                     <Show when={active()}>
@@ -540,7 +533,7 @@ const AppearancePanel: Component = () => {
                   <button
                     type="button"
                     onClick={() => setDensity(d as Density)}
-                    class={`h-7 rounded px-3 text-[11px] capitalize ${
+                    class={`h-7 rounded px-3 text-xs capitalize ${
                       active()
                         ? "accent-grad font-semibold"
                         : "text-fg-2 hover:bg-[var(--color-control-fill)]"
@@ -618,7 +611,7 @@ const CustomThemesCard: Component = () => {
     try {
       await fn();
     } catch (e) {
-      setNote(String(e));
+      setNote(describeIpcError(e));
     } finally {
       setBusy(false);
     }
@@ -652,7 +645,7 @@ const CustomThemesCard: Component = () => {
           <Show
             when={customThemes().length > 0}
             fallback={
-              <div class="text-[12px] leading-relaxed text-fg-3">
+              <div class="text-sm leading-relaxed text-fg-3">
                 No theme files yet. Create the sample to get a working file you
                 can copy and recolor — each file needs a <span class="mono">name</span>,
                 a <span class="mono">base</span> (daylight, lamplight, aurora, or
@@ -684,8 +677,8 @@ const CustomThemesCard: Component = () => {
                         style={{ background: "rgba(0,0,0,0.35)", "backdrop-filter": "blur(4px)" }}
                       >
                         <span class="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: swatchAccent() }} />
-                        <span class="truncate text-[11px] font-medium text-white">{t.name}</span>
-                        <span class="mono ml-auto text-[9px] uppercase text-white/60">{t.base}</span>
+                        <span class="truncate text-xs font-medium text-white">{t.name}</span>
+                        <span class="mono ml-auto text-[10px] uppercase text-white/60">{t.base}</span>
                         <Show when={active()}>
                           <Check size={10} stroke-width={3} class="text-white" />
                         </Show>
@@ -697,7 +690,7 @@ const CustomThemesCard: Component = () => {
             </div>
           </Show>
           <Show when={missingActive()}>
-            <div class="mt-3 text-[11px]" style={{ color: "var(--color-warn)" }}>
+            <div class="mt-3 text-xs" style={{ color: "var(--color-warn)" }}>
               The previously active theme "{activeCustomTheme()}" wasn't found —
               its file may have been renamed or removed. The base theme is shown
               until you pick another.
@@ -707,7 +700,7 @@ const CustomThemesCard: Component = () => {
             <div class="mt-3 flex flex-col gap-1">
               <For each={customThemeWarnings()}>
                 {(w) => (
-                  <div class="text-[11px]" style={{ color: "var(--color-warn)" }}>
+                  <div class="select-text text-xs" style={{ color: "var(--color-warn)" }}>
                     {w}
                   </div>
                 )}
@@ -720,34 +713,37 @@ const CustomThemesCard: Component = () => {
           hint="One .json per theme in the app's themes folder. The file name becomes the theme id."
         >
           <div class="flex items-center gap-1.5">
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
+              class="h-8"
               disabled={busy()}
               onClick={() => void run(() => ipc.customThemesOpenDir())}
-              class="lift glass-soft h-8 rounded-md px-2.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)] disabled:opacity-50"
             >
               Open folder
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              class="h-8"
               disabled={busy()}
               onClick={() => void createSample()}
-              class="lift glass-soft h-8 rounded-md px-2.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)] disabled:opacity-50"
             >
               Create sample
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              class="h-8"
               disabled={busy()}
               onClick={() => void run(() => reloadCustomThemes())}
-              class="lift glass-soft h-8 rounded-md px-2.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)] disabled:opacity-50"
             >
               Reload
-            </button>
+            </Button>
           </div>
         </Row>
         <Show when={note()}>
-          <div class="mono border-t border-glass-stroke px-5 py-2.5 text-[11px] text-fg-3">
+          <div class="mono select-text border-t border-glass-stroke px-5 py-2.5 text-xs text-fg-3">
             {note()}
           </div>
         </Show>
@@ -805,7 +801,7 @@ const ThemeTile: Component<{
     </div>
     <div class="absolute bottom-1.5 left-2 right-2 flex items-center justify-between">
       <span
-        class="text-[11px] font-semibold"
+        class="text-xs font-semibold"
         style={{
           color: props.meta.dark ? "#E6E8EC" : "#1F2937",
           "text-shadow": props.meta.dark ? "0 1px 2px rgba(0,0,0,0.6)" : "none",
@@ -936,7 +932,7 @@ const SelectStub: Component<{
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="listbox"
         aria-expanded={open()}
-        class="glass-inset flex h-8 w-[180px] items-center gap-2 rounded-md px-2.5 text-[12px] text-fg-1 hover:bg-[var(--color-control-fill)]"
+        class="glass-inset flex h-8 w-[180px] items-center gap-2 rounded-md px-2.5 text-sm text-fg-1 hover:bg-[var(--color-control-fill)]"
       >
         <span class="flex-1 text-left">{props.value}</span>
         <ChevronDown size={10} style={{ opacity: 0.5 }} />
@@ -951,21 +947,35 @@ const SelectStub: Component<{
           onClick={(e) => e.stopPropagation()}
         >
           <For each={props.options}>
-            {(o) => (
-              <button
-                type="button"
-                role="option"
-                aria-selected={o.label === props.value}
-                tabindex={-1}
-                onClick={() => {
-                  props.onChange(o.value);
-                  setOpen(false);
-                }}
-                class="flex w-full items-center px-3 py-1.5 text-left text-[12px] text-fg-1 hover:bg-[var(--color-control-fill)]"
-              >
-                {o.label}
-              </button>
-            )}
+            {(o) => {
+              const selected = () => o.label === props.value;
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={selected()}
+                  tabindex={-1}
+                  onClick={() => {
+                    props.onChange(o.value);
+                    setOpen(false);
+                  }}
+                  class={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg-1 ${
+                    selected()
+                      ? "bg-[var(--color-control-fill-hover)]"
+                      : "hover:bg-[var(--color-control-fill)]"
+                  }`}
+                >
+                  <span class="flex-1">{o.label}</span>
+                  <Show when={selected()}>
+                    <Check
+                      size={10}
+                      stroke-width={3}
+                      style={{ color: "var(--color-accent-1)" }}
+                    />
+                  </Show>
+                </button>
+              );
+            }}
           </For>
         </div>
       </Show>
@@ -991,7 +1001,7 @@ const NotificationsPanel: Component = () => {
       <Card
         title="Notifications"
         subtitle="Preview only — notification delivery isn't built yet, so these controls are disabled."
-        action={<SoonPill />}
+        action={<SoonBadge />}
       >
         <div
           class="label-xs grid items-center gap-4 px-5 pb-2 pt-3 uppercase tracking-wider text-fg-3"
@@ -1009,9 +1019,9 @@ const NotificationsPanel: Component = () => {
               style={{ "grid-template-columns": "1fr 64px 64px 64px" }}
             >
               <div>
-                <div class="text-[13px] font-medium text-fg-1">{p.label}</div>
+                <div class="text-base font-medium text-fg-1">{p.label}</div>
                 <Show when={p.hint}>
-                  <div class="mt-0.5 text-[11px] text-fg-3">{p.hint}</div>
+                  <div class="mt-0.5 text-xs text-fg-3">{p.hint}</div>
                 </Show>
               </div>
               <div class="flex justify-center">
@@ -1030,7 +1040,7 @@ const NotificationsPanel: Component = () => {
       <Card
         title="Quiet hours"
         subtitle="Pause email and push outside writing time. Disabled until delivery exists."
-        action={<SoonPill />}
+        action={<SoonBadge />}
       >
         <Row label="Quiet hours">
           <Switch checked={false} onChange={() => {}} disabled />
@@ -1112,32 +1122,17 @@ const SecurityPanel: Component = () => {
       <Card
         title="Two-factor authentication"
         subtitle="Add a second factor to protect your account."
-        action={
-          <Pill
-            bg="var(--color-control-fill)"
-            color="var(--color-fg-3)"
-          >
-            Coming soon
-          </Pill>
-        }
+        action={<SoonBadge />}
       >
         <Row label="Authenticator app" hint="Configured once cloud auth lands.">
-          <button
-            type="button"
-            class="lift glass-soft h-8 rounded-md px-3 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
-            disabled
-          >
+          <Button variant="secondary" size="sm" class="h-8" disabled>
             Reconfigure
-          </button>
+          </Button>
         </Row>
         <Row label="Recovery codes" hint="One-time codes printed when 2FA is set up.">
-          <button
-            type="button"
-            class="lift glass-soft h-8 rounded-md px-3 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
-            disabled
-          >
+          <Button variant="secondary" size="sm" class="h-8" disabled>
             View codes
-          </button>
+          </Button>
         </Row>
       </Card>
 
@@ -1150,26 +1145,22 @@ const SecurityPanel: Component = () => {
             <Trash2 size={14} style={{ color: "var(--color-err)" }} />
           </div>
           <div class="flex-1">
-            <div class="text-[13px] font-medium" style={{ color: "var(--color-err)" }}>
+            <div class="text-base font-medium" style={{ color: "var(--color-err)" }}>
               Reset local app data
             </div>
-            <div class="mt-0.5 text-[11px] text-fg-2">
+            <div class="mt-0.5 text-xs text-fg-2">
               Restores default settings and clears local UI state. Your project
               files on disk are untouched; the app reloads afterwards.
             </div>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            size="sm"
+            class="h-8"
             onClick={() => void resetAppData()}
-            class="lift h-8 rounded-md px-3 text-[12px] font-medium"
-            style={{
-              background: "color-mix(in srgb, var(--color-err) 12%, transparent)",
-              color: "var(--color-err)",
-              border: "1px solid color-mix(in srgb, var(--color-err) 25%, transparent)",
-            }}
           >
             Reset
-          </button>
+          </Button>
         </div>
       </Card>
     </div>

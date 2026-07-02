@@ -1,42 +1,33 @@
 /**
- * App-wide toast surface. Wraps Kobalte's Toast primitive (which provides an
- * `aria-live` region for free) and exposes a small imperative API the rest of
- * the app calls. `notifyError` in particular is how previously-silent async
- * failures (file saves, keyring disconnects, library refresh, sync errors)
- * reach the user instead of vanishing into telemetry.
+ * App-wide toast surface. Owns the Kobalte Toast rendering (which provides an
+ * `aria-live` region for free) and drains the dependency-free toast queue in
+ * `~/lib/toast` — so the imperative `notify*` service stays Kobalte-free and
+ * callable from stores/commands/lib without pulling this rendering stack.
  *
- * Mount `<Toaster />` once at the App root; `notify*` can be called from
- * anywhere (the Kobalte `toaster` is a global singleton).
+ * Mount `<Toaster />` once at the App root. The `notify*` functions are
+ * re-exported here for existing component-layer callers.
  */
 
 import { Toast, toaster } from "@kobalte/core/toast";
 import { AlertTriangle, CheckCircle2, Info, X } from "lucide-solid";
 import type { Component } from "solid-js";
-import { Show } from "solid-js";
+import { Show, createEffect } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
-type ToastKind = "error" | "info" | "success";
+import { pendingToasts, type ToastKind } from "~/lib/toast";
+
+export {
+  notifyError,
+  notifyInfo,
+  notifySuccess,
+  errorText,
+} from "~/lib/toast";
 
 const KIND: Record<ToastKind, { icon: Component<{ class?: string }>; color: string }> = {
   error: { icon: AlertTriangle, color: "var(--color-err)" },
   info: { icon: Info, color: "var(--color-accent-1)" },
   success: { icon: CheckCircle2, color: "var(--color-accent-1)" },
 };
-
-/**
- * Normalize an unknown thrown value (`Error` / string / Tauri rejection object)
- * into a human-readable line. Tauri IPC rejections are frequently plain objects,
- * so `String(e)` would render a useless `[object Object]`.
- */
-export function errorText(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
-  }
-}
 
 function show(kind: ToastKind, title: string, description?: string): void {
   const meta = KIND[kind];
@@ -52,7 +43,6 @@ function show(kind: ToastKind, title: string, description?: string): void {
         padding: "12px 12px 12px 14px",
         "border-radius": "12px",
         background: "var(--color-popover-bg)",
-        "box-shadow": "0 8px 28px rgb(0 0 0 / 0.28)",
         "border-left": `3px solid ${meta.color}`,
       }}
     >
@@ -60,11 +50,11 @@ function show(kind: ToastKind, title: string, description?: string): void {
         <Dynamic component={meta.icon} class="ui-icon-sm" />
       </span>
       <div class="min-w-0 flex-1">
-        <Toast.Title class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+        <Toast.Title class="text-sm font-medium text-fg-1">
           {title}
         </Toast.Title>
         <Show when={description}>
-          <Toast.Description class="mt-0.5 break-words text-[length:var(--ui-font-xs)] text-fg-3">
+          <Toast.Description class="mt-0.5 select-text break-words text-xs text-fg-3">
             {description}
           </Toast.Description>
         </Show>
@@ -79,33 +69,41 @@ function show(kind: ToastKind, title: string, description?: string): void {
   ));
 }
 
-export const notifyError = (title: string, description?: string): void =>
-  show("error", title, description);
-export const notifyInfo = (title: string, description?: string): void =>
-  show("info", title, description);
-export const notifySuccess = (title: string, description?: string): void =>
-  show("success", title, description);
+export const Toaster: Component = () => {
+  // Drain the pure toast queue into Kobalte. Track the last id shown so each
+  // request renders exactly once even though the signal carries a rolling
+  // window of recent entries.
+  let lastShown = 0;
+  createEffect(() => {
+    for (const t of pendingToasts()) {
+      if (t.id > lastShown) {
+        lastShown = t.id;
+        show(t.kind, t.title, t.description);
+      }
+    }
+  });
 
-export const Toaster: Component = () => (
-  <Toast.Region>
-    <Toast.List
-      class="scroll"
-      style={{
-        position: "fixed",
-        bottom: "16px",
-        right: "16px",
-        "z-index": "9999",
-        display: "flex",
-        "flex-direction": "column",
-        gap: "8px",
-        width: "min(380px, calc(100vw - 32px))",
-        "max-height": "100vh",
-        margin: "0",
-        padding: "0",
-        "list-style": "none",
-        outline: "none",
-        overflow: "hidden",
-      }}
-    />
-  </Toast.Region>
-);
+  return (
+    <Toast.Region>
+      <Toast.List
+        class="scroll"
+        style={{
+          position: "fixed",
+          bottom: "16px",
+          right: "16px",
+          "z-index": "9999",
+          display: "flex",
+          "flex-direction": "column",
+          gap: "8px",
+          width: "min(380px, calc(100vw - 32px))",
+          "max-height": "100vh",
+          margin: "0",
+          padding: "0",
+          "list-style": "none",
+          outline: "none",
+          overflow: "hidden",
+        }}
+      />
+    </Toast.Region>
+  );
+};

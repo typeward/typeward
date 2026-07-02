@@ -2,6 +2,7 @@ import { Columns3, FileText, FileType2, Layout as LayoutIcon, Terminal } from "l
 import type { Component, JSX } from "solid-js";
 import { Show, createSignal } from "solid-js";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import {
   type ConsolePosition,
   type EditorLayout,
@@ -19,6 +20,7 @@ export const LayoutMenu: Component = () => {
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
   const onTrigger = () => setOpen((v) => !v);
 
   return (
@@ -28,18 +30,24 @@ export const LayoutMenu: Component = () => {
         title="Layout"
         aria-label="Layout"
         onClick={onTrigger}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
         class="lift flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--color-control-fill)]"
       >
         <LayoutIcon class="ui-icon-chrome" style={{ opacity: 0.85 }} />
       </button>
       <Show when={open()}>
         <div
+          tabindex={-1}
+          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute right-0 top-full z-50 mt-1 w-[260px] rounded-xl"
           style={{
             padding: "var(--ui-pad-section)",
             background: "var(--color-popover-bg)",
           }}
         >
+          {/* Each single-select group is its own listbox — one listbox with
+              two always-selected options would announce as multi-select. */}
           <Section label="Pane layout">
             <LayoutOption
               value="split"
@@ -92,7 +100,9 @@ export const LayoutMenu: Component = () => {
 const Section: Component<{ label: string; children: JSX.Element }> = (props) => (
   <div class="flex flex-col gap-0.5">
     <span class="label-xs mb-1 px-1 text-fg-3">{props.label}</span>
-    {props.children}
+    <div role="listbox" aria-label={props.label} class="flex flex-col gap-0.5">
+      {props.children}
+    </div>
   </div>
 );
 
@@ -108,6 +118,9 @@ const LayoutOption: Component<{
   return (
     <button
       type="button"
+      role="option"
+      aria-selected={active()}
+      tabindex={-1}
       onClick={() => props.onChoose(props.value)}
       class={`lift flex items-center gap-2.5 rounded-md p-2 text-left ${
         active()
@@ -125,7 +138,7 @@ const LayoutOption: Component<{
         {props.icon}
       </span>
       <div class="min-w-0 flex-1">
-        <div class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+        <div class="text-sm font-medium text-fg-1">
           {props.label}
         </div>
         <div class="mono mt-0.5 text-[10px] text-fg-3">{props.hint}</div>
@@ -148,6 +161,9 @@ const ConsoleOption: Component<{
   return (
     <button
       type="button"
+      role="option"
+      aria-selected={active()}
+      tabindex={-1}
       onClick={() => props.onChoose(props.value)}
       class={`lift flex items-center gap-2.5 rounded-md p-2 text-left ${
         active()
@@ -165,7 +181,7 @@ const ConsoleOption: Component<{
         <Terminal size={13} />
       </span>
       <div class="min-w-0 flex-1">
-        <div class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+        <div class="text-sm font-medium text-fg-1">
           {props.label}
         </div>
         <div class="mono mt-0.5 text-[10px] text-fg-3">{props.hint}</div>

@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { Plus } from "lucide-solid";
 import type { Component } from "solid-js";
 import { createSignal, Show } from "solid-js";
@@ -61,7 +62,7 @@ export const DoiLookupDialog: Component<DoiLookupDialogProps> = (props) => {
       );
       setInput("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -99,20 +100,20 @@ export const DoiLookupDialog: Component<DoiLookupDialogProps> = (props) => {
           value={input()}
           onInput={(e) => setInput(e.currentTarget.value)}
           placeholder="10.1145/3290605.3300479 or 2403.04132"
-          class="glass-inset h-10 w-full rounded-md px-3 text-[length:var(--ui-font-base)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          class="glass-inset h-10 w-full rounded-md px-3 text-base text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           autofocus
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !busy()) handleAdd();
+            if (e.key === "Enter" && !e.isComposing && !busy()) handleAdd();
           }}
         />
 
         <Show when={error()}>
-          <div class="rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+          <div class="select-text rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
             {error()}
           </div>
         </Show>
         <Show when={success()}>
-          <div class="rounded-md border border-[var(--color-ok)]/40 bg-[var(--color-ok)]/10 px-3 py-2 text-[length:var(--ui-font-sm)] text-[var(--color-ok)]">
+          <div class="select-text rounded-md border border-[var(--color-ok)]/40 bg-[var(--color-ok)]/10 px-3 py-2 text-sm text-[var(--color-ok)]">
             {success()}
           </div>
         </Show>

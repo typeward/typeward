@@ -55,7 +55,7 @@ export const SyncStatusBadge: Component = () => {
         {(agg) => (
           <button
             type="button"
-            class="lift flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--ui-font-xs)] disabled:cursor-default"
+            class="lift flex items-center gap-1.5 rounded-md px-2 py-1 text-xs disabled:cursor-default"
             disabled={agg().conflicts === 0 && agg().phase !== "error"}
             onClick={() => {
               if (agg().conflicts > 0) setResolverOpen(true);
@@ -83,6 +83,8 @@ export const SyncStatusBadge: Component = () => {
             }
           >
             <PhaseIcon phase={agg().phase} />
+            {/* Not a live region: the poll loop flips pulling/idle every
+               minute, which would spam screen readers indefinitely. */}
             <span>{labelFor(agg().phase, agg().conflicts)}</span>
           </button>
         )}

@@ -1,8 +1,17 @@
-import type { EditorAdapter, Project } from "~/adapters/types";
+import { describeIpcError } from "~/lib/errors";
+import { notifyInfo } from "~/lib/toast";
+import type { EditorAdapter, Project, ProjectFormat } from "~/adapters/types";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
+import {
+  pathRelativeToProjectRoot,
+  syncForwardWithWasmSynctex,
+  syncInverseWithWasmSynctex,
+} from "~/adapters/latex/synctex";
+import { suffixWithConflict } from "~/integrations/cloud/core";
 import { notifyLocalSave } from "~/integrations/cloud/init";
 import * as ipc from "~/ipc";
+import { sha256Hex } from "~/lib/hash";
 import { recordError } from "~/lib/telemetry";
 import {
   activeFile,
@@ -15,7 +24,9 @@ import {
   requestGotoSource,
   requestPdfScroll,
   setCompileState,
+  setFileBaseHash,
   setLastResult,
+  type OpenFile,
 } from "~/stores/editor-store";
 import { currentCursorLine } from "~/stores/editor-view-store";
 import { compileEngine, editorSettings } from "~/stores/settings-store";
@@ -25,16 +36,24 @@ import {
   setRequestNewProject,
   togglePalette,
 } from "./palette-store";
+import { setCompileRunners } from "./compile-runner";
 
 /**
  * Single point that maps a project's format to its adapter. EditorScreen
- * imports this too — add new adapters here only.
+ * imports this too. Backed by an exhaustive `Record<ProjectFormat, ...>` so
+ * TypeScript forces an entry per format union member — add new adapters here
+ * only, and a missed one is a compile error rather than a silent no-op.
  */
-export const adapterFor = (p: Project): EditorAdapter | null => {
-  if (p.format === "latex") return LatexAdapter;
-  if (p.format === "typst") return TypstAdapter;
-  return null;
+const ADAPTERS: Record<ProjectFormat, EditorAdapter> = {
+  latex: LatexAdapter,
+  typst: TypstAdapter,
 };
+
+export const adapterFor = (p: Project): EditorAdapter => ADAPTERS[p.format];
+
+/** Re-exported from the LaTeX SyncTeX module; kept on this path for the
+ *  inverse-search call site + its unit test. */
+export { pathRelativeToProjectRoot };
 
 // ----- Editor actions ------------------------------------------------------
 
@@ -42,17 +61,9 @@ export async function saveActiveFile(): Promise<void> {
   const file = activeFile();
   const p = project();
   if (!file || !p) return;
-  // Snapshot content + identity before the await: if the user keeps typing or
-  // switches tabs during the write, we must only clear `dirty` on the file we
-  // actually wrote and only if its buffer still matches what hit disk.
-  const savedContent = file.content;
-  try {
-    await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
-  } catch (e) {
-    recordError("save-failed", `write_project_text_file failed for ${file.relPath}`, e);
-    throw e;
-  }
-  markFileCleanIfUnchanged(file.path, savedContent);
+  // `file` is an immutable store snapshot, so its content/identity stay fixed
+  // across the awaits below even if the user keeps typing.
+  await writeBufferWithConflictGuard(p, file);
   notifyLocalSave(p.rootPath, [file.relPath]);
   // Auto-compile rides the explicit save path only — compileActiveProject
   // saves via saveAllDirtyFiles, so this can't recurse, and its
@@ -71,34 +82,91 @@ export async function saveAllDirtyFiles(): Promise<void> {
   const saved: string[] = [];
   for (const file of openFiles()) {
     if (!file.dirty) continue;
-    const savedContent = file.content;
-    try {
-      await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
-    } catch (e) {
-      recordError("save-failed", `write_project_text_file failed for ${file.relPath}`, e);
-      throw e;
-    }
-    markFileCleanIfUnchanged(file.path, savedContent);
+    await writeBufferWithConflictGuard(p, file);
     saved.push(file.relPath);
   }
   notifyLocalSave(p.rootPath, saved);
 }
 
 /**
+ * Write one buffer to disk, but first detect the case where the on-disk file
+ * changed underneath the buffer since it was loaded (the classic save-after-
+ * pull hazard: a cloud pull writes a collaborator's edit to disk while the
+ * stale buffer still holds the old content). Blindly writing would silently
+ * revert that edit, and because the sync engine already advanced its per-file
+ * rev at pull time, its own conflict machinery can never recover it. When the
+ * live disk hash differs from the hash the buffer was loaded from, preserve
+ * the newer disk copy in a `.conflict-<ISO>` sidecar before overwriting, so
+ * the other version stays recoverable and visible in the file tree.
+ */
+async function writeBufferWithConflictGuard(p: Project, file: OpenFile): Promise<void> {
+  const savedContent = file.content;
+  await preserveConflictingDiskCopy(p, file);
+  try {
+    await ipc.writeProjectTextFile(p.rootPath, file.relPath, savedContent);
+  } catch (e) {
+    recordError("save-failed", `write_project_text_file failed for ${file.relPath}`, e);
+    throw e;
+  }
+  markFileCleanIfUnchanged(file.path, savedContent);
+  setFileBaseHash(file.path, await sha256Hex(savedContent));
+}
+
+async function preserveConflictingDiskCopy(p: Project, file: OpenFile): Promise<void> {
+  // No recorded origin hash (e.g. a conflict-inspection tab) → nothing to
+  // compare against; fall through to a plain write.
+  if (!file.baseHash) return;
+  let disk: string;
+  try {
+    disk = await ipc.readProjectTextFile(p.rootPath, file.relPath);
+  } catch {
+    // File missing on disk (fresh create / deleted) — normal write path.
+    return;
+  }
+  if (disk === file.content) return;
+  const diskHash = await sha256Hex(disk);
+  if (diskHash === file.baseHash) return; // disk unchanged since load — safe to overwrite
+  let sidecarRel: string;
+  try {
+    sidecarRel = suffixWithConflict(file.relPath, Date.now());
+  } catch (e) {
+    recordError("save-conflict", `could not derive conflict path for ${file.relPath}`, e);
+    return;
+  }
+  try {
+    await ipc.writeProjectTextFile(p.rootPath, sidecarRel, disk);
+    notifyInfo(
+      "Saved over newer changes",
+      `"${file.relPath}" had changed on disk since you opened it. That version was kept as "${sidecarRel}".`,
+    );
+  } catch (e) {
+    // Preserving the other copy failed — record it, but don't block the save;
+    // the buffer content is what the user explicitly asked to persist.
+    recordError("save-conflict", `failed to preserve disk copy of ${file.relPath}`, e);
+  }
+}
+
+/**
  * Orchestrates the full compile path: save-if-dirty, kick the adapter,
  * record results, push diagnostics into the store, and bump the PDF
- * version so the PreviewProvider re-renders. Errors are reported via
+ * version so the preview pane re-renders. Errors are reported via
  * telemetry — callers don't need to wrap in try/catch.
  */
 export async function compileActiveProject(): Promise<void> {
   const p = project();
   if (!p) return;
   const adapter = adapterFor(p);
-  if (!adapter) return;
   // Guard against a second compile racing the first (Mod+Enter has no
   // disabled-state the way the Recompile button does); two latexmk runs in
   // one directory fight over aux files and corrupt the output.
   if (compileState() === "compiling") return;
+
+  // adapter.compile is an un-cancellable IPC await; the user can switch
+  // projects before it resolves. Stamp the request with the active project's
+  // root and drop the result if the project changed underneath us, so a stale
+  // compile can't paint project A's PDF/status/diagnostics into project B.
+  const compileRoot = p.rootPath;
+  const isCurrent = () => project()?.rootPath === compileRoot;
 
   setCompileState("compiling");
   try {
@@ -106,6 +174,7 @@ export async function compileActiveProject(): Promise<void> {
     // Issues tab instead of an unhandled rejection.
     await saveAllDirtyFiles();
     const result = await adapter.compile(p);
+    if (!isCurrent()) return;
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");
     if (result.ok && result.outputPath) {
@@ -118,18 +187,19 @@ export async function compileActiveProject(): Promise<void> {
       );
     }
   } catch (e) {
+    if (!isCurrent()) return;
     setLastResult({
       ok: false,
       diagnostics: [
         {
           severity: "error",
-          message: String(e),
+          message: describeIpcError(e),
           file: p.rootFile,
           line: 1,
           source: "compile",
         },
       ],
-      log: String(e),
+      log: describeIpcError(e),
       durationMs: 0,
     });
     setCompileState("error");
@@ -241,95 +311,9 @@ export async function syncInverseFromPdfClick(
   }
 }
 
-async function syncForwardWithWasmSynctex(
-  p: Project,
-  outputPath: string,
-  relPath: string,
-  line: number,
-): Promise<void> {
-  try {
-    const lookup = await readWasmSynctex(p.rootPath, outputPath);
-    const hit = lookup?.forward(relPath, line)[0];
-    if (hit) requestPdfScroll(hit.page, hit.y);
-  } catch (e) {
-    recordError("synctex-forward", "wasm synctex forward lookup threw", e);
-  }
-}
-
-async function syncInverseWithWasmSynctex(
-  p: Project,
-  outputPath: string,
-  pageNum: number,
-  x: number,
-  y: number,
-): Promise<void> {
-  try {
-    const lookup = await readWasmSynctex(p.rootPath, outputPath);
-    const hit = lookup?.reverse(pageNum, x, y)[0];
-    if (!hit) return;
-    const relPath = synctexSourceToProjectRel(p.rootPath, hit.file);
-    if (relPath) requestGotoSource(relPath, hit.line);
-  } catch (e) {
-    recordError("synctex-inverse", "wasm synctex inverse lookup threw", e);
-  }
-}
-
-async function readWasmSynctex(
-  projectRoot: string,
-  outputPath: string,
-): Promise<import("texlive-wasm").SynctexLookup | null> {
-  const pdfRel = pathRelativeToProjectRoot(projectRoot, outputPath);
-  if (!pdfRel) return null;
-
-  const synctexRel = replaceExt(pdfRel, "synctex");
-  for (const candidate of [`${synctexRel}.gz`, synctexRel]) {
-    try {
-      const bytes = await ipc.readProjectBinaryFile(projectRoot, candidate);
-      const { createSynctex } = await import("texlive-wasm");
-      return await createSynctex(bytes);
-    } catch {
-      // Try the alternate gzip/plain SyncTeX spelling.
-    }
-  }
-  return null;
-}
-
-function synctexSourceToProjectRel(projectRoot: string, sourceFile: string): string | null {
-  const fromRoot = pathRelativeToProjectRoot(projectRoot, sourceFile);
-  if (fromRoot) return fromRoot;
-
-  const normalized = sourceFile.replace(/\\/g, "/");
-  if (normalized.startsWith("/project/")) return normalized.slice("/project/".length);
-  if (!normalized.startsWith("/") && !/^[A-Za-z]:/.test(normalized)) return normalized;
-  return null;
-}
-
-function replaceExt(filename: string, newExt: string): string {
-  const dot = filename.lastIndexOf(".");
-  if (dot < 0) return `${filename}.${newExt}`;
-  return `${filename.slice(0, dot)}.${newExt}`;
-}
-
-/**
- * Best-effort: convert an absolute source path to a path relative to the
- * project root. SyncTeX emits the source path as the engine resolved it,
- * which may include normalized casing or symlink resolution — we compare
- * case-insensitively on Windows where the FS is case-insensitive anyway.
- * Returns null if the absolute path doesn't live under the project.
- */
-export function pathRelativeToProjectRoot(root: string, abs: string): string | null {
-  const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "");
-  const r = norm(root);
-  const a = norm(abs);
-  const caseInsensitive =
-    typeof navigator !== "undefined" &&
-    /Windows/i.test(navigator.userAgent || navigator.platform || "");
-  const cmp = (x: string, y: string) =>
-    caseInsensitive ? x.toLowerCase() === y.toLowerCase() : x === y;
-  if (cmp(a, r)) return null;
-  if (!cmp(a.slice(0, r.length), r) || a.charAt(r.length) !== "/") {
-    return null;
-  }
-  const rest = a.slice(r.length + 1);
-  return rest || null;
-}
+// Inject the orchestration into the compile-runner leaf so adapter build/sync
+// commands can trigger it without importing this module (see compile-runner.ts).
+setCompileRunners({
+  compile: compileActiveProject,
+  syncForward: syncForwardFromCursor,
+});

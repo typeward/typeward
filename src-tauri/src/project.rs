@@ -11,12 +11,11 @@ use crate::fs_ops;
 /// Mirrors the TypeScript `Project` type in src/adapters/types.ts. Persisted
 /// at `<rootPath>/.typeward/project.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     /// Absolute folder path.
-    #[serde(rename = "rootPath")]
     pub root_path: String,
     /// Entry file relative to rootPath, e.g. "main.tex".
-    #[serde(rename = "rootFile")]
     pub root_file: String,
     pub format: ProjectFormat,
     pub name: String,
@@ -36,22 +35,20 @@ pub struct Project {
 /// part of project.json — they're derived from the folder/root-file metadata
 /// each time the library is enumerated, so they can't go stale on disk.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectListing {
     #[serde(flatten)]
     pub project: Project,
-    #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<i64>,
-    #[serde(rename = "modifiedAt", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub modified_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProjectIntegrations {
-    #[serde(
-        rename = "cloudOrigin",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_origin: Option<CloudOrigin>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<GitState>,
@@ -60,28 +57,25 @@ pub struct ProjectIntegrations {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloudOrigin {
     pub provider: String,
-    #[serde(rename = "accountId")]
     pub account_id: String,
-    #[serde(rename = "remotePath")]
     pub remote_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitState {
     pub remote: Option<String>,
     pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReferenceBinding {
     pub provider: String,
-    #[serde(
-        rename = "collectionId",
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collection_id: Option<String>,
 }
 
@@ -111,6 +105,14 @@ impl ProjectFormat {
     }
 }
 
+/// Current schema version stamped into `.typeward/project.json` (written by
+/// `write_project`, checked tolerantly by `read_project`). The version lives in
+/// the JSON artifact, not the in-memory `Project` struct, so additive fields
+/// never ripple into every `Project { .. }` literal. Bump only for a
+/// non-additive change that needs a migration. See CLAUDE.md's
+/// persisted-artifact note; mirrors the sync-state.json versioning convention.
+pub const CURRENT_PROJECT_SCHEMA: u64 = 1;
+
 #[derive(Debug, Error)]
 pub enum ProjectError {
     #[error("io error: {0}")]
@@ -129,6 +131,8 @@ pub enum ProjectError {
     PathEscapesRoot(String),
     #[error("no .tex or .typ entry file found in folder")]
     NoRootFile,
+    #[error("project root is not registered: {0}")]
+    UnregisteredRoot(String),
 }
 
 const SIDECAR_DIR: &str = ".typeward";
@@ -142,11 +146,51 @@ pub fn project_json_path(root: &Path) -> PathBuf {
     sidecar_dir(root).join(PROJECT_JSON)
 }
 
+/// Ensure `.typeward/` is listed in `<root>/.git/info/exclude` so Typeward's
+/// sidecar (snapshots, build output, review comments, project.json) never
+/// registers as untracked churn. We touch `.git/info/exclude`, never the user's
+/// tracked `.gitignore`. Idempotent and best-effort: a non-git folder or an
+/// unwritable exclude file is silently a no-op. Mirrors the cloud engine's
+/// `.typeward` guard — without this chokepoint every Typeward-opened repo is
+/// permanently pull-blocked (dirty worktree) and stage-all sweeps snapshots
+/// into commits.
+pub fn ensure_sidecar_git_excluded(root: &Path) {
+    let info = root.join(".git").join("info");
+    if !info.is_dir() {
+        return;
+    }
+    let exclude = info.join("exclude");
+    let existing = fs::read_to_string(&exclude).unwrap_or_default();
+    let already = existing.lines().any(|line| {
+        let t = line.trim();
+        t == ".typeward" || t == ".typeward/"
+    });
+    if already {
+        return;
+    }
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str(".typeward/\n");
+    let _ = fs::write(&exclude, updated);
+}
+
 /// Read project metadata from `<root>/.typeward/project.json`.
 pub fn read_project(root: &Path) -> Result<Project, ProjectError> {
     let path = project_json_path(root);
     let bytes = fs::read(path)?;
-    let mut project: Project = serde_json::from_slice(&bytes)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+    // Schema evolution degrades gracefully: older files (no `schemaVersion`)
+    // are treated as the current schema, and a newer version than we understand
+    // is still loaded best-effort so an older app never bricks a newer
+    // project.json (fields are additive; serde ignores unknown keys). A
+    // non-additive change must bump CURRENT_PROJECT_SCHEMA and migrate here.
+    let _schema = value
+        .get("schemaVersion")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(CURRENT_PROJECT_SCHEMA);
+    let mut project: Project = serde_json::from_value(value)?;
     validate_project_relative_path(&project.root_file)?;
     // Heal a stale rootPath if the project folder was moved.
     project.root_path = root.to_string_lossy().to_string();
@@ -159,7 +203,16 @@ pub fn write_project(project: &Project) -> Result<(), ProjectError> {
     let sidecar = sidecar_dir(root);
     fs::create_dir_all(&sidecar)?;
     let path = sidecar.join(PROJECT_JSON);
-    let json = serde_json::to_vec_pretty(project)?;
+    // Stamp the schema version into the artifact (not the struct — see
+    // CURRENT_PROJECT_SCHEMA) so future evolution has a discriminator.
+    let mut value = serde_json::to_value(project)?;
+    if let serde_json::Value::Object(map) = &mut value {
+        map.insert(
+            "schemaVersion".into(),
+            serde_json::Value::from(CURRENT_PROJECT_SCHEMA),
+        );
+    }
+    let json = serde_json::to_vec_pretty(&value)?;
     fs_ops::atomic_write(&path, &json)?;
     Ok(())
 }
@@ -270,6 +323,7 @@ pub fn import_folder_as_project(root: &Path, name: Option<&str>) -> Result<Proje
     if !root.is_dir() {
         return Err(ProjectError::NotADirectory(root.to_string_lossy().into()));
     }
+    ensure_sidecar_git_excluded(root);
     if project_json_path(root).exists() {
         return read_project(root);
     }
@@ -497,6 +551,36 @@ pub fn is_registered_root(root: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Canonical registered-root gate. Every command taking a renderer-supplied
+/// project root must route through this: on its own the custom file IPC,
+/// compile, snapshots, synctex, the watcher, and existing-repo git ops validate
+/// paths relative to whatever root the webview hands them, so a compromised
+/// renderer could reach `~/.ssh` without it. Returns `Err` for any root the
+/// user did not open this session. (Prefer this to raw `is_registered_root` in
+/// new callers so the gate stays a single chokepoint.)
+pub fn require_registered_root(root: &Path) -> Result<(), ProjectError> {
+    if is_registered_root(root) {
+        Ok(())
+    } else {
+        Err(ProjectError::UnregisteredRoot(
+            root.to_string_lossy().into_owned(),
+        ))
+    }
+}
+
+/// Like `require_registered_root` but also accepts a brand-new destination
+/// under the configured projects root (clone/init/template targets that aren't
+/// projects yet). Route new-destination commands through this.
+pub fn require_new_or_registered_root(root: &Path) -> Result<(), ProjectError> {
+    if is_registered_root(root) || is_new_path_under_projects_root(root) {
+        Ok(())
+    } else {
+        Err(ProjectError::UnregisteredRoot(
+            root.to_string_lossy().into_owned(),
+        ))
+    }
+}
+
 /// Record the configured projects root (persisted-settings value, read at
 /// startup and on settings save).
 pub fn set_projects_root(root: &Path) {
@@ -551,6 +635,79 @@ mod tests {
         assert_eq!(read.name, "Test");
         assert_eq!(read.root_file, "main.tex");
         assert!(matches!(read.format, ProjectFormat::Latex));
+    }
+
+    #[test]
+    fn write_project_stamps_schema_version() {
+        let dir = temp_dir();
+        let project = create_project(&dir, "Stamped", ProjectFormat::Latex).unwrap();
+        let raw = fs::read_to_string(project_json_path(Path::new(&project.root_path))).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            value.get("schemaVersion").and_then(|v| v.as_u64()),
+            Some(CURRENT_PROJECT_SCHEMA)
+        );
+    }
+
+    #[test]
+    fn read_project_accepts_missing_schema_version() {
+        // Older project.json files predate the schemaVersion field; they must
+        // still load (treated as the current schema).
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join(SIDECAR_DIR)).unwrap();
+        fs::write(
+            project_json_path(&dir),
+            r#"{
+  "rootPath": "ignored",
+  "rootFile": "main.tex",
+  "format": "latex",
+  "name": "Legacy"
+}"#,
+        )
+        .unwrap();
+        let read = read_project(&dir).unwrap();
+        assert_eq!(read.name, "Legacy");
+    }
+
+    #[test]
+    fn read_project_tolerates_unknown_future_schema_version() {
+        // A newer app version may have written a higher schema; load it
+        // best-effort rather than bricking the project.
+        let dir = temp_dir();
+        fs::create_dir_all(dir.join(SIDECAR_DIR)).unwrap();
+        fs::write(
+            project_json_path(&dir),
+            r#"{
+  "schemaVersion": 999,
+  "rootPath": "ignored",
+  "rootFile": "main.tex",
+  "format": "latex",
+  "name": "FromTheFuture"
+}"#,
+        )
+        .unwrap();
+        let read = read_project(&dir).unwrap();
+        assert_eq!(read.name, "FromTheFuture");
+    }
+
+    #[test]
+    fn ensure_sidecar_git_excluded_is_idempotent_and_git_only() {
+        // No .git → no-op (no file created).
+        let plain = temp_dir();
+        ensure_sidecar_git_excluded(&plain);
+        assert!(!plain.join(".git").exists());
+
+        // With .git/info → writes `.typeward/` once, even across repeat calls
+        // and without clobbering existing entries.
+        let repo = temp_dir();
+        let info = repo.join(".git").join("info");
+        fs::create_dir_all(&info).unwrap();
+        fs::write(info.join("exclude"), "# git ls-files exclude\n*.log\n").unwrap();
+        ensure_sidecar_git_excluded(&repo);
+        ensure_sidecar_git_excluded(&repo);
+        let contents = fs::read_to_string(info.join("exclude")).unwrap();
+        assert_eq!(contents.matches(".typeward/").count(), 1);
+        assert!(contents.contains("*.log"));
     }
 
     #[test]

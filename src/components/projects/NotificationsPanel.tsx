@@ -72,7 +72,7 @@ export const NotificationsPanel: Component<{
     >
       <div class="flex h-[44px] flex-shrink-0 items-center gap-2 border-b border-glass-stroke px-3">
         <Bell size={14} style={{ color: "var(--color-accent-1)" }} />
-        <span class="text-[length:var(--ui-font-sm)] font-semibold text-fg-1">
+        <span class="text-sm font-semibold text-fg-1">
           Notifications
         </span>
         <span class="mono ml-1 rounded-full px-1.5 text-[10px] text-fg-3"
@@ -82,7 +82,7 @@ export const NotificationsPanel: Component<{
         <button
           type="button"
           onClick={markAllRead}
-          class="mono ml-auto text-[11px] text-fg-2 hover:text-fg-1"
+          class="mono ml-auto text-xs text-fg-2 hover:text-fg-1"
         >
           mark all read
         </button>
@@ -100,7 +100,7 @@ export const NotificationsPanel: Component<{
         <Show
           when={notifications().length > 0}
           fallback={
-            <div class="grid h-full place-items-center text-[length:var(--ui-font-sm)] text-fg-3">
+            <div class="grid h-full place-items-center text-sm text-fg-3">
               nothing here yet
             </div>
           }
@@ -111,7 +111,7 @@ export const NotificationsPanel: Component<{
                 <Icon kind={n.kind} />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-1.5">
-                    <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                    <span class="text-sm font-medium text-fg-1">
                       {n.title}
                     </span>
                     <Show when={!n.read}>
@@ -122,7 +122,7 @@ export const NotificationsPanel: Component<{
                     </Show>
                   </div>
                   <Show when={n.body}>
-                    <div class="mono mt-0.5 text-[11px] leading-snug text-fg-3">
+                    <div class="mono mt-0.5 select-text text-xs leading-snug text-fg-3">
                       {n.body}
                     </div>
                   </Show>

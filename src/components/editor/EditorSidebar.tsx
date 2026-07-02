@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import {
   ChevronDown,
   ChevronUp,
@@ -12,6 +13,7 @@ import {
   For,
   Show,
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   onCleanup,
@@ -25,7 +27,8 @@ import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
 import { activeFile, project } from "~/stores/editor-store";
 import { compileEngine, integrationsSettings } from "~/stores/settings-store";
-import { allOpenThreadCount } from "~/stores/review-store";
+import { allOpenThreadCount, reanchorThreadById } from "~/stores/review-store";
+import { getActiveEditorView } from "~/stores/editor-view-store";
 
 const ENGINE_LABEL: Record<string, string> = {
   "system-tex": "pdflatex",
@@ -96,11 +99,28 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     if (!hasReferences() && props.tab === "references") props.setTab("files");
   });
 
+  // Re-anchor an orphaned thread to the current editor selection. The store
+  // is the source of truth; the CM decoration bridge re-renders from it.
+  const handleReanchor = (threadId: string) => {
+    const view = getActiveEditorView();
+    if (!view) return;
+    const sel = view.state.selection.main;
+    if (sel.from === sel.to) return;
+    const anchorText = view.state.doc.sliceString(sel.from, sel.to);
+    reanchorThreadById(threadId, sel.from, sel.to, anchorText);
+  };
+
   const createNewFile = async () => {
     const p = project();
     const name = newFileName().trim().replace(/\\/g, "/");
     if (!p || !name) return;
     try {
+      // The write IPC replaces the target unconditionally — typing an
+      // existing name would silently wipe that file.
+      if (await exists(`${p.rootPath}/${name}`)) {
+        setNewFileError("A file with this name already exists");
+        return;
+      }
       // The IPC validates the project-relative path and creates parent
       // dirs, so "chapters/intro.tex" also works as a folder shortcut.
       await ipc.writeProjectTextFile(p.rootPath, name, "");
@@ -109,7 +129,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       setNewFileError(null);
       props.onSelectFile(name);
     } catch (e) {
-      setNewFileError(String(e));
+      setNewFileError(describeIpcError(e));
       recordError("new-file", `creating ${name} failed`, e);
     }
   };
@@ -145,12 +165,49 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     onCleanup(() => ro.disconnect());
   });
 
+  // Reading activeFile().content straight from the footer would recount
+  // words/lines in the same flush as every keystroke (updateActiveFile
+  // replaces the file object per edit). Snapshot the content on a trailing
+  // debounce instead; a file-identity change bypasses the debounce so
+  // counts don't lag on tab switch.
+  const [statsContent, setStatsContent] = createSignal<string | null>(
+    activeFile()?.content ?? null,
+  );
+  let statsTimer: ReturnType<typeof setTimeout> | undefined;
+  let statsPath: string | undefined;
+  createEffect(() => {
+    const f = activeFile();
+    const content = f?.content ?? null;
+    if (statsTimer !== undefined) {
+      clearTimeout(statsTimer);
+      statsTimer = undefined;
+    }
+    if (f?.path !== statsPath) {
+      statsPath = f?.path;
+      setStatsContent(content);
+      return;
+    }
+    statsTimer = setTimeout(() => {
+      statsTimer = undefined;
+      setStatsContent(content);
+    }, 300);
+  });
+  onCleanup(() => {
+    if (statsTimer !== undefined) clearTimeout(statsTimer);
+  });
+  const stats = createMemo(() => {
+    const s = statsContent();
+    return s == null ? null : countStats(s);
+  });
+
   return (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
       {/* Tab row — Files / Review / TODO. SCM only inside git repos; Refs
           only when a citation provider is configured. */}
       <div
         ref={tabStripRef}
+        role="tablist"
+        aria-label="Sidebar panels"
         class="flex flex-shrink-0 items-center gap-0 overflow-x-auto scroll border-b border-glass-stroke px-2 pt-1.5"
       >
         <For
@@ -167,8 +224,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
             return (
               <button
                 type="button"
+                role="tab"
+                aria-selected={active()}
                 onClick={() => props.setTab(t.id)}
-                class={`relative flex flex-shrink-0 items-center gap-1.5 px-2.5 text-[length:var(--ui-font-base)] font-medium ${
+                class={`relative flex flex-shrink-0 items-center gap-1.5 px-2.5 text-base font-medium ${
                   active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
                 }`}
                 style={{ height: "var(--ui-row)" }}
@@ -176,7 +235,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                 {t.label}
                 <Show when={t.count != null}>
                   <span
-                    class="mono rounded-full px-1.5 py-0.5 text-[length:var(--ui-font-xs)]"
+                    class="mono rounded-full px-1.5 py-0.5 text-xs"
                     style={{
                       background: active()
                         ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
@@ -205,7 +264,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       {/* "Files" section header — uppercase label + new-file action. */}
       <Show when={props.tab === "files"}>
         <div
-          class="flex h-9 flex-shrink-0 items-center justify-between px-3 text-[length:var(--ui-font-xs)] uppercase tracking-[0.1em] text-fg-3"
+          class="label-xs flex h-9 flex-shrink-0 items-center justify-between px-3 text-fg-3"
         >
           <span>Files</span>
           <button
@@ -228,7 +287,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               value={newFileName()}
               onInput={(e) => setNewFileName(e.currentTarget.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void createNewFile();
+                if (e.key === "Enter" && !e.isComposing) void createNewFile();
                 if (e.key === "Escape") {
                   setNewFileOpen(false);
                   setNewFileName("");
@@ -237,10 +296,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               }}
               ref={(el) => setTimeout(() => el.focus(), 0)}
               placeholder="name.tex — Enter to create, Esc to cancel"
-              class="glass-inset w-full rounded-md px-2 py-1.5 text-[12px] text-fg-1 placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+              class="glass-inset w-full rounded-md px-2 py-1.5 text-sm text-fg-1 placeholder:text-fg-2 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
             />
             <Show when={newFileError()}>
-              <div class="mt-1 text-[11px]" style={{ color: "var(--color-err)" }}>
+              <div class="mt-1 text-xs" style={{ color: "var(--color-err)" }}>
                 {newFileError()}
               </div>
             </Show>
@@ -263,7 +322,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           <CommitPanel />
         </Show>
         <Show when={props.tab === "review"}>
-          <ReviewPanel />
+          <ReviewPanel onRequestReanchor={handleReanchor} />
         </Show>
         <Show when={props.tab === "todo"}>
           <EmptyTab
@@ -284,14 +343,14 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           <span class="label-xs text-fg-3">Project</span>
         </div>
         <div class="grid grid-cols-2 gap-2">
-          <Stat label="Words" value={wordCount()} />
-          <Stat label="Lines" value={lineCount()} />
+          <Stat label="Words" value={stats()?.words ?? "—"} />
+          <Stat label="Lines" value={stats()?.lines ?? "—"} />
         </div>
         <Show when={project()?.format === "latex"}>
           <div class="glass-soft flex items-center gap-2 rounded-lg px-2.5 py-2">
             <Zap size={12} style={{ color: "var(--color-accent-1)" }} />
-            <span class="text-[11px] text-fg-2">Engine</span>
-            <span class="mono ml-auto text-[11px] text-fg-1">
+            <span class="text-xs text-fg-2">Engine</span>
+            <span class="mono ml-auto text-xs text-fg-1">
               {ENGINE_LABEL[compileEngine()] ?? compileEngine()}
             </span>
           </div>
@@ -305,27 +364,44 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
 const Stat: Component<{ label: string; value: string }> = (props) => (
   <div class="glass-soft rounded-lg px-2 py-1.5">
     <div class="label-xs text-fg-3">{props.label}</div>
-    <div class="mono mt-0.5 text-[13px] font-semibold text-fg-1">
+    <div class="mono mt-0.5 text-base font-semibold text-fg-1">
       {props.value}
     </div>
   </div>
 );
 
-const wordCount = (): string => {
-  const f = activeFile();
-  if (!f) return "—";
-  return f.content
-    .replace(/[\s ]+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean)
-    .length.toLocaleString();
-};
+// Mirrors the JS regex \s set so word boundaries match the old
+// replace(/\s+/)-and-split implementation exactly.
+const isWhitespaceCode = (c: number): boolean =>
+  c === 0x20 ||
+  (c >= 0x09 && c <= 0x0d) ||
+  c === 0xa0 ||
+  c === 0x1680 ||
+  (c >= 0x2000 && c <= 0x200a) ||
+  c === 0x2028 ||
+  c === 0x2029 ||
+  c === 0x202f ||
+  c === 0x205f ||
+  c === 0x3000 ||
+  c === 0xfeff;
 
-const lineCount = (): string => {
-  const f = activeFile();
-  if (!f) return "—";
-  return f.content.split("\n").length.toLocaleString();
+// Single allocation-free pass — the previous regex/split pipeline made
+// three O(n) passes and allocated a whole-document word array each time.
+const countStats = (s: string): { words: string; lines: string } => {
+  let words = 0;
+  let lines = 1;
+  let inWord = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 0x0a) lines++;
+    if (isWhitespaceCode(c)) {
+      inWord = false;
+    } else if (!inWord) {
+      inWord = true;
+      words++;
+    }
+  }
+  return { words: words.toLocaleString(), lines: lines.toLocaleString() };
 };
 
 const EmptyTab: Component<{ icon: JSX.Element; title: string; body: string }> = (
@@ -338,8 +414,8 @@ const EmptyTab: Component<{ icon: JSX.Element; title: string; body: string }> = 
     >
       {props.icon}
     </div>
-    <div class="text-[13px] font-semibold text-fg-1">{props.title}</div>
-    <div class="text-[11px] leading-relaxed text-fg-3">{props.body}</div>
+    <div class="text-base font-semibold text-fg-1">{props.title}</div>
+    <div class="text-xs leading-relaxed text-fg-3">{props.body}</div>
   </div>
 );
 
@@ -354,7 +430,7 @@ const OutlinePanel: Component<{ collapsed: boolean; onToggle: () => void }> = (
         class="lift flex h-9 w-full items-center gap-2 px-3 hover:bg-[var(--color-control-fill)]"
       >
         <ListTree size={12} style={{ opacity: 0.65 }} />
-        <span class="text-[12px] font-medium text-fg-2">Outline</span>
+        <span class="text-sm font-medium text-fg-2">Outline</span>
         <span class="mono text-[10px] text-fg-3">document structure</span>
         <Show
           when={props.collapsed}
@@ -365,7 +441,7 @@ const OutlinePanel: Component<{ collapsed: boolean; onToggle: () => void }> = (
       </button>
       <Show when={!props.collapsed}>
         <div class="max-h-[200px] space-y-1.5 overflow-auto scroll px-2.5 pb-2.5">
-          <div class="text-[11px] text-fg-3 px-2 py-1.5 italic">
+          <div class="text-xs text-fg-3 px-2 py-1.5 italic">
             Document outline isn't built yet — coming soon.
           </div>
         </div>

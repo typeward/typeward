@@ -43,7 +43,7 @@ export const TopBar: Component<TopBarProps> = (props) => {
         <button
           type="button"
           onClick={() => props.onOpenPalette?.()}
-          class="lift glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-[length:var(--ui-font-sm)] text-fg-3 hover:text-fg-2"
+          class="lift glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-sm text-fg-3 hover:text-fg-2"
         >
           <Search class="ui-icon-chrome" style={{ opacity: 0.6 }} />
           <span>Search projects, papers, collaborators…</span>
@@ -68,7 +68,7 @@ export const TopBar: Component<TopBarProps> = (props) => {
           <Bell class="ui-icon-chrome" style={{ opacity: 0.85 }} />
           <Show when={props.notifications && props.notifications > 0}>
             <span
-              class="mono absolute -right-0.5 -top-0.5 rounded-full px-1 text-[11px]"
+              class="mono absolute -right-0.5 -top-0.5 rounded-full px-1 text-xs"
               style={{
                 background: "color-mix(in srgb, var(--color-err) 18%, transparent)",
                 color: "var(--color-err)",

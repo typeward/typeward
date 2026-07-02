@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { readFile } from "@tauri-apps/plugin-fs";
 import {
   ChevronDown,
@@ -16,7 +17,9 @@ import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { LogsView } from "~/components/editor/LogsDrawer";
+import { KbdHint } from "~/components/primitives/KbdHint";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { integrationsSettings } from "~/stores/settings-store";
 import { isTabletViewport } from "~/stores/viewport-store";
 import {
@@ -94,6 +97,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   const [zoomOpen, setZoomOpen] = createSignal(false);
 
   installDismiss(() => zoomRef, zoomOpen, () => setZoomOpen(false));
+  useListboxOpenFocus(zoomOpen, () => zoomRef);
 
   const scrollBehavior = (): ScrollBehavior =>
     !animations() ||
@@ -128,6 +132,9 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   // their captured `gen` after each await and bail if superseded — without it
   // a slow load completing after a newer one wipes the screen.
   let loadGen = 0;
+  // Path of the last successfully-wired document — gates the recompile fast
+  // path in load() (same path + same layout keeps old canvases on screen).
+  let lastLoadedPath: string | null = null;
 
   // Per-page render registry (imperative, non-reactive). Keyed by 1-based page
   // number. Page proxies are cached for re-render; `visible` tracks which pages
@@ -208,7 +215,12 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     } catch (e) {
       if (isCancellation(e)) return;
       // Swallow per-page render failures — keep the rest of the document
-      // intact rather than blanking the whole viewer on one bad page.
+      // intact rather than blanking the whole viewer on one bad page. But a
+      // slot whose renderedScale was nulled (recompile fast path) still holds
+      // the PREVIOUS document's bitmap: blank it rather than show stale pages
+      // next to fresh ones.
+      const cur = slots.get(pageNum);
+      if (cur?.canvas && cur.renderedScale === null) unrenderPage(pageNum);
     }
   };
 
@@ -304,44 +316,74 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     const gen = ++loadGen;
     setLoading(true);
     setErr(null);
+    let task: pdfjs.PDFDocumentLoadingTask | null = null;
     try {
       const bytes = await readFile(path);
       if (gen !== loadGen) return;
       const buf = new Uint8Array(bytes.byteLength);
       buf.set(bytes);
-      const task = pdfjs.getDocument({ data: buf });
+      task = pdfjs.getDocument({ data: buf });
       const doc = await task.promise;
       if (gen !== loadGen) {
         task.destroy();
         return;
       }
-      if (taskRef) taskRef.destroy();
-      taskRef = task;
-      docRef = doc;
-      resetSlots();
-      pageProxies.clear();
       // Page proxies are cheap (no rasterization); fetching them up front gives
       // every placeholder its true size so the scrollbar + scroll math are
-      // correct before a single canvas is drawn.
+      // correct before a single canvas is drawn. Deliberately done BEFORE any
+      // teardown of the mounted canvases: the old document must stay visible
+      // through the worker round-trip or every recompile flashes white.
       const proxies = await Promise.all(
         Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)),
       );
-      if (gen !== loadGen) return;
-      proxies.forEach((p, i) => pageProxies.set(i + 1, p));
+      if (gen !== loadGen) {
+        task.destroy();
+        return;
+      }
       const dims = proxies.map((p) => {
         const vp = p.getViewport({ scale: 1 });
         return { w: vp.width, h: vp.height };
       });
-      setPageSizes(dims);
-      requestAnimationFrame(() => {
-        if (scrollEl) scrollEl.scrollTop = savedScrollTop;
-      });
+      const prevTask = taskRef;
+      taskRef = task;
+      docRef = doc;
+      pageProxies.clear();
+      proxies.forEach((p, i) => pageProxies.set(i + 1, p));
+
+      const prev = pageSizes();
+      const sameLayout =
+        path === lastLoadedPath &&
+        dims.length === prev.length &&
+        dims.every((d, i) => d.w === prev[i].w && d.h === prev[i].h);
+      if (sameLayout) {
+        // Recompile fast path: identical page geometry, so keep the <For>
+        // rows AND the mounted canvases. Nulling renderedScale defeats
+        // renderPage's same-scale early return; renderPage then swaps each
+        // canvas via replaceChildren only after the new page has rasterized,
+        // so the old bitmap stays on screen the whole time (double-buffer).
+        // The observer won't re-fire for unchanged intersections — re-render
+        // the visible set imperatively, mirroring the zoom effect.
+        for (const slot of slots.values()) slot.renderedScale = null;
+        for (const pageNum of [...visible]) void renderPage(pageNum);
+      } else {
+        resetSlots();
+        setPageSizes(dims);
+        requestAnimationFrame(() => {
+          if (scrollEl) scrollEl.scrollTop = savedScrollTop;
+        });
+      }
+      lastLoadedPath = path;
+      prevTask?.destroy();
     } catch (e) {
+      // A task created but never wired into taskRef has no other owner —
+      // destroy it here or its document + dedicated worker leak on every
+      // failed load (e.g. getPage rejecting on a truncated PDF).
+      if (task && taskRef !== task) task.destroy();
       if (gen !== loadGen) return;
       // PDF.js throws this when an in-flight render is replaced by a newer
       // one — expected during quick recompile sequences, not a failure.
       if (isCancellation(e)) return;
-      setErr(String(e));
+      setErr(describeIpcError(e));
       setPageSizes([]);
     } finally {
       if (gen === loadGen) setLoading(false);
@@ -356,6 +398,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         savedScrollTop = scrollEl?.scrollTop ?? 0;
         if (!path) {
           ++loadGen;
+          lastLoadedPath = null;
           resetSlots();
           pageProxies.clear();
           setPageSizes([]);
@@ -467,12 +510,12 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           Icon-only toggles (with `title` tooltips); the Logs/Console icon
           only renders when console position is "in PDF panel". The Recompile
           button keeps its label because it's the primary action. */}
-      <div class="flex h-[44px] flex-shrink-0 items-center gap-1 border-b border-glass-stroke px-2.5">
+      <div class="@container flex h-[44px] flex-shrink-0 items-center gap-1 border-b border-glass-stroke px-2.5">
         <button
           type="button"
           onClick={() => props.onCompile?.()}
           disabled={props.compiling}
-          class="lift glow-accent relative flex h-8 items-center gap-2 rounded-lg accent-grad pl-3 pr-2.5 text-[12px] font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+          class="lift glow-accent relative flex h-8 items-center gap-2 rounded-lg accent-grad pl-3 pr-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Show
             when={props.compiling}
@@ -481,9 +524,13 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             <Loader2 size={12} class="animate-spin" />
           </Show>
           <span>{props.compiling ? "Compiling…" : "Recompile"}</span>
-          <span class="ml-1">
-            <ToolbarKbd shortcut="Mod+Enter" />
-          </span>
+          {/* KbdHint hides itself on tablet; the Show keeps the empty ml-1
+              wrapper from leaving phantom trailing space in the button. */}
+          <Show when={!isTabletViewport()}>
+            <span class="ml-1 hidden @[28rem]:inline-flex">
+              <KbdHint shortcut="Mod+Enter" size="md" tone="dark" />
+            </span>
+          </Show>
         </button>
 
         <ExportMenu pdfPath={props.path} />
@@ -513,7 +560,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           <Loader2 size={12} class="ml-2 animate-spin text-fg-3" />
         </Show>
         <Show when={fileName() && !loading() && previewMode() === "pdf"}>
-          <span class="mono ml-2 truncate text-[11px] text-fg-3">
+          <span class="mono ml-2 truncate text-xs text-fg-3">
             {fileName()}
           </span>
         </Show>
@@ -532,7 +579,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
               >
                 <ChevronUp size={12} class="opacity-70" />
               </button>
-              <div class="mono flex items-center gap-1 px-2 text-[11px]">
+              <div class="mono flex items-center gap-1 px-2 text-xs">
                 <span class="font-medium text-fg-1">
                   {totalPages() === 0 ? "—" : currentPage()}
                 </span>
@@ -556,41 +603,44 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
               <button
                 type="button"
                 onClick={() => setZoomOpen((v) => !v)}
-                class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12px]"
+                aria-haspopup="listbox"
+                aria-expanded={zoomOpen()}
+                title="Zoom"
+                class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm"
               >
                 <ZoomIn size={12} class="opacity-70" />
-                <span class="mono min-w-[58px] text-left text-fg-1">
+                <span class="mono hidden min-w-[58px] text-left text-fg-1 @[28rem]:inline">
                   {Math.round(scale() * 100)}%
                 </span>
                 <ChevronDown size={10} class="opacity-50" />
               </button>
               <Show when={zoomOpen()}>
-                <>
-                  <div
-                    class="fixed inset-0 z-30"
-                    onClick={() => setZoomOpen(false)}
-                  />
-                  <div
-                    class="glass absolute right-0 z-40 mt-1 w-[140px] overflow-hidden rounded-md py-1"
-                    style={{ background: "var(--color-popover-bg)" }}
-                  >
-                    <For each={ZOOM_PRESETS}>
-                      {(z) => (
-                        <button
-                          type="button"
-                          onClick={() => applyZoom(z)}
-                          class={`flex h-7 w-full items-center px-3 text-left text-[12px] hover:bg-[var(--color-control-fill)] ${
-                            Math.round(scale() * 100) === z
-                              ? "text-fg-1 font-medium"
-                              : "text-fg-2"
-                          }`}
-                        >
-                          {z}%
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                </>
+                <div
+                  role="listbox"
+                  tabindex={-1}
+                  onKeyDown={(e) => handleListboxKeydown(e, zoomRef, () => setZoomOpen(false))}
+                  class="glass absolute right-0 z-40 mt-1 w-[140px] overflow-hidden rounded-md py-1"
+                  style={{ background: "var(--color-popover-bg)" }}
+                >
+                  <For each={ZOOM_PRESETS}>
+                    {(z) => (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={Math.round(scale() * 100) === z}
+                        tabindex={-1}
+                        onClick={() => applyZoom(z)}
+                        class={`flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)] ${
+                          Math.round(scale() * 100) === z
+                            ? "text-fg-1 font-medium"
+                            : "text-fg-2"
+                        }`}
+                      >
+                        {z}%
+                      </button>
+                    )}
+                  </For>
+                </div>
               </Show>
             </div>
           </Show>
@@ -598,7 +648,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       </div>
 
       <Show when={err() && previewMode() === "pdf"}>
-        <div class="px-3 py-2 text-[11px] text-[var(--color-err)]">{err()}</div>
+        <div class="select-text px-3 py-2 text-xs text-[var(--color-err)]">{err()}</div>
       </Show>
 
       {/* Content area. The PDF scroll container stays mounted at all times so
@@ -630,7 +680,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           <Show
             when={pageSizes().length > 0}
             fallback={
-              <div class="flex h-full items-center justify-center text-[12px] text-fg-3">
+              <div class="flex h-full items-center justify-center text-sm text-fg-3">
                 <Show
                   when={loading()}
                   fallback={
@@ -734,38 +784,3 @@ const ToolbarIconToggle: Component<{
   </button>
 );
 
-const ToolbarKbd: Component<{ shortcut: string }> = (props) => {
-  // Inline kbd hint used inside the accent-grad Recompile button. Imports
-  // shortcutTokens lazily because this file already pulls in pdfjs.
-  return (
-    <span class="flex items-center gap-0.5">
-      {parseShortcut(props.shortcut).map((tok) => (
-        <kbd
-          class="mono rounded px-1 py-0.5 text-[10px]"
-          style={{
-            background: "color-mix(in srgb, var(--color-accent-fg) 16%, transparent)",
-            color: "var(--color-accent-fg)",
-            "line-height": "1",
-          }}
-        >
-          {tok}
-        </kbd>
-      ))}
-    </span>
-  );
-};
-
-const isMacEnv =
-  typeof navigator !== "undefined" &&
-  /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
-const parseShortcut = (s: string): string[] => {
-  const parts = s.split("+");
-  const out: string[] = [];
-  for (const p of parts) {
-    const lower = p.toLowerCase();
-    if (lower === "mod") out.push(isMacEnv ? "⌘" : "Ctrl");
-    else if (lower === "enter") out.push("↵");
-    else out.push(p.toUpperCase());
-  }
-  return out;
-};

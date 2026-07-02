@@ -50,12 +50,47 @@ function joinPath(parent: string, name: string): string {
   return parent.includes("\\") ? `${parent}\\${name}` : `${parent}/${name}`;
 }
 
+// Roving arrow-key navigation over the rendered row buttons (DOM order
+// matches visual order). Rows stay plain tabbable <button>s — the rove is an
+// ergonomics layer, not a full ARIA tree.
+function handleTreeKeydown(e: KeyboardEvent & { currentTarget: HTMLElement }) {
+  const rows = Array.from(
+    e.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+  );
+  if (rows.length === 0) return;
+  const current =
+    document.activeElement instanceof HTMLButtonElement
+      ? rows.indexOf(document.activeElement)
+      : -1;
+  if (e.key === "ArrowDown") {
+    rows[Math.min(current + 1, rows.length - 1)]?.focus();
+  } else if (e.key === "ArrowUp") {
+    rows[Math.max(current - 1, 0)]?.focus();
+  } else if (e.key === "Home") {
+    rows[0]?.focus();
+  } else if (e.key === "End") {
+    rows[rows.length - 1]?.focus();
+  } else if (e.key === "ArrowRight") {
+    const el = rows[current];
+    if (el?.getAttribute("aria-expanded") === "false") el.click();
+  } else if (e.key === "ArrowLeft") {
+    const el = rows[current];
+    if (el?.getAttribute("aria-expanded") === "true") el.click();
+  } else {
+    return;
+  }
+  e.preventDefault();
+}
+
 export const FileTree: Component<FileTreeProps> = (props) => {
   // The "Files" section header used to live here; it's now owned by
   // EditorSidebar so action icons (new folder / new file / more) can sit
   // across from it in the same row.
   return (
-    <div class="scroll h-full overflow-auto px-1.5 pb-2">
+    <div
+      class="scroll h-full overflow-auto px-1.5 pb-2"
+      onKeyDown={handleTreeKeydown}
+    >
       <DirectoryNode
         path={props.rootPath}
         relPath=""
@@ -84,9 +119,35 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
   // Source bundles the expanded path with fsVersion so any watcher event
   // bumps the cache key and forces a re-read. Cheap for shallow trees;
   // refine to a per-directory invalidation if it becomes a hotspot.
+  // Reuse the previous fetch's node objects for unchanged entries so the
+  // reference-keyed <For> below keeps row DOM alive across watcher bumps —
+  // otherwise every save collapses nested folders (fresh DirectoryNode =
+  // fresh `expanded` signal) and drops the focused row.
+  let prevByRelPath = new Map<string, FileNode>();
+  let fetchGen = 0;
   const [children] = createResource(
     () => (expanded() ? `${props.path}|${fsVersion()}` : null),
-    async (key) => (key ? readChildren(props.path, props.relPath) : []),
+    async (key) => {
+      if (!key) return [];
+      const gen = ++fetchGen;
+      const fresh = await readChildren(props.path, props.relPath);
+      const merged = fresh.map((node) => {
+        const prev = prevByRelPath.get(node.relPath);
+        // path must match too: the tree survives in-editor project switches,
+        // and a relPath collision across roots would resurrect the previous
+        // project's node (stale absolute path) in the new project's tree.
+        return prev && prev.isDir === node.isDir && prev.path === node.path
+          ? prev
+          : node;
+      });
+      // Only the newest in-flight fetch may commit the identity map —
+      // createResource is latest-wins for the value, and the map must track
+      // the node objects actually rendered.
+      if (gen === fetchGen) {
+        prevByRelPath = new Map(merged.map((node) => [node.relPath, node]));
+      }
+      return merged;
+    },
   );
 
   return (
@@ -97,7 +158,7 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded()}
           aria-label={`${expanded() ? "Collapse" : "Expand"} ${props.name}`}
-          class="lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[length:var(--ui-font-base)] text-fg-2 hover:bg-[var(--color-control-fill)]"
+          class="lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-base text-fg-2 hover:bg-[var(--color-control-fill)]"
           style={{ "padding-left": `${4 + props.depth * 12}px` }}
         >
           <ChevronRight
@@ -110,7 +171,7 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
       <Show when={expanded() || props.depth === 0}>
         <Show when={children.error}>
           <div
-            class="flex items-center gap-1.5 px-1.5 py-1 text-[length:var(--ui-font-xs)] text-[var(--color-err)]"
+            class="flex items-center gap-1.5 px-1.5 py-1 text-xs text-[var(--color-err)]"
             style={{ "padding-left": `${22 + props.depth * 12}px` }}
             title={String(children.error)}
           >
@@ -160,7 +221,8 @@ const FileEntry: Component<{
     <button
       type="button"
       onClick={() => props.onOpen(props.node.relPath)}
-      class={`lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[length:var(--ui-font-base)] ${
+      aria-current={props.active ? "true" : undefined}
+      class={`lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-base ${
         props.active
           ? "bg-[var(--color-control-fill-hover)] text-fg-1"
           : "text-fg-2 hover:bg-[var(--color-control-fill)]"

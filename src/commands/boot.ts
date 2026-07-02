@@ -7,13 +7,13 @@ import {
   toggleCommandPalette,
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
+import { notifyError, notifySuccess } from "~/lib/toast";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import { paletteOpen_, setRequestSaveTemplate } from "./palette-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
-import { addThread } from "~/stores/review-store";
-import { dispatchSetThreads, getCurrentRanges } from "~/lib/reviews/cm6";
+import { addThread, setRequestReviewPanel } from "~/stores/review-store";
 import { toggleFocusMode } from "~/stores/ui-store";
 
 /**
@@ -98,7 +98,16 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => project() !== null,
     run: async () => {
       const proj = project();
-      if (proj) await refreshLibraryBib(proj);
+      if (!proj) return;
+      const result = await refreshLibraryBib(proj);
+      if (result.providersFailed > 0) {
+        notifyError(
+          `${result.providersFailed} reference source${result.providersFailed === 1 ? "" : "s"} failed`,
+          result.failures.map((f) => `${f.providerId}: ${f.message}`).join("\n"),
+        );
+      } else {
+        notifySuccess("Reference library refreshed", `${result.totalKeys} citations`);
+      }
     },
   },
   {
@@ -122,12 +131,10 @@ const CORE_COMMANDS: EditorCommand[] = [
       if (sel.from === sel.to) return;
       const anchorText = view.state.doc.sliceString(sel.from, sel.to);
       const thread = createThread(f.relPath, sel.from, sel.to, anchorText, "You", "");
+      // The store is the single source of truth; the CM decoration bridge
+      // (syncThreadsToView, driven from the shell) picks this up and renders
+      // the new anchor. No direct RangeSet dispatch here.
       addThread(thread);
-      const existing = getCurrentRanges(view);
-      dispatchSetThreads(view, [
-        ...existing,
-        { id: thread.id, from: sel.from, to: sel.to, status: "open" },
-      ]);
     },
   },
   {
@@ -138,7 +145,7 @@ const CORE_COMMANDS: EditorCommand[] = [
     scope: "global",
     when: () => project() !== null,
     run: () => {
-      window.dispatchEvent(new CustomEvent("typeward:toggle-review-panel"));
+      setRequestReviewPanel(true);
     },
   },
   {

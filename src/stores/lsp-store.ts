@@ -2,8 +2,9 @@ import { createSignal } from "solid-js";
 import * as lspIpc from "~/lib/lsp/client";
 import { initSession, pathToFileUri, type LspSession } from "~/lib/lsp/cm6";
 import type { Project } from "~/adapters/types";
+import type { LspLanguage } from "~/adapters/languages";
 
-export type LspLanguage = "latex" | "typst";
+export type { LspLanguage };
 
 interface SessionEntry {
   language: LspLanguage;
@@ -82,6 +83,14 @@ async function doStartSession(
       ...prev,
       { language, projectRoot: project.rootPath, session },
     ]);
+    // Evict the session when its server dies (crash / reader EOF). wrap()
+    // already rejects in-flight requests on close; without this the dead entry
+    // lingers in the registry for the project's lifetime, so findSession keeps
+    // handing out a zombie and no fresh server is ever started. After eviction
+    // the next open of a matching file spawns a new server.
+    transport.onClose(() => {
+      setSessions((prev) => prev.filter((e) => e.session !== session));
+    });
     return session;
   } catch (e) {
     console.warn(`LSP initialize failed for ${language}:`, e);

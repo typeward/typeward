@@ -3,19 +3,47 @@ import { createEffect, createRoot, createSignal } from "solid-js";
 export const THEMES = ["daylight", "lamplight", "aurora", "paper"] as const;
 export type Theme = (typeof THEMES)[number];
 
-/** Display labels for each built-in theme. */
-export const THEME_LABEL: Record<Theme, string> = {
-  daylight: "Daylight",
-  lamplight: "Lamplight",
-  aurora: "Aurora",
-  paper: "Paper",
+export interface ThemeInfo {
+  /** Display label. */
+  label: string;
+  /** Dark-surface theme — the single truth for every light/dark decision
+   * (Markdown preview prose variant, Settings picker swatch). */
+  dark: boolean;
+}
+
+/**
+ * Single TS-side source of truth for the built-in theme roster. `Record<Theme>`
+ * makes a missing entry a compile error, so THEME_LABEL / LIGHT_THEMES / the
+ * Settings picker all derive from here rather than restating the roster.
+ *
+ * Three artifacts live OUTSIDE the bundle graph and cannot import this — they
+ * must be edited in lockstep when a theme is added: the `@import` list in
+ * `src/styles.css`, the SPLASH table in `public/boot-theme.js`, and
+ * `BUILTIN_BASES` in `src-tauri/src/themes.rs`.
+ */
+export const THEME_ROSTER: Record<Theme, ThemeInfo> = {
+  daylight: { label: "Daylight", dark: false },
+  lamplight: { label: "Lamplight", dark: true },
+  aurora: { label: "Aurora", dark: true },
+  paper: { label: "Paper", dark: false },
 };
+
+/** Display labels for each built-in theme. Derived from {@link THEME_ROSTER}. */
+export const THEME_LABEL: Record<Theme, string> = Object.fromEntries(
+  THEMES.map((t) => [t, THEME_ROSTER[t].label]),
+) as Record<Theme, string>;
 
 /**
  * Light-surface themes — consulted when an embedded surface needs a
  * light/dark variant decision (e.g. the Markdown preview's prose theme).
  */
-export const LIGHT_THEMES: readonly Theme[] = ["daylight", "paper"];
+export const LIGHT_THEMES: readonly Theme[] = THEMES.filter(
+  (t) => !THEME_ROSTER[t].dark,
+);
+
+export function isDarkTheme(t: Theme): boolean {
+  return THEME_ROSTER[t].dark;
+}
 
 export const ACCENTS = [
   "violet-cyan",

@@ -100,6 +100,18 @@ export default defineConfig({
         advancedChunks: {
           groups: [
             {
+              // Rolldown hoists shared runtime helpers (Vite's preload helper,
+              // transform helpers) into whichever group first captures them —
+              // landing them in a vendor chunk makes the ENTRY statically
+              // import that whole vendor bundle at boot (this happened with
+              // pdfjs: ~465 KB parsed pre-paint for ~1 KB of helper code).
+              // Capture them first into a tiny always-loaded chunk instead.
+              name: "runtime-helpers",
+              // Ids are NUL-prefixed virtual modules: "\0vite/preload-helper.js",
+              // "\0@oxc-project+runtime@x.y.z/helpers/esm/defineProperty.js", …
+              test: /^\0(?:vite\/|@oxc-project\+runtime@)/,
+            },
+            {
               name: "codemirror",
               test: /[\\/]node_modules[\\/](@codemirror|@lezer)[\\/]/,
             },

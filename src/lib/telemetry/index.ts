@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import * as ipc from "~/ipc";
 
 /**
@@ -9,13 +10,20 @@ export function recordError(
   summary: string,
   detail?: unknown,
 ): void {
-  const detailStr =
-    detail instanceof Error
-      ? `${detail.message}\n${detail.stack ?? ""}`
-      : detail !== undefined
-        ? String(detail)
-        : undefined;
-  void ipc.recordTelemetry(kind, summary, detailStr).catch(() => {});
+  // Telemetry is best-effort and must never break the caller — guard the whole
+  // path (a synchronous throw from the IPC layer wouldn't be caught by the
+  // promise `.catch` alone).
+  try {
+    const detailStr =
+      detail instanceof Error
+        ? `${detail.message}\n${detail.stack ?? ""}`
+        : detail !== undefined
+          ? describeIpcError(detail)
+          : undefined;
+    void ipc.recordTelemetry(kind, summary, detailStr).catch(() => {});
+  } catch {
+    /* swallow: recording an error must not itself raise */
+  }
 }
 
 /**

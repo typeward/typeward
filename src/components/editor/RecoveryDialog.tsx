@@ -65,7 +65,7 @@ export const RecoveryDialog: Component<RecoveryDialogProps> = (props) => {
       widthClass="w-[520px]"
       footer={
         <>
-          <Button variant="ghost" onClick={() => void discardAll()} leadingIcon={<Trash2 size={14} />}>
+          <Button variant="danger" onClick={() => void discardAll()} leadingIcon={<Trash2 size={14} />}>
             Discard all
           </Button>
           <Button variant="primary" onClick={() => void restoreAll()} leadingIcon={<History size={14} />}>
@@ -74,12 +74,12 @@ export const RecoveryDialog: Component<RecoveryDialogProps> = (props) => {
         </>
       }
     >
-      <ul class="flex flex-col gap-1.5 text-[12px] mono">
+      <ul class="flex flex-col gap-1.5 text-sm mono">
         <For each={props.orphans}>
           {(s) => (
             <li class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-1.5">
               <span class="truncate text-fg-1">{s.relPath}</span>
-              <span class="ml-auto text-[11px] text-fg-3">
+              <span class="ml-auto text-xs text-fg-3">
                 {formatRelative(s.snapshotMtime)}
               </span>
             </li>

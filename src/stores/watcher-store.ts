@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import { notifyInfo } from "~/lib/toast";
 import { watchProject, type WatchHandle } from "~/lib/watcher/client";
 
 /**
@@ -19,6 +20,10 @@ function sanitizeId(root: string): string {
 }
 
 const TYPEWARD_DIR_PATTERN = /[\\/]\.typeward[\\/]/;
+
+// Once per session — a persistently failing watcher would otherwise re-toast
+// on every project open.
+let notifiedWatcherFailure = false;
 
 async function startWatching(
   root: string,
@@ -49,6 +54,13 @@ async function startWatching(
     // Watcher is best-effort; an unsupported filesystem or permission error
     // shouldn't break the editor.
     console.warn("file watcher failed to start:", e);
+    if (!notifiedWatcherFailure) {
+      notifiedWatcherFailure = true;
+      notifyInfo(
+        "File watching unavailable",
+        "External changes won't refresh the file tree automatically.",
+      );
+    }
   }
 }
 

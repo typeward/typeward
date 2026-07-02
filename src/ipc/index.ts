@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriMobile } from "~/lib/platform";
 import type {
   CompileResult,
   Diagnostic,
@@ -6,6 +7,23 @@ import type {
   ProjectFormat,
   ProjectIntegrations,
 } from "~/adapters/types";
+
+/** True on desktop builds (Win/Mac/Linux); false on Android/iOS. */
+export function isDesktop(): boolean {
+  return !isTauriMobile();
+}
+
+/**
+ * Guard for wrappers whose Rust command is cfg-gated off mobile builds
+ * (TeX detection, SyncTeX, LSP — see `src-tauri/src/lib.rs`). Calling one on
+ * mobile would otherwise reject with Tauri's opaque unknown-command error;
+ * fail fast with an actionable message at the single wrapper chokepoint.
+ */
+export function assertDesktopCommand(command: string): void {
+  if (isTauriMobile()) {
+    throw new Error(`"${command}" is a desktop-only feature, unavailable on this device.`);
+  }
+}
 
 // ----- TeX engine detection ------------------------------------------------
 
@@ -21,7 +39,10 @@ export interface EngineProbe {
   anyLatexAvailable: boolean;
 }
 
-export const detectTex = (): Promise<EngineProbe> => invoke("detect_tex");
+export const detectTex = (): Promise<EngineProbe> => {
+  assertDesktopCommand("detect_tex");
+  return invoke("detect_tex");
+};
 
 // ----- Projects ------------------------------------------------------------
 
@@ -186,8 +207,10 @@ export const synctexForward = (args: {
   /** Source file relative to projectRoot. */
   sourceFile: string;
   line: number;
-}): Promise<SyncTexForwardLocation | null> =>
-  invoke("synctex_forward", { args });
+}): Promise<SyncTexForwardLocation | null> => {
+  assertDesktopCommand("synctex_forward");
+  return invoke("synctex_forward", { args });
+};
 
 export const synctexInverse = (args: {
   projectRoot: string;
@@ -195,8 +218,10 @@ export const synctexInverse = (args: {
   page: number;
   x: number;
   y: number;
-}): Promise<SyncTexInverseLocation | null> =>
-  invoke("synctex_inverse", { args });
+}): Promise<SyncTexInverseLocation | null> => {
+  assertDesktopCommand("synctex_inverse");
+  return invoke("synctex_inverse", { args });
+};
 
 // ----- Settings ------------------------------------------------------------
 

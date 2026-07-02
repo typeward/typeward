@@ -60,6 +60,10 @@ export function startSupabaseSession(): void {
 export async function signOut(): Promise<void> {
   const client = getSupabaseClient();
   if (!client) return;
-  await client.auth.signOut();
+  // supabase-js resolves with { error } instead of rejecting (e.g. offline);
+  // swallowing it would flip the UI to signed-out while the keyring session
+  // survives and silently signs the user back in on next launch.
+  const { error } = await client.auth.signOut();
+  if (error) throw error;
   setSession(null);
 }

@@ -29,71 +29,98 @@ interface ActiveEngine {
   cacheRoot: string;
 }
 
+/** The plain, non-reactive description of the engine the current project wants. */
+interface EngineTarget {
+  accountRef: CloudAccountRef;
+  projectId: string;
+  rootId: string;
+  cacheRoot: string;
+  projectsRoot: string;
+}
+
 let active: ActiveEngine | null = null;
+/**
+ * Serializes teardown→start across effect runs. Because `SyncEngine.stop()` is
+ * now async (it drains the in-flight pass so a late write can't clobber the
+ * replacement), constructing the next engine synchronously in the effect body
+ * would let two engines briefly share the same cache/cursor/manifest. Chaining
+ * every reconcile onto this promise guarantees the previous engine has fully
+ * drained before its successor starts.
+ */
+let lifecycle: Promise<void> = Promise.resolve();
 
 export function initCloudSync(): void {
   createRoot(() => {
     createEffect(() => {
-      const proj = project();
-      const root = projectsRoot();
-      if (!proj || !root) {
-        teardown();
-        return;
-      }
-
-      const origin = readCloudOrigin(proj);
-      if (!origin) {
-        teardown();
-        return;
-      }
-      if (!hasEntitlement(`integrations.cloud.${origin.provider}`)) {
-        teardown();
-        return;
-      }
-
-      const accountRef = findAccount(origin.provider, origin.accountId);
-      if (!accountRef) {
-        // The project remembers a binding for an account we no longer
-        // have credentials for. Don't crash — leave the project usable
-        // as a plain local folder until the user reconnects.
-        teardown();
-        return;
-      }
-
-      const projectId = deriveProjectId(proj.rootPath);
-      const cacheRoot = proj.rootPath;
-      // If the same engine is already running for this project, leave it.
-      if (
-        active?.providerId === accountRef.provider &&
-        active.projectId === projectId &&
-        active.accountId === accountRef.accountId &&
-        active.rootId === origin.remotePath &&
-        active.cacheRoot === cacheRoot
-      ) {
-        return;
-      }
-
-      teardown();
-
-      const provider = cloudProviderForAccount(accountRef);
-      const engine = new SyncEngine(provider, {
-        providerId: provider.id,
-        projectId,
-        rootId: origin.remotePath,
-        projectsRoot: root,
-        cacheRoot,
-      });
-      void engine.start();
-      active = {
-        engine,
-        providerId: provider.id,
-        projectId,
-        accountId: accountRef.accountId,
-        rootId: origin.remotePath,
-        cacheRoot,
-      };
+      // Read every reactive dependency synchronously, then hand a plain target
+      // (or null) to the serialized async reconcile.
+      const target = computeTarget();
+      lifecycle = lifecycle.then(() => reconcile(target)).catch(() => {});
     });
   });
+}
+
+function computeTarget(): EngineTarget | null {
+  const proj = project();
+  const root = projectsRoot();
+  if (!proj || !root) return null;
+
+  const origin = readCloudOrigin(proj);
+  if (!origin) return null;
+  if (!hasEntitlement(`integrations.cloud.${origin.provider}`)) return null;
+
+  const accountRef = findAccount(origin.provider, origin.accountId);
+  if (!accountRef) {
+    // The project remembers a binding for an account we no longer have
+    // credentials for. Don't crash — leave the project usable as a plain
+    // local folder until the user reconnects.
+    return null;
+  }
+
+  return {
+    accountRef,
+    projectId: deriveProjectId(proj.rootPath),
+    rootId: origin.remotePath,
+    cacheRoot: proj.rootPath,
+    projectsRoot: root,
+  };
+}
+
+async function reconcile(target: EngineTarget | null): Promise<void> {
+  if (!target) {
+    await teardown();
+    return;
+  }
+  // If the same engine is already running for this project, leave it.
+  if (
+    active?.providerId === target.accountRef.provider &&
+    active.projectId === target.projectId &&
+    active.accountId === target.accountRef.accountId &&
+    active.rootId === target.rootId &&
+    active.cacheRoot === target.cacheRoot
+  ) {
+    return;
+  }
+
+  await teardown();
+
+  const provider = cloudProviderForAccount(target.accountRef);
+  const engine = new SyncEngine(provider, {
+    providerId: provider.id,
+    projectId: target.projectId,
+    rootId: target.rootId,
+    projectsRoot: target.projectsRoot,
+    cacheRoot: target.cacheRoot,
+  });
+  active = {
+    engine,
+    providerId: provider.id,
+    projectId: target.projectId,
+    accountId: target.accountRef.accountId,
+    rootId: target.rootId,
+    cacheRoot: target.cacheRoot,
+  };
+  void engine.start();
 }
 
 /**
@@ -111,11 +138,14 @@ export function notifyLocalSave(cacheRoot: string, relPaths: string[]): void {
   active.engine.queuePush(relPaths);
 }
 
-function teardown(): void {
-  if (!active) return;
-  active.engine.stop();
-  clearSyncStatus(active.providerId, active.projectId);
+async function teardown(): Promise<void> {
+  const current = active;
+  if (!current) return;
+  // Clear the reference first so notifyLocalSave can't queue onto a dying
+  // engine while we await its drain.
   active = null;
+  await current.engine.stop();
+  clearSyncStatus(current.providerId, current.projectId);
 }
 
 function findAccount(

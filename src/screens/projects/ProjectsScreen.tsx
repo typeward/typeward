@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { useNavigate } from "@solidjs/router";
 import {
   BookMarked,
@@ -19,6 +20,7 @@ import {
 import type { Component, JSX } from "solid-js";
 import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from "solid-js";
 import type { Project, ProjectFormat } from "~/adapters/types";
+import { stripMarkupForWordCount } from "~/adapters/format-tables";
 import { createCloudBackedProject } from "~/integrations/cloud/create";
 import {
   cloudProviderForAccount,
@@ -59,7 +61,6 @@ import {
 } from "~/lib/deadlines";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
-  dashboardEnabled,
   defaultSort,
   defaultView,
   enableSpaces,
@@ -68,11 +69,9 @@ import {
   projectCardWords,
   type ProjectsSort,
   type ProjectsView,
-  setDashboardEnabled,
   setDefaultSort,
   setDefaultView,
 } from "~/stores/workspace-store";
-import { DashboardPanel } from "~/widgets/DashboardPanel";
 
 // =================================================================
 // Display metadata helpers — disk only carries name + format today;
@@ -124,7 +123,9 @@ const ProjectsScreen: Component = () => {
 
   onMount(() => {
     dismissBootSplash();
-    void refresh();
+    // AppShell prefetches the library as soon as settings resolve — don't
+    // stack a second list_projects on top of one already in flight.
+    if (!loading()) void refresh();
   });
 
   // Import an EXISTING folder (a manually-copied repo / unzipped project) as a
@@ -146,7 +147,7 @@ const ProjectsScreen: Component = () => {
       await refresh();
       openProject(project);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = describeIpcError(e);
       setImportError(
         /outside the projects root/i.test(msg)
           ? `Import only works for folders inside your projects root${
@@ -222,31 +223,29 @@ const ProjectsScreen: Component = () => {
           <div class="flex min-w-0 flex-1 flex-col gap-2">
             {/* Library header — the library IS the screen now; the old
                 ComposerHero (AI compose preview) was demoted out entirely.
-                The opt-in Dashboard panel below carries activity + cards. */}
+                The opt-in Widgets panel is unmounted for now — see
+                design/widgets.md; src/widgets/ remains for its return. */}
             <div class="flex items-end justify-between px-2 pt-3">
               <div>
-                <h1 class="text-[24px] font-semibold leading-tight tracking-tight text-fg-1">
+                <h1 class="text-xl font-semibold tracking-tight text-fg-1">
                   Library
                 </h1>
-                <div class="mono mt-0.5 text-[length:var(--ui-font-xs)] text-fg-3">
+                <div class="mono mt-0.5 text-xs text-fg-3">
                   {projects().length} project{projects().length === 1 ? "" : "s"} ·
                   local-first
                 </div>
               </div>
             </div>
-            <Show when={dashboardEnabled()}>
-              <DashboardPanel />
-            </Show>
             <Toolbar />
 
             <div class="mt-1 flex-1 overflow-auto scroll px-1 pb-2">
               <Show when={importError()}>
-                <div class="mb-3 flex items-start justify-between gap-3 rounded-lg border border-[var(--color-err)]/30 p-3 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
-                  <span>{importError()}</span>
+                <div class="mb-3 flex items-start justify-between gap-3 rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
+                  <span class="select-text">{importError()}</span>
                   <button
                     type="button"
                     onClick={() => setImportError(null)}
-                    class="flex-shrink-0 text-fg-3 hover:text-fg-1"
+                    class="-m-1.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded p-1.5 text-fg-3 hover:text-fg-1"
                     aria-label="Dismiss"
                   >
                     <X size={14} />
@@ -254,14 +253,14 @@ const ProjectsScreen: Component = () => {
                 </div>
               </Show>
               <Show when={projectsError()}>
-                <div class="mb-3 rounded-lg border border-[var(--color-err)]/30 p-3 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+                <div class="mb-3 select-text rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
                   Failed to list projects: {projectsError()}
                 </div>
               </Show>
               <Show
                 when={!loading() || projects().length > 0}
                 fallback={
-                  <div class="py-10 text-center text-[length:var(--ui-font-sm)] text-fg-3">
+                  <div class="py-10 text-center text-sm text-fg-3">
                     Loading projects…
                   </div>
                 }
@@ -283,7 +282,7 @@ const ProjectsScreen: Component = () => {
                   />
                 </Show>
                 <Show when={projects().length > 0}>
-                  <div class="mono py-6 text-center text-[11px] text-fg-3">
+                  <div class="mono py-6 text-center text-xs text-fg-3">
                     — end of {projects().length} project{projects().length === 1 ? "" : "s"} —
                   </div>
                 </Show>
@@ -358,7 +357,7 @@ const Sidebar: Component<{
         <button
           type="button"
           onClick={props.onNewProject}
-          class="lift glow-accent relative flex h-9 w-full items-center justify-center gap-2 rounded-lg accent-grad text-[length:var(--ui-font-sm)] font-semibold"
+          class="lift glow-accent relative flex h-9 w-full items-center justify-center gap-2 rounded-lg accent-grad text-sm font-semibold"
         >
           <Plus size={14} stroke-width={2.4} />
           <span>New project</span>
@@ -396,7 +395,7 @@ const Sidebar: Component<{
             setPreviousRoute("/projects");
             navigate("/settings");
           }}
-          class="lift glass-soft flex h-7 w-full items-center justify-center gap-1.5 rounded-md text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
+          class="lift glass-soft flex h-7 w-full items-center justify-center gap-1.5 rounded-md text-xs text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
         >
           <span class="h-1.5 w-1.5 rounded-full" style={{ background: "var(--color-accent-1)" }} />
           <span class="capitalize">{currentTier()} plan</span>
@@ -420,7 +419,7 @@ const SidebarGroup: Component<{
       {(item) => (
         <button
           type="button"
-          class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-[length:var(--ui-font-base)] ${
+          class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-base ${
             item.active
               ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
               : "text-fg-2 hover:bg-[var(--color-control-fill)]"
@@ -438,7 +437,7 @@ const SidebarGroup: Component<{
           </Show>
           <span class={item.active ? "font-medium" : ""}>{item.label}</span>
           <Show when={item.count != null}>
-            <span class="mono ml-auto text-[length:var(--ui-font-xs)] text-fg-3">{item.count}</span>
+            <span class="mono ml-auto text-xs text-fg-3">{item.count}</span>
           </Show>
         </button>
       )}
@@ -454,7 +453,7 @@ const SidebarMiniButton: Component<{
   <button
     type="button"
     onClick={() => props.onClick?.()}
-    class="lift glass-soft flex items-center justify-center gap-1.5 rounded-md text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
+    class="lift glass-soft flex items-center justify-center gap-1.5 rounded-md text-xs text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
     style={{ height: "var(--ui-row-sm)" }}
   >
     {props.icon}
@@ -463,7 +462,7 @@ const SidebarMiniButton: Component<{
 );
 
 // =================================================================
-// Toolbar — Widgets / Sort / View
+// Toolbar — Sort / View
 // =================================================================
 
 const Toolbar: Component = () => {
@@ -473,24 +472,6 @@ const Toolbar: Component = () => {
   useListboxOpenFocus(sortOpen, () => sortRef);
   return (
     <div class="flex items-center gap-2 px-1 pt-1">
-      <button
-        type="button"
-        onClick={() => setDashboardEnabled(!dashboardEnabled())}
-        class={`lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-sm)] hover:bg-[var(--color-control-fill)] ${
-          dashboardEnabled() ? "text-fg-1" : "text-fg-2"
-        }`}
-        title={dashboardEnabled() ? "Hide the widgets panel" : "Show activity and cards above the grid"}
-      >
-        <LayoutGrid
-          size={12}
-          style={{
-            opacity: 0.7,
-            color: dashboardEnabled() ? "var(--color-accent-1)" : undefined,
-          }}
-        />
-        <span>Widgets</span>
-      </button>
-
       <div class="ml-auto flex items-center gap-1.5">
         <div class="relative" ref={sortRef}>
           <button
@@ -498,7 +479,7 @@ const Toolbar: Component = () => {
             onClick={() => setSortOpen((v) => !v)}
             aria-haspopup="listbox"
             aria-expanded={sortOpen()}
-            class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill)]"
+            class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
             <span>
               Sort: <span class="text-fg-1">{SORT_LABEL[defaultSort()]}</span>
@@ -526,7 +507,7 @@ const Toolbar: Component = () => {
                         setDefaultSort(key);
                         setSortOpen(false);
                       }}
-                      class={`lift flex w-full items-center justify-between rounded-md px-2.5 text-left text-[length:var(--ui-font-sm)] ${
+                      class={`lift flex w-full items-center justify-between rounded-md px-2.5 text-left text-sm ${
                         active()
                           ? "bg-[var(--color-control-fill-hover)] text-fg-1"
                           : "text-fg-2 hover:bg-[var(--color-control-fill)]"
@@ -627,7 +608,7 @@ const ProjectList: Component<{
       <span class="flex h-7 w-7 items-center justify-center rounded-md accent-grad">
         <Plus size={13} stroke-width={2.4} />
       </span>
-      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">New project</span>
+      <span class="text-sm font-medium text-fg-1">New project</span>
       <span class="ml-auto">
         <KbdHint shortcut="Mod+N" size="sm" />
       </span>
@@ -654,10 +635,10 @@ const NewProjectTile: Component<{ onClick: () => void }> = (props) => (
       <Plus size={18} stroke-width={2.4} />
     </div>
     <div class="text-center">
-      <div class="text-[length:var(--ui-font-base)] font-semibold text-fg-1">
+      <div class="text-base font-semibold text-fg-1">
         New project
       </div>
-      <div class="mt-0.5 text-[length:var(--ui-font-xs)] text-fg-3">
+      <div class="mt-0.5 text-xs text-fg-3">
         template, import, or compose
       </div>
     </div>
@@ -680,7 +661,7 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
       tabindex={0}
       onClick={props.onOpen}
       onKeyDown={openOnKey(props.onOpen)}
-      class="card-glow group flex cursor-pointer flex-col gap-2 rounded-xl text-left"
+      class="card-glow group flex flex-col gap-2 rounded-xl text-left"
       style={{
         height: "180px",
         background: "var(--color-card-bg)",
@@ -705,7 +686,7 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
       </div>
 
       <div
-        class="mt-1 flex-1 text-[length:var(--ui-font-base)] font-semibold leading-snug text-fg-1"
+        class="mt-1 flex-1 text-base font-semibold leading-snug text-fg-1"
         style={{
           "text-wrap": "pretty",
           display: "-webkit-box",
@@ -717,7 +698,7 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
         {props.project.name}
       </div>
 
-      <div class="mono flex items-center justify-between gap-2 text-[11px] text-fg-3">
+      <div class="mono flex items-center justify-between gap-2 text-xs text-fg-3">
         <span class="flex min-w-0 items-center gap-1.5">
           <FolderOpen size={10} style={{ opacity: 0.6 }} />
           <span class="truncate">{props.project.rootFile}</span>
@@ -760,15 +741,10 @@ const ProjectWordCount: Component<{ project: Project }> = (props) => {
 };
 
 function approxWordCount(text: string, format: ProjectFormat): number {
-  let t = text;
-  // Drop line comments, then markup tokens, leaving prose words.
-  if (format === "latex") {
-    t = t.replace(/(^|[^\\])%.*$/gm, "$1");
-    t = t.replace(/\\[a-zA-Z@]+\*?/g, " ");
-  } else {
-    t = t.replace(/\/\/.*$/gm, "");
-    t = t.replace(/#[a-zA-Z][\w.]*/g, " ");
-  }
+  // Format-specific comment/markup stripping rides adapter format tables so a
+  // new format extends one exhaustive record; the punctuation strip + count
+  // below are format-agnostic.
+  let t = stripMarkupForWordCount(text, format);
   t = t.replace(/[{}[\]()\\$&#~^_*=]/g, " ");
   return t.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length;
 }
@@ -781,7 +757,7 @@ const ProjectRow: Component<{ project: Project; onOpen: () => void }> = (props) 
       tabindex={0}
       onClick={props.onOpen}
       onKeyDown={openOnKey(props.onOpen)}
-      class="card-glow group flex cursor-pointer items-center gap-3 rounded-md px-3 text-left"
+      class="card-glow group flex items-center gap-3 rounded-md px-3 text-left"
       style={{
         height: "var(--ui-row-lg)",
         background: "var(--color-card-bg)",
@@ -791,13 +767,13 @@ const ProjectRow: Component<{ project: Project; onOpen: () => void }> = (props) 
         class="h-2 w-2 rounded-full"
         style={{ background: accentColor }}
       />
-      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+      <span class="min-w-0 truncate text-sm font-medium text-fg-1">
         {props.project.name}
       </span>
-      <span class="mono text-[11px] text-fg-3">
+      <span class="mono flex-shrink-0 text-xs text-fg-3">
         {FORMAT_LABEL[props.project.format]}
       </span>
-      <span class="mono ml-auto truncate text-[11px] text-fg-3" style={{ "max-width": "180px" }}>
+      <span class="mono ml-auto truncate text-xs text-fg-3" style={{ "max-width": "180px" }}>
         {props.project.rootFile}
       </span>
       <DeadlineEditor
@@ -838,19 +814,24 @@ const DeadlineEditor: Component<{
             ? `Deadline: ${status()!.label} (${status()!.relative}) — click to change`
             : "Set a deadline"
         }
-        class="mono flex h-5 items-center gap-1 rounded px-1.5 text-[10px] hover:bg-[var(--color-control-fill)]"
+        class="mono flex h-6 items-center gap-1 rounded px-1.5 text-[10px] hover:bg-[var(--color-control-fill)]"
         style={{ color: status() ? DEADLINE_TONE_COLOR[status()!.tone] : "var(--color-fg-3)" }}
       >
         <CalendarClock size={10} />
         <Show
           when={status()}
           fallback={
-            <span class="opacity-0 transition-opacity group-hover:opacity-100">
+            <span class="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
               deadline
             </span>
           }
         >
-          <span>{status()!.label}</span>
+          {/* Overdue/soon urgency must read without color — append the relative phrase. */}
+          <span>
+            {status()!.tone === "normal"
+              ? status()!.label
+              : `${status()!.label} · ${status()!.relative}`}
+          </span>
         </Show>
       </button>
       <Show when={open()}>
@@ -863,7 +844,7 @@ const DeadlineEditor: Component<{
             type="date"
             value={props.deadline ?? ""}
             onInput={(e) => props.onChange(e.currentTarget.value || null)}
-            class="glass-inset rounded-md px-2 py-1.5 text-[length:var(--ui-font-sm)] text-fg-1 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset rounded-md px-2 py-1.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <Show when={status()}>
             <div class="flex items-center justify-between">
@@ -879,7 +860,7 @@ const DeadlineEditor: Component<{
                   props.onChange(null);
                   setOpen(false);
                 }}
-                class="text-[length:var(--ui-font-xs)] text-fg-3 hover:text-[var(--color-err)]"
+                class="text-xs text-fg-3 hover:text-[var(--color-err)]"
               >
                 Clear
               </button>
@@ -936,7 +917,7 @@ const NewProjectDialog: Component<{
       reset();
       props.onCreated(project);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(describeIpcError(e));
       setSubmitting(false);
     }
   };
@@ -962,7 +943,7 @@ const NewProjectDialog: Component<{
       const provider = cloudProviderForAccount(acc);
       return await provider.listRoots();
     } catch (e) {
-      setErr(`Could not list remote folders: ${e instanceof Error ? e.message : String(e)}`);
+      setErr(`Could not list remote folders: ${describeIpcError(e)}`);
       return [];
     }
   });
@@ -1019,7 +1000,7 @@ const NewProjectDialog: Component<{
       reset();
       props.onCreated(project);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(describeIpcError(e));
       setSubmitting(false);
     }
   };
@@ -1055,11 +1036,11 @@ const NewProjectDialog: Component<{
     >
       <div class="flex flex-col gap-4">
         <div class="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-glass-stroke px-3 py-2">
-          <span class="text-[11px] text-fg-3">Or start from:</span>
+          <span class="text-xs text-fg-3">Or start from:</span>
           <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
             Template
           </Button>
-          <span class="text-[11px] text-fg-3">·</span>
+          <span class="text-xs text-fg-3">·</span>
           <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
             Clone repository
           </Button>
@@ -1070,14 +1051,14 @@ const NewProjectDialog: Component<{
 
         <Show when={cloudAccounts().length > 0}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+            <legend class="text-sm font-medium text-fg-2">
               Where
             </legend>
             <div class="grid grid-cols-2 gap-2">
               <For each={[{ id: "local" as const, label: "Local", sub: "Folder under your projects root" }, { id: "cloud" as const, label: "Cloud", sub: "Sync with a connected provider" }]}>
                 {(opt) => (
                   <label
-                    class={`lift flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 ${
+                    class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
                       location() === opt.id
                         ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
                         : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
@@ -1092,10 +1073,10 @@ const NewProjectDialog: Component<{
                       class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
                     />
                     <div class="flex min-w-0 flex-1 flex-col">
-                      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                      <span class="text-sm font-medium text-fg-1">
                         {opt.label}
                       </span>
-                      <span class="text-[11px] text-fg-3">{opt.sub}</span>
+                      <span class="text-xs text-fg-3">{opt.sub}</span>
                     </div>
                   </label>
                 )}
@@ -1106,14 +1087,14 @@ const NewProjectDialog: Component<{
 
         <Show when={location() === "cloud"}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+            <legend class="text-sm font-medium text-fg-2">
               Account
             </legend>
             <div class="flex flex-col gap-1">
               <For each={cloudAccounts()}>
                 {(acc) => (
                   <label
-                    class={`lift flex cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-1.5 ${
+                    class={`lift flex items-center gap-2.5 rounded-md border px-2.5 py-1.5 ${
                       account()?.accountId === acc.accountId &&
                       account()?.provider === acc.provider
                         ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
@@ -1133,10 +1114,10 @@ const NewProjectDialog: Component<{
                       }}
                       class="h-3 w-3 accent-[var(--color-accent-1)]"
                     />
-                    <span class="mono text-[11px] uppercase tracking-wider text-fg-3">
+                    <span class="mono text-xs uppercase tracking-wider text-fg-3">
                       {acc.provider}
                     </span>
-                    <span class="text-[length:var(--ui-font-sm)] text-fg-1">
+                    <span class="text-sm text-fg-1">
                       {acc.label ?? acc.accountId}
                     </span>
                   </label>
@@ -1148,19 +1129,19 @@ const NewProjectDialog: Component<{
 
         <Show when={location() === "cloud" && account()}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+            <legend class="text-sm font-medium text-fg-2">
               Remote folder
             </legend>
             <Show
               when={!remoteRoots.loading}
               fallback={
-                <div class="text-[11px] text-fg-3">Loading remote folders…</div>
+                <div class="text-xs text-fg-3">Loading remote folders…</div>
               }
             >
               <Show
                 when={(remoteRoots() ?? []).length > 0}
                 fallback={
-                  <div class="text-[11px] text-fg-3">
+                  <div class="text-xs text-fg-3">
                     No folders found. Create one in the provider's web UI, then
                     come back.
                   </div>
@@ -1170,7 +1151,7 @@ const NewProjectDialog: Component<{
                   <For each={remoteRoots() ?? []}>
                     {(folder) => (
                       <label
-                        class={`flex cursor-pointer items-center gap-2 border-b border-glass-stroke px-2.5 py-1.5 last:border-b-0 ${
+                        class={`flex items-center gap-2 border-b border-glass-stroke px-2.5 py-1.5 last:border-b-0 ${
                           remoteRoot()?.id === folder.id
                             ? "bg-[var(--color-selection-bg)]"
                             : "hover:bg-[var(--color-control-fill)]"
@@ -1186,7 +1167,7 @@ const NewProjectDialog: Component<{
                           }}
                           class="h-3 w-3 accent-[var(--color-accent-1)]"
                         />
-                        <span class="text-[length:var(--ui-font-sm)] text-fg-1">
+                        <span class="text-sm text-fg-1">
                           {folder.name}
                         </span>
                       </label>
@@ -1199,39 +1180,42 @@ const NewProjectDialog: Component<{
         </Show>
 
         <label class="flex flex-col gap-1.5">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+          <span class="text-sm font-medium text-fg-2">
             Name
           </span>
           <input
             type="text"
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.isComposing && !submitting()) void submit();
+            }}
             placeholder="My thesis"
-            class="glass-inset rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset rounded-md px-3 py-2 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </label>
 
         <label class="flex flex-col gap-1.5">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-            Deadline <span class="text-[11px] font-normal text-fg-3">(optional)</span>
+          <span class="text-sm font-medium text-fg-2">
+            Deadline <span class="text-xs font-normal text-fg-3">(optional)</span>
           </span>
           <input
             type="date"
             value={deadlineInput()}
             onInput={(e) => setDeadlineInput(e.currentTarget.value)}
-            class="glass-inset w-fit rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset w-fit rounded-md px-3 py-2 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </label>
 
         <fieldset class="flex flex-col gap-2">
-          <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+          <legend class="text-sm font-medium text-fg-2">
             Format
           </legend>
           <div class="grid grid-cols-2 gap-2">
             <For each={FORMATS}>
               {(f) => (
                 <label
-                  class={`lift flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 ${
+                  class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
                     format() === f.id
                       ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
                       : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
@@ -1246,10 +1230,10 @@ const NewProjectDialog: Component<{
                     class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
                   />
                   <div class="flex min-w-0 flex-1 flex-col">
-                    <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                    <span class="text-sm font-medium text-fg-1">
                       {f.label}
                     </span>
-                    <span class="text-[11px] text-fg-3">{f.sub}</span>
+                    <span class="text-xs text-fg-3">{f.sub}</span>
                   </div>
                 </label>
               )}
@@ -1258,7 +1242,7 @@ const NewProjectDialog: Component<{
         </fieldset>
 
         <Show when={err()}>
-          <div class="text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+          <div class="select-text text-sm text-[var(--color-err)]">
             {err()}
           </div>
         </Show>

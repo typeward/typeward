@@ -101,7 +101,15 @@ export async function createCloudBackedProject(
   return { project, engine };
 }
 
-/** Minimal starter for a remote folder that had files but no LaTeX/Typst entry. */
+/**
+ * Minimal starter for a remote folder that had files but no LaTeX/Typst entry.
+ *
+ * Mirrors Rust's canonical `ProjectFormat::starter_content` (project.rs); kept
+ * in sync by hand because no existing IPC seeds a starter into a pre-existing
+ * folder (create_project makes a fresh directory, import_project_folder only
+ * detects an existing root file). Keep the two in step until a
+ * write_starter_file IPC exists.
+ */
 async function seedStarterFile(
   cacheRoot: string,
   name: string,

@@ -10,7 +10,27 @@
 
 import { createSignal } from "solid-js";
 
-import type { EntitlementKey, EntitlementSource, Tier } from "./types";
+import {
+  KNOWN_ENTITLEMENT_KEYS,
+  type EntitlementKey,
+  type EntitlementSource,
+  type Tier,
+} from "./types";
+
+const KNOWN_KEYS = new Set<string>(KNOWN_ENTITLEMENT_KEYS);
+
+/**
+ * Dev-only tripwire: the type system already blocks literal typos, but keys
+ * built dynamically from a provider id can still drift from the seeded matrix.
+ * Surface those loudly in dev instead of the feature silently vanishing.
+ */
+function warnIfUnknownKey(key: string): void {
+  if (import.meta.env.DEV && !KNOWN_KEYS.has(key)) {
+    console.warn(
+      `[entitlements] queried unknown key '${key}' — add it to KNOWN_ENTITLEMENT_KEYS and seed.sql, or fix the typo.`,
+    );
+  }
+}
 
 const FREE_ENTITLEMENTS = new Set<EntitlementKey>([
   "integrations.references.zotero.local",
@@ -37,6 +57,7 @@ const [currentSource, setCurrentSource] = createSignal<EntitlementSource>(freeTi
  * when Phase 7 swaps the source, gated UI re-renders automatically.
  */
 export function useEntitlement(key: EntitlementKey): () => boolean {
+  warnIfUnknownKey(key);
   return () => currentSource().has(key);
 }
 
@@ -48,6 +69,7 @@ export function useEntitlement(key: EntitlementKey): () => boolean {
  * with a thrown error the surrounding handler can surface.
  */
 export function hasEntitlement(key: EntitlementKey): boolean {
+  warnIfUnknownKey(key);
   return currentSource().has(key);
 }
 

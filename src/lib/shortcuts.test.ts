@@ -75,6 +75,9 @@ describe("shortcuts on Mac", () => {
     const mod = await import("./shortcuts");
     expect(mod.isMac).toBe(true);
     expect(mod.formatShortcutForDisplay("Mod+K")).toBe("⌘K");
+    // Multi-modifier order follows the HIG: ⌥⇧⌘ with Command last.
+    expect(mod.formatShortcutForDisplay("Mod+Shift+F")).toBe("⇧⌘F");
+    expect(mod.shortcutTokens("Mod+Shift+Enter")).toEqual(["⇧", "⌘", "↵"]);
     expect(
       mod.matches(
         new KeyboardEvent("keydown", { key: "k", metaKey: true }),

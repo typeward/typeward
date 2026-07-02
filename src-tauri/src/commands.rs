@@ -1,9 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
-
-use serde::Serialize;
-use tauri_plugin_shell::ShellExt;
 
 use crate::autosave::{self, Snapshot};
 #[cfg(desktop)]
@@ -57,7 +52,7 @@ fn ensure_registered_or_under_projects_root(path: &Path) -> CmdResult<()> {
     }
 }
 
-fn checked_project_root_and_file(project: &Project) -> CmdResult<(PathBuf, String)> {
+pub(crate) fn checked_project_root_and_file(project: &Project) -> CmdResult<(PathBuf, String)> {
     ensure_registered(&project.root_path)?;
     let root = PathBuf::from(&project.root_path)
         .canonicalize()
@@ -115,7 +110,7 @@ pub async fn list_projects(root: Option<String>) -> CmdResult<Vec<project::Proje
 }
 
 #[tauri::command]
-pub fn create_project(
+pub async fn create_project(
     name: String,
     format: ProjectFormat,
     parent: Option<String>,
@@ -123,33 +118,45 @@ pub fn create_project(
     let parent = parent
         .map(PathBuf::from)
         .unwrap_or_else(settings::default_projects_root);
-    ensure_under_projects_root(&parent)?;
-    if !parent.exists() {
-        std::fs::create_dir_all(&parent).map_err(err)?;
-    }
-    let project = project::create_project(&parent, &name, format).map_err(err)?;
-    project::register_root(Path::new(&project.root_path));
-    Ok(project)
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_under_projects_root(&parent)?;
+        if !parent.exists() {
+            std::fs::create_dir_all(&parent).map_err(err)?;
+        }
+        let project = project::create_project(&parent, &name, format).map_err(err)?;
+        project::register_root(Path::new(&project.root_path));
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
-pub fn open_project(path: String) -> CmdResult<Project> {
-    ensure_registered_or_under_projects_root(Path::new(&path))?;
-    let project = project::read_project(Path::new(&path)).map_err(err)?;
-    project::register_root(Path::new(&project.root_path));
-    Ok(project)
+pub async fn open_project(path: String) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered_or_under_projects_root(Path::new(&path))?;
+        let project = project::read_project(Path::new(&path)).map_err(err)?;
+        project::register_root(Path::new(&project.root_path));
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Write `.typeward/project.json` for an existing folder (e.g. a just-cloned
 /// repo) so it shows up in the library and can be opened. Gated to the projects
 /// area like `git_clone`. Returns the detected project.
 #[tauri::command]
-pub fn import_project_folder(path: String) -> CmdResult<Project> {
-    let root = PathBuf::from(&path);
-    ensure_registered_or_under_projects_root(&root)?;
-    let project = project::import_folder_as_project(&root, None).map_err(err)?;
-    project::register_root(Path::new(&project.root_path));
-    Ok(project)
+pub async fn import_project_folder(path: String) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        let root = PathBuf::from(&path);
+        ensure_registered_or_under_projects_root(&root)?;
+        let project = project::import_folder_as_project(&root, None).map_err(err)?;
+        project::register_root(Path::new(&project.root_path));
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Replace the project's `integrations` block. Caller passes the
@@ -157,26 +164,40 @@ pub fn import_project_folder(path: String) -> CmdResult<Project> {
 /// the file is rewritten atomically. No partial mutation API — keeping
 /// the seam narrow makes it harder to land a half-updated project.json.
 #[tauri::command]
-pub fn set_project_integrations(
+pub async fn set_project_integrations(
     project_root: String,
     integrations: project::ProjectIntegrations,
 ) -> CmdResult<Project> {
-    ensure_registered(&project_root)?;
-    project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
+    // Reads + atomically rewrites project.json (fs_ops::atomic_write fsyncs);
+    // on the cloud-project bind path, so keep the fsync off the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Set or clear a project's deadline. `deadline` is a plain ISO date
 /// (`YYYY-MM-DD`); `None` clears it. Shape is validated here so a malformed
 /// value never lands in project.json.
 #[tauri::command]
-pub fn set_project_deadline(project_root: String, deadline: Option<String>) -> CmdResult<Project> {
-    ensure_registered(&project_root)?;
+pub async fn set_project_deadline(
+    project_root: String,
+    deadline: Option<String>,
+) -> CmdResult<Project> {
     let deadline = match deadline {
         Some(d) if is_iso_date(&d) => Some(d),
         Some(_) => return Err("deadline must be an ISO date (YYYY-MM-DD)".into()),
         None => None,
     };
-    project::set_deadline(Path::new(&project_root), deadline).map_err(err)
+    // Atomically rewrites project.json (fsync); keep it off the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_deadline(Path::new(&project_root), deadline).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Cheap `YYYY-MM-DD` shape check (digits + dashes, plausible ranges). Not a
@@ -250,28 +271,6 @@ pub async fn write_project_text_file(
     .map_err(err)?
 }
 
-/// Decode a percent-encoded request header into an owned `String`. The binary
-/// upload commands carry their path metadata as headers (the JSON arg slot is
-/// taken by the raw byte body); the renderer percent-encodes via
-/// `encodeURIComponent` so arbitrary Unicode paths survive the ASCII-only
-/// header channel.
-fn percent_decode_header(name: &str, raw: &str) -> CmdResult<String> {
-    percent_encoding::percent_decode_str(raw)
-        .decode_utf8()
-        .map(|cow| cow.into_owned())
-        .map_err(|_| format!("invalid UTF-8 in `{name}` header"))
-}
-
-fn decode_path_header(request: &tauri::ipc::Request<'_>, name: &str) -> CmdResult<String> {
-    let raw = request
-        .headers()
-        .get(name)
-        .ok_or_else(|| format!("missing `{name}` header"))?
-        .to_str()
-        .map_err(|_| format!("invalid `{name}` header"))?;
-    percent_decode_header(name, raw)
-}
-
 /// Persist binary bytes (e.g. a PDF emitted by the WASM engine)
 /// to the given absolute path. Bypasses the fs plugin scope like the
 /// rest of our project-internal IO. Parent directories are created on
@@ -282,12 +281,10 @@ fn decode_path_header(request: &tauri::ipc::Request<'_>, name: &str) -> CmdResul
 /// root and relative path ride along as percent-encoded headers.
 #[tauri::command]
 pub async fn write_project_binary_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err("expected a raw request body".to_string());
-    };
-    let bytes = bytes.clone();
-    let project_root = decode_path_header(&request, "x-project-root")?;
-    let rel_path = decode_path_header(&request, "x-rel-path")?;
+    use crate::integrations::ipc;
+    let bytes = ipc::raw_body_required(&request)?;
+    let project_root = ipc::decode_header(&request, "x-project-root")?;
+    let rel_path = ipc::decode_header(&request, "x-rel-path")?;
     tokio::task::spawn_blocking(move || -> CmdResult<()> {
         ensure_registered(&project_root)?;
         let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
@@ -313,428 +310,44 @@ pub async fn write_project_binary_file(request: tauri::ipc::Request<'_>) -> CmdR
     .map_err(err)?
 }
 
-/// Exposes the existing `parse_latex_log` diagnostic extractor over IPC
-/// so the WASM CompileProvider can produce diagnostics in the same
-/// shape as the desktop path without duplicating the parser in TS.
 #[tauri::command]
-pub fn parse_latex_log_cmd(log: String, entry: String) -> Vec<Diagnostic> {
-    parse_latex_log(&log, &entry)
+pub async fn load_settings(app: tauri::AppHandle) -> CmdResult<Settings> {
+    tokio::task::spawn_blocking(move || settings::load(&app).map_err(err))
+        .await
+        .map_err(err)?
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct CompileResult {
-    pub ok: bool,
-    #[serde(rename = "outputPath")]
-    pub output_path: Option<String>,
-    pub diagnostics: Vec<Diagnostic>,
-    pub log: String,
-    #[serde(rename = "durationMs")]
-    pub duration_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Diagnostic {
-    pub severity: String,
-    pub message: String,
-    pub file: String,
-    pub line: u32,
-    pub source: String,
-}
-
-/// Phase 1 baseline LaTeX compile.
-///
-/// `system-tex` path: invokes the user's `latexmk` (preferred) or `pdflatex`
-/// from PATH.
-/// `tectonic` path: tries the bundled sidecar binary first
-/// (`binaries/tectonic-<target-triple>`, declared in tauri.conf.json's
-/// externalBin). Falls back to `tectonic` from PATH if the sidecar isn't
-/// shipped — useful during development before running `npm run fetch:tectonic`.
-///
-/// Diagnostic parsing is intentionally minimal; a richer `.log` parser lands
-/// later. Same for incremental builds.
 #[tauri::command]
-pub async fn compile_latex(
-    app: tauri::AppHandle,
-    project: Project,
-    engine: Option<String>,
-    halt_on_error: Option<bool>,
-) -> CmdResult<CompileResult> {
-    let started = Instant::now();
-    let (root, root_file) = checked_project_root_and_file(&project)?;
-
-    let engine = engine.unwrap_or_else(|| "system-tex".into());
-    // Halting was historically hardcoded — keep it the default. Turning it
-    // off lets the engine push past errors and collect every diagnostic in
-    // one pass (often with a partial PDF). Tectonic always halts; the flag
-    // only applies to the system-tex path.
-    let halt = halt_on_error.unwrap_or(true);
-    let (log, success) = match engine.as_str() {
-        "tectonic" => run_tectonic(&app, &root_file, &root).await?,
-        _ => {
-            let root_for_cmd = root.clone();
-            let root_file_for_cmd = root_file.clone();
-            tokio::task::spawn_blocking(move || {
-                run_system_tex(&root_file_for_cmd, &root_for_cmd, halt)
-            })
-            .await
-            .map_err(err)??
-        }
-    };
-
-    let pdf_path = root.join(replace_ext(&root_file, "pdf"));
-    let ok = success && pdf_path.exists();
-    let diagnostics = parse_latex_log(&log, &root_file);
-
-    Ok(CompileResult {
-        ok,
-        output_path: if ok {
-            Some(pdf_path.to_string_lossy().into())
-        } else {
-            None
-        },
-        diagnostics,
-        log,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-fn run_system_tex(
-    root_file: &str,
-    root: &Path,
-    halt_on_error: bool,
-) -> Result<(String, bool), String> {
-    let mut accumulated_log = String::new();
-
-    // Prefer latexmk (handles multiple passes, bibliography). If it isn't on
-    // PATH, or it spawns but exits non-zero with no useful diagnostics, fall
-    // back to a direct pdflatex invocation. MiKTeX on Windows sometimes ships
-    // latexmk without a usable Perl, so the fallback is important.
-    // Spawn the absolute path resolved against PATH, never the bare name:
-    // `current_dir(root)` would otherwise let Windows' CreateProcess execute a
-    // `latexmk`/`pdflatex` planted in a malicious project directory.
-    if let Ok(latexmk) = which::which("latexmk") {
-        let mut latexmk_args = vec!["-pdf", "-synctex=1", "-interaction=nonstopmode"];
-        if halt_on_error {
-            latexmk_args.push("-halt-on-error");
-        }
-        latexmk_args.push(root_file);
-        accumulated_log.push_str(&format!("$ latexmk {}\n", latexmk_args.join(" ")));
-        match Command::new(&latexmk)
-            .args(&latexmk_args)
-            .current_dir(root)
-            .output()
-        {
-            Ok(out) => {
-                accumulated_log.push_str(&merge_io(&out.stdout, &out.stderr));
-                if out.status.success() {
-                    return Ok((accumulated_log, true));
-                }
-                accumulated_log.push_str(&format!(
-                    "\n[latexmk exit: {}]\n\n--- falling back to pdflatex ---\n",
-                    out.status,
-                ));
-            }
-            Err(e) => {
-                accumulated_log.push_str(&format!(
-                    "[latexmk spawn failed: {}]\n\n--- falling back to pdflatex ---\n",
-                    e,
-                ));
-            }
-        }
-    }
-
-    let pdflatex = match which::which("pdflatex") {
-        Ok(path) => path,
-        Err(_) => {
-            accumulated_log
-                .push_str("\nNo LaTeX engine on PATH. Install MiKTeX/TeX Live or pick the Tectonic engine in Settings.");
-            return Ok((accumulated_log, false));
-        }
-    };
-
-    let mut pdflatex_args = vec!["-synctex=1", "-interaction=nonstopmode"];
-    if halt_on_error {
-        pdflatex_args.push("-halt-on-error");
-    }
-    pdflatex_args.push(root_file);
-    accumulated_log.push_str(&format!("\n$ pdflatex {}\n", pdflatex_args.join(" ")));
-    let output = Command::new(&pdflatex)
-        .args(&pdflatex_args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| {
-            accumulated_log.push_str(&format!("[pdflatex spawn failed: {}]\n", e));
-            // Return the accumulated log so the user can see what we tried.
-            format!("compile failed:\n{}", accumulated_log)
-        })?;
-    accumulated_log.push_str(&merge_io(&output.stdout, &output.stderr));
-    Ok((accumulated_log, output.status.success()))
-}
-
-async fn run_tectonic(
-    app: &tauri::AppHandle,
-    root_file: &str,
-    root: &Path,
-) -> Result<(String, bool), String> {
-    // --synctex emits the .synctex.gz alongside the PDF; harmless when the
-    // user doesn't have the synctex CLI installed (forward/inverse just
-    // return None then).
-    let tectonic_args = ["-X", "compile", root_file, "--keep-logs", "--synctex"];
-    // Try the bundled sidecar first.
-    let sidecar_result = app.shell().sidecar("binaries/tectonic");
-    if let Ok(cmd) = sidecar_result {
-        let output = cmd
-            .args(tectonic_args)
-            .current_dir(root)
-            .output()
-            .await
-            .map_err(|e| format!("sidecar tectonic failed: {}", e))?;
-        let ok = output.status.success();
-        return Ok((merge_io(&output.stdout, &output.stderr), ok));
-    }
-    // Fall back to PATH — resolve the absolute path and spawn that, not the
-    // bare name, so `current_dir(root)` can't redirect to a planted binary.
-    let tectonic = match which::which("tectonic") {
-        Ok(path) => path,
-        Err(_) => {
-            return Err(
-                "tectonic is not bundled (run `npm run fetch:tectonic`) and not on PATH".into(),
-            )
-        }
-    };
-    let root_for_cmd = root.to_path_buf();
-    let root_file_for_cmd = root_file.to_string();
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new(&tectonic)
-            .args([
-                "-X",
-                "compile",
-                root_file_for_cmd.as_str(),
-                "--keep-logs",
-                "--synctex",
-            ])
-            .current_dir(root_for_cmd)
-            .output()
-            .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
-        Ok((
-            merge_io(&output.stdout, &output.stderr),
-            output.status.success(),
-        ))
+pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()> {
+    // Runs on a debounce while the user drags sliders/toggles — the write plus
+    // create_dir_all must not hitch the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        settings::save(&app, &settings).map_err(err)?;
+        // Keep the clone-destination boundary in sync when the user moves their
+        // projects root. (File IO is gated by the opened-project registry, which
+        // this does not affect.)
+        let root = PathBuf::from(&settings.projects_root);
+        let _ = std::fs::create_dir_all(&root);
+        project::set_projects_root(&root);
+        Ok(())
     })
     .await
     .map_err(err)?
-}
-
-fn merge_io(stdout: &[u8], stderr: &[u8]) -> String {
-    let out = String::from_utf8_lossy(stdout);
-    let err = String::from_utf8_lossy(stderr);
-    if err.is_empty() {
-        out.into_owned()
-    } else {
-        format!("{out}\n{err}")
-    }
-}
-
-/// Minimal LaTeX log scanner: flags lines starting with `! ` (TeX errors) and
-/// `Warning:` patterns. A real implementation would track file pushes/pops to
-/// resolve the source file; this v0 just attributes everything to the entry.
-fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("! ") {
-            out.push(Diagnostic {
-                severity: "error".into(),
-                message: trimmed.trim_start_matches("! ").to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "compile".into(),
-            });
-        } else if trimmed.contains("Warning:") {
-            out.push(Diagnostic {
-                severity: "warning".into(),
-                message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "compile".into(),
-            });
-        }
-    }
-    out
-}
-
-// ---------- Typst compile -------------------------------------------------
-
-/// Compile a Typst project by invoking `typst compile <root_file>`. Output
-/// defaults to `<base>.pdf` alongside the entry; we don't pass an explicit
-/// output path so the user's filesystem layout stays in their control.
-///
-/// Diagnostics are parsed out of stderr — Typst prints `error:` and
-/// `warning:` lines with optional file:line:col context. The parser is
-/// intentionally minimal for now; a real impl would walk the structured
-/// `--diagnostic-format=json` output once it stabilizes.
-#[tauri::command]
-pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
-    let started = Instant::now();
-    let (root, root_file) = checked_project_root_and_file(&project)?;
-    let root_for_cmd = root.clone();
-    let root_file_for_cmd = root_file.clone();
-    let (log, success) = tokio::task::spawn_blocking(move || -> CmdResult<(String, bool)> {
-        // Resolve the absolute path on PATH and spawn THAT, not the bare name.
-        // Bare `Command::new("typst")` + `current_dir(project)` lets Windows'
-        // CreateProcess search the project dir first, so a planted `typst.exe`
-        // in a malicious project would run (argument/binary planting). `which`
-        // resolves against the app's CWD/PATH, never the project.
-        let typst = which::which("typst").map_err(|_| {
-            "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
-                .to_string()
-        })?;
-
-        let mut log = String::new();
-        log.push_str(&format!("$ typst compile {}\n", root_file_for_cmd));
-        let output = Command::new(&typst)
-            .args(["compile", root_file_for_cmd.as_str()])
-            .current_dir(&root_for_cmd)
-            .output()
-            .map_err(|e| format!("failed to spawn typst: {}", e))?;
-        log.push_str(&merge_io(&output.stdout, &output.stderr));
-        Ok((log, output.status.success()))
-    })
-    .await
-    .map_err(err)??;
-
-    let pdf_path = root.join(replace_ext(&root_file, "pdf"));
-    let ok = success && pdf_path.exists();
-    let diagnostics = parse_typst_log(&log, &root_file);
-
-    Ok(CompileResult {
-        ok,
-        output_path: if ok {
-            Some(pdf_path.to_string_lossy().into())
-        } else {
-            None
-        },
-        diagnostics,
-        log,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-/// Lines like `error: ...` and `warning: ...` are surfaced as Diagnostics.
-/// Typst also prints follow-up location hints; we attach them to the
-/// previous diagnostic via message concatenation.
-fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
-    let mut out: Vec<Diagnostic> = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        let trimmed = line.trim();
-        let (severity, rest) = if let Some(rest) = trimmed.strip_prefix("error:") {
-            ("error", rest.trim())
-        } else if let Some(rest) = trimmed.strip_prefix("warning:") {
-            ("warning", rest.trim())
-        } else {
-            continue;
-        };
-        out.push(Diagnostic {
-            severity: severity.into(),
-            message: rest.to_string(),
-            file: entry.to_string(),
-            line: (i + 1) as u32,
-            source: "typst".into(),
-        });
-    }
-    out
-}
-
-/// Strip the trailing extension and append `new_ext`. Idempotent for files
-/// that already end in `.<new_ext>`. Falls back to appending when the
-/// source has no extension.
-fn replace_ext(rel_path: &str, new_ext: &str) -> String {
-    match rel_path.rfind('.') {
-        Some(idx) => format!("{}.{}", &rel_path[..idx], new_ext),
-        None => format!("{}.{}", rel_path, new_ext),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replace_ext_swaps_trailing_extension() {
-        assert_eq!(replace_ext("main.typ", "pdf"), "main.pdf");
-        assert_eq!(replace_ext("paper.md", "pdf"), "paper.pdf");
-        assert_eq!(replace_ext("notes", "pdf"), "notes.pdf");
-        assert_eq!(replace_ext("a.b.tex", "pdf"), "a.b.pdf");
-    }
-
-    #[test]
-    fn percent_decode_header_round_trips_encodeuricomponent() {
-        // The renderer percent-encodes path metadata via `encodeURIComponent`
-        // before stuffing it into the ASCII-only header channel of the binary
-        // write IPC. Confirm Unicode, spaces, and separators decode faithfully.
-        // Values below are exactly what JS `encodeURIComponent` emits.
-        assert_eq!(
-            percent_decode_header("x-rel-path", "r%C3%A9sum%C3%A9%2Fmain.tex").unwrap(),
-            "résumé/main.tex"
-        );
-        assert_eq!(
-            percent_decode_header("x-rel-path", "my%20project%2Ffig%201.png").unwrap(),
-            "my project/fig 1.png"
-        );
-        assert_eq!(
-            percent_decode_header("x-project-root", "C%3A%5CUsers%5Cme%5CDocs").unwrap(),
-            "C:\\Users\\me\\Docs"
-        );
-        // Unencoded ASCII (encodeURIComponent leaves these untouched) passes through.
-        assert_eq!(
-            percent_decode_header("x-rel-path", "build/out.pdf").unwrap(),
-            "build/out.pdf"
-        );
-    }
-
-    #[test]
-    fn percent_decode_header_rejects_invalid_utf8() {
-        // `%FF` is not a valid UTF-8 lead byte — must error, not lossily decode.
-        assert!(percent_decode_header("x-rel-path", "%FF%FE").is_err());
-    }
-
-    #[test]
-    fn parse_typst_log_picks_up_error_and_warning_lines() {
-        let log = "  error: undefined variable `x`\nnote: at main.typ:3:1\nwarning: unused parameter\nrandom line\n";
-        let diags = parse_typst_log(log, "main.typ");
-        assert_eq!(diags.len(), 2);
-        assert_eq!(diags[0].severity, "error");
-        assert!(diags[0].message.contains("undefined variable"));
-        assert_eq!(diags[1].severity, "warning");
-        assert_eq!(diags[0].source, "typst");
-    }
-}
-
-#[tauri::command]
-pub fn load_settings(app: tauri::AppHandle) -> CmdResult<Settings> {
-    settings::load(&app).map_err(err)
-}
-
-#[tauri::command]
-pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()> {
-    settings::save(&app, &settings).map_err(err)?;
-    // Keep the clone-destination boundary in sync when the user moves their
-    // projects root. (File IO is gated by the opened-project registry, which
-    // this does not affect.)
-    let root = PathBuf::from(&settings.projects_root);
-    let _ = std::fs::create_dir_all(&root);
-    project::set_projects_root(&root);
-    Ok(())
 }
 
 /// Settings → Security → "Reset local app data". Overwrites settings.json
 /// with the defaults; the frontend clears localStorage and reloads. Project
 /// files on disk are untouched.
 #[tauri::command]
-pub fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
-    settings::save(&app, &Settings::default()).map_err(err)?;
-    project::set_projects_root(&settings::default_projects_root());
-    Ok(())
+pub async fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
+    // Writes settings.json (fsync); keep it off the event-loop thread like save_settings.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        settings::save(&app, &Settings::default()).map_err(err)?;
+        project::set_projects_root(&settings::default_projects_root());
+        Ok(())
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Zip the project sources for sharing. Reuses the template-capture walk
@@ -791,13 +404,23 @@ pub async fn write_snapshot(
 }
 
 #[tauri::command]
-pub fn clear_snapshot(project_root: String, rel_path: String) -> CmdResult<()> {
-    ensure_registered(&project_root)?;
-    autosave::clear(Path::new(&project_root), &rel_path).map_err(err)
+pub async fn clear_snapshot(project_root: String, rel_path: String) -> CmdResult<()> {
+    // Fires on every save; the unlink must not run on the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        autosave::clear(Path::new(&project_root), &rel_path).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
-pub fn list_orphan_snapshots(project_root: String) -> CmdResult<Vec<Snapshot>> {
-    ensure_registered(&project_root)?;
-    autosave::list_orphans(Path::new(&project_root)).map_err(err)
+pub async fn list_orphan_snapshots(project_root: String) -> CmdResult<Vec<Snapshot>> {
+    // Walks the snapshots dir and reads every .snap on project open.
+    tokio::task::spawn_blocking(move || -> CmdResult<Vec<Snapshot>> {
+        ensure_registered(&project_root)?;
+        autosave::list_orphans(Path::new(&project_root)).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }

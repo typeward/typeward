@@ -1,13 +1,12 @@
 import type {
-  CodeMirrorExtension,
   CompileResult,
   EditorAdapter,
   EditorCommand,
   Project,
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
+import { runCompile, runSyncForward } from "~/commands/compile-runner";
 import { compileEngine, editorSettings } from "~/stores/settings-store";
-import { compileActiveProject, syncForwardFromCursor } from "~/commands/actions";
 
 const compile = async (project: Project): Promise<CompileResult> => {
   const engine = compileEngine();
@@ -22,11 +21,12 @@ const compile = async (project: Project): Promise<CompileResult> => {
 
 /**
  * Adapter-published commands. They're registered with the CommandRegistry
- * when a LaTeX project opens (see commands/boot.ts) and
- * unregistered on close so they don't pollute the palette for other formats.
+ * when a LaTeX project opens (see commands/boot.ts) and unregistered on close
+ * so they don't pollute the palette for other formats.
  *
- * Run handlers read from the editor-store directly via the shared actions
- * module — adapters declare *what* runs, not *how* to plumb context through.
+ * Run handlers reach the orchestration in commands/actions through the
+ * compile-runner leaf module rather than importing actions directly — actions
+ * imports this module for adapterFor, so a back-import would form a cycle.
  */
 const commands: EditorCommand[] = [
   {
@@ -38,7 +38,7 @@ const commands: EditorCommand[] = [
     scope: "editor",
     when: () => true,
     run: async () => {
-      await compileActiveProject();
+      await runCompile();
     },
   },
   {
@@ -50,24 +50,19 @@ const commands: EditorCommand[] = [
     scope: "editor",
     when: () => true,
     run: async () => {
-      await syncForwardFromCursor();
+      await runSyncForward();
     },
   },
 ];
 
 /**
- * Phase 1 LatexAdapter. CodeMirror extensions are produced by the editor
- * shell (so it can compose them with the user's font-size + line-wrap
- * preferences) — the adapter publishes language identity and command set
- * here, and the shell knows what to do with that.
+ * Phase 1 LatexAdapter. CodeMirror extensions are produced per-file by the
+ * editor shell (composing the user's font-size + line-wrap preferences), so
+ * the adapter only publishes language identity and its command set.
  */
 export const LatexAdapter: EditorAdapter = {
   languageId: "latex",
   format: "latex",
-  previewKind: "pdf",
-  cmExtensions(): CodeMirrorExtension[] {
-    return [];
-  },
   compile,
   commands,
 };

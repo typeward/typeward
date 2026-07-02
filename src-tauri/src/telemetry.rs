@@ -110,25 +110,30 @@ pub async fn record_event(
 }
 
 #[tauri::command]
-pub fn list_recent_events(limit: Option<usize>) -> Result<Vec<Event>, String> {
-    let path = match LOG_PATH.lock().expect("telemetry lock poisoned").clone() {
-        Some(p) => p,
-        None => return Ok(vec![]),
-    };
-    if !path.exists() {
-        return Ok(vec![]);
-    }
-    let f = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let reader = BufReader::new(f);
-    let mut events: Vec<Event> = reader
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
-        .collect();
-    let limit = limit.unwrap_or(100).min(MAX_ENTRIES);
-    let start = events.len().saturating_sub(limit);
-    events.drain(0..start);
-    Ok(events)
+pub async fn list_recent_events(limit: Option<usize>) -> Result<Vec<Event>, String> {
+    // Reads (and JSON-parses) the whole JSONL log; keep it off the event loop.
+    tokio::task::spawn_blocking(move || -> Result<Vec<Event>, String> {
+        let path = match LOG_PATH.lock().expect("telemetry lock poisoned").clone() {
+            Some(p) => p,
+            None => return Ok(vec![]),
+        };
+        if !path.exists() {
+            return Ok(vec![]);
+        }
+        let f = fs::File::open(&path).map_err(|e| e.to_string())?;
+        let reader = BufReader::new(f);
+        let mut events: Vec<Event> = reader
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
+            .collect();
+        let limit = limit.unwrap_or(100).min(MAX_ENTRIES);
+        let start = events.len().saturating_sub(limit);
+        events.drain(0..start);
+        Ok(events)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Appends are O(1): the full-file `trim` runs only once every `TRIM_INTERVAL`
@@ -177,4 +182,56 @@ fn trim(path: &std::path::Path) -> std::io::Result<()> {
     out.sync_all()?;
     fs::rename(tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MARKER: &str = "…[truncated]";
+
+    #[test]
+    fn short_string_passes_through_unchanged() {
+        assert_eq!(truncate_on_char_boundary("hello".into(), 2000), "hello");
+        // Exactly at the cap is not truncated (the check is `len() <= max`).
+        let exact = "a".repeat(MAX_SUMMARY_LEN);
+        assert_eq!(
+            truncate_on_char_boundary(exact.clone(), MAX_SUMMARY_LEN),
+            exact
+        );
+    }
+
+    #[test]
+    fn summary_is_capped_at_2000_bytes() {
+        let s = "a".repeat(MAX_SUMMARY_LEN + 500);
+        let out = truncate_on_char_boundary(s, MAX_SUMMARY_LEN);
+        assert!(out.ends_with(MARKER));
+        let content = out.strip_suffix(MARKER).unwrap();
+        assert_eq!(content.len(), MAX_SUMMARY_LEN);
+        assert!(content.bytes().all(|b| b == b'a'));
+    }
+
+    #[test]
+    fn detail_is_capped_at_16000_bytes() {
+        let s = "b".repeat(MAX_DETAIL_LEN + 100);
+        let out = truncate_on_char_boundary(s, MAX_DETAIL_LEN);
+        assert!(out.ends_with(MARKER));
+        assert_eq!(out.strip_suffix(MARKER).unwrap().len(), MAX_DETAIL_LEN);
+    }
+
+    #[test]
+    fn truncation_backs_off_to_a_char_boundary() {
+        // Place a 2-byte 'é' straddling the cap: its lead byte sits at MAX-1 and
+        // the continuation byte at MAX, so cutting at MAX would split the char.
+        let s = format!("{}é", "a".repeat(MAX_SUMMARY_LEN - 1));
+        assert_eq!(s.len(), MAX_SUMMARY_LEN + 1);
+        let out = truncate_on_char_boundary(s, MAX_SUMMARY_LEN);
+        assert!(out.ends_with(MARKER));
+        let content = out.strip_suffix(MARKER).unwrap();
+        // The 'é' must be dropped whole — content is all ASCII 'a', one shorter.
+        assert_eq!(content.len(), MAX_SUMMARY_LEN - 1);
+        assert!(content.chars().all(|c| c == 'a'));
+        // Result stays valid UTF-8 (would panic here otherwise).
+        assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
 }

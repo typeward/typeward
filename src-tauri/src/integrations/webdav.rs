@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
+use crate::integrations::http::{blocking, outbound_client_builder, OutboundRedirect};
 use crate::{integrations::credentials, settings};
 
 const KEYRING_SERVICE: &str = "webdav";
@@ -145,12 +146,34 @@ async fn trusted_webdav_account_for_app(
     app: tauri::AppHandle,
     requested: WebdavAccount,
 ) -> Result<WebdavAccount, WebdavError> {
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         let settings = settings::load(&app).map_err(|e| WebdavError::Settings(e.to_string()))?;
         trusted_webdav_account(&settings, &requested)
     })
     .await
-    .map_err(|e| WebdavError::Join(e.to_string()))?
+    .map_err(WebdavError::Join)?
+}
+
+/// A trusted WebDAV account plus its keyring password, resolved once per IPC
+/// command. Hoisting the password out of [`execute`] avoids a spawn-blocking
+/// keyring read (a D-Bus round trip on Linux) per sub-request — `webdav_put`
+/// alone issues the PUT, an MKCOL chain, a retry, and an ETag PROPFIND. Every
+/// sub-request still resolves + SSRF-screens + pins its own connection, so
+/// anti-rebinding protection is unchanged.
+struct WebdavSession {
+    account: WebdavAccount,
+    password: String,
+}
+
+impl WebdavSession {
+    async fn open(
+        app: tauri::AppHandle,
+        requested: WebdavAccount,
+    ) -> Result<Self, WebdavError> {
+        let account = trusted_webdav_account_for_app(app, requested).await?;
+        let password = account_password(&account.account_id).await?;
+        Ok(Self { account, password })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,37 +474,22 @@ fn basic_auth_header(username: &str, password: &str) -> String {
 
 async fn account_password(account_id: &str) -> Result<String, WebdavError> {
     let id = account_id.to_string();
-    let secret = tokio::task::spawn_blocking(move || credentials::get_secret(KEYRING_SERVICE, &id))
+    let secret = blocking(move || credentials::get_secret(KEYRING_SERVICE, &id))
         .await
-        .map_err(|e| WebdavError::Join(e.to_string()))?
+        .map_err(WebdavError::Join)?
         .map_err(|e| WebdavError::Credential(e.to_string()))?;
     secret.ok_or_else(|| WebdavError::Credential("no stored password for account".into()))
 }
 
-/// Build a reqwest client pinned to the screened addresses for `host`. The
-/// redirect policy only follows same-host https hops so a redirect can never
-/// escape the pinned (vetted) address.
+/// Build a reqwest client pinned to the screened addresses for `host`. Goes
+/// through the shared outbound chokepoint with `OutboundRedirect::SameHost`, so
+/// the same-host-https-only redirect policy is installed by construction and a
+/// redirect can never escape the pinned (vetted) address.
 fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<Client, WebdavError> {
     let expected = host.to_ascii_lowercase();
-    let redirect_host = expected.clone();
-    let policy = reqwest::redirect::Policy::custom(move |attempt| {
-        if attempt.previous().len() >= 5 {
-            return attempt.error("too many redirects");
-        }
-        let same_host = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
-        if attempt.url().scheme() == "https" && same_host.as_deref() == Some(redirect_host.as_str())
-        {
-            attempt.follow()
-        } else {
-            attempt.error("redirect to a different host blocked")
-        }
-    });
-
-    Client::builder()
-        .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
+    outbound_client_builder(OutboundRedirect::SameHost(expected.clone()))
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(120))
-        .redirect(policy)
         .resolve_to_addrs(&expected, addrs)
         .build()
         .map_err(|e| WebdavError::Network(e.to_string()))
@@ -494,24 +502,24 @@ struct RawResponse {
 }
 
 async fn execute(
-    account: &WebdavAccount,
+    session: &WebdavSession,
     method: Method,
     url: &Url,
     headers: &[(&str, String)],
     body: Option<Vec<u8>>,
     cap: usize,
 ) -> Result<RawResponse, WebdavError> {
+    let account = &session.account;
     let host = host_of(url)?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| WebdavError::InvalidUrl(url.as_str().to_string()))?;
     let addrs = resolve_and_screen(&host, port, account.allow_private_host).await?;
     let client = build_client(&host, &addrs)?;
-    let password = account_password(&account.account_id).await?;
 
     let mut builder = client.request(method, url.clone()).header(
         "Authorization",
-        basic_auth_header(&account.username, &password),
+        basic_auth_header(&account.username, &session.password),
     );
     for (name, value) in headers {
         builder = builder.header(*name, value);
@@ -842,6 +850,15 @@ fn trim_trailing_slash(s: &str) -> &str {
 pub async fn webdav_validate_host(
     url: String,
     allow_private: bool,
+) -> Result<HostVerdict, String> {
+    webdav_validate_host_inner(url, allow_private)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn webdav_validate_host_inner(
+    url: String,
+    allow_private: bool,
 ) -> Result<HostVerdict, WebdavError> {
     let (base, base_path) = normalize_base(&url)?;
     let host = host_of(&base)?;
@@ -875,16 +892,25 @@ pub async fn webdav_validate_host(
 pub async fn webdav_status_probe(
     app: tauri::AppHandle,
     account: WebdavAccount,
-) -> Result<bool, WebdavError> {
-    let account = trusted_webdav_account_for_app(app, account).await?;
-    webdav_status_probe_inner(&account).await
+) -> Result<bool, String> {
+    webdav_status_probe_body(app, account)
+        .await
+        .map_err(|e| e.to_string())
 }
 
-async fn webdav_status_probe_inner(account: &WebdavAccount) -> Result<bool, WebdavError> {
-    let url = request_url(account, "", true)?;
+async fn webdav_status_probe_body(
+    app: tauri::AppHandle,
+    account: WebdavAccount,
+) -> Result<bool, WebdavError> {
+    let session = WebdavSession::open(app, account).await?;
+    webdav_status_probe_inner(&session).await
+}
+
+async fn webdav_status_probe_inner(session: &WebdavSession) -> Result<bool, WebdavError> {
+    let url = request_url(&session.account, "", true)?;
     let body = PROPFIND_BODY.as_bytes().to_vec();
     let res = execute(
-        account,
+        session,
         propfind_method()?,
         &url,
         &[
@@ -905,21 +931,33 @@ pub async fn webdav_propfind(
     account: WebdavAccount,
     rel_path: String,
     depth: u8,
+) -> Result<WebdavListResult, String> {
+    webdav_propfind_body(app, account, rel_path, depth)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn webdav_propfind_body(
+    app: tauri::AppHandle,
+    account: WebdavAccount,
+    rel_path: String,
+    depth: u8,
 ) -> Result<WebdavListResult, WebdavError> {
-    let account = trusted_webdav_account_for_app(app, account).await?;
-    webdav_propfind_inner(&account, &rel_path, depth).await
+    let session = WebdavSession::open(app, account).await?;
+    webdav_propfind_inner(&session, &rel_path, depth).await
 }
 
 async fn webdav_propfind_inner(
-    account: &WebdavAccount,
+    session: &WebdavSession,
     rel_path: &str,
     depth: u8,
 ) -> Result<WebdavListResult, WebdavError> {
+    let account = &session.account;
     let url = request_url(account, rel_path, true)?;
     let depth_header = if depth == 0 { "0" } else { "1" };
     let body = PROPFIND_BODY.as_bytes().to_vec();
     let res = execute(
-        account,
+        session,
         propfind_method()?,
         &url,
         &[
@@ -949,10 +987,20 @@ pub async fn webdav_get(
     app: tauri::AppHandle,
     account: WebdavAccount,
     rel_path: String,
+) -> Result<tauri::ipc::Response, String> {
+    webdav_get_body(app, account, rel_path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn webdav_get_body(
+    app: tauri::AppHandle,
+    account: WebdavAccount,
+    rel_path: String,
 ) -> Result<tauri::ipc::Response, WebdavError> {
-    let account = trusted_webdav_account_for_app(app, account).await?;
-    let url = request_url(&account, &rel_path, false)?;
-    let res = execute(&account, Method::GET, &url, &[], None, MAX_FILE_BYTES).await?;
+    let session = WebdavSession::open(app, account).await?;
+    let url = request_url(&session.account, &rel_path, false)?;
+    let res = execute(&session, Method::GET, &url, &[], None, MAX_FILE_BYTES).await?;
     if !http_ok(res.status) {
         return Err(status_err(res.status, &res.body));
     }
@@ -965,49 +1013,73 @@ pub async fn webdav_get(
 
 /// PUT file bytes. Creates missing ancestor collections (MKCOL chain) on 409,
 /// and uses `If-Match` for optimistic concurrency when a known rev is given.
+struct PutRequest {
+    account: WebdavAccount,
+    rel_path: String,
+    if_match: Option<String>,
+    body: Vec<u8>,
+}
+
+/// Upload bytes ride as the raw IPC body; account/path/if-match as
+/// percent-encoded headers (the JSON arg slot is taken by the raw body).
+/// Parsed synchronously so the borrowed `Request` never crosses an await.
+fn parse_put_request(request: &tauri::ipc::Request<'_>) -> Result<PutRequest, WebdavError> {
+    let body = crate::integrations::ipc::raw_body(request);
+    let account: WebdavAccount = serde_json::from_str(
+        &crate::integrations::ipc::decode_header(request, "x-webdav-account")
+            .map_err(WebdavError::Network)?,
+    )
+    .map_err(|e| WebdavError::Network(format!("account decode: {e}")))?;
+    let rel_path =
+        crate::integrations::ipc::decode_header(request, "x-rel-path").map_err(WebdavError::Network)?;
+    let if_match = crate::integrations::ipc::decode_opt_header(request, "x-if-match")
+        .map_err(WebdavError::Network)?;
+    Ok(PutRequest {
+        account,
+        rel_path,
+        if_match,
+        body,
+    })
+}
+
 #[tauri::command]
 pub async fn webdav_put(
     app: tauri::AppHandle,
     request: tauri::ipc::Request<'_>,
-) -> Result<WebdavPutResult, WebdavError> {
-    // Upload bytes ride as the raw IPC body; account/path/if-match as
-    // percent-encoded headers (the JSON arg slot is taken by the raw body).
-    let body = crate::integrations::ipc::raw_body(&request);
-    let account: WebdavAccount = serde_json::from_str(
-        &crate::integrations::ipc::decode_header(&request, "x-webdav-account")
-            .map_err(WebdavError::Network)?,
-    )
-    .map_err(|e| WebdavError::Network(format!("account decode: {e}")))?;
-    let rel_path = crate::integrations::ipc::decode_header(&request, "x-rel-path")
-        .map_err(WebdavError::Network)?;
-    let if_match = crate::integrations::ipc::decode_opt_header(&request, "x-if-match")
-        .map_err(WebdavError::Network)?;
+) -> Result<WebdavPutResult, String> {
+    let parsed = parse_put_request(&request).map_err(|e| e.to_string())?;
+    webdav_put_body(app, parsed).await.map_err(|e| e.to_string())
+}
 
-    let account = trusted_webdav_account_for_app(app, account).await?;
-    let url = request_url(&account, &rel_path, false)?;
+async fn webdav_put_body(
+    app: tauri::AppHandle,
+    req: PutRequest,
+) -> Result<WebdavPutResult, WebdavError> {
+    let session = WebdavSession::open(app, req.account).await?;
+    let url = request_url(&session.account, &req.rel_path, false)?;
     let mut headers: Vec<(&str, String)> = Vec::new();
-    if let Some(rev) = &if_match {
+    if let Some(rev) = &req.if_match {
         headers.push(("If-Match", format!("\"{rev}\"")));
     }
 
     let res = execute(
-        &account,
+        &session,
         Method::PUT,
         &url,
         &headers,
-        Some(body.clone()),
+        Some(req.body.clone()),
         MAX_XML_BYTES,
     )
     .await?;
     if res.status == 409 {
         // missing parent collection — create the chain and retry once
-        ensure_ancestors(&account, &rel_path).await?;
+        ensure_ancestors(&session, &req.rel_path).await?;
         let retry = execute(
-            &account,
+            &session,
             Method::PUT,
             &url,
             &headers,
-            Some(body),
+            Some(req.body),
             MAX_XML_BYTES,
         )
         .await?;
@@ -1015,14 +1087,14 @@ pub async fn webdav_put(
             return Err(status_err(retry.status, &retry.body));
         }
         return Ok(WebdavPutResult {
-            etag: resolve_put_etag(&account, &rel_path, retry.etag).await,
+            etag: resolve_put_etag(&session, &req.rel_path, retry.etag).await,
         });
     }
     if !http_ok(res.status) {
         return Err(status_err(res.status, &res.body));
     }
     Ok(WebdavPutResult {
-        etag: resolve_put_etag(&account, &rel_path, res.etag).await,
+        etag: resolve_put_etag(&session, &req.rel_path, res.etag).await,
     })
 }
 
@@ -1033,15 +1105,26 @@ pub async fn webdav_delete(
     account: WebdavAccount,
     rel_path: String,
     if_match: Option<String>,
+) -> Result<(), String> {
+    webdav_delete_body(app, account, rel_path, if_match)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn webdav_delete_body(
+    app: tauri::AppHandle,
+    account: WebdavAccount,
+    rel_path: String,
+    if_match: Option<String>,
 ) -> Result<(), WebdavError> {
-    let account = trusted_webdav_account_for_app(app, account).await?;
-    let url = request_url(&account, &rel_path, false)?;
+    let session = WebdavSession::open(app, account).await?;
+    let url = request_url(&session.account, &rel_path, false)?;
     let mut headers: Vec<(&str, String)> = Vec::new();
     if let Some(rev) = &if_match {
         headers.push(("If-Match", format!("\"{rev}\"")));
     }
     let res = execute(
-        &account,
+        &session,
         Method::DELETE,
         &url,
         &headers,
@@ -1075,7 +1158,7 @@ fn mkcol_method() -> Result<Method, WebdavError> {
 }
 
 /// Create each missing ancestor collection of `rel_path`, top-down.
-async fn ensure_ancestors(account: &WebdavAccount, rel_path: &str) -> Result<(), WebdavError> {
+async fn ensure_ancestors(session: &WebdavSession, rel_path: &str) -> Result<(), WebdavError> {
     let segments: Vec<&str> = rel_path.split('/').filter(|s| !s.is_empty()).collect();
     if segments.len() <= 1 {
         return Ok(());
@@ -1087,8 +1170,8 @@ async fn ensure_ancestors(account: &WebdavAccount, rel_path: &str) -> Result<(),
         } else {
             prefix = format!("{prefix}/{seg}");
         }
-        let url = request_url(account, &prefix, true)?;
-        let res = execute(account, mkcol_method()?, &url, &[], None, MAX_XML_BYTES).await?;
+        let url = request_url(&session.account, &prefix, true)?;
+        let res = execute(session, mkcol_method()?, &url, &[], None, MAX_XML_BYTES).await?;
         // 201 created, 405 already exists -> both fine; anything else is fatal.
         if !http_ok(res.status) && res.status != 405 {
             return Err(status_err(res.status, &res.body));
@@ -1100,14 +1183,14 @@ async fn ensure_ancestors(account: &WebdavAccount, rel_path: &str) -> Result<(),
 /// Some servers omit the ETag on the PUT response; fetch it with a Depth:0
 /// PROPFIND so echo suppression and conditional writes still work.
 async fn resolve_put_etag(
-    account: &WebdavAccount,
+    session: &WebdavSession,
     rel_path: &str,
     from_put: Option<String>,
 ) -> Option<String> {
     if from_put.is_some() {
         return from_put;
     }
-    let list = webdav_propfind_inner(account, rel_path, 0).await.ok()?;
+    let list = webdav_propfind_inner(session, rel_path, 0).await.ok()?;
     list.entries
         .into_iter()
         .find(|e| !e.is_dir)

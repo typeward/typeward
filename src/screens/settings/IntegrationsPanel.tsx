@@ -7,6 +7,7 @@
  * sub-routing, so users can scroll one page to see what's wired up.
  */
 
+import { describeIpcError } from "~/lib/errors";
 import {
   Check,
   ExternalLink,
@@ -29,6 +30,7 @@ import {
 } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
 import { createOllamaProvider } from "~/integrations/ai/ollama";
+import { type AiProviderId, getProvider } from "~/integrations/ai/registry";
 import {
   connectMendeley,
   disconnectMendeley,
@@ -47,6 +49,7 @@ import {
 } from "~/integrations/cloud/dropbox";
 import { connectWebdav, disconnectWebdav } from "~/integrations/cloud/webdav";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
 
@@ -104,7 +107,7 @@ const BetterBibTexRow: Component = () => {
   // "Ready" if either local path answers — Better BibTeX or plain
   // Zotero 7's built-in API. `bbt` only affects the explanatory hint now;
   // libraries are auto-discovered either way.
-  const [probe] = createResource(async () => {
+  const [probe, { refetch }] = createResource(async () => {
     const bbt = await probeBetterBibTex();
     if (bbt) return { reachable: true, bbt: true };
     return { reachable: await probeZoteroLocalApi(), bbt: false };
@@ -133,15 +136,27 @@ const BetterBibTexRow: Component = () => {
             : "unreachable"
       }
       controls={
-        <Switch
-          checked={settings().enabled}
-          onChange={(checked) => toggle(checked)}
-          disabled={!probe()?.reachable}
-        />
+        <div class="flex items-center gap-1.5">
+          <Show when={probe() && !probe()!.reachable}>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="h-8"
+              onClick={() => void refetch()}
+            >
+              Re-check
+            </Button>
+          </Show>
+          <Switch
+            checked={settings().enabled}
+            onChange={(checked) => toggle(checked)}
+            disabled={!probe()?.reachable}
+          />
+        </div>
       }
     >
       <Show when={settings().enabled && probe()?.reachable && !probe()?.bbt}>
-        <div class="mt-3 text-[12px] text-fg-3">
+        <div class="mt-3 text-sm text-fg-3">
           Using Zotero's built-in API. Install Better BibTeX for stable,
           human-readable citation keys.
         </div>
@@ -197,7 +212,7 @@ const ZoteroWebRow: Component = () => {
       });
       setApiKeyInput("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -239,14 +254,20 @@ const ZoteroWebRow: Component = () => {
               href="https://www.zotero.org/settings/keys"
               target="_blank"
               rel="noopener noreferrer"
-              class="lift flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12px] text-fg-2 hover:text-fg-1 hover:bg-[var(--color-control-fill)]"
+              onClick={(e) => {
+                // wry swallows new-window requests — route to the system
+                // browser via the opener plugin instead.
+                e.preventDefault();
+                void openUrl("https://www.zotero.org/settings/keys");
+              }}
+              class="lift flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-fg-2 hover:text-fg-1 hover:bg-[var(--color-control-fill)]"
             >
               Get key
               <ExternalLink class="ui-icon-sm" />
             </a>
           }
         >
-          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+          <Button variant="ghost" size="sm" class="h-8" onClick={handleDisconnect}>
             Disconnect
           </Button>
         </Show>
@@ -260,21 +281,21 @@ const ZoteroWebRow: Component = () => {
               placeholder="User id (numeric)"
               value={userIdInput()}
               onInput={(e) => setUserIdInput(e.currentTarget.value)}
-              class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="glass-inset h-8 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
             <input
               type="password"
               placeholder="API key"
               value={apiKeyInput()}
               onInput={(e) => setApiKeyInput(e.currentTarget.value)}
-              class="glass-inset h-8 flex-[2] rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="glass-inset h-8 flex-[2] rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
-            <Button variant="primary" size="sm" onClick={handleConnect} disabled={busy()}>
+            <Button variant="primary" size="sm" class="h-8" onClick={handleConnect} disabled={busy()}>
               {busy() ? "Testing…" : "Connect"}
             </Button>
           </div>
           <Show when={error()}>
-            <div class="text-[11px] text-[var(--color-err)]">{error()}</div>
+            <div class="select-text text-xs text-[var(--color-err)]">{error()}</div>
           </Show>
         </div>
       </Show>
@@ -317,7 +338,7 @@ const MendeleyRow: Component = () => {
       setSecretInput("");
       await refetchSecret();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     }
   };
 
@@ -333,7 +354,7 @@ const MendeleyRow: Component = () => {
         displayName: account.displayName,
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -367,6 +388,7 @@ const MendeleyRow: Component = () => {
             <Button
               variant="primary"
               size="sm"
+              class="h-8"
               onClick={handleConnect}
               disabled={busy() || !secretSaved()}
             >
@@ -374,7 +396,7 @@ const MendeleyRow: Component = () => {
             </Button>
           }
         >
-          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+          <Button variant="ghost" size="sm" class="h-8" onClick={handleDisconnect}>
             Disconnect
           </Button>
         </Show>
@@ -382,7 +404,7 @@ const MendeleyRow: Component = () => {
     >
       <Show when={!isConnected()}>
         <div class="mt-3 flex flex-col gap-2">
-          <div class="text-[11px] text-fg-3">
+          <div class="text-xs text-fg-3">
             Mendeley is a confidential OAuth client. The Redirect URL below must match the
             one registered in your app at dev.mendeley.com{" "}
             <strong>character-for-character</strong> (host, port, path, and any trailing
@@ -396,11 +418,11 @@ const MendeleyRow: Component = () => {
             value={redirectInput()}
             onInput={(e) => setRedirectInput(e.currentTarget.value)}
             onChange={() => persistMendeley()}
-            class="glass-inset h-8 rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-8 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
-          <div class="text-[11px] text-fg-3">
+          <div class="text-xs text-fg-3">
             App will send:{" "}
-            <span class="mono text-fg-2">
+            <span class="mono select-text text-fg-2">
               {redirectInput().trim() || "http://localhost:5000/callback"}
             </span>
             {" "}— this is what Mendeley must have registered.
@@ -411,11 +433,12 @@ const MendeleyRow: Component = () => {
               placeholder={secretSaved() ? "Secret saved — paste to replace" : "Client secret"}
               value={secretInput()}
               onInput={(e) => setSecretInput(e.currentTarget.value)}
-              class="glass-inset h-8 flex-1 rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="glass-inset h-8 flex-1 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
             <Button
               variant="secondary"
               size="sm"
+              class="h-8"
               onClick={handleSaveSecret}
               disabled={!secretInput().trim()}
             >
@@ -425,7 +448,7 @@ const MendeleyRow: Component = () => {
         </div>
       </Show>
       <Show when={error()}>
-        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+        <div class="mt-3 select-text text-xs text-[var(--color-err)]">{error()}</div>
       </Show>
     </ProviderRow>
   );
@@ -499,7 +522,7 @@ const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) =
         },
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -533,19 +556,19 @@ const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) =
         <Show
           when={account()}
           fallback={
-            <Button variant="primary" size="sm" onClick={handleConnect} disabled={busy()}>
+            <Button variant="primary" size="sm" class="h-8" onClick={handleConnect} disabled={busy()}>
               {busy() ? "Connecting…" : "Sign in"}
             </Button>
           }
         >
-          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+          <Button variant="ghost" size="sm" class="h-8" onClick={handleDisconnect}>
             Disconnect
           </Button>
         </Show>
       }
     >
       <Show when={error()}>
-        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+        <div class="mt-3 select-text text-xs text-[var(--color-err)]">{error()}</div>
       </Show>
     </ProviderRow>
   );
@@ -561,7 +584,7 @@ function normalizeWebdavUrl(raw: string): string {
 }
 
 const WEBDAV_INPUT =
-  "glass-inset h-8 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]";
+  "glass-inset h-8 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]";
 
 const WebdavRow: Component = () => {
   const accounts = () =>
@@ -614,7 +637,7 @@ const WebdavRow: Component = () => {
       setAllowPrivate(false);
       setAdding(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -646,6 +669,7 @@ const WebdavRow: Component = () => {
         <Button
           variant={adding() ? "ghost" : "primary"}
           size="sm"
+          class="h-8"
           onClick={() => setAdding(!adding())}
         >
           {adding() ? "Cancel" : "Add server"}
@@ -656,11 +680,12 @@ const WebdavRow: Component = () => {
         <div class="mt-3 flex flex-col gap-2">
           <For each={accounts()}>
             {(acc) => (
-              <div class="flex items-center justify-between gap-2 text-[12px] text-fg-2">
+              <div class="flex items-center justify-between gap-2 text-sm text-fg-2">
                 <span class="truncate">{acc.label ?? acc.accountId}</span>
                 <Button
                   variant="ghost"
                   size="sm"
+                  class="h-8"
                   onClick={() => void handleDisconnect(acc.accountId)}
                 >
                   Disconnect
@@ -690,25 +715,26 @@ const WebdavRow: Component = () => {
                   placeholder="App password"
                   value={password()}
                   onInput={(e) => setPassword(e.currentTarget.value)}
-                  class={`${WEBDAV_INPUT} flex-[2] font-mono`}
+                  class={`${WEBDAV_INPUT} flex-[2] mono`}
                 />
               </div>
-              <label class="flex items-center gap-2 text-[11px] text-fg-2">
+              <label class="flex items-center gap-2 text-xs text-fg-2">
                 <input
                   type="checkbox"
                   checked={allowPrivate()}
                   onInput={(e) => setAllowPrivate(e.currentTarget.checked)}
+                  class="h-3 w-3 rounded accent-[var(--color-accent-1)]"
                 />
                 Allow a private / LAN server (10.x, 172.16.x, 192.168.x). Loopback and
                 cloud-metadata addresses stay blocked.
               </label>
               <div>
-                <Button variant="primary" size="sm" onClick={handleAdd} disabled={busy()}>
+                <Button variant="primary" size="sm" class="h-8" onClick={handleAdd} disabled={busy()}>
                   {busy() ? "Connecting…" : "Connect"}
                 </Button>
               </div>
               <Show when={error()}>
-                <div class="text-[11px] text-[var(--color-err)]">{error()}</div>
+                <div class="select-text text-xs text-[var(--color-err)]">{error()}</div>
               </Show>
             </div>
           </Show>
@@ -752,7 +778,7 @@ const AuthorIdentityRow: Component = () => {
       name="Author identity"
       hint="Falls back to your system gitconfig when blank. Required for commits — git will refuse to commit without a signature."
       status={git().authorName && git().authorEmail ? "ready" : "unconfigured"}
-      controls={<span class="text-[11px] text-fg-3 italic">Saved in settings.json</span>}
+      controls={<span class="text-xs text-fg-3 italic">Saved in settings.json</span>}
     >
       <div class="mt-3 flex flex-col gap-2">
         <div class="flex gap-2">
@@ -761,14 +787,14 @@ const AuthorIdentityRow: Component = () => {
             placeholder="Name"
             value={git().authorName ?? ""}
             onInput={(e) => update({ authorName: e.currentTarget.value || undefined })}
-            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <input
             type="email"
             placeholder="you@example.com"
             value={git().authorEmail ?? ""}
             onInput={(e) => update({ authorEmail: e.currentTarget.value || undefined })}
-            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </div>
       </div>
@@ -802,7 +828,7 @@ const GithubAccountRow: Component = () => {
       });
       setUserCode(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -839,12 +865,12 @@ const GithubAccountRow: Component = () => {
         <Show
           when={accountId()}
           fallback={
-            <Button variant="primary" size="sm" onClick={handleConnect} disabled={busy()}>
+            <Button variant="primary" size="sm" class="h-8" onClick={handleConnect} disabled={busy()}>
               {busy() ? "Waiting…" : "Sign in"}
             </Button>
           }
         >
-          <Button variant="ghost" size="sm" onClick={handleDisconnect}>
+          <Button variant="ghost" size="sm" class="h-8" onClick={handleDisconnect}>
             Disconnect
           </Button>
         </Show>
@@ -852,15 +878,15 @@ const GithubAccountRow: Component = () => {
     >
       <Show when={userCode()}>
         <div class="mt-3 flex items-center gap-3 rounded-md bg-[var(--color-control-fill)] px-3 py-2">
-          <span class="text-[11px] text-fg-3">User code:</span>
-          <span class="mono select-all text-[16px] font-semibold tracking-[0.25em] text-fg-1">
+          <span class="text-xs text-fg-3">User code:</span>
+          <span class="mono select-all text-lg font-semibold tracking-[0.25em] text-fg-1">
             {userCode()}
           </span>
-          <span class="text-[11px] text-fg-3">— your browser should open with this prefilled.</span>
+          <span class="text-xs text-fg-3">— your browser should open with this prefilled.</span>
         </div>
       </Show>
       <Show when={error()}>
-        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+        <div class="mt-3 select-text text-xs text-[var(--color-err)]">{error()}</div>
       </Show>
     </ProviderRow>
   );
@@ -871,7 +897,7 @@ const GithubAccountRow: Component = () => {
 // =================================================================
 
 interface AiKnownProvider {
-  id: "anthropic" | "openai" | "gemini" | "ollama";
+  id: AiProviderId;
   name: string;
   feature: EntitlementKey;
   hint: string;
@@ -881,8 +907,11 @@ interface AiKnownProvider {
   keyUrl?: string;
 }
 
-const AI_PROVIDERS: AiKnownProvider[] = [
-  {
+// Keyed by AiProviderId so a new provider added to the registry union is a
+// compile error here until its settings card is described — the two used to
+// drift silently (the card just wouldn't render).
+const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
+  anthropic: {
     id: "anthropic",
     name: "Claude (Anthropic)",
     feature: "integrations.ai.anthropic",
@@ -890,7 +919,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
     keyringService: "anthropic",
     keyUrl: "https://console.anthropic.com/settings/keys",
   },
-  {
+  openai: {
     id: "openai",
     name: "ChatGPT (OpenAI)",
     feature: "integrations.ai.openai",
@@ -898,7 +927,7 @@ const AI_PROVIDERS: AiKnownProvider[] = [
     keyringService: "openai",
     keyUrl: "https://platform.openai.com/api-keys",
   },
-  {
+  gemini: {
     id: "gemini",
     name: "Gemini (Google)",
     feature: "integrations.ai.gemini",
@@ -906,13 +935,15 @@ const AI_PROVIDERS: AiKnownProvider[] = [
     keyringService: "gemini",
     keyUrl: "https://aistudio.google.com/apikey",
   },
-  {
+  ollama: {
     id: "ollama",
     name: "Ollama (local)",
     feature: "integrations.ai.ollama",
     hint: "Local models via the Ollama app — auto-detected, nothing to configure. Install from ollama.com, pull a model, and it shows up here.",
   },
-];
+};
+
+const AI_PROVIDER_LIST: AiKnownProvider[] = Object.values(AI_PROVIDERS);
 
 const AiCard: Component = () => {
   const ai = () => integrationsSettings().ai;
@@ -943,7 +974,7 @@ const AiCard: Component = () => {
         controls={<Switch checked={ai().enabled} onChange={setEnabled} />}
       />
       <Show when={ai().enabled}>
-        <For each={AI_PROVIDERS}>
+        <For each={AI_PROVIDER_LIST}>
           {(p) => (
             <FeatureGate feature={p.feature}>
               <AiProviderRow provider={p} onActivate={setActive} />
@@ -1027,7 +1058,7 @@ const AiProviderRow: Component<{
       setApiKeyInput("");
       await refetchKey();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -1067,6 +1098,7 @@ const AiProviderRow: Component<{
             <Button
               variant={isActive() ? "secondary" : "ghost"}
               size="sm"
+              class="h-8"
               onClick={() => {
                 if (!isActive()) assertEntitlement(props.provider.feature);
                 props.onActivate(isActive() ? undefined : props.provider.id);
@@ -1080,7 +1112,11 @@ const AiProviderRow: Component<{
               href={props.provider.keyUrl}
               target="_blank"
               rel="noopener noreferrer"
-              class="lift flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[12px] text-fg-2 hover:text-fg-1 hover:bg-[var(--color-control-fill)]"
+              onClick={(e) => {
+                e.preventDefault();
+                if (props.provider.keyUrl) void openUrl(props.provider.keyUrl);
+              }}
+              class="lift flex h-8 items-center gap-1.5 rounded-md px-2.5 text-sm text-fg-2 hover:text-fg-1 hover:bg-[var(--color-control-fill)]"
             >
               Get key
               <ExternalLink class="ui-icon-sm" />
@@ -1096,15 +1132,15 @@ const AiProviderRow: Component<{
             placeholder="API key"
             value={apiKeyInput()}
             onInput={(e) => setApiKeyInput(e.currentTarget.value)}
-            class="glass-inset h-8 flex-1 rounded-md px-2.5 font-mono text-[12px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-8 flex-1 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
-          <Button variant="primary" size="sm" onClick={saveKey} disabled={busy()}>
+          <Button variant="primary" size="sm" class="h-8" onClick={saveKey} disabled={busy()}>
             {busy() ? "Testing…" : "Save"}
           </Button>
         </div>
       </Show>
       <Show when={props.provider.keyringService && hasKey()}>
-        <div class="mt-3 text-[11px] text-fg-3">
+        <div class="mt-3 text-xs text-fg-3">
           Key stored in keyring as <span class="mono">{props.provider.keyringService}</span>.
           <button
             type="button"
@@ -1119,20 +1155,13 @@ const AiProviderRow: Component<{
         <Show
           when={ollamaProbe()?.ok}
           fallback={
-            <div class="mt-3 flex flex-col gap-2 text-[12px] text-fg-2">
+            <div class="mt-3 flex flex-col gap-2 text-sm text-fg-2">
               <Show when={ollamaProbe() && !ollamaProbe()!.ok}>
                 <div class="text-fg-3">
                   Ollama isn't running. Install it from{" "}
                   <span class="mono text-fg-2">ollama.com</span>, pull a model
                   (e.g. <span class="mono text-fg-2">ollama pull gemma3</span>),
                   and it's detected automatically — no setup needed.
-                  <button
-                    type="button"
-                    onClick={() => void refetchOllama()}
-                    class="ml-2 text-[var(--color-accent-1)] hover:underline"
-                  >
-                    Re-check
-                  </button>
                 </div>
                 {/* Only useful when the daemon runs somewhere non-default. */}
                 <div class="flex items-center gap-2">
@@ -1143,14 +1172,21 @@ const AiProviderRow: Component<{
                     onInput={(e) => setBaseUrlInput(e.currentTarget.value)}
                     onBlur={persistOllamaBaseUrl}
                     placeholder="http://localhost:11434"
-                    class="glass-inset h-7 flex-1 rounded-md px-2.5 font-mono text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+                    class="glass-inset h-7 flex-1 rounded-md px-2.5 mono text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
                   />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void refetchOllama()}
+                  >
+                    Re-check
+                  </Button>
                 </div>
               </Show>
             </div>
           }
         >
-          <div class="mt-3 flex items-center gap-2 text-[12px] text-fg-3">
+          <div class="mt-3 flex items-center gap-2 text-sm text-fg-3">
             <span>
               Detected
               <Show when={ai().ollamaBaseUrl}>
@@ -1169,67 +1205,38 @@ const AiProviderRow: Component<{
                 </span>
               </Show>
             </span>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="sm"
+              class="ml-auto"
+              aria-label="Refresh models"
               onClick={() => void refetchOllama()}
-              class="ml-auto text-[var(--color-accent-1)] hover:underline"
             >
-              Refresh
-            </button>
+              <RefreshCw class="ui-icon-sm" />
+            </Button>
           </div>
         </Show>
       </Show>
       <Show when={error()}>
-        <div class="mt-3 text-[11px] text-[var(--color-err)]">{error()}</div>
+        <div class="mt-3 select-text text-xs text-[var(--color-err)]">{error()}</div>
       </Show>
     </ProviderRow>
   );
 };
 
 async function probeProvider(
-  id: "anthropic" | "openai" | "gemini" | "ollama",
+  id: AiProviderId,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
-  // Cheap probe per provider: a single auth'd request that fails fast
-  // if the key is wrong. Each provider's models endpoint is the lowest
-  // surface.
+  // Delegate to the provider module's own status() rather than restating each
+  // provider's endpoint/header/authRef here — the provider is the single source
+  // of truth for its API surface, so a version bump lands in one place.
   try {
-    switch (id) {
-      case "anthropic": {
-        const res = await httpRequest({
-          method: "GET",
-          url: "https://api.anthropic.com/v1/models?limit=1",
-          headers: { "anthropic-version": "2023-06-01" },
-          authRef: { service: "anthropic", account: "default", header: "x-api-key", prefix: "" },
-        });
-        return res.status >= 200 && res.status < 300
-          ? { ok: true }
-          : { ok: false, message: `Anthropic rejected the key (status ${res.status}).` };
-      }
-      case "openai": {
-        const res = await httpRequest({
-          method: "GET",
-          url: "https://api.openai.com/v1/models",
-          authRef: { service: "openai", account: "default", header: "Authorization", prefix: "Bearer " },
-        });
-        return res.status >= 200 && res.status < 300
-          ? { ok: true }
-          : { ok: false, message: `OpenAI rejected the key (status ${res.status}).` };
-      }
-      case "gemini": {
-        const res = await httpRequest({
-          method: "GET",
-          url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
-          authRef: { service: "gemini", account: "default", header: "x-goog-api-key", prefix: "" },
-        });
-        return res.status >= 200 && res.status < 300
-          ? { ok: true }
-          : { ok: false, message: `Gemini rejected the key (status ${res.status}).` };
-      }
-      case "ollama":
-        return { ok: true };
-    }
+    const status = await getProvider(id).status();
+    if (status === "ready") return { ok: true };
+    const name = AI_PROVIDERS[id].name;
+    return { ok: false, message: `${name} rejected the key or is unreachable (status: ${status}).` };
   } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    return { ok: false, message: describeIpcError(err) };
   }
 }
 
@@ -1303,7 +1310,7 @@ const ProviderRow: Component<{
     <div class="flex items-start gap-4">
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-2">
-          <span class="text-[13px] font-medium text-fg-1">{props.name}</span>
+          <span class="text-base font-medium text-fg-1">{props.name}</span>
           <span
             class="mono inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider"
             style={{ background: STATUS_BG[props.status], color: STATUS_FG[props.status] }}
@@ -1320,7 +1327,7 @@ const ProviderRow: Component<{
             {STATUS_TEXT[props.status]}
           </span>
         </div>
-        <div class="mt-0.5 text-[12px] leading-relaxed text-fg-3">{props.hint}</div>
+        <div class="mt-0.5 text-sm leading-relaxed text-fg-3">{props.hint}</div>
       </div>
       <div class="flex-shrink-0">{props.controls}</div>
     </div>
@@ -1338,9 +1345,9 @@ const Card: Component<{
 }> = (props) => (
   <div class="glass overflow-hidden rounded-xl">
     <div class="border-b border-glass-stroke px-5 py-4">
-      <div class="text-[14px] font-semibold tracking-tight text-fg-1">{props.title}</div>
+      <div class="text-base font-semibold tracking-tight text-fg-1">{props.title}</div>
       <Show when={props.subtitle}>
-        <div class="mt-0.5 text-[12px] leading-relaxed text-fg-2">{props.subtitle}</div>
+        <div class="mt-0.5 text-sm leading-relaxed text-fg-2">{props.subtitle}</div>
       </Show>
     </div>
     <div>{props.children}</div>

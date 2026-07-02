@@ -27,8 +27,7 @@ pub struct WatcherManager {
     watchers: Mutex<HashMap<String, RecommendedWatcher>>,
 }
 
-#[derive(Debug, Error, Serialize)]
-#[serde(tag = "kind", content = "message")]
+#[derive(Debug, Error)]
 pub enum WatcherError {
     #[error("watch error: {0}")]
     Watch(String),
@@ -60,6 +59,16 @@ pub struct WatcherEvent {
 pub async fn watch_project(
     app: AppHandle,
     manager: State<'_, WatcherManager>,
+    args: WatchArgs,
+) -> Result<(), String> {
+    // Runs inside the async command so the runtime context is present for the
+    // `tokio::spawn` the impl performs; the impl itself has no `.await`.
+    watch_project_impl(&app, &manager, args).map_err(|e| e.to_string())
+}
+
+fn watch_project_impl(
+    app: &AppHandle,
+    manager: &WatcherManager,
     args: WatchArgs,
 ) -> Result<(), WatcherError> {
     let project_id = args.project_id;
@@ -157,12 +166,12 @@ pub async fn watch_project(
 pub fn unwatch_project(
     manager: State<'_, WatcherManager>,
     project_id: String,
-) -> Result<(), WatcherError> {
+) -> Result<(), String> {
     let mut watchers = manager.watchers.lock().expect("watcher lock poisoned");
     if watchers.remove(&project_id).is_some() {
         Ok(())
     } else {
-        Err(WatcherError::NotWatched(project_id))
+        Err(WatcherError::NotWatched(project_id).to_string())
     }
 }
 
@@ -187,5 +196,44 @@ fn classify(kind: &EventKind) -> String {
         EventKind::Access(_) => "access".into(),
         EventKind::Other => "other".into(),
         EventKind::Any => "any".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_internal_path_flags_sidecar_and_vcs_churn() {
+        // The autosave feedback loop and .git churn must be dropped at the source
+        // (forward slashes and Windows backslashes both).
+        assert!(is_internal_path(
+            "/home/u/proj/.typeward/snapshots/main.tex.snap"
+        ));
+        assert!(is_internal_path("C:\\Users\\u\\proj\\.git\\index"));
+        assert!(is_internal_path(
+            "C:\\Users\\u\\proj\\.typeward\\build\\main.pdf"
+        ));
+        assert!(is_internal_path("/proj/.typeward"));
+        assert!(is_internal_path("/proj/.git"));
+    }
+
+    #[test]
+    fn is_internal_path_passes_normal_project_files() {
+        assert!(!is_internal_path("/home/u/proj/main.tex"));
+        assert!(!is_internal_path("/home/u/proj/chapters/intro.tex"));
+        assert!(!is_internal_path("C:\\Users\\u\\proj\\figures\\plot.png"));
+        // A file whose name merely starts with .typeward is not the sidecar dir.
+        assert!(!is_internal_path("/proj/.typeward-notes.txt"));
+        assert!(!is_internal_path("/proj/mygit/config"));
+    }
+
+    #[test]
+    fn classify_maps_event_kinds() {
+        use notify::event::{CreateKind, ModifyKind, RemoveKind};
+        assert_eq!(classify(&EventKind::Create(CreateKind::Any)), "create");
+        assert_eq!(classify(&EventKind::Modify(ModifyKind::Any)), "modify");
+        assert_eq!(classify(&EventKind::Remove(RemoveKind::Any)), "remove");
+        assert_eq!(classify(&EventKind::Any), "any");
     }
 }

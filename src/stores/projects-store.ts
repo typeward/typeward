@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { createSignal } from "solid-js";
 import * as ipc from "~/ipc";
 import type { Project, ProjectFormat } from "~/adapters/types";
@@ -15,7 +16,7 @@ async function refresh() {
     const list = await ipc.listProjects(root);
     setProjects(list);
   } catch (e) {
-    setError(String(e));
+    setError(describeIpcError(e));
     setProjects([]);
   } finally {
     setLoading(false);
