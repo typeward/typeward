@@ -10,9 +10,12 @@ import { tags as t } from "@lezer/highlight";
 import type { Component } from "solid-js";
 import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { typst } from "~/adapters/typst/typst-language";
+import type { EditorLanguage } from "~/adapters/languages";
 import { getActiveEditorView, pushCursor, setActiveEditorView } from "~/stores/editor-view-store";
 
-export type CodeMirrorLanguage = "latex" | "markdown" | "typst" | "plain";
+// The editor's per-file language is owned by adapters/languages; the CM
+// component maps each value to a CodeMirror language extension (langExtension).
+export type CodeMirrorLanguage = EditorLanguage;
 
 interface CodeMirrorProps {
   value: string;
@@ -73,7 +76,37 @@ const baseTheme = EditorView.theme({
   ".cm-lineNumbers .cm-gutterElement": {
     padding: "0 14px 0 10px",
     minWidth: "32px",
-    fontSize: "11px",
+    // em, not px — tracks the user-configured editor font size.
+    fontSize: "0.85em",
+  },
+  // The library's `&light` base theme paints tooltips/panels stock
+  // white-on-light regardless of the app theme; token-driven rules here win
+  // over package base themes and re-skin with the rest of the chrome.
+  ".cm-tooltip": {
+    background: "var(--color-popover-bg)",
+    border: "1px solid var(--color-glass-stroke)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-tooltip-autocomplete ul li[aria-selected]": {
+    background: "var(--color-selection-bg)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-panels": {
+    background: "var(--color-popover-bg)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--color-glass-stroke)" },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--color-glass-stroke)" },
+  ".cm-textfield": {
+    background: "var(--color-control-fill)",
+    border: "1px solid var(--color-control-stroke)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-button": {
+    background: "var(--color-control-fill)",
+    backgroundImage: "none",
+    border: "1px solid var(--color-control-stroke)",
+    color: "var(--color-fg-1)",
   },
   ".cm-scroller": {
     overflow: "auto",

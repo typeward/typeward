@@ -279,16 +279,42 @@ export interface TemplateProvider extends IntegrationProvider {
 export type Tier = "free" | "pro";
 
 /**
- * Entitlement keys identify a gated feature. Stable, prefixed by category
- * so they group naturally in the settings UI and in the Supabase
- * `entitlements_map` table.
+ * Every known entitlement key. This is the canonical in-repo list — the free
+ * matrix (`entitlements.ts`), the gating call sites, and the remote
+ * `entitlements_map` (seed.sql) must all agree with it. Adding a gated feature
+ * starts here so a typo at any call site is a compile error rather than a
+ * silently hidden feature (sources default closed + FeatureGate renders
+ * nothing for unknown keys).
  *
  * Naming rule: dot-separated, lowercase, never repurposed once shipped.
  */
-export type EntitlementKey =
-  | `integrations.${string}`
-  | `templates.${string}`
-  | `features.${string}`;
+export const KNOWN_ENTITLEMENT_KEYS = [
+  // Free tier
+  "integrations.references.zotero.local",
+  "integrations.references.doi_lookup",
+  "integrations.vcs.git",
+  "integrations.vcs.github",
+  "integrations.vcs.overleaf_import",
+  "integrations.ai.ollama",
+  "integrations.grammar.harper",
+  "templates.builtin.free",
+  "templates.custom.max",
+  // Paid tier
+  "integrations.references.zotero.web",
+  "integrations.references.mendeley",
+  "integrations.cloud.dropbox",
+  "integrations.cloud.webdav",
+  "integrations.ai.anthropic",
+  "integrations.ai.openai",
+  "integrations.ai.gemini",
+] as const;
+
+/**
+ * Entitlement keys identify a gated feature. Closed union — call sites that
+ * construct keys dynamically from a provider id (e.g. `integrations.ai.${id}`)
+ * typecheck only because every provider id maps to a listed key.
+ */
+export type EntitlementKey = (typeof KNOWN_ENTITLEMENT_KEYS)[number];
 
 export interface EntitlementSource {
   current(): Tier;

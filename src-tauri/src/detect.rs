@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
@@ -6,6 +6,7 @@ use serde::Serialize;
 /// Result of probing the user's PATH for TeX-related binaries. Frontend
 /// onboarding renders one card per engine and shows the first version line.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TexEngine {
     pub name: String,
     pub path: Option<String>,
@@ -14,12 +15,22 @@ pub struct TexEngine {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EngineProbe {
     pub engines: Vec<TexEngine>,
     /// True if any LaTeX engine is installed and a build manager is available
     /// (latexmk preferred, but pdflatex alone is workable).
-    #[serde(rename = "anyLatexAvailable")]
     pub any_latex_available: bool,
+}
+
+/// Resolve a tool to its absolute path via `which`, so callers spawn the
+/// resolved path and never a bare name. On Windows `CreateProcess` searches the
+/// process CWD before PATH; a subprocess launched with `current_dir(project)`
+/// and a bare program name would run a binary planted in a malicious project
+/// (binary-planting RCE). This is the single chokepoint for that invariant:
+/// subprocess sites resolve here, then `Command::new(resolved)`.
+pub fn resolve_program(name: &str) -> Result<PathBuf, String> {
+    which::which(name).map_err(|_| format!("`{name}` was not found on PATH"))
 }
 
 const ENGINES: &[&str] = &[
@@ -38,13 +49,10 @@ pub fn probe() -> EngineProbe {
 }
 
 fn probe_one(name: &str) -> TexEngine {
-    let resolved = which::which(name).ok();
+    let resolved = resolve_program(name).ok();
     let path = resolved
         .as_ref()
         .map(|p| p.to_string_lossy().into_owned());
-    // Spawn the which-resolved absolute path, never the bare name: on Windows
-    // CreateProcess searches the CWD before PATH, so a bare name could run a
-    // binary planted in the current directory.
     let version = resolved.as_ref().and_then(|exe| run_version(name, exe));
     TexEngine {
         installed: path.is_some(),

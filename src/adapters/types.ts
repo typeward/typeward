@@ -102,21 +102,24 @@ export interface EditorCommand {
   run(): void | Promise<void>;
 }
 
-/**
- * CodeMirror's `Extension` type is referenced opaquely so this file does not
- * depend on @codemirror/state being installed. Adapters that produce real
- * extensions cast at the use site.
- */
-export type CodeMirrorExtension = unknown;
-
 export interface EditorAdapter {
+  /**
+   * The project's primary editor language. Consumed to pick the LSP server for
+   * a newly-opened project (see EditorScreen). Per-FILE language dispatch
+   * (a Typst project holds .md/.bib files too) lives in `adapters/languages.ts`,
+   * not here.
+   */
   languageId: string;
   format: ProjectFormat;
-  previewKind: "pdf";
-  cmExtensions(): CodeMirrorExtension[];
-  /** Delegates to a CompileProvider chosen by project settings. */
+  /** Compiles the project to its output artifact (PDF today). */
   compile(project: Project): Promise<CompileResult>;
   commands: EditorCommand[];
-  // diagnostics$ and completions are streamed; their wire shape is finalized
-  // when the LSP transport lands.
+  /**
+   * Vestigial seam members. Preview kind is decided per-file
+   * (`languages.ts#previewKindForFile`) and CodeMirror extensions per-file in
+   * CodeMirror.tsx, so neither is a per-project adapter fact. Kept optional so
+   * older adapter shapes still typecheck; do not add new consumers.
+   */
+  previewKind?: "pdf";
+  cmExtensions?(): unknown[];
 }

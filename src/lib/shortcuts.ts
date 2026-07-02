@@ -80,6 +80,23 @@ const KEY_DISPLAY: Record<string, string> = {
   " ": "Space",
 };
 
+// Mac glyphs follow the HIG menu order Control–Option–Shift–Command; Ctrl
+// folds into Mod on parse, so the sequence reduces to ⌥⇧⌘ with ⌘ last —
+// "⇧⌘F", not "⌘⇧F". Non-Mac keeps the conventional Ctrl+Alt+Shift order.
+const modifierTokens = (parsed: ParsedShortcut): string[] => {
+  const tokens: string[] = [];
+  if (isMac) {
+    if (parsed.alt) tokens.push("⌥");
+    if (parsed.shift) tokens.push("⇧");
+    if (parsed.mod) tokens.push("⌘");
+  } else {
+    if (parsed.mod) tokens.push("Ctrl");
+    if (parsed.alt) tokens.push("Alt");
+    if (parsed.shift) tokens.push("Shift");
+  }
+  return tokens;
+};
+
 /**
  * Render a shortcut as the human-facing string that goes inside <kbd>.
  * "Mod+K" → "⌘K" on Mac, "Ctrl+K" elsewhere.
@@ -87,12 +104,8 @@ const KEY_DISPLAY: Record<string, string> = {
 export const formatShortcutForDisplay = (shortcut: string): string => {
   const parsed = parseShortcut(shortcut);
   if (!parsed) return shortcut;
-  const parts: string[] = [];
-  if (parsed.mod) parts.push(isMac ? "⌘" : "Ctrl");
-  if (parsed.alt) parts.push(isMac ? "⌥" : "Alt");
-  if (parsed.shift) parts.push(isMac ? "⇧" : "Shift");
-  const keyDisplay = KEY_DISPLAY[parsed.key] ?? parsed.key.toUpperCase();
-  parts.push(keyDisplay);
+  const parts = modifierTokens(parsed);
+  parts.push(KEY_DISPLAY[parsed.key] ?? parsed.key.toUpperCase());
   return isMac ? parts.join("") : parts.join("+");
 };
 
@@ -103,10 +116,7 @@ export const formatShortcutForDisplay = (shortcut: string): string => {
 export const shortcutTokens = (shortcut: string): string[] => {
   const parsed = parseShortcut(shortcut);
   if (!parsed) return [shortcut];
-  const tokens: string[] = [];
-  if (parsed.mod) tokens.push(isMac ? "⌘" : "Ctrl");
-  if (parsed.alt) tokens.push(isMac ? "⌥" : "Alt");
-  if (parsed.shift) tokens.push(isMac ? "⇧" : "Shift");
+  const tokens = modifierTokens(parsed);
   tokens.push(KEY_DISPLAY[parsed.key] ?? parsed.key.toUpperCase());
   return tokens;
 };

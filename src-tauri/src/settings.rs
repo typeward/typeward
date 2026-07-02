@@ -430,3 +430,63 @@ pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), Se
 
 // Re-export for command handlers
 pub use tauri::Manager;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_projects_root_rejects_relative_path() {
+        // rootFile flows into engines as a positional arg and the projects root
+        // gates clone/init destinations; a non-absolute root must never pass.
+        assert!(validate_projects_root(Path::new("relative/dir")).is_err());
+        assert!(validate_projects_root(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn validate_projects_root_rejects_path_outside_documents() {
+        // The temp dir lives outside ~/Documents on every supported host.
+        let outside = std::env::temp_dir();
+        assert!(validate_projects_root(&outside).is_err());
+    }
+
+    #[test]
+    fn validate_projects_root_accepts_new_dir_under_documents() {
+        let Some(docs) = dirs::document_dir() else {
+            return;
+        };
+        if !docs.exists() {
+            return;
+        }
+        // A not-yet-created project directory under Documents validates because
+        // its first existing ancestor (Documents) is under the boundary.
+        let candidate = docs.join("Typeward").join("test-new-project-xyz");
+        assert!(validate_projects_root(&candidate).is_ok());
+    }
+
+    #[test]
+    fn sanitize_falls_back_when_projects_root_invalid() {
+        let mut s = Settings::default();
+        s.projects_root = "not/absolute/root".into();
+        let sanitized = sanitize_loaded_settings(s);
+        assert_eq!(
+            sanitized.projects_root,
+            default_projects_root().to_string_lossy().into_owned()
+        );
+    }
+
+    #[test]
+    fn sanitize_keeps_valid_projects_root() {
+        let Some(docs) = dirs::document_dir() else {
+            return;
+        };
+        if !docs.exists() {
+            return;
+        }
+        let valid = docs.join("Typeward");
+        let mut s = Settings::default();
+        s.projects_root = valid.to_string_lossy().into_owned();
+        let sanitized = sanitize_loaded_settings(s);
+        assert_eq!(sanitized.projects_root, valid.to_string_lossy().into_owned());
+    }
+}

@@ -23,22 +23,17 @@ import {
   setCredential,
 } from "./credentials";
 
+// Canonical IPC-error normalizer lives in ~/lib/errors; imported for local use
+// (below) and re-exported so existing `~/integrations/auth/chunked` importers
+// keep resolving it.
+import { describeIpcError } from "~/lib/errors";
+export { describeIpcError };
+
 // 1024 UTF-16 code units = 2048 bytes — safely under the 2560-byte cap.
 const CHUNK_CHARS = 1024;
 const MARKER_PREFIX = "__typeward_chunks__:";
 
 const partAccount = (account: string, i: number): string => `${account}.part${i}`;
-
-/** Normalize Tauri IPC rejections (serialized error enums) into readable text. */
-export function describeIpcError(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "string") return e;
-  try {
-    return JSON.stringify(e);
-  } catch {
-    return String(e);
-  }
-}
 
 function parseMarker(value: string): number | null {
   if (!value.startsWith(MARKER_PREFIX)) return null;

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { assertDesktopCommand } from "~/ipc";
 
 /**
  * Phase 1 LSP transport client. Talks to the Rust LSP manager over Tauri
@@ -36,6 +37,7 @@ interface StartResult {
 }
 
 export async function startLsp(args: StartArgs): Promise<LanguageServerClient> {
+  assertDesktopCommand("start_lsp");
   const { serverId } = await invoke<StartResult>("start_lsp", { args });
 
   const eventName = `lsp:${serverId}:message`;

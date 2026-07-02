@@ -24,3 +24,31 @@
   --color-accent-2: #ec4899;
   --color-accent-fg: #111314; /* dark ink — bright accent (was #ffffff) */
 }
+
+/*
+ * Light-theme variants. The stock palettes above are tuned for the dark
+ * themes; on Daylight/Paper the same values fail AA both as text (links,
+ * active tab labels, badges all render in --color-accent-1) and as the
+ * global focus ring. Deepened same-hue variants take over, dark enough
+ * that the label color on gradients flips back to white.
+ */
+[data-theme="daylight"][data-accent="amber-rose"],
+[data-theme="paper"][data-accent="amber-rose"] {
+  --color-accent-1: #92400e;
+  --color-accent-2: #9f1239;
+  --color-accent-fg: #ffffff;
+}
+
+[data-theme="daylight"][data-accent="emerald-teal"],
+[data-theme="paper"][data-accent="emerald-teal"] {
+  --color-accent-1: #065f46;
+  --color-accent-2: #0f766e;
+  --color-accent-fg: #ffffff;
+}
+
+[data-theme="daylight"][data-accent="indigo-pink"],
+[data-theme="paper"][data-accent="indigo-pink"] {
+  --color-accent-1: #4f46e5;
+  --color-accent-2: #be185d;
+  --color-accent-fg: #ffffff;
+}

@@ -13,8 +13,10 @@
  * an in-app banner the user can dismiss by going online.
  */
 
-import { createEffect, createRoot } from "solid-js";
+import { createEffect, createRoot, createSignal } from "solid-js";
 
+import { recordError } from "~/lib/telemetry";
+import { notifyError } from "~/lib/toast";
 import { resetEntitlementSource, setEntitlementSource } from "~/integrations/entitlements";
 import type {
   EntitlementKey,
@@ -31,6 +33,17 @@ import { supabaseSession, supabaseSessionReady } from "./session";
 
 const CACHE_SERVICE = "supabase.entitlements";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Whether the last entitlement refresh reached Supabase. UI (e.g. the plan
+ * badge) can read this to show an offline indicator. `offline-cached` means we
+ * are serving a valid cached snapshot; `offline-uncached` means the refresh
+ * failed with no usable cache, so the user has collapsed to the free tier.
+ */
+export type EntitlementSyncStatus = "online" | "offline-cached" | "offline-uncached";
+const [entitlementSyncStatus, setEntitlementSyncStatus] =
+  createSignal<EntitlementSyncStatus>("online");
+export { entitlementSyncStatus };
 
 interface CachedSnapshot {
   fetchedAt: number;
@@ -137,11 +150,33 @@ export function initSupabaseEntitlements(): void {
       });
 
       // Then refresh.
-      void fetchEntitlements().then((fresh) => {
+      void fetchEntitlements().then(async (fresh) => {
         if (!isCurrentSessionUser(userId)) return;
         if (fresh) {
           setEntitlementSource(buildSource(fresh));
+          setEntitlementSyncStatus("online");
           void writeCache(userId, fresh).catch(() => undefined);
+          return;
+        }
+        // Refresh failed (offline / RPC error). Don't silently strip a paying
+        // user of their plan: keep serving a within-TTL cached snapshot. Only
+        // when there is no usable cache do we fall through to the free stub —
+        // and in that case make it visible rather than a silent downgrade.
+        recordError(
+          "entitlements-refresh",
+          `get_entitlements failed for ${userId}; falling back to cache`,
+        );
+        const cached = await readCache(userId);
+        if (!isCurrentSessionUser(userId)) return;
+        if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+          setEntitlementSource(buildSource(cached));
+          setEntitlementSyncStatus("offline-cached");
+        } else {
+          setEntitlementSyncStatus("offline-uncached");
+          notifyError(
+            "Couldn't verify your plan",
+            "You appear to be offline. Some paid features may be locked until Typeward can reach your account again.",
+          );
         }
       });
     });

@@ -60,6 +60,16 @@ violet/cyan on Aurora). Three explicit palettes (Amber-Rose, Emerald-Teal,
 Indigo-Pink) layer on top of any theme. Custom themes embed their own accent —
 when a custom theme is selected, the accent picker is also grayed out.
 
+**Light-theme variants (2026-07-01).** The stock palettes are bright and
+tuned for the dark themes; as text (links, active tab labels, badges) and
+as the global focus ring they failed WCAG AA on Daylight/Paper (amber
+1.96:1 as text, ring 1.6:1). `accents.css` therefore carries deepened
+same-hue variants behind `[data-theme="daylight"][data-accent="..."]` /
+`[data-theme="paper"]...` compound selectors, with `--color-accent-fg`
+flipped back to white. The Settings accent swatches probe with the current
+theme's `data-theme` set on the detached probe element so the picker
+previews the variant that will actually apply.
+
 ## Custom themes — shipped 2026-06-12
 
 User-defined themes are JSON files in `<app_data_dir>/themes/` — one file per

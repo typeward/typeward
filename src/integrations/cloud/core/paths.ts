@@ -13,6 +13,17 @@
  * `<cache>/.typeward/integrations/<providerId>/`.
  */
 
+/**
+ * A remote-relative path that has passed `normalizeRemoteRelPath` — the single
+ * producer. Branding it makes the funnel visible to the compiler: engine data
+ * structures that key on remote paths (the sync-state manifest, the pending
+ * push set, the echo-suppression map) require this type, so a raw provider
+ * string (Dropbox `path_display`, a WebDAV href) cannot be inserted without
+ * first passing the traversal / `.typeward` / absolute-path rejection. Runtime
+ * value is a plain string; the brand exists only at compile time.
+ */
+export type NormalizedRelPath = string & { readonly __normalizedRemoteRelPath: unique symbol };
+
 export const REMOTE_CACHE_DIR = ".remote-cache";
 
 export function providerCacheRoot(projectsRoot: string, providerId: string): string {
@@ -71,7 +82,7 @@ function providerStatePath(cacheRoot: string, providerId: string, fileName: stri
   return joinPath(cacheRoot, ".typeward", "integrations", providerId, fileName);
 }
 
-export function normalizeRemoteRelPath(relPath: string): string {
+export function normalizeRemoteRelPath(relPath: string): NormalizedRelPath {
   const normalized = relPath.trim().replace(/\\/g, "/");
   if (
     !normalized ||
@@ -94,7 +105,7 @@ export function normalizeRemoteRelPath(relPath: string): string {
   if (segments.some((segment) => segment.toLowerCase() === ".typeward")) {
     throw new Error(`Remote path '${relPath}' targets Typeward's internal state`);
   }
-  return segments.join("/");
+  return segments.join("/") as NormalizedRelPath;
 }
 
 export function cachePathForRemoteRel(cacheRoot: string, relPath: string): string {

@@ -17,8 +17,8 @@
   /* Foreground levels */
   --color-fg-1: #e6e8ec;
   --color-fg-2: #9ca3af;
-  --color-fg-3: #747b88; /* was #6b7280 — lifted to 4.6:1 on bg (AA body) */
-  --color-fg-4: #57606d; /* was #4b5563 — lifted to 3.1:1 on bg (AA UI floor) */
+  --color-fg-3: #7d8593; /* 4.5:1+ on the glass/popover composites the text actually sits on — bg-only tuning regressed there */
+  --color-fg-4: #5d6673; /* 3:1+ on the same composites (AA UI floor) */
 
   /* Glass surfaces (used by .glass, .glass-soft, .glass-inset utilities) */
   --color-glass-fill: rgb(255 255 255 / 0.035);
@@ -81,8 +81,8 @@
   /*
    * Subtle accent-tinted background used to mark "active" / "selected"
    * rows where a faint white/slate tint isn't enough on its own to read
-   * as selected. Hooks into the active accent so it re-tints per accent
-   * palette as well.
+   * as selected. Theme files override with their own wash; accent palettes
+   * deliberately don't re-tint it.
    */
   --color-selection-bg: rgb(139 92 246 / 0.10);
 
@@ -131,6 +131,29 @@
    * themes don't carry a hard pure-black drop. */
   --shadow-raised: 0 2px 6px rgb(0 0 0 / 0.45);
 
+  /* Filled accent button (Button primary). Light themes swap the heavy black
+   * drop for their paper shadow language. */
+  --shadow-accent-btn:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 4px 14px rgb(0 0 0 / 0.22);
+
+  /*
+   * Named Tailwind text sizes resolve through the density scale so text-xs /
+   * text-sm / text-base / text-lg / text-xl rescale with Compact/Cozy/
+   * Comfortable. Sizes below the scale (10px micro-mono captions) stay
+   * literal text-[10px] by convention.
+   */
+  --text-xs: var(--ui-font-xs);
+  --text-xs--line-height: var(--ui-line-base);
+  --text-sm: var(--ui-font-sm);
+  --text-sm--line-height: var(--ui-line-base);
+  --text-base: var(--ui-font-base);
+  --text-base--line-height: var(--ui-line-base);
+  --text-lg: var(--ui-font-lg);
+  --text-lg--line-height: var(--ui-line-base);
+  --text-xl: var(--ui-font-xl);
+  --text-xl--line-height: var(--ui-line-tight);
+
   /* Fonts */
   --font-sans:
     "Inter Variable", "Inter", system-ui, -apple-system, "Segoe UI", Roboto,
@@ -167,7 +190,7 @@
   --syntax-cmd: #c4b5fd;
   --syntax-env: #34d399;
   --syntax-math: #67e8f9;
-  --syntax-comment: #737b89; /* was #5f6878 — lifted to 4.6:1 on bg (AA) */
+  --syntax-comment: #7d8593; /* 4.5:1+ on the editor's glass composite, not bare bg */
   --syntax-bracket: var(--color-fg-3);
   --syntax-attr: #a7f3d0;
 }
@@ -197,7 +220,8 @@ body,
 body {
   font-family: var(--font-sans);
   font-feature-settings: "cv02", "cv03", "cv04", "ss01";
-  letter-spacing: -0.005em;
+  /* Tracking comes from the density layer (utilities.css applies
+   * --ui-track-tight), which loads after this file. */
   /*
    * `-webkit-font-smoothing: antialiased` would force grayscale AA, which
    * only looks "right" at 2x device-pixel ratios. At Windows 100% scale

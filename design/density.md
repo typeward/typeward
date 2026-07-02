@@ -64,14 +64,20 @@ visual weight of lucide stroke icons line up well at that ratio.
 
 ## Consumption
 
-CSS / Tailwind references use the tokens, **not** raw pixel values:
+Since 2026-07-01, Tailwind's named text sizes ARE the density tokens —
+`tokens.css` `@theme` aliases `--text-xs/sm/base/lg/xl` to
+`var(--ui-font-*)` (with line-height companions: 1.5 for xs–lg via
+`--ui-line-base`, 1.2 for xl via `--ui-line-tight`). Use the named
+utilities; the verbose `text-[length:var(--ui-font-xs)]`-style spelling
+(one per size) is retired, as are hardcoded `text-[12px]`-style sizes on
+the scale:
 
 ```tsx
 // Body / list items
-class="text-[length:var(--ui-font-base)]"
+class="text-base"
 
 // Hints
-class="text-[length:var(--ui-font-xs)]"
+class="text-xs"
 
 // Inline icon
 <FolderIcon class="ui-icon-menu" />
@@ -79,6 +85,10 @@ class="text-[length:var(--ui-font-xs)]"
 // Density-aware row height
 style={{ height: "var(--ui-row)" }}
 ```
+
+`text-[10px]` stays literal by convention — the micro-caption floor below
+the scale (mono badges, kbd chips). Display sizes (18px+ onboarding
+headings) also stay literal.
 
 Three utility classes live in `utilities.css`:
 
@@ -122,7 +132,12 @@ on first tablet mount. Once they set a value explicitly, it sticks.
 
 ## Migration
 
-`text-[length:var(--ui-font-base)]` / `class="ui-icon-menu"` everywhere
-new. Existing surfaces migrate as they're touched; a sweep on 2026-05-15
-rounded every `text-[Xpx]` fractional value to its nearest integer (9.5 →
-10, 10.5 → 11, …, 13.5 → 14) so no surface renders sub-pixel.
+A sweep on 2026-05-15 rounded every `text-[Xpx]` fractional value to its
+nearest integer (9.5 → 10, 10.5 → 11, …, 13.5 → 14) so no surface renders
+sub-pixel. The 2026-07-01 design pass migrated the whole live UI (~350
+sites) onto the named `text-*` aliases, so every size now rescales with
+density; 13px one-offs were absorbed into `text-base`.
+
+Radius tokens (`--ui-radius-sm/base/lg`) were removed 2026-07-01 — they
+were never consumed; radii are Tailwind literals (`rounded-md/lg/xl`) and
+deliberately do not scale with density.

@@ -14,6 +14,7 @@ import {
   removeThread,
 } from "~/stores/review-store";
 import { recoverThreads } from "~/lib/reviews/recovery";
+import { formatShortcutForDisplay } from "~/lib/shortcuts";
 import { setCursorLine } from "~/stores/editor-view-store";
 
 export type ReviewScope = "file" | "all";
@@ -77,7 +78,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setScope("file")}
-            class={`rounded px-2 py-0.5 text-[11px] font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
+            class={`rounded px-2 py-0.5 text-xs font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
             style={scope() === "file" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             This file
@@ -85,13 +86,13 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setScope("all")}
-            class={`rounded px-2 py-0.5 text-[11px] font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
+            class={`rounded px-2 py-0.5 text-xs font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
             style={scope() === "all" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             All files
           </button>
         </div>
-        <label class="flex items-center gap-1.5 text-[10px] text-fg-3 cursor-pointer select-none">
+        <label class="flex items-center gap-1.5 text-[10px] text-fg-3 select-none">
           <input
             type="checkbox"
             checked={showResolved()}
@@ -113,9 +114,9 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
               >
                 <Inbox size={20} />
               </div>
-              <div class="text-[13px] font-semibold text-fg-1">No review threads</div>
-              <div class="text-[11px] leading-relaxed text-fg-3">
-                Select text and press Ctrl+Shift+M to start a review thread.
+              <div class="text-base font-semibold text-fg-1">No review threads</div>
+              <div class="text-xs leading-relaxed text-fg-3">
+                Select text and press {formatShortcutForDisplay("Mod+Shift+M")} to start a review thread.
               </div>
             </div>
           }

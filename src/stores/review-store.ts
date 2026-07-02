@@ -1,37 +1,45 @@
+import { describeIpcError } from "~/lib/errors";
+import { notifyError } from "~/lib/toast";
 import { createSignal } from "solid-js";
 import type { CommentThread } from "~/lib/reviews/types";
 import { addReply, resolveThread, reopenThread } from "~/lib/reviews/types";
-import { activeFile, project } from "~/stores/editor-store";
+import { project } from "~/stores/editor-store";
 import * as ipc from "~/ipc";
+import { recordError } from "~/lib/telemetry";
 
+// Review comments persist to a machine-local sidecar under the project's
+// `.typeward/` dir. Format: a JSON array of CommentThread. This is primary
+// user-authored data (not a derived cache), but it lives in the non-portable
+// `.typeward/` tree — it does NOT travel with a cloud-synced or git-tracked
+// copy of the project (both exclude `.typeward/`). See finding #35: a durable
+// relocation is deferred; documented here so the trade-off is explicit.
 const SIDECAR_REL_PATH = ".typeward/reviews/comments.json";
 const SAVE_DEBOUNCE_MS = 1_500;
 
 const [allThreads, setAllThreads] = createSignal<CommentThread[]>([]);
 const [showResolved, setShowResolved] = createSignal(false);
 
+// "Please switch the sidebar to the Review tab" intent — mirrors the
+// requestNewProject/requestSaveTemplate pattern in palette-store. The shell
+// observes this and clears it. Replaces the old window CustomEvent bus.
+const [requestReviewPanel, setRequestReviewPanel] = createSignal(false);
+
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 // Root captured when the save was scheduled — the debounce can outlive a
 // project switch, and writing to whatever project() points at by then would
 // drop one project's threads into another's sidecar.
 let _pendingRoot: string | null = null;
+// Refuse to persist until a clean load has established what's on disk. A read
+// or parse failure that got laundered into an empty writable state would let
+// the next save overwrite (and destroy) real threads that merely failed to
+// load. Set true on reset, flipped false only by a successful/not-found load.
+let _readOnly = true;
+// One save-failure toast per project — a repeatedly failing debounce must not
+// spam the user, but the failure must not be silent either.
+let _writeErrorToastedRoot: string | null = null;
 
 function threadsForFile(relPath: string): CommentThread[] {
   return allThreads().filter((t) => t.fileRelPath === relPath);
-}
-
-function activeFileThreads(): CommentThread[] {
-  const f = activeFile();
-  return f ? threadsForFile(f.relPath) : [];
-}
-
-function visibleActiveFileThreads(): CommentThread[] {
-  const base = activeFileThreads();
-  return showResolved() ? base : base.filter((t) => t.status === "open");
-}
-
-function activeFileOpenThreadCount(): number {
-  return activeFileThreads().filter((t) => t.status === "open").length;
 }
 
 function allOpenThreadCount(): number {
@@ -69,6 +77,27 @@ function removeThread(threadId: string): void {
   scheduleSave();
 }
 
+/**
+ * Re-point an orphaned thread at a fresh range (the current editor selection).
+ * The store is the single source of truth for anchors, so updating it here is
+ * enough — the CM bridge re-derives decorations from the store.
+ */
+function reanchorThreadById(
+  threadId: string,
+  fromOffset: number,
+  toOffset: number,
+  anchorText: string,
+): void {
+  setAllThreads((prev) =>
+    prev.map((t) =>
+      t.id === threadId
+        ? { ...t, fromOffset, toOffset, anchorText: anchorText.slice(0, 80) }
+        : t,
+    ),
+  );
+  scheduleSave();
+}
+
 function updateThreadOffsets(
   fileRelPath: string,
   updates: Array<{ id: string; fromOffset: number; toOffset: number; anchorText: string }>,
@@ -85,23 +114,70 @@ function updateThreadOffsets(
   scheduleSave();
 }
 
+/**
+ * A missing sidecar (fresh project, no reviews yet) is normal and writable; a
+ * genuine read failure (permission, lock) must NOT be — hence the distinction.
+ * We can't call the fs plugin here (its scope is Documents-only, but project
+ * reads go through a custom root-registered IPC that also serves out-of-scope
+ * roots), so we classify by the io error the Rust read surfaces. NotFound is
+ * "os error 2" on every platform; anything else is treated as a real failure.
+ */
+function isNotFoundError(e: unknown): boolean {
+  const msg = (
+    typeof e === "string"
+      ? e
+      : e instanceof Error
+        ? e.message
+        : describeIpcError(e)
+  ).toLowerCase();
+  return (
+    msg.includes("os error 2") ||
+    msg.includes("no such file") ||
+    msg.includes("cannot find the file") ||
+    msg.includes("cannot find the path")
+  );
+}
+
 async function loadThreads(isCurrent: () => boolean = () => true): Promise<void> {
   const proj = project();
   if (!proj) return;
+  let raw: string;
   try {
-    const raw = await ipc.readProjectTextFile(proj.rootPath, SIDECAR_REL_PATH);
+    raw = await ipc.readProjectTextFile(proj.rootPath, SIDECAR_REL_PATH);
+  } catch (e) {
     if (!isCurrent()) return;
+    if (isNotFoundError(e)) {
+      // No sidecar yet — an empty, writable slate.
+      setAllThreads([]);
+      _readOnly = false;
+    } else {
+      // A real read failure. Stay read-only so the next save can't overwrite
+      // threads that are present on disk but that we failed to load.
+      recordError("reviews-load", `reading ${SIDECAR_REL_PATH} failed`, e);
+    }
+    return;
+  }
+  if (!isCurrent()) return;
+  try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       setAllThreads(parsed);
+      _readOnly = false;
+    } else {
+      // Valid JSON, wrong shape — treat as corrupt; don't clobber it.
+      recordError(
+        "reviews-load",
+        `${SIDECAR_REL_PATH} is not a thread array`,
+      );
     }
-  } catch {
-    if (!isCurrent()) return;
-    setAllThreads([]);
+  } catch (e) {
+    // Corrupt sidecar — stay read-only rather than overwrite it on next save.
+    recordError("reviews-load", `parsing ${SIDECAR_REL_PATH} failed`, e);
   }
 }
 
 function scheduleSave(): void {
+  if (_readOnly) return;
   if (_saveTimer) clearTimeout(_saveTimer);
   _pendingRoot = project()?.rootPath ?? null;
   _saveTimer = setTimeout(() => {
@@ -134,21 +210,29 @@ function resetThreads(): void {
     _saveTimer = null;
   }
   _pendingRoot = null;
+  _writeErrorToastedRoot = null;
+  // Block saves until loadThreads establishes what's on disk for the next
+  // project — otherwise a mutation in the load gap could overwrite it.
+  _readOnly = true;
   setAllThreads([]);
 }
 
-async function saveThreads(): Promise<void> {
-  const proj = project();
-  if (!proj) return;
-  await writeThreads(proj.rootPath);
-}
-
 async function writeThreads(rootPath: string): Promise<void> {
+  if (_readOnly) return;
   const data = JSON.stringify(allThreads(), null, 2);
   try {
     await ipc.writeProjectTextFile(rootPath, SIDECAR_REL_PATH, data);
-  } catch {
-    // save is non-critical; failures are intentionally swallowed
+    if (_writeErrorToastedRoot === rootPath) _writeErrorToastedRoot = null;
+  } catch (e) {
+    // Review comments are primary user data with no other persistence — a
+    // silent drop is data loss. Surface it (once per project) and keep the
+    // save "dirty" by re-arming the debounce so it retries.
+    recordError("reviews-save", `writing ${SIDECAR_REL_PATH} failed`, e);
+    if (_writeErrorToastedRoot !== rootPath) {
+      _writeErrorToastedRoot = rootPath;
+      notifyError("Couldn't save review comments", describeIpcError(e));
+    }
+    if (rootPath === project()?.rootPath) scheduleSave();
   }
 }
 
@@ -159,22 +243,20 @@ function _resetForTests(): void {
 
 export {
   allThreads,
-  setAllThreads,
   showResolved,
   setShowResolved,
+  requestReviewPanel,
+  setRequestReviewPanel,
   threadsForFile,
-  activeFileThreads,
-  visibleActiveFileThreads,
-  activeFileOpenThreadCount,
   allOpenThreadCount,
   addThread,
   addReplyToThread,
   resolveThreadById,
   reopenThreadById,
   removeThread,
+  reanchorThreadById,
   updateThreadOffsets,
   loadThreads,
-  saveThreads,
   flushPendingReviewSave,
   resetThreads,
   _resetForTests,

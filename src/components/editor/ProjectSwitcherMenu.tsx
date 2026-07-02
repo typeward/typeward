@@ -3,6 +3,7 @@ import { ArrowLeft, ChevronDown, FolderOpen } from "lucide-solid";
 import type { Component } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { project } from "~/stores/editor-store";
 import { projects } from "~/stores/projects-store";
 
@@ -21,6 +22,7 @@ export const ProjectSwitcherMenu: Component<{
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
   const onTrigger = () => setOpen((v) => !v);
 
   const others = () =>
@@ -38,18 +40,23 @@ export const ProjectSwitcherMenu: Component<{
       <button
         type="button"
         onClick={onTrigger}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
         class="lift flex h-7 items-center gap-1.5 rounded-md px-2.5 hover:bg-[var(--color-control-fill)]"
       >
         <span class="flex h-4 w-4 items-center justify-center rounded-[5px] accent-grad">
           <span class="text-[9px] font-bold">τ</span>
         </span>
-        <span class="text-[length:var(--ui-font-sm)] font-semibold tracking-tight text-fg-1">
+        <span class="max-w-[220px] truncate text-sm font-semibold tracking-tight text-fg-1">
           {project()?.name ?? "—"}
         </span>
         <ChevronDown size={11} class="opacity-50" />
       </button>
       <Show when={open()}>
         <div
+          role="listbox"
+          tabindex={-1}
+          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute left-0 top-full z-50 mt-1 w-[260px] rounded-xl"
           style={{
             padding: "var(--ui-pad-section)",
@@ -63,7 +70,7 @@ export const ProjectSwitcherMenu: Component<{
           <Show
             when={others().length > 0}
             fallback={
-              <div class="px-2 py-3 text-[length:var(--ui-font-sm)] text-fg-3">
+              <div class="px-2 py-3 text-sm text-fg-3">
                 No other projects yet.
               </div>
             }
@@ -72,12 +79,14 @@ export const ProjectSwitcherMenu: Component<{
               {(p) => (
                 <button
                   type="button"
+                  role="option"
+                  tabindex={-1}
                   onClick={() => choose(p.rootPath)}
                   class="lift flex w-full items-center gap-2 rounded-md p-2 text-left hover:bg-[var(--color-control-fill)]"
                 >
                   <FolderOpen size={12} class="text-fg-3" />
                   <div class="min-w-0 flex-1">
-                    <div class="truncate text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                    <div class="truncate text-sm font-medium text-fg-1">
                       {p.name}
                     </div>
                     <div class="mono mt-0.5 truncate text-[10px] text-fg-3">
@@ -91,11 +100,13 @@ export const ProjectSwitcherMenu: Component<{
           <div class="my-1.5 h-px" style={{ background: "var(--color-control-stroke)" }} />
           <button
             type="button"
+            role="option"
+            tabindex={-1}
             onClick={() => {
               setOpen(false);
               props.onBack();
             }}
-            class="lift flex w-full items-center gap-2 rounded-md p-2 text-left text-[length:var(--ui-font-sm)] text-fg-2 hover:bg-[var(--color-control-fill)]"
+            class="lift flex w-full items-center gap-2 rounded-md p-2 text-left text-sm text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
             <ArrowLeft size={12} class="text-fg-3" />
             <span>Back to all projects</span>

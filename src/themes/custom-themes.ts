@@ -67,7 +67,10 @@ function applyTheme(active: ipc.CustomTheme | null): void {
     styleEl.id = STYLE_EL_ID;
     document.head.appendChild(styleEl);
   }
-  styleEl.textContent = `html[data-custom-theme="${active.id}"] {\n${decls}\n}`;
+  // Doubled attribute keeps specificity (0,2,1) above the compound
+  // [data-theme][data-accent] light-theme accent variants in accents.css —
+  // a custom theme's tokens must win over every built-in block.
+  styleEl.textContent = `html[data-custom-theme="${active.id}"][data-custom-theme] {\n${decls}\n}`;
   html.setAttribute("data-custom-theme", active.id);
 }
 

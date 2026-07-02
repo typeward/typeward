@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { notifyError } = vi.hoisted(() => ({ notifyError: vi.fn() }));
-vi.mock("~/components/feedback/Toaster", () => ({
+// run.ts imports notifyError from ~/lib/toast (which statically pulls Kobalte);
+// mock it so the toast rendering stack stays out of this unit test. errorText
+// now comes from the pure ~/lib/errors and needs no mock.
+vi.mock("~/lib/toast", () => ({
   notifyError,
-  errorText: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
 import type { EditorCommand } from "~/adapters/types";

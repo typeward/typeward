@@ -10,7 +10,6 @@
 //! Linux Secret Service backend can stall on D-Bus operations.
 
 use keyring::Entry;
-use serde::Serialize;
 use thiserror::Error;
 
 const SERVICE_PREFIX: &str = "typeward";
@@ -24,7 +23,7 @@ const SERVICE_PREFIX: &str = "typeward";
 const SESSION_SERVICE: &str = "supabase.session";
 const CHUNK_MARKER: &str = "__typeward_chunks__:";
 
-#[derive(Debug, Error, Serialize)]
+#[derive(Debug, Error)]
 pub enum CredentialError {
     #[error("invalid service name (empty or contains '/'): {0}")]
     InvalidService(String),
@@ -140,23 +139,25 @@ pub async fn credential_set(
     service: String,
     account: String,
     secret: String,
-) -> Result<(), CredentialError> {
+) -> Result<(), String> {
     tokio::task::spawn_blocking(move || set_secret(&service, &account, &secret))
         .await
-        .map_err(|e| CredentialError::Join(e.to_string()))?
+        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn credential_get(
     service: String,
     account: String,
-) -> Result<Option<String>, CredentialError> {
+) -> Result<Option<String>, String> {
     if !frontend_read_allowed(&service) {
-        return Err(CredentialError::ReadForbidden(service));
+        return Err(CredentialError::ReadForbidden(service).to_string());
     }
     tokio::task::spawn_blocking(move || get_secret(&service, &account))
         .await
-        .map_err(|e| CredentialError::Join(e.to_string()))?
+        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
+        .map_err(|e| e.to_string())
 }
 
 /// Dedicated reader for the Supabase auth session. supabase-js runs in the
@@ -164,24 +165,27 @@ pub async fn credential_get(
 /// the renderer — but only through this purpose-specific command, keeping the
 /// generic `credential_get` locked (see `frontend_read_allowed`).
 #[tauri::command]
-pub async fn supabase_session_read(account: String) -> Result<Option<String>, CredentialError> {
+pub async fn supabase_session_read(account: String) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || read_chunked_session(&account))
         .await
-        .map_err(|e| CredentialError::Join(e.to_string()))?
+        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn credential_exists(service: String, account: String) -> Result<bool, CredentialError> {
+pub async fn credential_exists(service: String, account: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || secret_exists(&service, &account))
         .await
-        .map_err(|e| CredentialError::Join(e.to_string()))?
+        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn credential_delete(service: String, account: String) -> Result<(), CredentialError> {
+pub async fn credential_delete(service: String, account: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || delete_secret(&service, &account))
         .await
-        .map_err(|e| CredentialError::Join(e.to_string()))?
+        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
+        .map_err(|e| e.to_string())
 }
 
 fn frontend_read_allowed(service: &str) -> bool {

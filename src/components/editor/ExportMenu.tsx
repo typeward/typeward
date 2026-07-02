@@ -1,8 +1,11 @@
+import { describeIpcError } from "~/lib/errors";
 import { FileDown, FileType2, Loader2, MessageSquare, Package } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
+import { SoonBadge } from "~/components/primitives/SoonBadge";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
+import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { recordError } from "~/lib/telemetry";
 import { project } from "~/stores/editor-store";
 
@@ -33,6 +36,7 @@ export const ExportMenu: Component<{
   const [error, setError] = createSignal<string | null>(null);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
   const onTrigger = () => {
     setError(null);
     setOpen((v) => !v);
@@ -64,7 +68,7 @@ export const ExportMenu: Component<{
       const suggested = source.split(/[\\/]/).pop() ?? "document.pdf";
       await copyToChosenDest(source, suggested, { name: "PDF", extensions: ["pdf"] });
     } catch (e) {
-      setError(String(e));
+      setError(describeIpcError(e));
       recordError("export-pdf", "PDF export failed", e);
     } finally {
       setBusy(false);
@@ -83,7 +87,7 @@ export const ExportMenu: Component<{
         extensions: ["zip"],
       });
     } catch (e) {
-      setError(String(e));
+      setError(describeIpcError(e));
       recordError("export-zip", "source bundle export failed", e);
     } finally {
       setBusy(false);
@@ -95,6 +99,8 @@ export const ExportMenu: Component<{
       <button
         type="button"
         onClick={onTrigger}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
         class="lift glass-soft flex h-9 w-9 items-center justify-center rounded-md text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
         title="Export"
         aria-label="Export"
@@ -103,12 +109,17 @@ export const ExportMenu: Component<{
       </button>
       <Show when={open()}>
         <div
+          role="listbox"
+          tabindex={-1}
+          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute left-0 top-full z-50 mt-1 w-[260px] rounded-xl"
           style={{ padding: "var(--ui-pad-section)", background: "var(--color-popover-bg)" }}
         >
           <span class="label-xs mb-1 block px-1 text-fg-3">Export as</span>
           <button
             type="button"
+            role="option"
+            tabindex={-1}
             disabled={!props.pdfPath || busy()}
             onClick={() => void exportPdf()}
             class="flex w-full items-center gap-2.5 rounded-md p-2 text-left enabled:hover:bg-[var(--color-control-fill)] disabled:cursor-not-allowed disabled:opacity-60"
@@ -122,7 +133,7 @@ export const ExportMenu: Component<{
               </Show>
             </span>
             <div class="min-w-0 flex-1">
-              <div class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+              <div class="text-sm font-medium text-fg-1">
                 Export PDF
               </div>
               <div class="mono mt-0.5 text-[10px] text-fg-3">
@@ -132,6 +143,8 @@ export const ExportMenu: Component<{
           </button>
           <button
             type="button"
+            role="option"
+            tabindex={-1}
             disabled={!project() || busy()}
             onClick={() => void exportZip()}
             class="flex w-full items-center gap-2.5 rounded-md p-2 text-left enabled:hover:bg-[var(--color-control-fill)] disabled:cursor-not-allowed disabled:opacity-60"
@@ -145,7 +158,7 @@ export const ExportMenu: Component<{
               </Show>
             </span>
             <div class="min-w-0 flex-1">
-              <div class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+              <div class="text-sm font-medium text-fg-1">
                 Source bundle (.zip)
               </div>
               <div class="mono mt-0.5 text-[10px] text-fg-3">
@@ -167,25 +180,17 @@ export const ExportMenu: Component<{
                   {o.icon()}
                 </span>
                 <div class="min-w-0 flex-1">
-                  <div class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                  <div class="text-sm font-medium text-fg-1">
                     {o.label}
                   </div>
                   <div class="mono mt-0.5 text-[10px] text-fg-3">{o.hint}</div>
                 </div>
-                <span
-                  class="mono rounded px-1 text-[9px]"
-                  style={{
-                    background: "var(--color-control-fill)",
-                    color: "var(--color-fg-3)",
-                  }}
-                >
-                  soon
-                </span>
+                <SoonBadge />
               </button>
             )}
           </For>
           <Show when={error()}>
-            <div class="px-2 pt-1 text-[11px]" style={{ color: "var(--color-err)" }}>
+            <div class="select-text px-2 pt-1 text-xs" style={{ color: "var(--color-err)" }}>
               {error()}
             </div>
           </Show>

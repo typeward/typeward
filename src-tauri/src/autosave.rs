@@ -24,15 +24,13 @@ pub enum AutosaveError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    #[serde(rename = "relPath")]
     pub rel_path: String,
     pub content: String,
     /// Snapshot mtime as ms-since-epoch.
-    #[serde(rename = "snapshotMtime")]
     pub snapshot_mtime: i64,
     /// File mtime as ms-since-epoch (or null if file missing).
-    #[serde(rename = "fileMtime")]
     pub file_mtime: Option<i64>,
 }
 
@@ -150,6 +148,70 @@ fn mtime_ms(path: &Path) -> std::io::Result<i64> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     Ok(duration.as_millis() as i64)
+}
+
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "typeward-autosave-portable-{}-{}",
+            std::process::id(),
+            id
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn write_then_orphan_when_underlying_file_missing() {
+        let root = temp_dir();
+        write(&root, "main.tex", "unsaved buffer").unwrap();
+        let orphans = list_orphans(&root).unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].rel_path, "main.tex");
+        assert_eq!(orphans[0].content, "unsaved buffer");
+        // No underlying file exists, so it's unambiguously an orphan.
+        assert!(orphans[0].file_mtime.is_none());
+    }
+
+    #[test]
+    fn nested_relative_path_orphan_reports_forward_slash_rel() {
+        let root = temp_dir();
+        write(&root, "chapters/intro.tex", "draft").unwrap();
+        let orphans = list_orphans(&root).unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].rel_path, "chapters/intro.tex");
+    }
+
+    #[test]
+    fn clear_removes_snapshot_so_it_is_no_longer_listed() {
+        let root = temp_dir();
+        write(&root, "main.tex", "buffered").unwrap();
+        assert_eq!(list_orphans(&root).unwrap().len(), 1);
+        clear(&root, "main.tex").unwrap();
+        assert!(list_orphans(&root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_orphans_empty_when_no_snapshot_dir() {
+        let root = temp_dir();
+        assert!(list_orphans(&root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn write_and_clear_reject_traversal_paths() {
+        let root = temp_dir();
+        assert!(write(&root, "../escape.tex", "x").is_err());
+        assert!(clear(&root, "../escape.tex").is_err());
+    }
 }
 
 #[cfg(all(test, unix))]

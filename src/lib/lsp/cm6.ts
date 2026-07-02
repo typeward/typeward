@@ -113,23 +113,25 @@ function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
   return ViewPlugin.define((view: EditorView) => {
     let version = 1;
     let debounce: ReturnType<typeof setTimeout> | undefined;
-    let pendingText: string | null = null;
+    let dirty = false;
 
-    const sendDidChange = (text: string): void => {
+    // Serializes the doc lazily at send time — doing it per keystroke would
+    // be an O(n) rope→string walk discarded by the next edit.
+    const sendDidChange = (): void => {
       opts.client.notify("textDocument/didChange", {
         textDocument: { uri: opts.uri, version: version++ },
         // Full-content sync — keeps the wire shape simple. Texlab and friends
         // accept this even when they advertise incremental sync.
-        contentChanges: [{ text }],
+        contentChanges: [{ text: view.state.doc.toString() }],
       });
-      pendingText = null;
+      dirty = false;
     };
     const flushPending = (): void => {
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
       }
-      if (pendingText !== null) sendDidChange(pendingText);
+      if (dirty) sendDidChange();
     };
     sync.flush = flushPending;
 
@@ -159,11 +161,11 @@ function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
     return {
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
-        pendingText = update.state.doc.toString();
+        dirty = true;
         if (debounce) clearTimeout(debounce);
         debounce = setTimeout(() => {
           debounce = undefined;
-          if (pendingText !== null) sendDidChange(pendingText);
+          if (dirty) sendDidChange();
         }, 200);
       },
       destroy() {
@@ -180,17 +182,17 @@ function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
 
 // ---- Diagnostic conversion ------------------------------------------------
 
-interface LspPosition {
+export interface LspPosition {
   line: number;
   character: number;
 }
 
-interface LspRange {
+export interface LspRange {
   start: LspPosition;
   end: LspPosition;
 }
 
-interface LspDiagnostic {
+export interface LspDiagnostic {
   range: LspRange;
   severity?: 1 | 2 | 3 | 4; // Error | Warning | Information | Hint
   message: string;
@@ -198,7 +200,7 @@ interface LspDiagnostic {
   code?: string | number;
 }
 
-function lspToCmDiagnostic(d: LspDiagnostic, view: EditorView): Diagnostic | null {
+export function lspToCmDiagnostic(d: LspDiagnostic, view: EditorView): Diagnostic | null {
   const from = lspPosToOffset(d.range.start, view);
   const to = lspPosToOffset(d.range.end, view);
   if (from == null || to == null) return null;
@@ -216,14 +218,14 @@ function lspToCmDiagnostic(d: LspDiagnostic, view: EditorView): Diagnostic | nul
   };
 }
 
-function lspPosToOffset(pos: LspPosition, view: EditorView): number | null {
+export function lspPosToOffset(pos: LspPosition, view: EditorView): number | null {
   const doc = view.state.doc;
   if (pos.line >= doc.lines) return doc.length;
   const line = doc.line(pos.line + 1); // CM6 lines are 1-based
   return Math.min(line.from + pos.character, line.to);
 }
 
-function cmOffsetToLspPos(offset: number, view: EditorView): LspPosition {
+export function cmOffsetToLspPos(offset: number, view: EditorView): LspPosition {
   const line = view.state.doc.lineAt(offset);
   return { line: line.number - 1, character: offset - line.from };
 }
@@ -282,7 +284,7 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
   };
 }
 
-function kindToType(kind?: number): string | undefined {
+export function kindToType(kind?: number): string | undefined {
   // Maps the LSP CompletionItemKind subset we care about onto CodeMirror's
   // free-form "type" strings (which become autocomplete icon classes).
   switch (kind) {

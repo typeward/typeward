@@ -1,5 +1,13 @@
 # Widgets panel — Projects screen
 
+> **Status: unmounted (2026-07-01).** The panel is removed from the Projects
+> screen for now, per user direction — `ProjectsScreen` no longer renders
+> `DashboardPanel` and the toolbar "Widgets" toggle is gone. The code under
+> `src/widgets/` and all persisted settings (`workspace.dashboardEnabled`,
+> `workspace.dashboardOrder`, `workspace.widgets`, `workspace.statsCards`)
+> remain intact so it can be remounted without migration. The rest of this
+> document describes the panel as it behaves when mounted.
+
 > The panel is labelled **Widgets** in the UI (renamed from "Dashboard"
 > 2026-06-14). Internal identifiers and persisted settings keys keep the
 > `dashboard*` names (`DashboardPanel`, `workspace.dashboardEnabled`,

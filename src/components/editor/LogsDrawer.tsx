@@ -82,6 +82,9 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
     >
       {/* Header */}
       <div class="flex h-9 flex-shrink-0 items-center gap-0.5 border-b border-glass-stroke px-2">
+        {/* Tablist wraps only the tab group — the status pills on the right
+            aren't tabs. */}
+        <div role="tablist" aria-label="Log panels" class="flex items-center gap-0.5">
         <For each={TABS}>
           {(t) => {
             const active = () => tab() === t.id && !minimized();
@@ -89,8 +92,10 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
             return (
               <button
                 type="button"
+                role="tab"
+                aria-selected={active()}
                 onClick={() => handleSelectTab(t.id)}
-                class={`relative flex h-8 items-center gap-1.5 px-2.5 text-[12px] font-medium ${
+                class={`relative flex h-8 items-center gap-1.5 px-2.5 text-sm font-medium ${
                   active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
                 }`}
               >
@@ -122,6 +127,7 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
             );
           }}
         </For>
+        </div>
 
         <div class="ml-auto flex items-center gap-1.5">
           {/* Inline status pills — always visible, even when minimized */}
@@ -196,7 +202,7 @@ const StatusPill: Component<{
   tint?: string;
 }> = (props) => (
   <span
-    class="mono glass-soft flex h-6 items-center gap-1.5 rounded-full px-2 text-[11px]"
+    class="mono glass-soft flex h-6 items-center gap-1.5 rounded-full px-2 text-xs"
     style={props.tint ? { color: props.tint } : { color: "var(--color-fg-2)" }}
   >
     <Show when={props.dot}>
@@ -226,7 +232,7 @@ const LogsTabBody: Component = () => {
         />
       }
     >
-      <pre class="mono whitespace-pre-wrap p-3 text-[11px] leading-[1.55] text-fg-2">
+      <pre class="mono select-text whitespace-pre-wrap p-3 text-xs leading-[1.55] text-fg-2">
         {log()}
       </pre>
     </Show>
@@ -306,10 +312,10 @@ const IssuesTabBody: Component = () => {
                 <XCircle size={12} style={{ color: "var(--color-err)" }} />
               </div>
               <div class="flex-1">
-                <div class="text-[12px] font-semibold" style={{ color: "var(--color-err)" }}>
+                <div class="text-sm font-semibold" style={{ color: "var(--color-err)" }}>
                   Compile failed — see the Logs tab for full output
                 </div>
-                <pre class="mono mt-2 max-h-[120px] overflow-auto whitespace-pre-wrap text-[11px] leading-[1.5] text-fg-3 scroll">
+                <pre class="mono select-text mt-2 max-h-[120px] overflow-auto whitespace-pre-wrap text-xs text-fg-3 scroll">
                   {result()!.log.slice(-500)}
                 </pre>
               </div>
@@ -340,7 +346,7 @@ const IssueCard: Component<{
     disabled={!props.onJump}
     onClick={() => props.onJump?.()}
     title={props.onJump ? "Jump to source" : undefined}
-    class="block w-full rounded-lg p-3 text-left disabled:cursor-default enabled:cursor-pointer enabled:hover:bg-[var(--color-control-fill-hover)]"
+    class="block w-full rounded-lg p-3 text-left enabled:hover:bg-[var(--color-control-fill-hover)]"
     style={{
       background: "var(--color-control-fill)",
       border: "1px solid var(--color-control-stroke)",
@@ -360,12 +366,12 @@ const IssueCard: Component<{
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <span
-            class="text-[12px] font-semibold"
+            class="select-text text-sm font-semibold"
             style={{ color: SEVERITY_FG[props.severity] }}
           >
             {props.title}
           </span>
-          <span class="mono text-[11px] text-fg-3">{props.meta}</span>
+          <span class="mono select-text text-xs text-fg-3">{props.meta}</span>
         </div>
       </div>
     </div>
@@ -374,8 +380,8 @@ const IssueCard: Component<{
 
 const EmptyTab: Component<{ title: string; body: string }> = (props) => (
   <div class="flex h-full flex-col items-center justify-center gap-2 px-6 py-8 text-center">
-    <div class="text-[13px] font-semibold text-fg-1">{props.title}</div>
-    <div class="max-w-[380px] text-[11px] leading-relaxed text-fg-3">
+    <div class="text-base font-semibold text-fg-1">{props.title}</div>
+    <div class="max-w-[380px] text-xs leading-relaxed text-fg-3">
       {props.body}
     </div>
   </div>
@@ -496,7 +502,7 @@ const SelectorCard: Component<{
     </span>
     <span class="min-w-0 flex-1">
       <span
-        class={`block text-[12px] font-semibold ${
+        class={`block text-sm font-semibold ${
           props.active ? "text-fg-1" : "text-fg-2"
         }`}
       >

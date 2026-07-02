@@ -13,24 +13,23 @@
  * list so the badge reflects reality immediately.
  */
 
-import {
-  readDir,
-  readTextFile,
-  remove,
-  writeTextFile,
-} from "@tauri-apps/plugin-fs";
+import { describeIpcError } from "~/lib/errors";
+import { readTextFile } from "@tauri-apps/plugin-fs";
 import { AlertTriangle, FileText } from "lucide-solid";
 import type { Component } from "solid-js";
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
+import { allSyncStatuses } from "~/integrations/cloud/core";
 import {
-  allSyncStatuses,
-  clearConflict,
-} from "~/integrations/cloud/core";
+  findLatestConflictSibling,
+  resolveConflictKeepMine,
+  resolveConflictKeepTheirs,
+} from "~/integrations/cloud/core/resolve";
 import { readCloudOrigin } from "~/integrations/cloud/registry";
 import { openFile, project } from "~/stores/editor-store";
+import { recordError } from "~/lib/telemetry";
 
 interface ConflictResolverDialogProps {
   open: boolean;
@@ -92,54 +91,54 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
   const total = createMemo(() => entries()?.length ?? 0);
 
   const keepMine = async (entry: ConflictEntry) => {
+    if (entry.conflictAbs) {
+      // Destructive: the sidecar is the only saved copy of the other version
+      // (which side it holds depends on who won the conflict) — no undo path,
+      // so confirm first.
+      if (
+        !(await confirmDestructive(
+          "Keep mine",
+          `Delete the conflict copy "${entry.conflictRelPath}"? This is the only saved copy of the other version.`,
+          "Delete other copy",
+        ))
+      ) {
+        return;
+      }
+    }
     setActionError(null);
     try {
-      if (entry.conflictAbs) await remove(entry.conflictAbs);
-      clearConflict(entry.providerId, entry.projectId, entry.relPath);
+      await resolveConflictKeepMine(entry);
       setRefreshTick((t) => t + 1);
     } catch (e) {
+      recordError("cloud-conflict", `keep-mine failed for ${entry.relPath}`, e);
       setActionError(
-        `Couldn't keep your copy of "${entry.relPath}": ${e instanceof Error ? e.message : String(e)}`,
+        `Couldn't keep your copy of "${entry.relPath}": ${describeIpcError(e)}`,
       );
     }
   };
 
   const keepTheirs = async (entry: ConflictEntry) => {
-    if (!entry.conflictAbs) {
-      clearConflict(entry.providerId, entry.projectId, entry.relPath);
-      setRefreshTick((t) => t + 1);
-      return;
+    if (entry.conflictAbs) {
+      // Destructive: overwrites the local file with the remote copy and
+      // deletes the sidecar — no undo path, so confirm first.
+      if (
+        !(await confirmDestructive(
+          "Keep theirs",
+          `Replace your local "${entry.relPath}" with the remote version? Your local edits will be lost.`,
+          "Replace local copy",
+        ))
+      ) {
+        return;
+      }
     }
-    // Destructive: overwrites the local file with the remote copy and
-    // deletes the sidecar — no undo path, so confirm first.
-    let proceed = false;
-    try {
-      const { ask } = await import("@tauri-apps/plugin-dialog");
-      proceed = await ask(
-        `Replace your local "${entry.relPath}" with the remote version? Your local edits will be lost.`,
-        {
-          title: "Keep theirs",
-          kind: "warning",
-          okLabel: "Replace local copy",
-          cancelLabel: "Cancel",
-        },
-      );
-    } catch {
-      proceed = window.confirm(
-        `Replace your local "${entry.relPath}" with the remote version?`,
-      );
-    }
-    if (!proceed) return;
     setActionError(null);
     try {
-      const content = await readTextFile(entry.conflictAbs);
-      await writeTextFile(entry.originalAbs, content);
-      await remove(entry.conflictAbs);
-      clearConflict(entry.providerId, entry.projectId, entry.relPath);
+      await resolveConflictKeepTheirs(entry);
       setRefreshTick((t) => t + 1);
     } catch (e) {
+      recordError("cloud-conflict", `keep-theirs failed for ${entry.relPath}`, e);
       setActionError(
-        `Couldn't replace "${entry.relPath}" with the remote copy: ${e instanceof Error ? e.message : String(e)}`,
+        `Couldn't replace "${entry.relPath}" with the remote copy: ${describeIpcError(e)}`,
       );
     }
   };
@@ -178,13 +177,7 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
       }
     >
       <Show when={actionError()}>
-        <div
-          class="mb-2 rounded-md px-3 py-2 text-[11px]"
-          style={{
-            color: "var(--color-danger-fill)",
-            background: "color-mix(in srgb, var(--color-danger-fill) 12%, transparent)",
-          }}
-        >
+        <div class="mb-2 select-text rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
           {actionError()}
         </div>
       </Show>
@@ -203,21 +196,21 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
               <div class="glass-inset flex flex-col gap-2 rounded-md px-3 py-2.5">
                 <div class="flex items-center gap-2">
                   <FileText class="ui-icon-sm text-fg-3" />
-                  <span class="mono truncate text-[length:var(--ui-font-sm)] text-fg-1">
+                  <span class="mono truncate text-sm text-fg-1">
                     {entry.relPath}
                   </span>
                 </div>
                 <Show
                   when={entry.conflictRelPath}
                   fallback={
-                    <div class="text-[11px] text-fg-3">
+                    <div class="text-xs text-fg-3">
                       Couldn't find a `.conflict-*` sibling for this file. The
                       remote copy may have been removed already.
                     </div>
                   }
                 >
-                  <div class="text-[11px] text-fg-3">
-                    Other copy: <span class="mono">{entry.conflictRelPath}</span>
+                  <div class="text-xs text-fg-3">
+                    Other copy: <span class="mono select-text">{entry.conflictRelPath}</span>
                   </div>
                 </Show>
                 <div class="flex items-center gap-1.5">
@@ -247,48 +240,17 @@ function joinAbs(root: string, rel: string): string {
   return `${trimmed}${sep}${cleaned}`;
 }
 
-/**
- * The sync engine writes conflict files as
- * `<dir>/<stem>.conflict-<ISO>.<ext>` next to the original. Walk the
- * parent directory for the newest match — usually there's exactly one,
- * but if multiple passes have raced we surface the most recent.
- */
-async function findLatestConflictSibling(
-  projectRoot: string,
-  relPath: string,
-): Promise<string | undefined> {
-  const sep = projectRoot.includes("\\") ? "\\" : "/";
-  const lastSlash = Math.max(relPath.lastIndexOf("/"), relPath.lastIndexOf("\\"));
-  const dirRel = lastSlash >= 0 ? relPath.slice(0, lastSlash) : "";
-  const baseName = lastSlash >= 0 ? relPath.slice(lastSlash + 1) : relPath;
-  const dotIdx = baseName.lastIndexOf(".");
-  const stem = dotIdx <= 0 ? baseName : baseName.slice(0, dotIdx);
-  const ext = dotIdx <= 0 ? "" : baseName.slice(dotIdx);
-
-  const absDir =
-    dirRel.length === 0
-      ? projectRoot.replace(/[\\/]+$/, "")
-      : `${projectRoot.replace(/[\\/]+$/, "")}${sep}${dirRel}`;
-
-  let entries: Array<{ name: string }>;
+async function confirmDestructive(
+  title: string,
+  message: string,
+  okLabel: string,
+): Promise<boolean> {
   try {
-    entries = await readDir(absDir);
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    return await ask(message, { title, kind: "warning", okLabel, cancelLabel: "Cancel" });
   } catch {
-    return undefined;
+    return window.confirm(message);
   }
-
-  const conflictPrefix = `${stem}.conflict-`;
-  const matches = entries
-    .map((e) => e.name)
-    .filter((name) =>
-      ext
-        ? name.startsWith(conflictPrefix) && name.endsWith(ext)
-        : name.startsWith(conflictPrefix),
-    )
-    .sort()
-    .reverse();
-  if (matches.length === 0) return undefined;
-  return `${absDir}${sep}${matches[0]}`;
 }
 
 async function safeReadText(absPath: string): Promise<string> {

@@ -10,7 +10,7 @@
 //! aiStream(req))` — same shape across all providers.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,10 @@ use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::sync::oneshot;
 
-use crate::integrations::credentials;
-use crate::integrations::http::{validate_outbound_request, AuthRef};
+use crate::integrations::http::{
+    build_outbound_request, outbound_client_builder, AuthRef, HttpError, OutboundBody,
+    OutboundRedirect,
+};
 
 const MAX_AI_ERROR_BODY_BYTES: usize = 64 * 1024;
 const MAX_STREAM_BUFFER_BYTES: usize = 2 * 1024 * 1024;
@@ -84,12 +86,24 @@ pub enum AiError {
     InvalidStreamId(String),
     #[error("stream already running: {0}")]
     DuplicateStream(String),
-    #[error("network error: {0}")]
-    Network(String),
     #[error("credential lookup failed: {0}")]
     Credential(String),
-    #[error("unknown stream id: {0}")]
-    UnknownStream(String),
+}
+
+fn ai_error_from_http(e: HttpError) -> AiError {
+    match e {
+        HttpError::InvalidMethod(m) => AiError::InvalidMethod(m),
+        HttpError::Credential(m) => AiError::Credential(m),
+        other => AiError::BlockedRequest(other.to_string()),
+    }
+}
+
+/// How a stream task ended, so the completion arm knows whether to emit a
+/// terminal event. An aborted stream stays silent — the consumer tore down
+/// first, so emitting into a dead channel is noise.
+enum StreamEnd {
+    Completed,
+    Aborted,
 }
 
 /// Active streams keyed by `stream_id`. Drops the sender → the task's
@@ -100,45 +114,53 @@ pub struct AiStreamManager {
     handles: Mutex<HashMap<String, oneshot::Sender<()>>>,
 }
 
+/// Shared streaming client, mirroring `integrations::http`'s static client so
+/// consecutive chat messages reuse the pooled TLS connection instead of paying
+/// a fresh TCP+TLS handshake per stream. The allowlist redirect policy MUST
+/// stay installed here — it re-validates every redirect hop (SSRF guard).
+fn stream_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        outbound_client_builder(OutboundRedirect::Allowlist)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
+            // Deliberately no total `.timeout()`: streams are long-lived and a
+            // whole-request deadline would kill slow chat completions mid-flight.
+            .build()
+            .expect("ai stream client init")
+    })
+}
+
 #[tauri::command]
 pub async fn ai_stream_start(
     req: AiStreamRequest,
     app: AppHandle,
     manager: tauri::State<'_, Arc<AiStreamManager>>,
+) -> Result<(), String> {
+    ai_stream_start_inner(req, app, manager)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn ai_stream_start_inner(
+    req: AiStreamRequest,
+    app: AppHandle,
+    manager: tauri::State<'_, Arc<AiStreamManager>>,
 ) -> Result<(), AiError> {
     validate_stream_id(&req.stream_id)?;
-    let method = req
-        .method
-        .parse::<reqwest::Method>()
-        .map_err(|_| AiError::InvalidMethod(req.method.clone()))?;
-    validate_outbound_request(&req.url, &req.headers, req.auth_ref.as_ref())
-        .map_err(|e| AiError::BlockedRequest(e.to_string()))?;
 
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .redirect(crate::integrations::http::allowlist_redirect_policy())
-        .build()
-        .map_err(|e| AiError::Network(e.to_string()))?;
-
-    let mut builder = client.request(method, &req.url);
-    for (k, v) in &req.headers {
-        builder = builder.header(k, v);
-    }
-    if let Some(auth) = &req.auth_ref {
-        let secret = tokio::task::spawn_blocking({
-            let service = auth.service.clone();
-            let account = auth.account.clone();
-            move || credentials::get_secret(&service, &account)
-        })
-        .await
-        .map_err(|e| AiError::Credential(e.to_string()))?
-        .map_err(|e| AiError::Credential(e.to_string()))?;
-        if let Some(secret) = secret {
-            builder = builder.header(&auth.header, format!("{}{}", auth.prefix, secret));
-        }
-    }
-    builder = builder.body(req.body.clone());
+    // Routes auth through the shared outbound builder, so keyring resolution
+    // and (for OAuth-bundle services) pre-emptive refresh match `http_request`.
+    let builder = build_outbound_request(
+        stream_client(),
+        &req.method,
+        &req.url,
+        &req.headers,
+        req.auth_ref.as_ref(),
+        OutboundBody::Text(&req.body),
+    )
+    .await
+    .map_err(ai_error_from_http)?;
 
     let (abort_tx, abort_rx) = oneshot::channel::<()>();
     {
@@ -163,41 +185,48 @@ pub async fn ai_stream_start(
             .remove(&stream_id);
 
         let final_event = match outcome {
-            Ok(()) => ChunkEvent {
+            Ok(StreamEnd::Completed) => Some(ChunkEvent {
                 stream_id: stream_id.clone(),
                 kind: "done",
                 delta: None,
                 error: None,
-            },
-            Err(err) => ChunkEvent {
+            }),
+            Ok(StreamEnd::Aborted) => None,
+            Err(err) => Some(ChunkEvent {
                 stream_id: stream_id.clone(),
                 kind: "error",
                 delta: None,
                 error: Some(err),
-            },
+            }),
         };
-        let _ = app_for_task.emit(&event_name(&stream_id), final_event);
+        if let Some(event) = final_event {
+            let _ = app_for_task.emit(&event_name(&stream_id), event);
+        }
     });
 
     Ok(())
 }
 
+/// Tear down an in-flight stream. Idempotent: an unknown id (already finished or
+/// torn down) is a no-op success, so a consumer can abort on every generator
+/// disposal without racing the task's own completion.
 #[tauri::command]
 pub fn ai_stream_abort(
     stream_id: String,
     manager: tauri::State<'_, Arc<AiStreamManager>>,
-) -> Result<(), AiError> {
+) -> Result<(), String> {
     if let Some(tx) = manager
         .handles
         .lock()
         .expect("ai stream lock")
         .remove(&stream_id)
     {
+        // Dropping the sender alone would fire the task's abort arm; the send is
+        // the fast path. Either way the `select!` resolves and the request is
+        // dropped, aborting the upstream connection.
         let _ = tx.send(());
-        Ok(())
-    } else {
-        Err(AiError::UnknownStream(stream_id))
     }
+    Ok(())
 }
 
 fn event_name(stream_id: &str) -> String {
@@ -224,7 +253,7 @@ async fn run_stream(
     format: AiStreamFormat,
     stream_id: &str,
     app: &AppHandle,
-) -> Result<(), String> {
+) -> Result<StreamEnd, String> {
     let response = builder
         .send()
         .await
@@ -242,7 +271,7 @@ async fn run_stream(
 
     loop {
         tokio::select! {
-            _ = &mut abort_rx => return Ok(()),
+            _ = &mut abort_rx => return Ok(StreamEnd::Aborted),
             chunk = stream.next() => {
                 let chunk = match chunk {
                     Some(Ok(bytes)) => bytes,
@@ -253,7 +282,7 @@ async fn run_stream(
                         for event in extract_remaining(&rest, format) {
                             emit_delta(app, stream_id, &event);
                         }
-                        return Ok(());
+                        return Ok(StreamEnd::Completed);
                     }
                 };
                 if let Ok(text) = std::str::from_utf8(&chunk) {
@@ -484,5 +513,21 @@ mod tests {
         assert!(validate_stream_id("").is_err());
         assert!(validate_stream_id("chat:123").is_err());
         assert!(validate_stream_id("chat/123").is_err());
+    }
+
+    #[test]
+    fn http_error_maps_to_matching_ai_error() {
+        assert!(matches!(
+            ai_error_from_http(HttpError::InvalidMethod("BOGUS".into())),
+            AiError::InvalidMethod(_)
+        ));
+        assert!(matches!(
+            ai_error_from_http(HttpError::Credential("nope".into())),
+            AiError::Credential(_)
+        ));
+        assert!(matches!(
+            ai_error_from_http(HttpError::BlockedUrl("https://evil.test".into())),
+            AiError::BlockedRequest(_)
+        ));
     }
 }

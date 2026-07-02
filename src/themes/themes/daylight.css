@@ -35,7 +35,7 @@
   --color-card-bg-soft: rgb(251 248 239 / 0.72);
 
   /* Quiet paper-toned format tints — no saturated tech colors in chrome. */
-  --format-latex: #8a6d3b;
+  --format-latex: #7d6335; /* was #8a6d3b — 4.5:1+ for the 10px chip label on card surfaces */
   --format-typst: #5c7361;
 
   /* Primary action is the identity's deep-ink button; the gradient end is a
@@ -48,7 +48,7 @@
   /* Emphasized words go brass, not lightened ink (which would read fainter
    * than the surrounding body text). */
   --accent-text-1: #8a6d3b;
-  --accent-text-2: #b79a5c;
+  --accent-text-2: #9a7b3f; /* was #b79a5c — 3:1+ large-text floor on ivory for the gradient's light stop */
 
   --color-ok: #3d7a4a;
   --color-warn: #866b37; /* was #9a7b3f — darkened to 4.6:1 on ivory (AA text) */
@@ -62,13 +62,16 @@
     0 1px 2px rgb(34 33 30 / 0.05);
   --shadow-glass-inset-inner: inset 0 1px 2px rgb(34 33 30 / 0.05);
   --shadow-raised: 0 1px 3px rgb(34 33 30 / 0.20);
+  --shadow-accent-btn:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 1px 3px rgb(34 33 30 / 0.20);
 
   /* Editor syntax — subtle, not neon; blue is allowed here per identity. */
   --syntax-cmd: #2456a6;
   --syntax-env: #3d7a4a;
   --syntax-math: #a84935;
   --syntax-comment: rgb(34 33 30 / 0.63); /* was 0.40 — 4.6:1 on ivory (AA) */
-  --syntax-bracket: rgb(34 33 30 / 0.45);
+  --syntax-bracket: var(--color-fg-3); /* was ink/0.45 (2.7:1) — brackets are body-size code text */
   --syntax-attr: #2f7d62;
 
   /* Ambient: faint parchment pools — daylight has no lamp glow. */

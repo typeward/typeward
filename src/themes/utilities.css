@@ -21,10 +21,11 @@ svg {
  * match :focus-visible on every focus and carry their own ring styles). */
 button:focus-visible,
 a:focus-visible,
+[role="button"]:focus-visible,
 [role="tab"]:focus-visible,
 [role="option"]:focus-visible,
 select:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--color-accent-1) 70%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--color-accent-1) 90%, transparent);
   outline-offset: 2px;
 }
 
@@ -168,20 +169,34 @@ body {
 
 /* Scrollbar (WebKit only — Chromium-based webview on Tauri) ------------ */
 
-.scroll::-webkit-scrollbar {
+.scroll {
+  /* A scroller that hits its end must not chain into the app shell
+   * (rubber-banding the window on macOS). */
+  overscroll-behavior: contain;
+}
+
+.scroll::-webkit-scrollbar,
+.md-preview pre::-webkit-scrollbar,
+.md-preview .katex-display::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-.scroll::-webkit-scrollbar-track {
+.scroll::-webkit-scrollbar-track,
+.md-preview pre::-webkit-scrollbar-track,
+.md-preview .katex-display::-webkit-scrollbar-track {
   background: transparent;
 }
-.scroll::-webkit-scrollbar-thumb {
+.scroll::-webkit-scrollbar-thumb,
+.md-preview pre::-webkit-scrollbar-thumb,
+.md-preview .katex-display::-webkit-scrollbar-thumb {
   background: var(--color-control-fill);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-.scroll::-webkit-scrollbar-thumb:hover {
+.scroll::-webkit-scrollbar-thumb:hover,
+.md-preview pre::-webkit-scrollbar-thumb:hover,
+.md-preview .katex-display::-webkit-scrollbar-thumb:hover {
   background: var(--color-control-fill-hover);
 }
 
@@ -216,15 +231,6 @@ body {
   animation: blink 1.05s steps(1) infinite;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
 /* SyncTeX forward-search highlight: gradient ribbon that pulses on, then
  * fades to 0 opacity. Triggered by PdfViewer when scrollTarget changes. */
 @keyframes synctex-pulse {
@@ -240,16 +246,6 @@ body {
     opacity: 0;
     transform: scaleY(1);
   }
-}
-.shimmer {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgb(255 255 255 / 0.06) 50%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.6s linear infinite;
 }
 
 /* Caret used in the Composer prompt — gradient bar that blinks. */
@@ -420,51 +416,6 @@ body {
   );
 }
 
-/* Animated border-flow gradient used on the Composer's top edge. */
-@keyframes border-flow {
-  0% {
-    background-position: 0% 50%;
-  }
-  100% {
-    background-position: 200% 50%;
-  }
-}
-.composer-glow {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--color-accent-1) 35%, transparent),
-    color-mix(in srgb, var(--color-accent-2) 35%, transparent),
-    transparent
-  );
-  background-size: 200% 100%;
-  animation: border-flow 3.6s linear infinite;
-}
-
-/* Tiny "paper" surface used as document thumbnails on project cards. */
-.thumb {
-  background: linear-gradient(180deg, #fbfaf6 0%, #f4f2ec 100%);
-  color: #1f2937;
-}
-
-/* Mini-doc lines used inside .thumb to mimic paragraphs. */
-.doc-line {
-  background: rgb(31 41 55 / 0.55);
-  border-radius: 0.5px;
-}
-.doc-line.dim {
-  background: rgb(31 41 55 / 0.3);
-}
-.doc-line.darker {
-  background: rgb(17 24 39 / 0.85);
-}
-
-/* Math glyphs that appear in the mini-doc thumbnails. */
-.glyph-eq {
-  font-family: "Cambria", "Times New Roman", serif;
-  font-style: italic;
-}
-
 .no-emoji {
   font-variant-emoji: text;
 }
@@ -474,7 +425,7 @@ body {
  * prose scale lives here. Token-driven, so the light/dark variant classes
  * the component sets need no per-theme rules of their own. */
 .md-preview {
-  font-size: 14px;
+  font-size: var(--ui-font-base);
   line-height: 1.7;
 }
 .md-preview h1,
@@ -584,6 +535,17 @@ body {
   margin: 1em 0;
   overflow-x: auto;
 }
+/* Placeholder emitted when the sandboxed renderer refuses an image
+ * (traversal, absolute path, unknown scheme) — the author must see that
+ * something was blocked rather than nothing at all. */
+.md-img-blocked {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-fg-3);
+  border: 1px dashed var(--color-glass-stroke-strong);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
 
 /* --- Review comment anchors --- */
 .cm-review-anchor-open {
@@ -593,10 +555,9 @@ body {
 .cm-review-anchor-resolved {
   background: color-mix(in srgb, var(--color-accent-1) 4%, transparent);
 }
-.cm-review-gutter { width: 16px; }
+.cm-review-gutter { width: 20px; }
 .cm-review-gutter-marker {
   color: var(--color-accent-1);
-  cursor: pointer;
   opacity: 0.7;
   font-size: 10px;
   line-height: 1;

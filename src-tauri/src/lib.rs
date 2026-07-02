@@ -1,5 +1,6 @@
 mod autosave;
 mod commands;
+mod compile;
 // Subprocess-backed modules are desktop-only: mobile (iOS/Android) has no
 // system TeX / language-server / synctex binaries on a PATH to spawn, and the
 // frontend never reaches their IPC there (compile routes through texlive-wasm,
@@ -21,11 +22,26 @@ mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // Single-instance must be the first plugin registered. A second desktop
+    // launch (trivial on Windows) is caught here and focuses the running
+    // window instead of spawning a rival process that would run duplicate
+    // watchers/autosave/sync engines over the same data — the shared cursor,
+    // sync-state.json, snapshots, and settings.json all assume one writer.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        use tauri::Manager;
+        if let Some(win) = app.webview_windows().values().next() {
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        }
+    }));
+
+    let builder = builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             telemetry::install(app.handle());
@@ -64,9 +80,9 @@ pub fn run() {
             commands::read_project_binary_file,
             commands::write_project_text_file,
             commands::write_project_binary_file,
-            commands::parse_latex_log_cmd,
-            commands::compile_latex,
-            commands::compile_typst,
+            compile::parse_latex_log_cmd,
+            compile::compile_latex,
+            compile::compile_typst,
             #[cfg(desktop)]
             synctex::synctex_forward,
             #[cfg(desktop)]
@@ -100,6 +116,7 @@ pub fn run() {
             integrations::http::http_request_bytes,
             integrations::oauth::oauth_begin,
             integrations::oauth::oauth_wait,
+            integrations::oauth::oauth_cancel,
             integrations::vcs::git::git_init,
             integrations::vcs::git::git_status,
             integrations::vcs::git::git_stage,

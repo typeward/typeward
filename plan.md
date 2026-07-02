@@ -117,6 +117,14 @@ Even with no plugin system today, define interfaces so format logic isn't hardco
 - `LspProvider` — texlab / tinymist
 - `CommandRegistry` — toolbar actions, command palette, keybindings register here, not directly in components
 
+> **Update (2026-07-02):** the `CompileProvider`/`PreviewProvider`/`LspProvider`
+> interfaces were only ever aspirational — the two `EditorAdapter`s call IPC
+> directly (through the `src/commands/compile-runner.ts` leaf), preview-kind is a
+> per-file `.md`-vs-PDF switch, and LSP dispatch lives in `src/adapters/languages.ts`.
+> The dead `src/providers/types.ts` was deleted; only the mobile
+> `providers/compile/texlive-wasm-provider.ts` remains. `CommandRegistry` shipped
+> as planned. See CLAUDE.md's `EditorAdapter` seam for the current shape.
+
 Plugins later become "things that register adapters and providers." Without these seams, every format leaks into every component.
 
 ### 4. LSP transport

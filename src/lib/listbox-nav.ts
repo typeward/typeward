@@ -9,6 +9,8 @@
  *   - `useListboxOpenFocus` (called once during component setup) moves focus
  *     onto the selected option — or the first — when the popup opens, so the
  *     arrow keys have a starting point and screen readers announce the list.
+ *     On close it hands focus back to the pre-open element (the trigger) —
+ *     the popup unmounts, so without the restore focus would fall to <body>.
  *
  * Options are `tabindex={-1}` (focusable programmatically, skipped by Tab); the
  * buttons keep their native Enter/Space activation.
@@ -18,7 +20,11 @@ import { createEffect } from "solid-js";
 
 function optionsIn(container: HTMLElement | undefined): HTMLElement[] {
   if (!container) return [];
-  return Array.from(container.querySelectorAll<HTMLElement>('[role="option"]'));
+  // Disabled options can't take focus — including them would make the
+  // open-focus and arrow-roving silently no-op on them.
+  return Array.from(
+    container.querySelectorAll<HTMLElement>('[role="option"]'),
+  ).filter((o) => !o.hasAttribute("disabled") && o.getAttribute("aria-disabled") !== "true");
 }
 
 export function handleListboxKeydown(
@@ -58,8 +64,26 @@ export function useListboxOpenFocus(
   isOpen: () => boolean,
   getContainer: () => HTMLElement | undefined,
 ): void {
+  let restoreTo: HTMLElement | null = null;
   createEffect(() => {
-    if (!isOpen()) return;
+    if (!isOpen()) {
+      // Restore only when focus is still inside the (unmounting) popup or
+      // already fell to <body> — an outside-click dismissal that focused
+      // something else (e.g. the CodeMirror document) must keep its focus.
+      const active = document.activeElement;
+      const container = getContainer();
+      const focusIsLoose =
+        active === document.body ||
+        active === null ||
+        (container instanceof HTMLElement && container.contains(active));
+      if (focusIsLoose && restoreTo?.isConnected) restoreTo.focus();
+      restoreTo = null;
+      return;
+    }
+    restoreTo =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     requestAnimationFrame(() => {
       const opts = optionsIn(getContainer());
       const selected = opts.find((o) => o.getAttribute("aria-selected") === "true");
