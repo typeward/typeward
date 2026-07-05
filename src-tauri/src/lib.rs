@@ -8,6 +8,10 @@ mod compile;
 // subprocess IPC surface off the mobile webview entirely.
 #[cfg(desktop)]
 mod detect;
+#[cfg(desktop)]
+mod export_annotated;
+#[cfg(desktop)]
+mod export_pandoc;
 mod fs_ops;
 mod integrations;
 #[cfg(desktop)]
@@ -18,6 +22,8 @@ mod settings;
 mod synctex;
 mod telemetry;
 mod themes;
+mod todo_scan;
+mod trust;
 mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,6 +49,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             telemetry::install(app.handle());
             // Seed the project trust boundary (project.rs) from the configured
@@ -57,6 +64,7 @@ pub fn run() {
         })
         .manage(watcher::WatcherManager::default())
         .manage(integrations::oauth::OauthManager::default())
+        .manage(integrations::grammar::GrammarState::default())
         .manage(std::sync::Arc::new(
             integrations::ai::streaming::AiStreamManager::default(),
         ));
@@ -76,6 +84,24 @@ pub fn run() {
             commands::import_project_folder,
             commands::set_project_integrations,
             commands::set_project_deadline,
+            commands::set_project_tags,
+            commands::set_project_space,
+            commands::set_project_trashed,
+            commands::set_project_archived,
+            commands::touch_project_opened,
+            commands::rename_project,
+            commands::delete_project,
+            commands::duplicate_project,
+            commands::set_project_build,
+            commands::set_project_root_file,
+            commands::rename_project_file,
+            commands::delete_project_path,
+            commands::create_project_dir,
+            commands::duplicate_project_file,
+            commands::reveal_project_path,
+            trust::shell_escape_trust_get,
+            trust::shell_escape_trust_set,
+            todo_scan::scan_project_todos,
             commands::read_project_text_file,
             commands::read_project_binary_file,
             commands::write_project_text_file,
@@ -91,6 +117,10 @@ pub fn run() {
             commands::save_settings,
             commands::reset_settings,
             commands::export_project_zip,
+            #[cfg(desktop)]
+            export_pandoc::export_pandoc,
+            #[cfg(desktop)]
+            export_annotated::export_pdf_annotated,
             themes::custom_themes_list,
             themes::custom_theme_write_sample,
             themes::custom_themes_open_dir,
@@ -134,6 +164,11 @@ pub fn run() {
             integrations::ai::streaming::ai_stream_start,
             integrations::ai::streaming::ai_stream_abort,
             integrations::grammar::grammar_check,
+            integrations::grammar::grammar_add_word,
+            integrations::grammar::grammar_remove_word,
+            integrations::grammar::grammar_list_words,
+            integrations::grammar::grammar_ignore_lint,
+            integrations::grammar::grammar_clear_ignored,
             integrations::templates::templates_list,
             integrations::templates::template_instantiate,
             integrations::templates::template_save,

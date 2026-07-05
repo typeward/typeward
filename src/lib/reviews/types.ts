@@ -9,6 +9,11 @@ export interface CommentThread {
   status: "open" | "resolved";
   comments: Comment[];
   createdAt: string;
+  /**
+   * Review comment vs a TODO (e.g. created from a PDF selection). Absent is
+   * treated as "comment" everywhere, so this is additive for old sidecars.
+   */
+  kind?: "comment" | "todo";
 }
 
 export interface Comment {
@@ -25,6 +30,7 @@ export function createThread(
   anchorText: string,
   author: string,
   body: string,
+  kind: "comment" | "todo" = "comment",
 ): CommentThread {
   const now = new Date().toISOString();
   return {
@@ -36,6 +42,7 @@ export function createThread(
     status: "open",
     comments: [{ id: nanoid(), author, body, createdAt: now }],
     createdAt: now,
+    kind,
   };
 }
 

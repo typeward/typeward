@@ -24,7 +24,7 @@ use serde::Serialize;
 use thiserror::Error;
 use zip::ZipArchive;
 
-use crate::project::{self, Project, ProjectFormat, ProjectIntegrations};
+use crate::project::{self, Project, ProjectFormat};
 
 #[derive(Debug, Error, Serialize)]
 pub enum OverleafError {
@@ -101,8 +101,7 @@ pub async fn overleaf_import_zip(
             root_file,
             format,
             name,
-            deadline: None,
-            integrations: ProjectIntegrations::default(),
+            ..Default::default()
         };
         project::write_project(&project)?;
         Ok(project)

@@ -1,14 +1,24 @@
 import { describeIpcError } from "~/lib/errors";
 import {
-  ChevronDown,
-  ChevronUp,
-  CircleDot,
+  BookMarked,
+  ChevronsDownUp,
+  ClipboardCopy,
+  Copy,
+  ExternalLink,
+  Files,
   FilePlus,
-  ListTree,
+  FolderOpen,
+  FolderPlus,
+  GitBranch,
+  ListTodo,
+  MessageSquare,
+  Pencil,
+  Settings2,
+  Trash2,
   Zap,
 } from "lucide-solid";
 import { exists } from "@tauri-apps/plugin-fs";
-import type { Component, JSX } from "solid-js";
+import type { Component } from "solid-js";
 import {
   For,
   Show,
@@ -19,22 +29,49 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import { FileTree } from "~/components/editor/FileTree";
+import { Dynamic } from "solid-js/web";
+import { FileTree, type FileNode } from "~/components/editor/FileTree";
+import { OutlinePanel } from "~/components/editor/OutlinePanel";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
+import { TodoPanel } from "~/components/editor/TodoPanel";
 import { CommitPanel } from "~/components/vcs/CommitPanel";
 import { ReviewPanel } from "~/components/reviews/ReviewPanel";
+import {
+  ContextMenu,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  createContextMenuState,
+} from "~/components/primitives/ContextMenu";
+import { Dialog } from "~/components/primitives/Dialog";
+import { Button } from "~/components/primitives/Button";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
-import { activeFile, project } from "~/stores/editor-store";
-import { compileEngine, integrationsSettings } from "~/stores/settings-store";
-import { allOpenThreadCount, reanchorThreadById } from "~/stores/review-store";
+import { notifyError } from "~/lib/toast";
+import { refsAvailability } from "~/integrations/references/availability";
+import { citationProviders } from "~/integrations/references/registry";
+import {
+  activeFile,
+  closeFileByRelPath,
+  openFiles,
+  project,
+  renameOpenFile,
+  setProject,
+} from "~/stores/editor-store";
+import { effectiveBuild } from "~/adapters/latex/build-config";
+import {
+  BuildConfigMenu,
+  ENGINE_LABEL,
+} from "~/components/editor/BuildConfigMenu";
+import { openProjectSettings } from "~/components/editor/ProjectSettingsDialog";
+import { installDismiss } from "~/lib/dismiss";
+import { useListboxOpenFocus } from "~/lib/listbox-nav";
+import {
+  openCommentThreadCount,
+  reanchorThreadById,
+  remapThreadFile,
+} from "~/stores/review-store";
+import { todoCount } from "~/stores/todo-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
-
-const ENGINE_LABEL: Record<string, string> = {
-  "system-tex": "pdflatex",
-  tectonic: "Tectonic (xelatex)",
-  "texlive-wasm": "TeX Live (WASM)",
-};
 
 /**
  * Shared left sidebar for the editor's TextShell.
@@ -48,6 +85,13 @@ const ENGINE_LABEL: Record<string, string> = {
 
 export type LeftTab = "files" | "references" | "scm" | "review" | "todo";
 
+interface SidebarTab {
+  id: LeftTab;
+  label: string;
+  icon: Component<{ size?: number }>;
+  count?: number;
+}
+
 interface EditorSidebarProps {
   tab: LeftTab;
   setTab: (t: LeftTab) => void;
@@ -58,10 +102,33 @@ interface EditorSidebarProps {
   onTabsMeasured?: (px: number) => void;
 }
 
+/** What the shared NamePromptDialog is currently asking for. */
+interface PromptRequest {
+  title: string;
+  placeholder: string;
+  initial: string;
+  confirmLabel: string;
+  /** Throws (Error/string) to surface an inline error; resolve = success + close. */
+  onConfirm: (value: string) => Promise<void> | void;
+}
+
+/** Payload for the FileTree context menu (which surface was right-clicked). */
+type FileMenuPayload =
+  | { kind: "file"; node: FileNode }
+  | { kind: "dir"; node: FileNode }
+  | { kind: "empty" };
+
 export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
-  const [newFileOpen, setNewFileOpen] = createSignal(false);
-  const [newFileName, setNewFileName] = createSignal("");
-  const [newFileError, setNewFileError] = createSignal<string | null>(null);
+  const [prompt, setPrompt] = createSignal<PromptRequest | null>(null);
+  const [collapseGen, setCollapseGen] = createSignal(0);
+  const fileMenu = createContextMenuState<FileMenuPayload>();
+
+  // When the sidebar is dragged narrower than the tab strip's natural width,
+  // tabs collapse to icon-only. The natural width is measured off a hidden
+  // full-label clone (below) so it stays known even while compact renders.
+  const [compact, setCompact] = createSignal(false);
+  let naturalWidth = 0;
+  let measureStripRef: HTMLDivElement | undefined;
 
   // The SCM tab is meaningless outside a git repo — `.git` can be a dir or
   // (worktrees) a file; `exists` covers both. Non-Tauri contexts resolve
@@ -85,16 +152,12 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     if (!isGitRepo() && props.tab === "scm") props.setTab("files");
   });
 
-  // Refs only earns a tab once at least one citation provider is set up —
-  // an empty panel teaches users to ignore the sidebar.
-  const hasReferences = () => {
-    const refs = integrationsSettings().references;
-    return (
-      refs.betterBibTex.enabled ||
-      Boolean(refs.zoteroWeb.userId) ||
-      Boolean(refs.mendeley.profileId)
-    );
-  };
+  // Refs earns a tab once at least one citation provider is registered
+  // (configured) AND the reachability probe hasn't proven every provider
+  // unreachable. Configured-but-unknown still shows the tab; it only drops out
+  // after a definitive all-unreachable result (e.g. Zotero enabled but closed).
+  const hasReferences = () =>
+    citationProviders().length > 0 && refsAvailability() !== "none-ready";
   createEffect(() => {
     if (!hasReferences() && props.tab === "references") props.setTab("files");
   });
@@ -110,38 +173,187 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     reanchorThreadById(threadId, sel.from, sel.to, anchorText);
   };
 
-  const createNewFile = async () => {
+  // ---- File-tree operations (header buttons + context menus) --------------
+
+  /** Directory portion of a rel path ("chapters/intro.tex" -> "chapters"). */
+  const parentRel = (relPath: string): string => {
+    const i = relPath.replace(/\\/g, "/").lastIndexOf("/");
+    return i < 0 ? "" : relPath.slice(0, i);
+  };
+
+  const openNewFilePrompt = (dirRel: string) => {
+    const seed = dirRel ? `${dirRel}/` : "";
+    setPrompt({
+      title: "New file",
+      placeholder: "name.tex",
+      initial: seed,
+      confirmLabel: "Create",
+      onConfirm: async (value) => {
+        const p = project();
+        const name = value.trim().replace(/\\/g, "/");
+        if (!p || !name) return;
+        // The write IPC replaces the target unconditionally — an existing name
+        // would silently wipe that file.
+        if (await exists(`${p.rootPath}/${name}`)) {
+          throw new Error("A file with this name already exists");
+        }
+        try {
+          // Validates the project-relative path and creates parent dirs, so
+          // "chapters/intro.tex" also works as a folder shortcut.
+          await ipc.writeProjectTextFile(p.rootPath, name, "");
+        } catch (e) {
+          recordError("new-file", `creating ${name} failed`, e);
+          throw e;
+        }
+        props.onSelectFile(name);
+      },
+    });
+  };
+
+  const openNewFolderPrompt = (dirRel: string) => {
+    const seed = dirRel ? `${dirRel}/` : "";
+    setPrompt({
+      title: "New folder",
+      placeholder: "chapters",
+      initial: seed,
+      confirmLabel: "Create",
+      onConfirm: async (value) => {
+        const p = project();
+        const name = value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+        if (!p || !name) return;
+        if (await exists(`${p.rootPath}/${name}`)) {
+          throw new Error("A folder with this name already exists");
+        }
+        try {
+          await ipc.createProjectDir(p.rootPath, name);
+        } catch (e) {
+          recordError("new-folder", `creating ${name} failed`, e);
+          throw e;
+        }
+      },
+    });
+  };
+
+  const openRenamePrompt = (node: FileNode) => {
+    const dir = parentRel(node.relPath);
+    setPrompt({
+      title: "Rename file",
+      placeholder: "name.tex",
+      initial: node.name,
+      confirmLabel: "Rename",
+      onConfirm: async (value) => {
+        const p = project();
+        const trimmed = value.trim().replace(/\\/g, "/");
+        if (!p || !trimmed || trimmed === node.name) return;
+        const newRel = dir ? `${dir}/${trimmed}` : trimmed;
+        if (newRel === node.relPath) return;
+        try {
+          await ipc.renameProjectFile(p.rootPath, node.relPath, newRel);
+        } catch (e) {
+          recordError("rename-file", `renaming ${node.relPath} failed`, e);
+          throw e;
+        }
+        const newAbs = node.path.slice(0, node.path.length - node.name.length) + trimmed;
+        // Keep an open buffer attached (content + dirty preserved).
+        renameOpenFile(node.relPath, newRel, newAbs);
+        // Repoint the entry file if we just renamed it.
+        if (p.rootFile === node.relPath) {
+          try {
+            const updated = await ipc.setProjectRootFile(p.rootPath, newRel);
+            setProject(updated);
+          } catch (e) {
+            recordError("rename-file", `repointing rootFile to ${newRel} failed`, e);
+          }
+        }
+        // Keep comment/TODO threads attached to the renamed file.
+        remapThreadFile(node.relPath, newRel);
+      },
+    });
+  };
+
+  const duplicateFile = async (node: FileNode) => {
     const p = project();
-    const name = newFileName().trim().replace(/\\/g, "/");
-    if (!p || !name) return;
+    if (!p) return;
     try {
-      // The write IPC replaces the target unconditionally — typing an
-      // existing name would silently wipe that file.
-      if (await exists(`${p.rootPath}/${name}`)) {
-        setNewFileError("A file with this name already exists");
-        return;
-      }
-      // The IPC validates the project-relative path and creates parent
-      // dirs, so "chapters/intro.tex" also works as a folder shortcut.
-      await ipc.writeProjectTextFile(p.rootPath, name, "");
-      setNewFileOpen(false);
-      setNewFileName("");
-      setNewFileError(null);
-      props.onSelectFile(name);
+      const newRel = await ipc.duplicateProjectFile(p.rootPath, node.relPath);
+      props.onSelectFile(newRel);
     } catch (e) {
-      setNewFileError(describeIpcError(e));
-      recordError("new-file", `creating ${name} failed`, e);
+      notifyError("Couldn't duplicate file", describeIpcError(e));
+      recordError("duplicate-file", `duplicating ${node.relPath} failed`, e);
     }
   };
 
-  // The tab strip fits its tabs (Files / Refs / SCM / Review·n / TODO·n)
-  // without squishing them; we report its natural width so the shell can size
-  // the sidebar to show them all. Summing children (each `flex-shrink-0`) keeps
-  // the measurement independent of the current container width.
+  const deletePath = async (node: FileNode) => {
+    const p = project();
+    if (!p) return;
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    const ok = await ask(
+      node.isDir
+        ? `Move the folder "${node.name}" and its contents to the trash? You can restore it from your system trash.`
+        : `Move "${node.name}" to the trash? Any unsaved changes in this file will be lost. You can restore it from your system trash.`,
+      { title: "Delete", kind: "warning" },
+    );
+    if (!ok) return;
+    try {
+      await ipc.deleteProjectPath(p.rootPath, node.relPath);
+    } catch (e) {
+      notifyError("Couldn't delete", describeIpcError(e));
+      recordError("delete-path", `deleting ${node.relPath} failed`, e);
+      return;
+    }
+    // Close any open tab(s) the delete just orphaned. Threads are left in
+    // place — the file is trash-recoverable.
+    if (node.isDir) {
+      const prefix = `${node.relPath}/`;
+      for (const rel of openFiles()
+        .map((f) => f.relPath)
+        .filter((rel) => rel === node.relPath || rel.startsWith(prefix))) {
+        closeFileByRelPath(rel);
+      }
+    } else {
+      closeFileByRelPath(node.relPath);
+    }
+  };
+
+  const copyRelPath = async (node: FileNode) => {
+    try {
+      await navigator.clipboard.writeText(node.relPath);
+    } catch (e) {
+      notifyError("Couldn't copy path", describeIpcError(e));
+    }
+  };
+
+  const revealInFileManager = async (node: FileNode) => {
+    const p = project();
+    if (!p) return;
+    try {
+      await ipc.revealProjectPath(p.rootPath, node.relPath);
+    } catch (e) {
+      notifyError("Couldn't reveal file", describeIpcError(e));
+    }
+  };
+
+  // The tabs shown, in order. Files always; Refs/SCM gated; Review/TODO carry
+  // live counters. The label + icon serve the full and compact renderings.
+  const tabDefs = createMemo<SidebarTab[]>(() => [
+    { id: "files", label: "Files", icon: Files },
+    ...(hasReferences()
+      ? [{ id: "references" as LeftTab, label: "Refs", icon: BookMarked }]
+      : []),
+    ...(isGitRepo()
+      ? [{ id: "scm" as LeftTab, label: "SCM", icon: GitBranch }]
+      : []),
+    { id: "review", label: "Review", icon: MessageSquare, count: openCommentThreadCount() },
+    { id: "todo", label: "TODO", icon: ListTodo, count: todoCount() },
+  ]);
+
+  // Natural width is measured off the hidden full-label clone, not the visible
+  // strip — so a compact (icon-only) render can't shrink the measured width and
+  // trap the strip in compact mode. The shell sizes the sidebar to this width.
   let tabStripRef: HTMLDivElement | undefined;
   const measureTabs = () => {
-    const el = tabStripRef;
-    if (!el || !props.onTabsMeasured) return;
+    const el = measureStripRef;
+    if (!el) return;
     const style = getComputedStyle(el);
     const padX = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
     const gap = parseFloat(style.columnGap) || 0;
@@ -149,18 +361,30 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     let content = padX;
     for (const k of kids) content += k.offsetWidth;
     if (kids.length > 1) content += gap * (kids.length - 1);
-    props.onTabsMeasured(Math.ceil(content));
+    naturalWidth = Math.ceil(content);
+    props.onTabsMeasured?.(naturalWidth);
+    evaluateCompact();
+  };
+  // Flip to icons when the visible strip can't fit full labels; expand back with
+  // an 8px hysteresis band so it doesn't oscillate at the threshold.
+  const evaluateCompact = () => {
+    const el = tabStripRef;
+    if (!el || naturalWidth === 0) return;
+    const avail = el.clientWidth;
+    if (!compact() && avail < naturalWidth) setCompact(true);
+    else if (compact() && avail >= naturalWidth + 8) setCompact(false);
   };
   createEffect(() => {
     // Track the reactive bits that add/remove tabs or change a counter width.
     hasReferences();
     isGitRepo();
-    allOpenThreadCount();
+    openCommentThreadCount();
+    todoCount();
     queueMicrotask(measureTabs);
   });
   onMount(() => {
     if (!tabStripRef) return;
-    const ro = new ResizeObserver(() => measureTabs());
+    const ro = new ResizeObserver(() => evaluateCompact());
     ro.observe(tabStripRef);
     onCleanup(() => ro.disconnect());
   });
@@ -210,15 +434,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         aria-label="Sidebar panels"
         class="flex flex-shrink-0 items-center gap-0 overflow-x-auto scroll border-b border-glass-stroke px-2 pt-1.5"
       >
-        <For
-          each={[
-            { id: "files" as LeftTab, label: "Files" },
-            ...(hasReferences() ? [{ id: "references" as LeftTab, label: "Refs" }] : []),
-            ...(isGitRepo() ? [{ id: "scm" as LeftTab, label: "SCM" }] : []),
-            { id: "review" as LeftTab, label: "Review", count: allOpenThreadCount() },
-            { id: "todo" as LeftTab, label: "TODO", count: 0 },
-          ]}
-        >
+        <For each={tabDefs()}>
           {(t) => {
             const active = () => props.tab === t.id;
             return (
@@ -226,13 +442,17 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                 type="button"
                 role="tab"
                 aria-selected={active()}
+                aria-label={t.label}
+                title={compact() ? t.label : undefined}
                 onClick={() => props.setTab(t.id)}
                 class={`relative flex flex-shrink-0 items-center gap-1.5 px-2.5 text-base font-medium ${
                   active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
                 }`}
                 style={{ height: "var(--ui-row)" }}
               >
-                {t.label}
+                <Show when={compact() && t.id !== "files"} fallback={t.label}>
+                  <Dynamic component={t.icon} size={14} />
+                </Show>
                 <Show when={t.count != null}>
                   <span
                     class="mono rounded-full px-1.5 py-0.5 text-xs"
@@ -260,51 +480,62 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           }}
         </For>
       </div>
+      {/* Hidden full-label clone: the sole width-measurement source, so the
+          natural width stays known even while the visible strip renders icons. */}
+      <div
+        ref={measureStripRef}
+        aria-hidden="true"
+        class="pointer-events-none flex items-center gap-0 px-2"
+        style={{
+          position: "absolute",
+          top: "0",
+          left: "0",
+          visibility: "hidden",
+          "white-space": "nowrap",
+        }}
+      >
+        <For each={tabDefs()}>
+          {(t) => (
+            <span
+              class="flex flex-shrink-0 items-center gap-1.5 px-2.5 text-base font-medium"
+              style={{ height: "var(--ui-row)" }}
+            >
+              {t.label}
+              <Show when={t.count != null}>
+                <span class="mono rounded-full px-1.5 py-0.5 text-xs">{t.count}</span>
+              </Show>
+            </span>
+          )}
+        </For>
+      </div>
 
-      {/* "Files" section header — uppercase label + new-file action. */}
+      {/* "Files" section header — uppercase label + new-file / new-folder actions. */}
       <Show when={props.tab === "files"}>
         <div
           class="label-xs flex h-9 flex-shrink-0 items-center justify-between px-3 text-fg-3"
         >
-          <span>Files</span>
-          <button
-            type="button"
-            title="New file"
-            aria-label="New file"
-            onClick={() => {
-              setNewFileOpen((v) => !v);
-              setNewFileError(null);
-            }}
-            class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
-          >
-            <FilePlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
-          </button>
-        </div>
-        <Show when={newFileOpen()}>
-          <div class="flex-shrink-0 px-3 pb-2">
-            <input
-              type="text"
-              value={newFileName()}
-              onInput={(e) => setNewFileName(e.currentTarget.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.isComposing) void createNewFile();
-                if (e.key === "Escape") {
-                  setNewFileOpen(false);
-                  setNewFileName("");
-                  setNewFileError(null);
-                }
-              }}
-              ref={(el) => setTimeout(() => el.focus(), 0)}
-              placeholder="name.tex — Enter to create, Esc to cancel"
-              class="glass-inset w-full rounded-md px-2 py-1.5 text-sm text-fg-1 placeholder:text-fg-2 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
-            />
-            <Show when={newFileError()}>
-              <div class="mt-1 text-xs" style={{ color: "var(--color-err)" }}>
-                {newFileError()}
-              </div>
-            </Show>
+          <span>File tree</span>
+          <div class="flex items-center gap-0.5">
+            <button
+              type="button"
+              title="New folder"
+              aria-label="New folder"
+              onClick={() => openNewFolderPrompt("")}
+              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+            >
+              <FolderPlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
+            </button>
+            <button
+              type="button"
+              title="New file"
+              aria-label="New file"
+              onClick={() => openNewFilePrompt("")}
+              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+            >
+              <FilePlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
+            </button>
           </div>
-        </Show>
+        </div>
       </Show>
 
       <div class="min-h-0 flex-1 overflow-auto scroll">
@@ -313,6 +544,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
             rootPath={project()!.rootPath}
             activeRelPath={activeFile()?.relPath ?? null}
             onOpen={props.onSelectFile}
+            onFileMenu={(node, e) => fileMenu.openAt(e, { kind: "file", node })}
+            onDirMenu={(node, e) => fileMenu.openAt(e, { kind: "dir", node })}
+            onEmptyMenu={(e) => fileMenu.openAt(e, { kind: "empty" })}
+            collapseGeneration={collapseGen()}
           />
         </Show>
         <Show when={props.tab === "references"}>
@@ -325,11 +560,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           <ReviewPanel onRequestReanchor={handleReanchor} />
         </Show>
         <Show when={props.tab === "todo"}>
-          <EmptyTab
-            icon={<CircleDot size={20} />}
-            title="TODO collection — coming soon"
-            body="This tab will collect %! TODO: comments from your sources. It isn't built yet."
-          />
+          <TodoPanel />
         </Show>
       </div>
 
@@ -341,25 +572,278 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       <div class="flex-shrink-0 space-y-2.5 border-t border-glass-stroke p-3">
         <div class="flex items-center justify-between">
           <span class="label-xs text-fg-3">Project</span>
+          <button
+            type="button"
+            title="Project settings"
+            aria-label="Project settings"
+            onClick={() => openProjectSettings()}
+            class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+          >
+            <Settings2 class="ui-icon-menu" style={{ opacity: 0.8 }} />
+          </button>
         </div>
         <div class="grid grid-cols-2 gap-2">
           <Stat label="Words" value={stats()?.words ?? "—"} />
           <Stat label="Lines" value={stats()?.lines ?? "—"} />
         </div>
         <Show when={project()?.format === "latex"}>
-          <div class="glass-soft flex items-center gap-2 rounded-lg px-2.5 py-2">
-            <Zap size={12} style={{ color: "var(--color-accent-1)" }} />
-            <span class="text-xs text-fg-2">Engine</span>
-            <span class="mono ml-auto text-xs text-fg-1">
-              {ENGINE_LABEL[compileEngine()] ?? compileEngine()}
-            </span>
-          </div>
+          <EnginePill />
         </Show>
       </div>
+
+      <Show when={fileMenu.menu()}>
+        {(m) => {
+          const nodeOf = (p: FileMenuPayload) => (p.kind === "empty" ? undefined : p);
+          return (
+            <ContextMenu x={m().x} y={m().y} onClose={fileMenu.close}>
+              <Show when={nodeOf(m().payload)}>
+                {(pl) => (
+                  <>
+                    <Show when={pl().kind === "file"}>
+                      <ContextMenuItem
+                        icon={FolderOpen}
+                        label="Open"
+                        onClick={() => {
+                          fileMenu.close();
+                          props.onSelectFile(pl().node.relPath);
+                        }}
+                      />
+                      <ContextMenuItem
+                        icon={Pencil}
+                        label="Rename…"
+                        onClick={() => {
+                          fileMenu.close();
+                          openRenamePrompt(pl().node);
+                        }}
+                      />
+                      <ContextMenuItem
+                        icon={Copy}
+                        label="Duplicate"
+                        onClick={() => {
+                          fileMenu.close();
+                          void duplicateFile(pl().node);
+                        }}
+                      />
+                    </Show>
+                    <ContextMenuItem
+                      icon={FilePlus}
+                      label="New file here"
+                      onClick={() => {
+                        fileMenu.close();
+                        openNewFilePrompt(
+                          pl().kind === "dir"
+                            ? pl().node.relPath
+                            : parentRel(pl().node.relPath),
+                        );
+                      }}
+                    />
+                    <ContextMenuItem
+                      icon={FolderPlus}
+                      label="New folder here"
+                      onClick={() => {
+                        fileMenu.close();
+                        openNewFolderPrompt(
+                          pl().kind === "dir"
+                            ? pl().node.relPath
+                            : parentRel(pl().node.relPath),
+                        );
+                      }}
+                    />
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      icon={ClipboardCopy}
+                      label="Copy relative path"
+                      onClick={() => {
+                        fileMenu.close();
+                        void copyRelPath(pl().node);
+                      }}
+                    />
+                    <ContextMenuItem
+                      icon={ExternalLink}
+                      label="Reveal in file manager"
+                      onClick={() => {
+                        fileMenu.close();
+                        void revealInFileManager(pl().node);
+                      }}
+                    />
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      icon={Trash2}
+                      label="Delete…"
+                      danger
+                      onClick={() => {
+                        fileMenu.close();
+                        void deletePath(pl().node);
+                      }}
+                    />
+                  </>
+                )}
+              </Show>
+              <Show when={m().payload.kind === "empty"}>
+                <ContextMenuItem
+                  icon={FilePlus}
+                  label="New file"
+                  onClick={() => {
+                    fileMenu.close();
+                    openNewFilePrompt("");
+                  }}
+                />
+                <ContextMenuItem
+                  icon={FolderPlus}
+                  label="New folder"
+                  onClick={() => {
+                    fileMenu.close();
+                    openNewFolderPrompt("");
+                  }}
+                />
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  icon={ChevronsDownUp}
+                  label="Collapse all"
+                  onClick={() => {
+                    fileMenu.close();
+                    setCollapseGen((g) => g + 1);
+                  }}
+                />
+              </Show>
+            </ContextMenu>
+          );
+        }}
+      </Show>
+
+      <NamePromptDialog request={prompt()} onClose={() => setPrompt(null)} />
     </div>
   );
 };
 
+/**
+ * Small prefilled-input dialog shared by new-file / new-folder / rename. The
+ * caller's `onConfirm` throws to surface an inline error (e.g. name collision)
+ * and resolves to close.
+ */
+const NamePromptDialog: Component<{
+  request: PromptRequest | null;
+  onClose: () => void;
+}> = (props) => {
+  const [value, setValue] = createSignal("");
+  const [error, setError] = createSignal<string | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  let inputRef: HTMLInputElement | undefined;
+
+  createEffect(() => {
+    const req = props.request;
+    if (!req) return;
+    setValue(req.initial);
+    setError(null);
+    queueMicrotask(() => {
+      inputRef?.focus();
+      // Select the file stem so a rename edits the name, not the extension.
+      const v = inputRef?.value ?? "";
+      const dot = v.lastIndexOf(".");
+      inputRef?.setSelectionRange(0, dot > 0 ? dot : v.length);
+    });
+  });
+
+  const submit = async () => {
+    const req = props.request;
+    if (!req || busy()) return;
+    setBusy(true);
+    try {
+      await req.onConfirm(value());
+      props.onClose();
+    } catch (e) {
+      setError(describeIpcError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={props.request !== null}
+      onOpenChange={(o) => {
+        if (!o) props.onClose();
+      }}
+      title={props.request?.title ?? ""}
+      widthClass="w-[420px]"
+      footer={
+        <>
+          <Button variant="ghost" size="sm" onClick={props.onClose}>
+            Cancel
+          </Button>
+          <Button variant="primary" size="sm" disabled={busy()} onClick={() => void submit()}>
+            {props.request?.confirmLabel ?? "OK"}
+          </Button>
+        </>
+      }
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        value={value()}
+        onInput={(e) => setValue(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.isComposing) {
+            e.preventDefault();
+            void submit();
+          }
+        }}
+        placeholder={props.request?.placeholder}
+        class="glass-inset w-full rounded-md px-2.5 py-2 text-sm text-fg-1 placeholder:text-fg-2 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+      />
+      <Show when={error()}>
+        <div class="mt-2 text-xs" style={{ color: "var(--color-err)" }}>
+          {error()}
+        </div>
+      </Show>
+    </Dialog>
+  );
+};
+
+
+/**
+ * Interactive engine chip in the Project footer. Clicking it toggles the shared
+ * {@link BuildConfigMenu}. The popover opens *upward* into the sidebar body:
+ * the chip sits at the footer, and the sidebar root clips overflow, so a
+ * downward menu would be hidden.
+ */
+const EnginePill: Component = () => {
+  const [open, setOpen] = createSignal(false);
+  let rootRef: HTMLDivElement | undefined;
+  installDismiss(() => rootRef, open, () => setOpen(false));
+  useListboxOpenFocus(open, () => rootRef);
+
+  const label = () => {
+    const p = project();
+    if (!p) return "";
+    const e = effectiveBuild(p).engine;
+    return ENGINE_LABEL[e] ?? e;
+  };
+
+  return (
+    <div class="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
+        title="Build settings"
+        class="glass-soft flex w-full items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-[var(--color-control-fill)]"
+      >
+        <Zap size={12} style={{ color: "var(--color-accent-1)" }} />
+        <span class="text-xs text-fg-2">Engine</span>
+        <span class="mono ml-auto text-xs text-fg-1">{label()}</span>
+      </button>
+      <Show when={open()}>
+        <BuildConfigMenu
+          direction="up"
+          onClose={() => setOpen(false)}
+          onOpenSettings={openProjectSettings}
+        />
+      </Show>
+    </div>
+  );
+};
 
 const Stat: Component<{ label: string; value: string }> = (props) => (
   <div class="glass-soft rounded-lg px-2 py-1.5">
@@ -404,48 +888,3 @@ const countStats = (s: string): { words: string; lines: string } => {
   return { words: words.toLocaleString(), lines: lines.toLocaleString() };
 };
 
-const EmptyTab: Component<{ icon: JSX.Element; title: string; body: string }> = (
-  props,
-) => (
-  <div class="flex h-full flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-    <div
-      class="flex h-10 w-10 items-center justify-center rounded-full"
-      style={{ background: "var(--color-control-fill)" }}
-    >
-      {props.icon}
-    </div>
-    <div class="text-base font-semibold text-fg-1">{props.title}</div>
-    <div class="text-xs leading-relaxed text-fg-3">{props.body}</div>
-  </div>
-);
-
-const OutlinePanel: Component<{ collapsed: boolean; onToggle: () => void }> = (
-  props,
-) => {
-  return (
-    <div class="flex-shrink-0 border-t border-glass-stroke">
-      <button
-        type="button"
-        onClick={props.onToggle}
-        class="lift flex h-9 w-full items-center gap-2 px-3 hover:bg-[var(--color-control-fill)]"
-      >
-        <ListTree size={12} style={{ opacity: 0.65 }} />
-        <span class="text-sm font-medium text-fg-2">Outline</span>
-        <span class="mono text-[10px] text-fg-3">document structure</span>
-        <Show
-          when={props.collapsed}
-          fallback={<ChevronDown size={12} class="ml-auto opacity-55" />}
-        >
-          <ChevronUp size={12} class="ml-auto opacity-55" />
-        </Show>
-      </button>
-      <Show when={!props.collapsed}>
-        <div class="max-h-[200px] space-y-1.5 overflow-auto scroll px-2.5 pb-2.5">
-          <div class="text-xs text-fg-3 px-2 py-1.5 italic">
-            Document outline isn't built yet — coming soon.
-          </div>
-        </div>
-      </Show>
-    </div>
-  );
-};

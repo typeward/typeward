@@ -50,6 +50,8 @@ import {
 import { connectWebdav, disconnectWebdav } from "~/integrations/cloud/webdav";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { notifySuccess } from "~/lib/toast";
+import * as ipc from "~/ipc";
 
 export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
 
@@ -150,7 +152,7 @@ const BetterBibTexRow: Component = () => {
           <Switch
             checked={settings().enabled}
             onChange={(checked) => toggle(checked)}
-            disabled={!probe()?.reachable}
+            disabled={!settings().enabled && !probe()?.reachable}
           />
         </div>
       }
@@ -1244,6 +1246,14 @@ async function probeProvider(
 // Grammar card
 // =================================================================
 
+const DIALECT_LABELS: Record<ipc.GrammarDialect, string> = {
+  "en-US": "American",
+  "en-GB": "British",
+  "en-CA": "Canadian",
+  "en-AU": "Australian",
+  "en-IN": "Indian",
+};
+
 const GrammarCard: Component = () => {
   const grammar = () => integrationsSettings().grammar;
 
@@ -1254,17 +1264,150 @@ const GrammarCard: Component = () => {
     });
   };
 
+  const setDialect = (language: string) => {
+    setIntegrationsSettings({
+      ...integrationsSettings(),
+      grammar: { ...grammar(), language },
+    });
+  };
+
+  const [words, { refetch: refetchWords }] = createResource(async () => {
+    try {
+      return await ipc.grammarListWords();
+    } catch {
+      return [] as string[];
+    }
+  });
+  const [managing, setManaging] = createSignal(false);
+  const [clearing, setClearing] = createSignal(false);
+
+  const removeWord = async (word: string) => {
+    try {
+      await ipc.grammarRemoveWord(word);
+      await refetchWords();
+    } catch (e) {
+      notifyError("Couldn't remove word", errorText(e));
+    }
+  };
+
+  const resetIgnored = async () => {
+    setClearing(true);
+    try {
+      await ipc.grammarClearIgnored();
+      notifySuccess("Ignored lints cleared", "Previously dismissed suggestions will show again.");
+    } catch (e) {
+      notifyError("Couldn't reset ignored lints", errorText(e));
+    } finally {
+      setClearing(false);
+    }
+  };
+
   return (
     <Card
       title="Grammar"
-      subtitle="Local Harper grammar lint. Runs in-process via the Rust crate — zero network, all on-device. Diagnostics surface as squiggles in the editor with one-click apply for suggested replacements."
+      subtitle="Local Harper grammar + spell check. Runs in-process via the Rust crate — zero network, all on-device. LaTeX commands and Typst code are skipped automatically; diagnostics surface as squiggles with one-click fixes."
     >
       <ProviderRow
-        name="Harper (American English)"
-        hint="Phase 5 ships en-US only. Additional dialects land as Harper's dictionary set grows."
+        name="Harper"
+        hint="Rust-native English grammar engine. Underlines spelling, grammar, and style issues with quick-fix suggestions."
         status={grammar().enabled ? "ready" : "unconfigured"}
         controls={<Switch checked={grammar().enabled} onChange={toggle} />}
-      />
+      >
+        <Show when={grammar().enabled}>
+          <div class="mt-4 flex flex-col gap-3">
+            <div class="flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-fg-1">English dialect</div>
+                <div class="text-xs text-fg-3">
+                  Spelling and usage rules follow the selected variety.
+                </div>
+              </div>
+              <select
+                value={grammar().language ?? "en-US"}
+                onChange={(e) => setDialect(e.currentTarget.value)}
+                class="glass-inset h-8 rounded-md px-2.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              >
+                <For each={ipc.GRAMMAR_DIALECTS}>
+                  {(d) => (
+                    <option value={d}>
+                      {DIALECT_LABELS[d]} ({d})
+                    </option>
+                  )}
+                </For>
+              </select>
+            </div>
+
+            <div class="flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-fg-1">
+                  Personal dictionary: {words()?.length ?? 0}{" "}
+                  {(words()?.length ?? 0) === 1 ? "word" : "words"}
+                </div>
+                <div class="text-xs text-fg-3">
+                  Words you added via "Add to dictionary" are never flagged.
+                </div>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                class="h-8"
+                onClick={() => setManaging((v) => !v)}
+              >
+                {managing() ? "Done" : "Manage"}
+              </Button>
+            </div>
+
+            <Show when={managing()}>
+              <div class="glass-inset rounded-md p-1">
+                <Show
+                  when={(words()?.length ?? 0) > 0}
+                  fallback={
+                    <div class="px-2 py-3 text-center text-xs text-fg-3">
+                      No custom words yet.
+                    </div>
+                  }
+                >
+                  <div class="max-h-48 overflow-y-auto">
+                    <For each={words()}>
+                      {(word) => (
+                        <div class="flex items-center justify-between gap-2 rounded px-2 py-1.5 hover:bg-[var(--color-control-fill)]">
+                          <span class="mono truncate text-sm text-fg-1">{word}</span>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${word}`}
+                            class="lift flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-fg-3 hover:text-[var(--color-err)]"
+                            onClick={() => void removeWord(word)}
+                          >
+                            <X class="ui-icon-sm" />
+                          </button>
+                        </div>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            </Show>
+
+            <div class="flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <div class="text-sm font-medium text-fg-1">Ignored suggestions</div>
+                <div class="text-xs text-fg-3">
+                  Restore every lint you dismissed with "Ignore".
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-8"
+                onClick={() => void resetIgnored()}
+                disabled={clearing()}
+              >
+                Reset ignored lints
+              </Button>
+            </div>
+          </div>
+        </Show>
+      </ProviderRow>
     </Card>
   );
 };
@@ -1284,19 +1427,19 @@ const STATUS_TEXT: Record<ProviderStatus, string> = {
 };
 
 const STATUS_BG: Record<ProviderStatus, string> = {
-  ready: "color-mix(in srgb, var(--color-ok) 14%, transparent)",
+  ready: "color-mix(in srgb, var(--color-ok) 18%, transparent)",
   unconfigured: "var(--color-control-fill)",
-  unreachable: "color-mix(in srgb, var(--color-err) 14%, transparent)",
+  unreachable: "color-mix(in srgb, var(--color-err) 18%, transparent)",
   checking: "var(--color-control-fill)",
-  error: "color-mix(in srgb, var(--color-err) 14%, transparent)",
+  error: "color-mix(in srgb, var(--color-err) 18%, transparent)",
 };
 
 const STATUS_FG: Record<ProviderStatus, string> = {
-  ready: "var(--color-ok)",
+  ready: "color-mix(in srgb, var(--color-ok) 65%, var(--color-fg-1))",
   unconfigured: "var(--color-fg-3)",
-  unreachable: "var(--color-err)",
+  unreachable: "color-mix(in srgb, var(--color-err) 65%, var(--color-fg-1))",
   checking: "var(--color-fg-3)",
-  error: "var(--color-err)",
+  error: "color-mix(in srgb, var(--color-err) 65%, var(--color-fg-1))",
 };
 
 const ProviderRow: Component<{

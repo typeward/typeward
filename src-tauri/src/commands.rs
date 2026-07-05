@@ -4,7 +4,7 @@ use crate::autosave::{self, Snapshot};
 #[cfg(desktop)]
 use crate::detect::{self, EngineProbe};
 use crate::fs_ops;
-use crate::project::{self, Project, ProjectFormat};
+use crate::project::{self, Project, ProjectBuild, ProjectFormat};
 use crate::settings::{self, Settings};
 
 /// Convert any error into a String at the command boundary so Tauri's bridge
@@ -195,6 +195,360 @@ pub async fn set_project_deadline(
     tokio::task::spawn_blocking(move || -> CmdResult<Project> {
         ensure_registered(&project_root)?;
         project::set_deadline(Path::new(&project_root), deadline).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Set a project's tags. Normalization (trim, dedupe, caps) is enforced in
+/// `project::set_tags` so the invariant holds regardless of caller.
+#[tauri::command]
+pub async fn set_project_tags(project_root: String, tags: Vec<String>) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_tags(Path::new(&project_root), tags).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Assign the project to a space (`None` clears it). The space id references the
+/// workspace spaces catalog in settings.json; it is not cross-checked here.
+#[tauri::command]
+pub async fn set_project_space(
+    project_root: String,
+    space: Option<String>,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_space(Path::new(&project_root), space).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Move a project to (or out of) the in-app soft-trash. `trashed = true` stamps
+/// the current time (epoch ms); `false` clears it. The folder on disk is left
+/// untouched — permanent removal goes through `delete_project`.
+#[tauri::command]
+pub async fn set_project_trashed(project_root: String, trashed: bool) -> CmdResult<Project> {
+    let trashed_at = trashed.then(|| chrono::Utc::now().timestamp_millis());
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_trashed(Path::new(&project_root), trashed_at).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn set_project_archived(project_root: String, archived: bool) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_archived(Path::new(&project_root), archived).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Stamp the project's last-opened time (server-side clock). Fire-and-forget
+/// from the frontend on every project open.
+#[tauri::command]
+pub async fn touch_project_opened(project_root: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        project::touch_opened(Path::new(&project_root), now).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Rename a project's display name (folder path unchanged; see `project::rename`).
+#[tauri::command]
+pub async fn rename_project(project_root: String, name: String) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::rename(Path::new(&project_root), name).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Move a project to the OS trash. Recoverable, so the UI confirms with a plain
+/// dialog. No registry unregister is needed — a trashed folder fails to
+/// canonicalize and drops out of `is_registered_root` naturally.
+#[tauri::command]
+pub async fn delete_project(project_root: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        project::delete_project(Path::new(&project_root)).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Duplicate a project into a fresh sibling folder under the projects root.
+#[tauri::command]
+pub async fn duplicate_project(
+    project_root: String,
+    new_name: Option<String>,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        let source = Path::new(&project_root);
+        // The copy lands as a child of the source's parent; validate that
+        // parent is under the projects root *before* copying so the new folder
+        // can't escape the projects area.
+        let parent = source
+            .parent()
+            .ok_or_else(|| "project has no parent directory".to_string())?;
+        ensure_under_projects_root(parent)?;
+        let (dest, project) = project::duplicate_project(source, new_name).map_err(err)?;
+        project::register_root(&dest);
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Set (or clear) the per-project LaTeX build config. Engine validation lives
+/// in `project::set_build`.
+#[tauri::command]
+pub async fn set_project_build(
+    project_root: String,
+    build: Option<ProjectBuild>,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_build(Path::new(&project_root), build).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Repoint the project's entry file (root-file picker / rename-the-root-file
+/// flow). Existence + extension-match + `write_project` revalidation live in
+/// `project::set_root_file`.
+#[tauri::command]
+pub async fn set_project_root_file(
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_root_file(Path::new(&project_root), &rel_path).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+// ---------- File-tree operations (context menus) --------------------------
+//
+// Renderer-driven file ops (rename / delete / new dir / duplicate). Each gates
+// on the opened-project registry, validates the project-relative path (the
+// leading-dash guard included), and refuses the `.typeward` sidecar and `.git`
+// repo as a first component so the renderer can't rewrite snapshots, the sync
+// cursor, review comments, or VCS internals. The watcher picks the changes up
+// automatically (fsVersion bump → FileTree + TODO scan refresh).
+
+/// Reject a rel path whose first component is a protected sidecar/VCS dir.
+/// Case-insensitive (Windows/macOS fold case) at the first segment — matching
+/// the cloud engine's `.typeward` guard.
+fn reject_protected_first_component(rel_path: &str) -> CmdResult<()> {
+    let first = Path::new(rel_path).components().find_map(|c| match c {
+        std::path::Component::Normal(p) => Some(p.to_string_lossy().to_ascii_lowercase()),
+        _ => None,
+    });
+    if let Some(first) = first {
+        if first == ".typeward" || first == ".git" {
+            return Err(format!("cannot modify protected path: {rel_path}"));
+        }
+    }
+    Ok(())
+}
+
+/// Move `from_rel` to `to_rel` within the project. The source must exist and NOT
+/// be a symlink (never follow a planted link); the destination must not already
+/// exist (no silent overwrite). Pure/testable: the command wrapper adds the
+/// registry gate.
+fn rename_project_file_op(root: &Path, from_rel: &str, to_rel: &str) -> CmdResult<()> {
+    reject_protected_first_component(from_rel)?;
+    reject_protected_first_component(to_rel)?;
+    // resolve_project_write_path canonicalizes only the parent, leaving the leaf
+    // un-canonicalized so symlink_metadata below sees the link itself.
+    let from = project::resolve_project_write_path(root, from_rel).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&from)
+        .map_err(|_| format!("source does not exist: {from_rel}"))?;
+    if meta.file_type().is_symlink() {
+        return Err("refusing to rename a symlink".to_string());
+    }
+    let to = project::resolve_project_write_path(root, to_rel).map_err(err)?;
+    if to.symlink_metadata().is_ok() {
+        return Err(format!("destination already exists: {to_rel}"));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(err)?;
+    }
+    std::fs::rename(&from, &to).map_err(err)
+}
+
+#[tauri::command]
+pub async fn rename_project_file(
+    project_root: String,
+    from_rel: String,
+    to_rel: String,
+) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        rename_project_file_op(Path::new(&project_root), &from_rel, &to_rel)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Delete a project-relative file or directory. Uses the OS trash on desktop
+/// (recoverable, so the UI confirms with a plain dialog) and a hard remove on
+/// mobile — mirroring `project::delete_project`'s cfg split. A symlink leaf is
+/// deleted as the link, never followed to its target.
+fn delete_project_path_op(root: &Path, rel_path: &str) -> CmdResult<()> {
+    reject_protected_first_component(rel_path)?;
+    let target = project::resolve_project_write_path(root, rel_path).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&target)
+        .map_err(|_| format!("path does not exist: {rel_path}"))?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = meta;
+        trash::delete(&target).map_err(|e| e.to_string())
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        if meta.file_type().is_dir() {
+            std::fs::remove_dir_all(&target).map_err(err)
+        } else {
+            std::fs::remove_file(&target).map_err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn delete_project_path(project_root: String, rel_path: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        delete_project_path_op(Path::new(&project_root), &rel_path)
+    })
+    .await
+    .map_err(err)?
+}
+
+fn create_project_dir_op(root: &Path, rel_path: &str) -> CmdResult<()> {
+    reject_protected_first_component(rel_path)?;
+    let dir = project::resolve_project_write_path(root, rel_path).map_err(err)?;
+    std::fs::create_dir_all(&dir).map_err(err)
+}
+
+#[tauri::command]
+pub async fn create_project_dir(project_root: String, rel_path: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        create_project_dir_op(Path::new(&project_root), &rel_path)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Compute a "<stem> copy[.ext]" sibling rel path that doesn't yet exist,
+/// escalating to "<stem> copy 2", "<stem> copy 3"… on collision. The existence
+/// probe uses `symlink_metadata` so a planted symlink at the candidate name
+/// still counts as taken.
+fn duplicate_rel_name(root: &Path, rel_path: &str) -> CmdResult<String> {
+    let rel = Path::new(rel_path);
+    let stem = rel
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("cannot duplicate: {rel_path}"))?;
+    let ext = rel.extension().map(|s| s.to_string_lossy().into_owned());
+    let parent = rel.parent();
+
+    let make = |suffix: &str| -> String {
+        let name = match &ext {
+            Some(e) => format!("{stem}{suffix}.{e}"),
+            None => format!("{stem}{suffix}"),
+        };
+        match parent {
+            Some(p) if !p.as_os_str().is_empty() => {
+                p.join(name).to_string_lossy().replace('\\', "/")
+            }
+            _ => name,
+        }
+    };
+
+    let taken = |candidate: &str| root.join(candidate).symlink_metadata().is_ok();
+
+    let first = make(" copy");
+    if !taken(&first) {
+        return Ok(first);
+    }
+    let mut n = 2;
+    loop {
+        let candidate = make(&format!(" copy {n}"));
+        if !taken(&candidate) {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
+/// Duplicate a project-relative FILE (directories rejected in v1). Copies disk
+/// content to a fresh "<name> copy.ext" sibling and returns the new rel path.
+fn duplicate_project_file_op(root: &Path, rel_path: &str) -> CmdResult<String> {
+    reject_protected_first_component(rel_path)?;
+    let source = project::resolve_project_write_path(root, rel_path).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&source)
+        .map_err(|_| format!("source does not exist: {rel_path}"))?;
+    if meta.file_type().is_symlink() {
+        return Err("refusing to duplicate a symlink".to_string());
+    }
+    if !meta.file_type().is_file() {
+        return Err("only files can be duplicated".to_string());
+    }
+    let dest_rel = duplicate_rel_name(root, rel_path)?;
+    let dest = project::resolve_project_write_path(root, &dest_rel).map_err(err)?;
+    std::fs::copy(&source, &dest).map_err(err)?;
+    Ok(dest_rel)
+}
+
+#[tauri::command]
+pub async fn duplicate_project_file(
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<String> {
+    tokio::task::spawn_blocking(move || -> CmdResult<String> {
+        ensure_registered(&project_root)?;
+        duplicate_project_file_op(Path::new(&project_root), &rel_path)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Reveal a project-relative file in the OS file manager (Finder/Explorer).
+/// Unlike the raw `opener` plugin's reveal command — which took an unscoped
+/// absolute path straight from the renderer — this gates on the opened-project
+/// registry and resolves the path under the canonical root, so webview XSS
+/// can't reveal `~/.ssh` or any path outside an opened project.
+#[tauri::command]
+pub async fn reveal_project_path(
+    app: tauri::AppHandle,
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        reject_protected_first_component(&rel_path)?;
+        let abs = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)
+            .map_err(err)?;
+        app.opener().reveal_item_in_dir(abs).map_err(err)
     })
     .await
     .map_err(err)?
@@ -423,4 +777,139 @@ pub async fn list_orphan_snapshots(project_root: String) -> CmdResult<Vec<Snapsh
     })
     .await
     .map_err(err)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("typeward-cmd-test-{}-{}", std::process::id(), id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reject_protected_first_component_matrix() {
+        // First-component sidecar/VCS dirs are rejected, case-insensitively.
+        for bad in [
+            ".typeward/project.json",
+            ".git/config",
+            ".Typeward/x",
+            ".GIT/hooks/pre-commit",
+        ] {
+            assert!(
+                reject_protected_first_component(bad).is_err(),
+                "{bad} should be rejected"
+            );
+        }
+        // A nested `.typeward` beyond the first segment is not this guard's job
+        // (validate_project_relative_path handles traversal); ordinary paths pass.
+        for ok in ["sections/intro.tex", "figures/plot.png", "notes.md"] {
+            assert!(reject_protected_first_component(ok).is_ok(), "{ok} should pass");
+        }
+    }
+
+    #[test]
+    fn file_ops_reject_traversal_absolute_and_dash_paths() {
+        let root = temp_dir();
+        for bad in ["../outside.tex", "sections/../../evil.tex", "-shell-escape.tex"] {
+            assert!(create_project_dir_op(&root, bad).is_err(), "{bad} rejected by mkdir");
+            assert!(
+                rename_project_file_op(&root, "main.tex", bad).is_err(),
+                "{bad} rejected as rename dest"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_rejects_missing_source_and_existing_dest() {
+        let root = temp_dir();
+        std::fs::write(root.join("a.tex"), "A").unwrap();
+        std::fs::write(root.join("b.tex"), "B").unwrap();
+
+        // Missing source.
+        assert!(rename_project_file_op(&root, "ghost.tex", "c.tex").is_err());
+        // Dest already exists — no silent overwrite.
+        assert!(rename_project_file_op(&root, "a.tex", "b.tex").is_err());
+        // Clean rename into a fresh nested dir works (parent created).
+        rename_project_file_op(&root, "a.tex", "chapters/a.tex").unwrap();
+        assert!(root.join("chapters").join("a.tex").exists());
+        assert!(!root.join("a.tex").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_and_duplicate_reject_symlink_source() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir();
+        std::fs::write(root.join("real.tex"), "R").unwrap();
+        symlink(root.join("real.tex"), root.join("link.tex")).unwrap();
+
+        assert!(
+            rename_project_file_op(&root, "link.tex", "moved.tex")
+                .unwrap_err()
+                .contains("symlink")
+        );
+        assert!(
+            duplicate_project_file_op(&root, "link.tex")
+                .unwrap_err()
+                .contains("symlink")
+        );
+        // The real file behind the link is untouched.
+        assert!(root.join("real.tex").exists());
+        assert!(root.join("link.tex").exists());
+    }
+
+    #[test]
+    fn duplicate_naming_escalates_on_collision() {
+        let root = temp_dir();
+        std::fs::write(root.join("note.tex"), "N").unwrap();
+        assert_eq!(duplicate_rel_name(&root, "note.tex").unwrap(), "note copy.tex");
+
+        // End-to-end duplicate, then a second duplicate escalates the suffix.
+        let first = duplicate_project_file_op(&root, "note.tex").unwrap();
+        assert_eq!(first, "note copy.tex");
+        assert!(root.join("note copy.tex").exists());
+        let second = duplicate_project_file_op(&root, "note.tex").unwrap();
+        assert_eq!(second, "note copy 2.tex");
+
+        // Nested path keeps its directory and handles an extension-less file.
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        std::fs::write(root.join("d").join("README"), "x").unwrap();
+        assert_eq!(duplicate_rel_name(&root, "d/README").unwrap(), "d/README copy");
+    }
+
+    #[test]
+    fn duplicate_rejects_directories() {
+        let root = temp_dir();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        assert!(
+            duplicate_project_file_op(&root, "sub")
+                .unwrap_err()
+                .contains("only files")
+        );
+    }
+
+    #[test]
+    fn delete_rejects_protected_and_missing_before_trashing() {
+        let root = temp_dir();
+        // Protected first component is refused before any filesystem action.
+        assert!(delete_project_path_op(&root, ".typeward/snapshots/x.snap").is_err());
+        // A non-existent leaf errors rather than reaching the trash call.
+        assert!(delete_project_path_op(&root, "ghost.tex").is_err());
+    }
+
+    #[test]
+    fn create_project_dir_op_makes_nested_dirs() {
+        let root = temp_dir();
+        create_project_dir_op(&root, "chapters/appendix").unwrap();
+        assert!(root.join("chapters").join("appendix").is_dir());
+    }
 }

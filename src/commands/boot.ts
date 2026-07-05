@@ -3,7 +3,7 @@ import {
   closePalette,
   openNewProjectDialog,
   openSettings,
-  saveActiveFile,
+  saveAndCompileActiveProject,
   toggleCommandPalette,
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
@@ -13,7 +13,7 @@ import { activeFile, project } from "~/stores/editor-store";
 import { paletteOpen_, setRequestSaveTemplate } from "./palette-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
-import { addThread, setRequestReviewPanel } from "~/stores/review-store";
+import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
 import { toggleFocusMode } from "~/stores/ui-store";
 
 /**
@@ -79,14 +79,14 @@ const CORE_COMMANDS: EditorCommand[] = [
   },
   {
     id: "core.save",
-    title: "Save file",
-    subtitle: "Persist the active editor buffer to disk",
+    title: "Save and compile",
+    subtitle: "Persist every dirty buffer, then compile the project",
     shortcut: "Mod+S",
     group: "File",
     scope: "editor",
-    when: () => activeFile()?.dirty === true,
+    when: () => activeFile() !== null,
     run: async () => {
-      await saveActiveFile();
+      await saveAndCompileActiveProject();
     },
   },
   {
@@ -138,14 +138,46 @@ const CORE_COMMANDS: EditorCommand[] = [
     },
   },
   {
+    id: "review.addTodo",
+    title: "Add TODO",
+    subtitle: "Flag the current selection as a TODO",
+    shortcut: "Mod+Shift+T",
+    group: "Review",
+    scope: "editor",
+    when: () => {
+      const view = getActiveEditorView();
+      if (!view) return false;
+      const sel = view.state.selection.main;
+      return sel.from !== sel.to && activeFile() !== null;
+    },
+    run: () => {
+      const view = getActiveEditorView();
+      const f = activeFile();
+      if (!view || !f) return;
+      const sel = view.state.selection.main;
+      if (sel.from === sel.to) return;
+      const anchorText = view.state.doc.sliceString(sel.from, sel.to);
+      const thread = createThread(
+        f.relPath,
+        sel.from,
+        sel.to,
+        anchorText,
+        "You",
+        "",
+        "todo",
+      );
+      addThread(thread);
+    },
+  },
+  {
     id: "review.togglePanel",
-    title: "Toggle Review Panel",
-    subtitle: "Show or hide the review sidebar",
+    title: "Open Review Panel",
+    subtitle: "Show the review sidebar",
     group: "Review",
     scope: "global",
     when: () => project() !== null,
     run: () => {
-      setRequestReviewPanel(true);
+      requestReviewPanelIntent();
     },
   },
   {

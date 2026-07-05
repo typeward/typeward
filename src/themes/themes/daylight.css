@@ -34,6 +34,10 @@
   --color-card-bg: rgb(253 251 244 / 0.94);
   --color-card-bg-soft: rgb(251 248 239 / 0.72);
 
+  --color-control-track-off: rgb(34 33 30 / 0.13);
+  --color-control-thumb: #fdfbf4;
+  --color-control-thumb-stroke: rgb(34 33 30 / 0.16);
+
   /* Quiet paper-toned format tints — no saturated tech colors in chrome. */
   --format-latex: #7d6335; /* was #8a6d3b — 4.5:1+ for the 10px chip label on card surfaces */
   --format-typst: #5c7361;
@@ -53,6 +57,7 @@
   --color-ok: #3d7a4a;
   --color-warn: #866b37; /* was #9a7b3f — darkened to 4.6:1 on ivory (AA text) */
   --color-err: #a84935;
+  --color-info: #3a5c9a; /* ink-blue, ~5:1 on ivory paper */
   --color-danger-fill: var(--color-err); /* #a84935 seal-red is dark enough for white labels */
 
   /* Soft paper drops + crisp white inset highlight. */

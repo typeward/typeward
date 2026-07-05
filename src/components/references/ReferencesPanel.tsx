@@ -23,6 +23,11 @@ import { citationSnippet } from "~/adapters/format-tables";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
+import {
+  readyProviders,
+  refreshAvailability,
+  refsAvailabilityLoading,
+} from "~/integrations/references/availability";
 import { citationProviders } from "~/integrations/references/registry";
 import type { Citation, LibraryNode } from "~/integrations/types";
 import { installDismiss } from "~/lib/dismiss";
@@ -141,24 +146,14 @@ export const ReferencesPanel: Component = () => {
   const findProvider = (id: string | null) =>
     citationProviders().find((p) => p.id === id) ?? null;
 
-  // ----- Reachability: only offer managers whose status() is ready -----
-  const [availableRes] = createResource(
-    () => [citationProviders(), refreshTick()] as const,
-    async ([provs]) => {
-      const ready = await Promise.all(
-        provs.map((p) =>
-          p
-            .status()
-            .then((s) => (s === "ready" ? p.id : null))
-            .catch(() => null),
-        ),
-      );
-      const readyIds = new Set(ready.filter((id): id is string => id !== null));
-      return provs.filter((p) => readyIds.has(p.id)).map((p) => ({ id: p.id, name: p.displayName }));
-    },
-    { initialValue: [] },
-  );
-  const sources = () => availableRes() ?? [];
+  // ----- Reachability: only offer managers whose status() is ready. The probe
+  // is shared with the sidebar's Refs-tab gate (references/availability.ts). ---
+  const sources = () => {
+    const readyIds = new Set(readyProviders());
+    return citationProviders()
+      .filter((p) => readyIds.has(p.id))
+      .map((p) => ({ id: p.id, name: p.displayName }));
+  };
 
   // ----- Manager (provider) -----
   const selectedProviderId = createMemo(() => {
@@ -310,6 +305,7 @@ export const ReferencesPanel: Component = () => {
     const proj = project();
     if (!proj) return;
     for (const p of citationProviders()) p.invalidate?.();
+    refreshAvailability();
     try {
       const result = await refreshLibraryBib(proj);
       if (result.providersFailed > 0) {
@@ -350,7 +346,7 @@ export const ReferencesPanel: Component = () => {
               items={sources()}
               selectedId={null}
               icon={BookMarked}
-              loading={availableRes.loading}
+              loading={refsAvailabilityLoading()}
               placeholder="Select a reference manager…"
               onSelect={selectProvider}
             />
@@ -413,7 +409,7 @@ export const ReferencesPanel: Component = () => {
                   when={selectedProviderId()}
                   fallback={
                     <Show
-                      when={!availableRes.loading}
+                      when={!refsAvailabilityLoading()}
                       fallback={<div class="text-fg-2">Checking reference managers…</div>}
                     >
                       <Show

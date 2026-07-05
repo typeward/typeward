@@ -2,6 +2,7 @@ import {
   Bell,
   Search,
   Settings as SettingsIcon,
+  X,
 } from "lucide-solid";
 import type { Component } from "solid-js";
 import { Show } from "solid-js";
@@ -20,6 +21,10 @@ interface TopBarProps {
   onToggleNotifications?: () => void;
   /** Optional unread notification count badge. */
   notifications?: number;
+  /** When present, the center slot becomes a real library-search input (Projects
+   *  screen) instead of the palette button. The palette stays one click away via
+   *  the Mod+K chip. */
+  search?: { value: string; onInput: (v: string) => void };
 }
 
 /**
@@ -37,20 +42,68 @@ export const TopBar: Component<TopBarProps> = (props) => {
       class="glass relative flex h-[52px] items-center border-b border-glass-stroke px-4"
       style={{ background: "var(--color-topbar-bg)" }}
     >
-      {/* Centered Cmd+K search. Flexes to fill, max width matches the projects
-        center column. */}
+      {/* Centered slot. On the Projects screen (search prop present) this is the
+        live library-search input; elsewhere it's the palette button. Both share
+        the same shell size so window chrome stays stable across screens. */}
       <div class="flex flex-1 justify-center">
-        <button
-          type="button"
-          onClick={() => props.onOpenPalette?.()}
-          class="lift glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-sm text-fg-3 hover:text-fg-2"
+        <Show
+          when={props.search}
+          fallback={
+            <button
+              type="button"
+              onClick={() => props.onOpenPalette?.()}
+              class="lift glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-sm text-fg-3 hover:text-fg-2"
+            >
+              <Search class="ui-icon-chrome" style={{ opacity: 0.6 }} />
+              <span>Search projects, papers, collaborators…</span>
+              <span class="ml-auto">
+                <KbdHint shortcut="Mod+K" />
+              </span>
+            </button>
+          }
         >
-          <Search class="ui-icon-chrome" style={{ opacity: 0.6 }} />
-          <span>Search projects, papers, collaborators…</span>
-          <span class="ml-auto">
-            <KbdHint shortcut="Mod+K" />
-          </span>
-        </button>
+          {(search) => (
+            <div class="glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-sm focus-within:ring-1 focus-within:ring-[var(--color-accent-1)]">
+              <Search class="ui-icon-chrome flex-shrink-0 text-fg-3" style={{ opacity: 0.6 }} />
+              <input
+                type="text"
+                value={search().value}
+                placeholder="Search projects…"
+                aria-label="Search projects"
+                onInput={(e) => search().onInput(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    if (search().value) {
+                      e.stopPropagation();
+                      search().onInput("");
+                    } else {
+                      e.currentTarget.blur();
+                    }
+                  }
+                }}
+                class="min-w-0 flex-1 bg-transparent text-fg-1 placeholder:text-fg-3 outline-none"
+              />
+              <Show when={search().value}>
+                <button
+                  type="button"
+                  onClick={() => search().onInput("")}
+                  aria-label="Clear search"
+                  class="lift flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+                >
+                  <X size={12} />
+                </button>
+              </Show>
+              <button
+                type="button"
+                onClick={() => props.onOpenPalette?.()}
+                aria-label="Open command palette"
+                class="lift flex-shrink-0 rounded"
+              >
+                <KbdHint shortcut="Mod+K" />
+              </button>
+            </div>
+          )}
+        </Show>
       </div>
 
       {/* Right cluster — density-sized icons */}

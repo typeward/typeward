@@ -41,6 +41,8 @@ export interface GotoSourceIntent {
   /** Path relative to project.rootPath. */
   relPath: string;
   line: number;
+  /** When set, select these 0-based document offsets instead of the line. */
+  range?: { from: number; to: number };
   generation: number;
 }
 
@@ -67,9 +69,13 @@ export const requestPdfScroll = (page: number, y: number): void => {
   setPdfScrollTargetInternal({ page, y, generation: _scrollGen });
 };
 
-export const requestGotoSource = (relPath: string, line: number): void => {
+export const requestGotoSource = (
+  relPath: string,
+  line: number,
+  range?: { from: number; to: number },
+): void => {
   _gotoGen++;
-  setGotoSourceIntentInternal({ relPath, line, generation: _gotoGen });
+  setGotoSourceIntentInternal({ relPath, line, range, generation: _gotoGen });
 };
 
 // Owned by a module-level root so this page-lifetime memo isn't created in a
@@ -185,6 +191,30 @@ function restoreFileContent(file: OpenFile): void {
   if (activeIndex() < 0) setActiveIndex(0);
 }
 
+/**
+ * Rename an open tab in place: repoint its absolute + relative path while
+ * preserving the buffer content, dirty flag, and baseHash. The rename moved the
+ * exact bytes on disk, so baseHash stays valid. The active tab's CodeMirror
+ * remounts because `text-shell` keys it on `activeFile().path`. No-op if the
+ * file isn't open (a rename from the tree on a non-open file needs no buffer
+ * bookkeeping).
+ */
+function renameOpenFile(oldRel: string, newRel: string, newAbs: string): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.relPath === oldRel);
+    if (i < 0) return prev;
+    const next = prev.slice();
+    next[i] = { ...next[i], path: newAbs, relPath: newRel };
+    return next;
+  });
+}
+
+/** Close whichever tab holds `relPath` (used after deleting a file). No-op if not open. */
+function closeFileByRelPath(relPath: string): void {
+  const i = openFiles().findIndex((f) => f.relPath === relPath);
+  if (i >= 0) closeFile(i);
+}
+
 /** Close a tab by index. Adjusts activeIndex to a sibling. */
 function closeFile(index: number): void {
   setOpenFiles((prev) => prev.filter((_, i) => i !== index));
@@ -224,6 +254,7 @@ export {
   adoptDiskContent,
   bumpPdfVersion,
   closeFile,
+  closeFileByRelPath,
   compileState,
   gotoSourceIntent,
   lastResult,
@@ -233,6 +264,7 @@ export {
   pdfScrollTarget,
   pdfVersion,
   project,
+  renameOpenFile,
   resetCompileState,
   resetTabs,
   restoreFileContent,

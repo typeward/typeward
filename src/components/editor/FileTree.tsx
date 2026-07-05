@@ -1,23 +1,31 @@
 import { readDir, type DirEntry } from "@tauri-apps/plugin-fs";
 import { ChevronRight, File as FileIcon, FileText, Folder } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createResource, createSignal } from "solid-js";
+import { For, Show, createEffect, createResource, createSignal, on } from "solid-js";
 import { fsVersion } from "~/stores/watcher-store";
 
-interface FileTreeProps {
-  rootPath: string;
-  /** Relative path of the currently-open file, e.g. "main.tex". */
-  activeRelPath: string | null;
-  onOpen: (relPath: string) => void;
-}
-
-interface FileNode {
+export interface FileNode {
   name: string;
   /** Absolute path. */
   path: string;
   /** Path relative to root. */
   relPath: string;
   isDir: boolean;
+}
+
+interface FileTreeProps {
+  rootPath: string;
+  /** Relative path of the currently-open file, e.g. "main.tex". */
+  activeRelPath: string | null;
+  onOpen: (relPath: string) => void;
+  /** Right-click on a file row. */
+  onFileMenu?: (node: FileNode, e: MouseEvent) => void;
+  /** Right-click on a directory row. */
+  onDirMenu?: (node: FileNode, e: MouseEvent) => void;
+  /** Right-click on empty tree space (below/around the rows). */
+  onEmptyMenu?: (e: MouseEvent) => void;
+  /** Bumped by "Collapse all" — resets every non-root directory to collapsed. */
+  collapseGeneration?: number;
 }
 
 async function readChildren(absPath: string, relPath: string): Promise<FileNode[]> {
@@ -90,6 +98,7 @@ export const FileTree: Component<FileTreeProps> = (props) => {
     <div
       class="scroll h-full overflow-auto px-1.5 pb-2"
       onKeyDown={handleTreeKeydown}
+      onContextMenu={(e) => props.onEmptyMenu?.(e)}
     >
       <DirectoryNode
         path={props.rootPath}
@@ -98,6 +107,9 @@ export const FileTree: Component<FileTreeProps> = (props) => {
         depth={0}
         activeRelPath={props.activeRelPath}
         onOpen={props.onOpen}
+        onFileMenu={props.onFileMenu}
+        onDirMenu={props.onDirMenu}
+        collapseGeneration={props.collapseGeneration}
         startExpanded
       />
     </div>
@@ -111,11 +123,25 @@ interface DirectoryNodeProps {
   depth: number;
   activeRelPath: string | null;
   onOpen: (relPath: string) => void;
+  onFileMenu?: (node: FileNode, e: MouseEvent) => void;
+  onDirMenu?: (node: FileNode, e: MouseEvent) => void;
+  collapseGeneration?: number;
   startExpanded?: boolean;
 }
 
 const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
   const [expanded, setExpanded] = createSignal(props.startExpanded ?? false);
+  // "Collapse all" bump: fold every non-root directory. The root (depth 0)
+  // stays open so the tree never fully disappears.
+  createEffect(
+    on(
+      () => props.collapseGeneration,
+      () => {
+        if (props.depth > 0) setExpanded(false);
+      },
+      { defer: true },
+    ),
+  );
   // Source bundles the expanded path with fsVersion so any watcher event
   // bumps the cache key and forces a re-read. Cheap for shallow trees;
   // refine to a per-directory invalidation if it becomes a hotspot.
@@ -156,6 +182,12 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}
+          onContextMenu={(e) =>
+            props.onDirMenu?.(
+              { name: props.name, path: props.path, relPath: props.relPath, isDir: true },
+              e,
+            )
+          }
           aria-expanded={expanded()}
           aria-label={`${expanded() ? "Collapse" : "Expand"} ${props.name}`}
           class="lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-base text-fg-2 hover:bg-[var(--color-control-fill)]"
@@ -193,6 +225,9 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
                   depth={props.depth + 1}
                   activeRelPath={props.activeRelPath}
                   onOpen={props.onOpen}
+                  onFileMenu={props.onFileMenu}
+                  onDirMenu={props.onDirMenu}
+                  collapseGeneration={props.collapseGeneration}
                 />
               ) : (
                 <FileEntry
@@ -200,6 +235,7 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
                   depth={props.depth + 1}
                   active={props.activeRelPath === child.relPath}
                   onOpen={props.onOpen}
+                  onMenu={props.onFileMenu}
                 />
               )
             }
@@ -215,12 +251,14 @@ const FileEntry: Component<{
   depth: number;
   active: boolean;
   onOpen: (relPath: string) => void;
+  onMenu?: (node: FileNode, e: MouseEvent) => void;
 }> = (props) => {
   const Icon = pickIcon(props.node.name);
   return (
     <button
       type="button"
       onClick={() => props.onOpen(props.node.relPath)}
+      onContextMenu={(e) => props.onMenu?.(props.node, e)}
       aria-current={props.active ? "true" : undefined}
       class={`lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-base ${
         props.active

@@ -3,7 +3,9 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import {
   ChevronDown,
   ChevronUp,
+  ListTodo,
   Loader2,
+  MessageSquare,
   Play,
   Sparkles,
   Terminal,
@@ -12,16 +14,27 @@ import {
 import * as pdfjs from "pdfjs-dist";
 // Vite-resolves the worker file to a URL and serves it as a separate chunk.
 import workerSrc from "pdfjs-dist/build/pdf.worker.mjs?url";
-import type { Component } from "solid-js";
-import { For, Show, createEffect, createSignal, on, onCleanup } from "solid-js";
+import "~/components/pdf/pdf-text-layer.css";
+import type { Component, JSX } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createSignal,
+  on,
+  onCleanup,
+  untrack,
+} from "solid-js";
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
-import { integrationsSettings } from "~/stores/settings-store";
+import { computeFitScale, type ZoomMode } from "~/components/pdf/zoom";
+import { editorSettings, integrationsSettings } from "~/stores/settings-store";
 import { isTabletViewport } from "~/stores/viewport-store";
+import { isDarkTheme, theme } from "~/themes/theme-store";
 import {
   animations,
   consolePosition,
@@ -32,6 +45,9 @@ import {
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 type RenderTask = ReturnType<pdfjs.PDFPageProxy["render"]>;
+
+import type { PdfAnnotation, CreateThreadInput } from "~/lib/pdf-annotations/types";
+export type { PdfAnnotation, CreateThreadInput };
 
 interface PdfViewerProps {
   /** Absolute path on disk. Reloaded whenever it changes (or version bumps). */
@@ -48,7 +64,7 @@ interface PdfViewerProps {
    * points relative to that page's top-left corner — exactly what
    * `synctex edit` expects.
    */
-  onPageClick?: (page: number, x: number, y: number) => void;
+  onPageClick?: (page: number, x: number, y: number, selectedText?: string) => void;
   /**
    * Forward-search target. When this signal changes, scroll to (page, y).
    * `y` is in PDF points from the top of that page; the viewer converts
@@ -56,13 +72,34 @@ interface PdfViewerProps {
    * field guarantees re-firing on identical (page, y) repeats.
    */
   scrollTarget?: { page: number; y: number; generation: number } | null;
+  /**
+   * Create a review/TODO thread from the current PDF text selection. When
+   * absent, the selection chip's Comment/TODO actions are hidden (e.g. a
+   * read-only host). The host owns SyncTeX inverse + source anchoring.
+   */
+  onCreateThread?: (input: CreateThreadInput) => void;
+  /** Open the review panel targeted at a thread (highlight click). */
+  onOpenThread?: (threadId: string) => void;
+  /** Thread highlights to paint over the pages (E10c). */
+  annotations?: PdfAnnotation[];
+  /**
+   * Embedded/detached-window mode: hides the Export menu and the Console/AI
+   * toggles (the detached preview window is PDF-only, with no file dialogs or
+   * editor-store-backed panes).
+   */
+  embedded?: boolean;
 }
 
-const ZOOM_PRESETS = [50, 75, 90, 100, 110, 125, 150, 175, 200] as const;
+const ZOOM_PRESETS = [50, 75, 100, 125, 150, 200] as const;
 
 /** Pre-render this many CSS px above/below the viewport so a quick scroll
  *  doesn't reveal blank pages before they paint. */
 const RENDER_MARGIN_PX = 800;
+
+/** Approx one text line in PDF points — the vertical extent of a thread
+ *  highlight band (SyncTeX resolves to a line, not a glyph box) and the
+ *  tolerance for click hit-testing it. */
+const HIGHLIGHT_BAND_PT = 13;
 
 interface PageSlot {
   /** The canvas host (absolute inset-0 of the page box) the render mounts into. */
@@ -71,6 +108,15 @@ interface PageSlot {
   canvas: HTMLCanvasElement | null;
   /** Scale the current canvas was rendered at; null when nothing is mounted. */
   renderedScale: number | null;
+  /** The text-layer host (absolute inset-0, above the canvas) for selection. */
+  textHost: HTMLElement | null;
+  /** The live pdfjs TextLayer for this page, or null when none is built. */
+  textLayer: pdfjs.TextLayer | null;
+  /** loadGen the current text layer belongs to (stale ones get rebuilt). */
+  textGen: number;
+  /** A build is mid-flight (between the getTextContent await and assignment);
+   *  serializes builds so a concurrent call can't create a duplicate layer. */
+  textBuilding: boolean;
 }
 
 /**
@@ -90,10 +136,18 @@ interface PageSlot {
 export const PdfViewer: Component<PdfViewerProps> = (props) => {
   let scrollEl: HTMLDivElement | undefined;
   let zoomRef: HTMLDivElement | undefined;
+  let rootRef: HTMLDivElement | undefined;
   // Unscaled (scale=1) page dimensions in PDF points; placeholder CSS size is
   // these times the current zoom scale. Drives the layout + scrollbar.
   const [pageSizes, setPageSizes] = createSignal<{ w: number; h: number }[]>([]);
-  const [scale, setScale] = createSignal(1.1);
+  // Initial zoom seeds from the pdfDefaultZoom setting (percent → factor).
+  const initialZoom = editorSettings().pdfDefaultZoom ?? 110;
+  const [scale, setScale] = createSignal(initialZoom / 100);
+  // The zoom *intent*: a numeric percentage, or a fit mode that recomputes
+  // `scale` from the container size. `scale` stays the rendering truth.
+  const [zoomMode, setZoomMode] = createSignal<ZoomMode>(initialZoom);
+  // Bumped by a ResizeObserver on the scroll container so fit modes re-apply.
+  const [containerSize, setContainerSize] = createSignal(0);
   const [zoomOpen, setZoomOpen] = createSignal(false);
 
   installDismiss(() => zoomRef, zoomOpen, () => setZoomOpen(false));
@@ -224,11 +278,98 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     }
   };
 
+  // Build (or, on a pure zoom, cheaply re-layout) the selectable text layer for
+  // a visible page. The transparent glyph boxes sit above the canvas so native
+  // selection works; the font-size + container size track `--total-scale-factor`
+  // (set reactively on the page box), so only the baked per-span `--scale-x`
+  // needs the update({viewport}) re-layout on zoom.
+  const renderTextLayer = async (pageNum: number) => {
+    const slot = slots.get(pageNum);
+    if (!slot || !slot.textHost || !docRef) return;
+    const gen = loadGen;
+    const s = scale();
+    const page = await getPage(pageNum);
+    if (
+      !page ||
+      gen !== loadGen ||
+      !slots.has(pageNum) ||
+      !visible.has(pageNum) ||
+      !slot.textHost
+    ) {
+      return;
+    }
+    const viewport = page.getViewport({ scale: s });
+    if (slot.textLayer && slot.textGen === gen) {
+      slot.textLayer.update({ viewport });
+      return;
+    }
+    // `slot.textLayer` isn't assigned until after the getTextContent await, so a
+    // second concurrent call (intersection + zoom / recompile fast-path) would
+    // slip past the null check above and build a duplicate layer into the same
+    // host, leaking the first. Serialize builds per slot — the analogue of
+    // renderPage cancelling its in-flight task at entry.
+    if (slot.textBuilding) return;
+    slot.textBuilding = true;
+    try {
+      slot.textLayer?.cancel();
+      slot.textLayer = null;
+      slot.textHost.replaceChildren();
+      let textSource;
+      try {
+        textSource = await page.getTextContent();
+      } catch {
+        return;
+      }
+      // The page may have scrolled out (canvas released) during the await —
+      // don't build a live text layer over an unrendered page.
+      if (
+        gen !== loadGen ||
+        !slots.has(pageNum) ||
+        !visible.has(pageNum) ||
+        !slot.textHost
+      ) {
+        return;
+      }
+      const tl = new pdfjs.TextLayer({
+        textContentSource: textSource,
+        container: slot.textHost,
+        viewport,
+      });
+      slot.textLayer = tl;
+      slot.textGen = gen;
+      try {
+        await tl.render();
+      } catch {
+        return; // cancelled (superseded / torn down)
+      }
+      if (gen !== loadGen || !slots.has(pageNum) || !visible.has(pageNum)) {
+        tl.cancel();
+        slot.textHost?.replaceChildren();
+        if (slot.textLayer === tl) slot.textLayer = null;
+        return;
+      }
+      // A zoom during the build left the baked per-span --scale-x at the old
+      // scale — re-layout to the current one.
+      const cur = scale();
+      if (cur !== s) tl.update({ viewport: page.getViewport({ scale: cur }) });
+    } finally {
+      slot.textBuilding = false;
+    }
+  };
+
+  const clearTextLayer = (slot: PageSlot) => {
+    slot.textLayer?.cancel();
+    slot.textLayer = null;
+    slot.textGen = 0;
+    slot.textHost?.replaceChildren();
+  };
+
   const unrenderPage = (pageNum: number) => {
     const slot = slots.get(pageNum);
     if (!slot) return;
     slot.task?.cancel();
     slot.task = null;
+    clearTextLayer(slot);
     if (slot.canvas) {
       slot.canvas.width = 0;
       slot.canvas.height = 0;
@@ -251,6 +392,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     for (const slot of slots.values()) {
       observer?.unobserve(slot.host);
       slot.task?.cancel();
+      slot.textLayer?.cancel();
       if (slot.canvas) {
         slot.canvas.width = 0;
         slot.canvas.height = 0;
@@ -267,6 +409,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       if (entry.isIntersecting) {
         visible.add(pageNum);
         void renderPage(pageNum);
+        void renderTextLayer(pageNum);
       } else {
         visible.delete(pageNum);
         unrenderPage(pageNum);
@@ -277,6 +420,8 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   // Ref on the scroll container. It's the IntersectionObserver root and mounts
   // exactly once (the AI/console panes overlay it rather than unmounting it),
   // so the observer + slots stay stable across preview-mode switches.
+  let resizeObs: ResizeObserver | undefined;
+  let resizeRaf = 0;
   const setScrollEl = (el: HTMLDivElement) => {
     scrollEl = el;
     observer?.disconnect();
@@ -286,6 +431,17 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       threshold: 0,
     });
     for (const slot of slots.values()) observer.observe(slot.host);
+    // Drive fit-mode recomputation on pane resize (rAF-coalesced so a drag
+    // doesn't thrash). Only fit modes read containerSize().
+    resizeObs?.disconnect();
+    resizeObs = new ResizeObserver(() => {
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        setContainerSize((n) => n + 1);
+      });
+    });
+    resizeObs.observe(el);
   };
 
   const registerPage = (pageNum: number, host: HTMLElement) => {
@@ -294,6 +450,10 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       task: null,
       canvas: null,
       renderedScale: null,
+      textHost: null,
+      textLayer: null,
+      textGen: 0,
+      textBuilding: false,
     };
     slots.set(pageNum, slot);
     observer?.observe(host);
@@ -303,6 +463,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     onCleanup(() => {
       observer?.unobserve(host);
       slot.task?.cancel();
+      slot.textLayer?.cancel();
       if (slot.canvas) {
         slot.canvas.width = 0;
         slot.canvas.height = 0;
@@ -310,6 +471,17 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       visible.delete(pageNum);
       if (slots.get(pageNum) === slot) slots.delete(pageNum);
     });
+  };
+
+  // The text-layer host mounts as a sibling of the canvas host in the same row
+  // render, so the slot already exists by the time this ref fires. Building the
+  // layer here (when the page is already visible) covers the recompile fast
+  // path, where the observer doesn't re-fire for unchanged intersections.
+  const setTextHost = (pageNum: number, el: HTMLElement) => {
+    const slot = slots.get(pageNum);
+    if (!slot) return;
+    slot.textHost = el;
+    if (visible.has(pageNum)) void renderTextLayer(pageNum);
   };
 
   const load = async (path: string) => {
@@ -363,8 +535,14 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         // so the old bitmap stays on screen the whole time (double-buffer).
         // The observer won't re-fire for unchanged intersections — re-render
         // the visible set imperatively, mirroring the zoom effect.
-        for (const slot of slots.values()) slot.renderedScale = null;
-        for (const pageNum of [...visible]) void renderPage(pageNum);
+        for (const slot of slots.values()) {
+          slot.renderedScale = null;
+          clearTextLayer(slot);
+        }
+        for (const pageNum of [...visible]) {
+          void renderPage(pageNum);
+          void renderTextLayer(pageNum);
+        }
       } else {
         resetSlots();
         setPageSizes(dims);
@@ -420,18 +598,42 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         if (scrollEl && zoomAnchorScale > 0) {
           scrollEl.scrollTop = zoomAnchorTop * (s / zoomAnchorScale);
         }
-        for (const pageNum of [...visible]) void renderPage(pageNum);
+        for (const pageNum of [...visible]) {
+          void renderPage(pageNum);
+          void renderTextLayer(pageNum);
+        }
       },
       { defer: true },
     ),
   );
 
-  const applyZoom = (z: number) => {
+  const applyScale = (s: number) => {
+    const cur = untrack(scale);
+    if (s === cur) return;
     zoomAnchorTop = scrollEl?.scrollTop ?? 0;
-    zoomAnchorScale = scale();
-    setScale(z / 100);
+    zoomAnchorScale = cur;
+    setScale(s);
+  };
+  const selectZoom = (mode: ZoomMode) => {
+    setZoomMode(mode);
     setZoomOpen(false);
   };
+  // Resolve zoomMode → scale. Numeric applies directly; fit modes compute from
+  // the container + current page and re-apply on container resize / doc reload.
+  // currentPage is read untracked so scrolling across differently-sized pages
+  // doesn't re-fit (which would jitter).
+  createEffect(() => {
+    const mode = zoomMode();
+    if (typeof mode === "number") {
+      applyScale(mode / 100);
+      return;
+    }
+    containerSize();
+    const sizes = pageSizes();
+    if (!scrollEl || sizes.length === 0) return;
+    const page = sizes[untrack(currentPage) - 1] ?? sizes[0];
+    applyScale(computeFitScale(scrollEl, page, mode));
+  });
 
   // Forward-search: scroll to (page, y) and pulse a highlight ribbon. The
   // scroll container is the page boxes' offsetParent (it's positioned), so
@@ -467,7 +669,11 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   // natural "take me to this" gesture — with shift+click kept as the
   // power-user shortcut. Plain single clicks stay free for text
   // selection / pan affordances.
-  const triggerInverseSearch = (e: MouseEvent, pageNum: number) => {
+  const triggerInverseSearch = (
+    e: MouseEvent,
+    pageNum: number,
+    selectedText?: string,
+  ) => {
     if (!props.onPageClick) return;
     // currentTarget is the page box, sized exactly to the page in CSS px.
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -476,17 +682,132 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     if (xPx < 0 || yPx < 0 || xPx > rect.width || yPx > rect.height) return;
     const s = scale();
     e.preventDefault();
-    props.onPageClick(pageNum, xPx / s, yPx / s);
+    props.onPageClick(pageNum, xPx / s, yPx / s, selectedText);
   };
 
+  // Opening a thread on a highlight click is deferred briefly so a double-click
+  // (inverse search) on the same band cancels it instead of both firing — the
+  // first `click` of a double-click arrives with the selection still collapsed.
+  let openThreadTimer: number | undefined;
   const handlePageClick = (e: MouseEvent, pageNum: number) => {
-    if (!e.shiftKey) return;
-    triggerInverseSearch(e, pageNum);
+    if (e.shiftKey) {
+      triggerInverseSearch(e, pageNum);
+      return;
+    }
+    // A plain click on a thread highlight opens its panel entry. Hit-test the
+    // annotation bands here (rather than making the overlay clickable) so the
+    // text layer stays on top for selection without stealing highlight clicks —
+    // the click still bubbles to this page box even when it lands on a glyph.
+    const onOpen = props.onOpenThread;
+    const anns = props.annotations;
+    if (!onOpen || !anns || anns.length === 0) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed) return; // mid-selection, not a thread click
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const yPt = (e.clientY - rect.top) / scale();
+    const hit = anns.find(
+      (a) => a.page === pageNum && yPt >= a.y - HIGHLIGHT_BAND_PT && yPt <= a.y + 3,
+    );
+    if (hit) {
+      e.preventDefault();
+      const id = hit.threadId;
+      if (openThreadTimer) window.clearTimeout(openThreadTimer);
+      openThreadTimer = window.setTimeout(() => {
+        openThreadTimer = undefined;
+        onOpen(id);
+      }, 250);
+    }
   };
 
+  // ----- Selection chip: create a review/TODO thread from a PDF selection ----
+  interface SelChip {
+    left: number; // clamped, root-relative px
+    top: number; // root-relative px (top of the selection)
+    page: number;
+    xPt: number; // selection start, PDF points, page-relative
+    yPt: number;
+    text: string;
+  }
+  const [selChip, setSelChip] = createSignal<SelChip | null>(null);
+  const [chipMode, setChipMode] = createSignal<"menu" | "comment" | "todo">("menu");
+  const [chipBody, setChipBody] = createSignal("");
+  let chipTextarea: HTMLTextAreaElement | undefined;
+
+  const clearChip = () => {
+    setSelChip(null);
+    setChipMode("menu");
+    setChipBody("");
+  };
+
+  const onSelectionChange = () => {
+    // While composing, keep the snapshot — focusing the textarea collapses the
+    // PDF selection, which would otherwise clear the chip out from under us.
+    if (chipMode() !== "menu") return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !rootRef || !scrollEl) {
+      setSelChip(null);
+      return;
+    }
+    const range = sel.getRangeAt(0);
+    const text = sel.toString().trim();
+    if (!text || !scrollEl.contains(range.commonAncestorContainer)) {
+      setSelChip(null);
+      return;
+    }
+    const startEl =
+      range.startContainer.nodeType === Node.TEXT_NODE
+        ? range.startContainer.parentElement
+        : (range.startContainer as HTMLElement | null);
+    const pageBox = startEl?.closest<HTMLElement>("[data-page]");
+    if (!pageBox) {
+      setSelChip(null);
+      return;
+    }
+    const pageRect = pageBox.getBoundingClientRect();
+    const rangeRect = range.getBoundingClientRect();
+    const rootRect = rootRef.getBoundingClientRect();
+    const s = scale();
+    setSelChip({
+      left: Math.min(Math.max(8, rangeRect.left - rootRect.left), Math.max(8, rootRect.width - 268)),
+      top: rangeRect.top - rootRect.top,
+      page: Number(pageBox.dataset.page),
+      xPt: (rangeRect.left - pageRect.left) / s,
+      yPt: (rangeRect.top - pageRect.top) / s,
+      text,
+    });
+  };
+  document.addEventListener("selectionchange", onSelectionChange);
+  onCleanup(() => document.removeEventListener("selectionchange", onSelectionChange));
+
+  const chipCompose = (kind: "comment" | "todo") => {
+    setChipMode(kind);
+    queueMicrotask(() => chipTextarea?.focus());
+  };
+  const chipSubmit = () => {
+    const c = selChip();
+    const mode = chipMode();
+    const onCreate = props.onCreateThread;
+    if (!c || mode === "menu" || !onCreate) return;
+    onCreate({
+      kind: mode,
+      page: c.page,
+      x: c.xPt,
+      y: c.yPt,
+      selectedText: c.text,
+      body: chipBody().trim(),
+    });
+    clearChip();
+    window.getSelection()?.removeAllRanges();
+  };
   onCleanup(() => {
     observer?.disconnect();
-    for (const slot of slots.values()) slot.task?.cancel();
+    resizeObs?.disconnect();
+    if (resizeRaf) cancelAnimationFrame(resizeRaf);
+    if (openThreadTimer) window.clearTimeout(openThreadTimer);
+    for (const slot of slots.values()) {
+      slot.task?.cancel();
+      slot.textLayer?.cancel();
+    }
     taskRef?.destroy();
   });
 
@@ -504,7 +825,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     props.path ? props.path.split(/[\\/]/).pop() ?? "" : "";
 
   return (
-    <div class="relative flex h-full min-w-0 flex-col overflow-hidden">
+    <div ref={rootRef} class="relative flex h-full min-w-0 flex-col overflow-hidden">
       {/* Toolbar — 44px. Layout per /design/screens-editor.md (updated 2026-05-15):
             [Recompile] [Export icon] [Logs/Console icon] [AI icon]   …   [page nav] [zoom]
           Icon-only toggles (with `title` tooltips); the Logs/Console icon
@@ -533,9 +854,11 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           </Show>
         </button>
 
-        <ExportMenu pdfPath={props.path} />
+        <Show when={!props.embedded}>
+          <ExportMenu pdfPath={props.path} />
+        </Show>
 
-        <Show when={consolePosition() === "pdf-tab"}>
+        <Show when={consolePosition() === "pdf-tab" && !props.embedded}>
           <ToolbarIconToggle
             active={previewMode() === "console"}
             onClick={() =>
@@ -546,7 +869,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           />
         </Show>
 
-        <Show when={aiEnabled()}>
+        <Show when={aiEnabled() && !props.embedded}>
           <ToolbarIconToggle
             active={previewMode() === "ai"}
             onClick={() => setPreviewMode(previewMode() === "ai" ? "pdf" : "ai")}
@@ -554,7 +877,6 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             label="AI"
           />
         </Show>
-
 
         <Show when={loading() && previewMode() === "pdf"}>
           <Loader2 size={12} class="ml-2 animate-spin text-fg-3" />
@@ -622,18 +944,40 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                   class="glass absolute right-0 z-40 mt-1 w-[140px] overflow-hidden rounded-md py-1"
                   style={{ background: "var(--color-popover-bg)" }}
                 >
+                  <For
+                    each={
+                      [
+                        { mode: "fit-width" as ZoomMode, label: "Fit width" },
+                        { mode: "fit-page" as ZoomMode, label: "Fit page" },
+                      ]
+                    }
+                  >
+                    {(opt) => (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={zoomMode() === opt.mode}
+                        tabindex={-1}
+                        onClick={() => selectZoom(opt.mode)}
+                        class={`flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)] ${
+                          zoomMode() === opt.mode ? "text-fg-1 font-medium" : "text-fg-2"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    )}
+                  </For>
+                  <div class="my-1 border-t border-glass-stroke" />
                   <For each={ZOOM_PRESETS}>
                     {(z) => (
                       <button
                         type="button"
                         role="option"
-                        aria-selected={Math.round(scale() * 100) === z}
+                        aria-selected={zoomMode() === z}
                         tabindex={-1}
-                        onClick={() => applyZoom(z)}
+                        onClick={() => selectZoom(z)}
                         class={`flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)] ${
-                          Math.round(scale() * 100) === z
-                            ? "text-fg-1 font-medium"
-                            : "text-fg-2"
+                          zoomMode() === z ? "text-fg-1 font-medium" : "text-fg-2"
                         }`}
                       >
                         {z}%
@@ -675,6 +1019,12 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             background: "var(--color-overlay-dim)",
             "scrollbar-gutter": "stable",
             display: previewMode() === "pdf" ? undefined : "none",
+            // Dark-mode PDF reading: invert + hue-rotate keeps color figures
+            // roughly true while flipping the white page to dark.
+            filter:
+              editorSettings().pdfInvertDark && isDarkTheme(theme())
+                ? "invert(0.92) hue-rotate(180deg)"
+                : undefined,
           }}
         >
           <Show
@@ -707,9 +1057,27 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                       style={{
                         width: `${Math.round(sz.w * scale())}px`,
                         height: `${Math.round(sz.h * scale())}px`,
+                        // Drives the text layer's glyph font-size + container
+                        // size (pdfjs reads --total-scale-factor); the round-step
+                        // vars keep its round() width expressions valid.
+                        "--total-scale-factor": `${scale()}`,
+                        "--scale-round-x": "1px",
+                        "--scale-round-y": "1px",
                       }}
                       onClick={(e) => handlePageClick(e, pageNum)}
-                      onDblClick={(e) => triggerInverseSearch(e, pageNum)}
+                      onDblClick={(e) => {
+                        // This gesture is a double-click (inverse search) — cancel
+                        // any highlight-open its first click may have armed.
+                        if (openThreadTimer) {
+                          window.clearTimeout(openThreadTimer);
+                          openThreadTimer = undefined;
+                        }
+                        // A double-click always jumps to source; when it landed
+                        // on a word, mirror that word's selection in the editor.
+                        const selText =
+                          window.getSelection()?.toString().trim() || undefined;
+                        triggerInverseSearch(e, pageNum, selText);
+                      }}
                       title="Double-click to jump to source"
                     >
                       <div class="mono absolute -left-12 top-1.5 select-none text-[10px] text-fg-3">
@@ -720,12 +1088,40 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                         ref={(el) => registerPage(pageNum, el)}
                         class="absolute inset-0 overflow-hidden rounded-md"
                       />
+                      {/* Thread highlights — a soft line band per open review/
+                          TODO thread SyncTeX-resolved to this page. Painted
+                          under the text layer (z:1 < z:2), pointer-events none;
+                          clicks are hit-tested on the page box (handlePageClick)
+                          so the text layer keeps selection. */}
+                      <For each={props.annotations?.filter((a) => a.page === pageNum) ?? []}>
+                        {(a) => {
+                          const isTodo = a.kind === "todo";
+                          const tint = isTodo ? "var(--color-warn)" : "var(--color-accent-1)";
+                          return (
+                            <div
+                              class="pointer-events-none absolute left-0 right-0 rounded-[2px]"
+                              style={{
+                                top: `${(a.y - HIGHLIGHT_BAND_PT + 2) * scale()}px`,
+                                height: `${HIGHLIGHT_BAND_PT * 1.15 * scale()}px`,
+                                "z-index": 1,
+                                background: `color-mix(in srgb, ${tint} 20%, transparent)`,
+                                "border-left": `2px solid ${tint}`,
+                              }}
+                            />
+                          );
+                        }}
+                      </For>
+                      <div
+                        ref={(el) => setTextHost(pageNum, el)}
+                        class="pdf-text-layer"
+                      />
                       <Show when={highlight()?.page === pageNum}>
                         <div
                           class="pointer-events-none absolute left-0 right-0"
                           style={{
                             top: `${highlight()!.yCss - 2}px`,
                             height: "4px",
+                            "z-index": 4,
                             background:
                               "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))",
                             "box-shadow":
@@ -745,9 +1141,104 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           </Show>
         </div>
       </div>
+
+      {/* Selection chip — floats above a PDF text selection with Comment / TODO.
+          Rendered at the viewer root (NOT inside the scroll
+          container, which may carry the dark-invert `filter` that would both
+          re-tint the chip and break its positioning). */}
+      <Show when={selChip() && props.onCreateThread}>
+        <div
+          class="glass absolute z-50 rounded-lg shadow-lg"
+          style={{
+            left: `${selChip()!.left}px`,
+            top: `${selChip()!.top}px`,
+            transform: "translateY(calc(-100% - 8px))",
+            background: "var(--color-popover-bg)",
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              clearChip();
+            }
+          }}
+        >
+          <Show
+            when={chipMode() === "menu"}
+            fallback={
+              <div class="flex w-[248px] flex-col gap-1.5 p-2">
+                <div class="label-xs px-0.5 text-fg-3">
+                  {chipMode() === "todo" ? "New TODO" : "New comment"}
+                </div>
+                <textarea
+                  ref={chipTextarea}
+                  value={chipBody()}
+                  onInput={(e) => setChipBody(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                      e.preventDefault();
+                      chipSubmit();
+                    }
+                  }}
+                  rows={3}
+                  placeholder="Add a note…"
+                  class="w-full resize-none rounded-md bg-[var(--color-control-fill)] p-2 text-sm text-fg-1 outline-none placeholder:text-fg-3"
+                />
+                <div class="flex items-center justify-end gap-1.5">
+                  <button
+                    type="button"
+                    onClick={clearChip}
+                    class="rounded-md px-2 py-1 text-xs text-fg-3 hover:text-fg-1"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={chipSubmit}
+                    class="lift rounded-md accent-grad px-2.5 py-1 text-xs font-semibold"
+                  >
+                    {chipMode() === "todo" ? "Add TODO" : "Add comment"}
+                  </button>
+                </div>
+              </div>
+            }
+          >
+            {/* preventDefault keeps the click from collapsing the PDF selection
+                before the action handler snapshots it. */}
+            <div class="flex items-center gap-0.5 p-1" onMouseDown={(e) => e.preventDefault()}>
+              <Show when={props.onCreateThread}>
+                <ChipAction
+                  icon={<MessageSquare size={13} />}
+                  label="Comment"
+                  onClick={() => chipCompose("comment")}
+                />
+                <ChipAction
+                  icon={<ListTodo size={13} />}
+                  label="TODO"
+                  onClick={() => chipCompose("todo")}
+                />
+              </Show>
+            </div>
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 };
+
+const ChipAction: Component<{
+  icon: JSX.Element;
+  label: string;
+  onClick: () => void;
+}> = (props) => (
+  <button
+    type="button"
+    onClick={props.onClick}
+    class="lift flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-fg-2 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+  >
+    {props.icon}
+    <span>{props.label}</span>
+  </button>
+);
 
 /**
  * Square icon-only toggle for the PDF toolbar (Logs/Console, AI). 36px

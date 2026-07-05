@@ -1,32 +1,29 @@
 import { describeIpcError } from "~/lib/errors";
-import { FileDown, FileType2, Loader2, MessageSquare, Package } from "lucide-solid";
+import {
+  FileCode,
+  FileDown,
+  FileType2,
+  Loader2,
+  MessageSquare,
+  Package,
+} from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createSignal } from "solid-js";
-import { SoonBadge } from "~/components/primitives/SoonBadge";
+import { Show, createSignal } from "solid-js";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
+import { offsetToLine } from "~/lib/reviews/lines";
+import { notifyInfo, notifySuccess } from "~/lib/toast";
 import { recordError } from "~/lib/telemetry";
-import { project } from "~/stores/editor-store";
+import { openFiles, project } from "~/stores/editor-store";
+import { allThreads } from "~/stores/review-store";
 
 /**
- * Export dropdown — replaces the old Download icon. "Export PDF" and
- * "Source bundle (.zip)" are real; the pandoc-backed options stay
- * visible-but-disabled until their pipelines exist.
+ * Export dropdown — replaces the old Download icon. All five options are real:
+ * the compiled PDF and source zip copy existing artifacts; Word/HTML shell out
+ * to pandoc; "PDF + annotations" flattens open review comments into SyncTeX-
+ * placed sticky notes (LaTeX only).
  */
-
-interface ExportOption {
-  id: string;
-  label: string;
-  hint: string;
-  icon: () => JSX.Element;
-}
-
-const STUB_OPTIONS: ExportOption[] = [
-  { id: "pdf-ann", label: "PDF + annotations", hint: "Flatten comments into PDF", icon: () => <FileDown size={13} /> },
-  { id: "docx", label: "Word (.docx)", hint: "Pandoc → Word", icon: () => <FileType2 size={13} /> },
-  { id: "html", label: "HTML", hint: "Pandoc → standalone HTML", icon: () => <MessageSquare size={13} /> },
-];
 
 export const ExportMenu: Component<{
   pdfPath: string | null;
@@ -42,7 +39,7 @@ export const ExportMenu: Component<{
     setOpen((v) => !v);
   };
 
-  // Shared save-dialog + byte-copy tail for both real exports. The dialog
+  // Shared save-dialog + byte-copy tail for the real exports. The dialog
   // plugin extends the fs scope with the picked path, so the write is
   // allowed even outside $DOCUMENT.
   const copyToChosenDest = async (
@@ -94,6 +91,127 @@ export const ExportMenu: Component<{
     }
   };
 
+  const exportViaPandoc = async (format: "docx" | "html") => {
+    const p = project();
+    if (!p || busy()) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const artifact = await ipc.exportPandoc(p, format);
+      await copyToChosenDest(artifact, `${p.name}.${format}`, {
+        name: format === "docx" ? "Word document" : "HTML page",
+        extensions: [format],
+      });
+    } catch (e) {
+      setError(describeIpcError(e));
+      recordError(`export-${format}`, `${format} export failed`, e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openThreads = () => allThreads().filter((t) => t.status === "open");
+
+  const annEnabled = () =>
+    !!props.pdfPath &&
+    !busy() &&
+    project()?.format === "latex" &&
+    openThreads().length > 0;
+
+  const annHint = (): string => {
+    const p = project();
+    if (p && p.format !== "latex") return "Needs SyncTeX (LaTeX only)";
+    if (!props.pdfPath) return "Compile first";
+    const n = openThreads().length;
+    if (n === 0) return "No open comments to place";
+    return `Place ${n} open comment${n === 1 ? "" : "s"} as sticky notes`;
+  };
+
+  const exportAnnotated = async () => {
+    const p = project();
+    if (!p || busy() || !props.pdfPath || p.format !== "latex") return;
+    const threads = openThreads();
+    if (threads.length === 0) return;
+    setError(null);
+    setBusy(true);
+    try {
+      // Read each thread's file once; prefer the live buffer (may hold unsaved
+      // edits that shifted offsets) and fall back to disk for unopened files.
+      const contentCache = new Map<string, string>();
+      const annotations: ipc.AnnotationInput[] = [];
+      for (const t of threads) {
+        let content = contentCache.get(t.fileRelPath);
+        if (content === undefined) {
+          const buf = openFiles().find((f) => f.relPath === t.fileRelPath);
+          content = buf
+            ? buf.content
+            : await ipc.readProjectTextFile(p.rootPath, t.fileRelPath);
+          contentCache.set(t.fileRelPath, content);
+        }
+        annotations.push({
+          file: t.fileRelPath,
+          line: offsetToLine(content, t.fromOffset),
+          title: t.comments[0]?.author ?? "Reviewer",
+          body: t.comments.map((c) => `${c.author}: ${c.body}`).join("\n"),
+        });
+      }
+      const result = await ipc.exportPdfAnnotated(p, props.pdfPath, annotations);
+      await copyToChosenDest(result.path, `${p.name}-annotated.pdf`, {
+        name: "PDF",
+        extensions: ["pdf"],
+      });
+      notifySuccess(
+        `${result.annotated} comment${result.annotated === 1 ? "" : "s"} placed`,
+      );
+      if (result.skipped.length > 0) {
+        notifyInfo(
+          `${result.skipped.length} comment${
+            result.skipped.length === 1 ? "" : "s"
+          } couldn't be placed`,
+          result.skipped
+            .slice(0, 5)
+            .map((s) => `${s.file}:${s.line} — ${s.reason}`)
+            .join("\n"),
+        );
+      }
+    } catch (e) {
+      setError(describeIpcError(e));
+      recordError("export-annotated", "annotated PDF export failed", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const OptionRow: Component<{
+    label: string;
+    hint: string;
+    icon: JSX.Element;
+    disabled: boolean;
+    onSelect: () => void;
+  }> = (o) => (
+    <button
+      type="button"
+      role="option"
+      tabindex={-1}
+      disabled={o.disabled}
+      onClick={o.onSelect}
+      class="flex w-full items-center gap-2.5 rounded-md p-2 text-left enabled:hover:bg-[var(--color-control-fill)] disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <span
+        class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
+        style={{ background: "var(--color-control-fill)" }}
+      >
+        <Show when={busy()} fallback={o.icon}>
+          <Loader2 size={13} class="animate-spin" />
+        </Show>
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium text-fg-1">{o.label}</div>
+        <div class="mono mt-0.5 text-[10px] text-fg-3">{o.hint}</div>
+      </div>
+    </button>
+  );
+
   return (
     <div ref={rootRef} class="relative">
       <button
@@ -116,79 +234,41 @@ export const ExportMenu: Component<{
           style={{ padding: "var(--ui-pad-section)", background: "var(--color-popover-bg)" }}
         >
           <span class="label-xs mb-1 block px-1 text-fg-3">Export as</span>
-          <button
-            type="button"
-            role="option"
-            tabindex={-1}
+          <OptionRow
+            label="Export PDF"
+            hint={props.pdfPath ? "Save the compiled PDF as…" : "Compile first"}
+            icon={<FileDown size={13} />}
             disabled={!props.pdfPath || busy()}
-            onClick={() => void exportPdf()}
-            class="flex w-full items-center gap-2.5 rounded-md p-2 text-left enabled:hover:bg-[var(--color-control-fill)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span
-              class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
-              style={{ background: "var(--color-control-fill)" }}
-            >
-              <Show when={busy()} fallback={<FileDown size={13} />}>
-                <Loader2 size={13} class="animate-spin" />
-              </Show>
-            </span>
-            <div class="min-w-0 flex-1">
-              <div class="text-sm font-medium text-fg-1">
-                Export PDF
-              </div>
-              <div class="mono mt-0.5 text-[10px] text-fg-3">
-                {props.pdfPath ? "Save the compiled PDF as…" : "Compile first"}
-              </div>
-            </div>
-          </button>
-          <button
-            type="button"
-            role="option"
-            tabindex={-1}
+            onSelect={() => void exportPdf()}
+          />
+          <OptionRow
+            label="Source bundle (.zip)"
+            hint="Sources only — build junk, .git and .typeward excluded"
+            icon={<Package size={13} />}
             disabled={!project() || busy()}
-            onClick={() => void exportZip()}
-            class="flex w-full items-center gap-2.5 rounded-md p-2 text-left enabled:hover:bg-[var(--color-control-fill)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <span
-              class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
-              style={{ background: "var(--color-control-fill)" }}
-            >
-              <Show when={busy()} fallback={<Package size={13} />}>
-                <Loader2 size={13} class="animate-spin" />
-              </Show>
-            </span>
-            <div class="min-w-0 flex-1">
-              <div class="text-sm font-medium text-fg-1">
-                Source bundle (.zip)
-              </div>
-              <div class="mono mt-0.5 text-[10px] text-fg-3">
-                Sources only — build junk, .git and .typeward excluded
-              </div>
-            </div>
-          </button>
-          <For each={STUB_OPTIONS}>
-            {(o) => (
-              <button
-                type="button"
-                disabled
-                class="flex w-full cursor-not-allowed items-center gap-2.5 rounded-md p-2 text-left opacity-60"
-              >
-                <span
-                  class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
-                  style={{ background: "var(--color-control-fill)" }}
-                >
-                  {o.icon()}
-                </span>
-                <div class="min-w-0 flex-1">
-                  <div class="text-sm font-medium text-fg-1">
-                    {o.label}
-                  </div>
-                  <div class="mono mt-0.5 text-[10px] text-fg-3">{o.hint}</div>
-                </div>
-                <SoonBadge />
-              </button>
-            )}
-          </For>
+            onSelect={() => void exportZip()}
+          />
+          <OptionRow
+            label="PDF + annotations"
+            hint={annHint()}
+            icon={<MessageSquare size={13} />}
+            disabled={!annEnabled()}
+            onSelect={() => void exportAnnotated()}
+          />
+          <OptionRow
+            label="Word (.docx)"
+            hint="Pandoc → Word — complex macros may not convert"
+            icon={<FileType2 size={13} />}
+            disabled={!project() || busy()}
+            onSelect={() => void exportViaPandoc("docx")}
+          />
+          <OptionRow
+            label="HTML"
+            hint="Pandoc → standalone HTML — complex macros may not convert"
+            icon={<FileCode size={13} />}
+            disabled={!project() || busy()}
+            onSelect={() => void exportViaPandoc("html")}
+          />
           <Show when={error()}>
             <div class="select-text px-2 pt-1 text-xs" style={{ color: "var(--color-err)" }}>
               {error()}

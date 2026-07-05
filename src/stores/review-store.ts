@@ -19,10 +19,46 @@ const SAVE_DEBOUNCE_MS = 1_500;
 const [allThreads, setAllThreads] = createSignal<CommentThread[]>([]);
 const [showResolved, setShowResolved] = createSignal(false);
 
-// "Please switch the sidebar to the Review tab" intent — mirrors the
+// "Open the review panel (optionally targeting a thread)" intent — mirrors the
 // requestNewProject/requestSaveTemplate pattern in palette-store. The shell
-// observes this and clears it. Replaces the old window CustomEvent bus.
-const [requestReviewPanel, setRequestReviewPanel] = createSignal(false);
+// observes this, switches to the Review tab, hands the threadId to
+// `focusedThreadId`, and clears the intent. The `generation` makes repeated
+// clicks on the SAME thread re-fire (new object identity each call).
+export interface ReviewPanelIntent {
+  threadId?: string;
+  // Which sidebar tab to open — comment threads land in "review", TODO-kind
+  // threads (e.g. from a PDF selection) in "todo".
+  panel: "review" | "todo";
+  generation: number;
+}
+const [reviewPanelIntent, setReviewPanelIntent] =
+  createSignal<ReviewPanelIntent | null>(null);
+let _reviewIntentGen = 0;
+
+/** Ask the shell to open the review/TODO panel, optionally scrolled to a thread. */
+export function requestReviewPanelIntent(
+  threadId?: string,
+  panel: "review" | "todo" = "review",
+): void {
+  setReviewPanelIntent({ threadId, panel, generation: ++_reviewIntentGen });
+}
+
+/**
+ * Open a thread in the correct panel, routing TODO-kind threads to the TODO
+ * tab. Shared by gutter clicks and PDF band clicks, which only know a threadId.
+ */
+export function requestThreadPanel(threadId: string): void {
+  const thread = allThreads().find((t) => t.id === threadId);
+  const panel = (thread?.kind ?? "comment") === "todo" ? "todo" : "review";
+  requestReviewPanelIntent(threadId, panel);
+}
+
+// The thread the ReviewPanel should scroll to + expand. Set by the shell from
+// the intent; consumed and cleared by the panel.
+const [focusedThreadId, setFocusedThreadId] = createSignal<string | null>(null);
+export function clearFocusedThread(): void {
+  setFocusedThreadId(null);
+}
 
 let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 // Root captured when the save was scheduled — the debounce can outlive a
@@ -42,8 +78,20 @@ function threadsForFile(relPath: string): CommentThread[] {
   return allThreads().filter((t) => t.fileRelPath === relPath);
 }
 
-function allOpenThreadCount(): number {
-  return allThreads().filter((t) => t.status === "open").length;
+function openCommentThreadCount(): number {
+  return allThreads().filter(
+    (t) => t.status === "open" && (t.kind ?? "comment") !== "todo",
+  ).length;
+}
+
+function openTodoThreads(): CommentThread[] {
+  return allThreads().filter(
+    (t) => t.status === "open" && (t.kind ?? "comment") === "todo",
+  );
+}
+
+function openTodoThreadCount(): number {
+  return openTodoThreads().length;
 }
 
 function addThread(thread: CommentThread): void {
@@ -96,6 +144,23 @@ function reanchorThreadById(
     ),
   );
   scheduleSave();
+}
+
+/**
+ * Repoint every thread anchored to `oldRel` at `newRel` after a file rename, so
+ * comments/TODOs stay attached to the renamed file. Offsets are unchanged — the
+ * rename moved the exact bytes.
+ */
+function remapThreadFile(oldRel: string, newRel: string): void {
+  let changed = false;
+  setAllThreads((prev) =>
+    prev.map((t) => {
+      if (t.fileRelPath !== oldRel) return t;
+      changed = true;
+      return { ...t, fileRelPath: newRel };
+    }),
+  );
+  if (changed) scheduleSave();
 }
 
 function updateThreadOffsets(
@@ -245,16 +310,21 @@ export {
   allThreads,
   showResolved,
   setShowResolved,
-  requestReviewPanel,
-  setRequestReviewPanel,
+  reviewPanelIntent,
+  setReviewPanelIntent,
+  focusedThreadId,
+  setFocusedThreadId,
   threadsForFile,
-  allOpenThreadCount,
+  openCommentThreadCount,
+  openTodoThreads,
+  openTodoThreadCount,
   addThread,
   addReplyToThread,
   resolveThreadById,
   reopenThreadById,
   removeThread,
   reanchorThreadById,
+  remapThreadFile,
   updateThreadOffsets,
   loadThreads,
   flushPendingReviewSave,

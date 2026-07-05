@@ -38,6 +38,7 @@ import { IntegrationsPanel } from "./IntegrationsPanel";
 import {
   type CompileEngine,
   type EditorSettings,
+  type LineHeightMode,
   compileEngine,
   editorSettings,
   integrationsSettings,
@@ -60,16 +61,20 @@ import {
 import {
   type Density,
   DENSITIES,
+  accentGradient,
   activeCustomTheme,
   ambientLights,
   animations,
   customThemesEnabled,
   density,
+  glowEffects,
+  setAccentGradient,
   setActiveCustomTheme,
   setAmbientLights,
   setAnimations,
   setCustomThemesEnabled,
   setDensity,
+  setGlowEffects,
 } from "~/stores/ui-store";
 import {
   customThemeWarnings,
@@ -362,6 +367,8 @@ interface ThemeMeta {
 // Preview swatch backgrounds only. `name` and `dark` derive from THEME_ROSTER
 // (theme-store) so the light/dark truth and labels have a single source.
 const THEME_VIBE: Record<Theme, string> = {
+  light: "#FFFFFF",
+  dark: "#1E1E1E",
   daylight:
     "radial-gradient(circle at 75% 20%, #F0E7CF, transparent 60%), radial-gradient(circle at 25% 80%, #ECDFC2, transparent 60%), #F8F4EA",
   lamplight:
@@ -382,6 +389,12 @@ const THEME_META: Record<Theme, ThemeMeta> = Object.fromEntries(
     },
   ]),
 ) as Record<Theme, ThemeMeta>;
+
+// Picker sections: plain "Basic" (Light/Dark) then the stylized "Styled" set.
+const THEME_GROUPS: { label: string; themes: Theme[] }[] = [
+  { label: "Basic", themes: THEMES.filter((t) => THEME_ROSTER[t].category === "basic") },
+  { label: "Styled", themes: THEMES.filter((t) => THEME_ROSTER[t].category === "styled") },
+];
 
 interface AccentMeta {
   id: Accent;
@@ -446,15 +459,30 @@ const AppearancePanel: Component = () => {
         subtitle="Built-in themes. Disabled while a custom theme is active."
       >
         <div
-          class="grid grid-cols-4 gap-3 p-5"
+          class="space-y-4 p-5"
           style={
             customThemeActive()
               ? { opacity: "0.4", "pointer-events": "none" }
               : undefined
           }
         >
-          <For each={THEMES}>
-            {(t) => <ThemeTile meta={THEME_META[t]} active={theme() === t} onClick={() => setTheme(t)} />}
+          <For each={THEME_GROUPS}>
+            {(group) => (
+              <div class="space-y-2">
+                <div class="label-xs text-fg-3">{group.label}</div>
+                <div class="grid grid-cols-4 gap-3">
+                  <For each={group.themes}>
+                    {(t) => (
+                      <ThemeTile
+                        meta={THEME_META[t]}
+                        active={theme() === t}
+                        onClick={() => setTheme(t)}
+                      />
+                    )}
+                  </For>
+                </div>
+              </div>
+            )}
           </For>
         </div>
       </Card>
@@ -519,6 +547,20 @@ const AppearancePanel: Component = () => {
             }}
           </For>
         </div>
+        <Row
+          label="Gradient"
+          hint="Blend both accent stops across buttons, active items, and highlights. Off uses the solid accent color."
+        >
+          <Switch checked={accentGradient()} onChange={setAccentGradient} />
+        </Row>
+        <Show when={THEME_ROSTER[theme()].category === "styled"}>
+          <Row
+            label="Glow"
+            hint="Soft accent glow behind primary buttons and card hovers."
+          >
+            <Switch checked={glowEffects()} onChange={setGlowEffects} />
+          </Row>
+        </Show>
       </Card>
 
       <CustomThemesCard />
@@ -563,13 +605,13 @@ const AppearancePanel: Component = () => {
       <Card title="Workspace">
         <Row
           label="Enable Spaces"
-          hint="Preview with sample data — real spaces aren't built yet."
+          hint="Show the Spaces grouping in the projects sidebar."
         >
           <Switch checked={enableSpaces()} onChange={setEnableSpaces} />
         </Row>
         <Row
           label="Enable Tags"
-          hint="Preview with sample data — real tags aren't built yet."
+          hint="Show the Tags list in the projects sidebar."
         >
           <Switch checked={enableTags()} onChange={setEnableTags} />
         </Row>
@@ -842,7 +884,7 @@ const EditorPanel: Component = () => {
         <Show when={!isTauriMobile()}>
           <Row
             label="Default engine"
-            hint="System TeX uses your local install; Tectonic is a self-contained Rust binary."
+            hint="Default for projects without their own build settings (set those in the editor's build menu). System TeX uses your local install; Tectonic is self-contained."
           >
             <SelectStub
               value={ENGINE_LABEL[compileEngine()]}
@@ -872,6 +914,28 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("stopOnFirstError", v)}
           />
         </Row>
+        <Row
+          label="Autosave"
+          hint="Write changes to disk automatically after an idle pause."
+        >
+          <Switch
+            checked={editorSettings().autosaveEnabled}
+            onChange={(v) => update("autosaveEnabled", v)}
+          />
+        </Row>
+        <Row
+          label="Autosave delay"
+          hint="Idle time before changes are saved (crash-recovery snapshot when autosave is off)."
+        >
+          <SelectStub
+            value={`${editorSettings().autosaveDelayMs} ms`}
+            options={[300, 500, 1000, 2000].map((n) => ({
+              value: n,
+              label: `${n} ms`,
+            }))}
+            onChange={(v) => update("autosaveDelayMs", Number(v))}
+          />
+        </Row>
       </Card>
 
       <Card title="Editing" subtitle="Behaviour of the source pane.">
@@ -889,6 +953,56 @@ const EditorPanel: Component = () => {
           <Switch
             checked={editorSettings().lineWrap}
             onChange={(v) => update("lineWrap", v)}
+          />
+        </Row>
+        <Row label="Line height">
+          <SelectStub
+            value={editorSettings().lineHeight}
+            options={(["compact", "normal", "relaxed"] as const).map((m) => ({
+              value: m,
+              label: m,
+            }))}
+            onChange={(v) => update("lineHeight", v as LineHeightMode)}
+          />
+        </Row>
+        <Row label="Tab size" hint="Indent width in spaces.">
+          <SelectStub
+            value={`${editorSettings().tabSize}`}
+            options={[2, 4, 8].map((n) => ({ value: n, label: `${n}` }))}
+            onChange={(v) => update("tabSize", Number(v))}
+          />
+        </Row>
+        <Row label="Line numbers">
+          <Switch
+            checked={editorSettings().lineNumbers}
+            onChange={(v) => update("lineNumbers", v)}
+          />
+        </Row>
+        <Row label="Highlight active line">
+          <Switch
+            checked={editorSettings().highlightActiveLine}
+            onChange={(v) => update("highlightActiveLine", v)}
+          />
+        </Row>
+        <Row
+          label="Autocomplete"
+          hint="Built-in word/snippet completion. Language-server completion is unaffected."
+        >
+          <Switch
+            checked={editorSettings().autocomplete}
+            onChange={(v) => update("autocomplete", v)}
+          />
+        </Row>
+        <Row label="Bracket matching" hint="Highlight the matching bracket at the cursor.">
+          <Switch
+            checked={editorSettings().bracketMatching}
+            onChange={(v) => update("bracketMatching", v)}
+          />
+        </Row>
+        <Row label="Auto-close brackets" hint="Insert the closing bracket/quote automatically.">
+          <Switch
+            checked={editorSettings().autoCloseBrackets}
+            onChange={(v) => update("autoCloseBrackets", v)}
           />
         </Row>
         <Row label="Vim mode" hint="Modal editing bindings in the source pane.">
@@ -909,6 +1023,28 @@ const EditorPanel: Component = () => {
                 grammar: { ...prev.grammar, enabled: v },
               }))
             }
+          />
+        </Row>
+      </Card>
+
+      <Card title="PDF preview" subtitle="How the compiled output is displayed.">
+        <Row label="Default zoom" hint="Zoom level the preview opens at.">
+          <SelectStub
+            value={`${editorSettings().pdfDefaultZoom}%`}
+            options={[80, 90, 100, 110, 125, 150].map((n) => ({
+              value: n,
+              label: `${n}%`,
+            }))}
+            onChange={(v) => update("pdfDefaultZoom", Number(v))}
+          />
+        </Row>
+        <Row
+          label="Invert on dark themes"
+          hint="Flip the white page to dark for night reading (only while a dark theme is active)."
+        >
+          <Switch
+            checked={editorSettings().pdfInvertDark}
+            onChange={(v) => update("pdfInvertDark", v)}
           />
         </Row>
       </Card>

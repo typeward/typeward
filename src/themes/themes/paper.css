@@ -30,6 +30,10 @@
   --color-card-bg: rgb(255 255 255 / 0.88);
   --color-card-bg-soft: rgb(255 255 255 / 0.65);
 
+  --color-control-track-off: rgb(15 23 42 / 0.14);
+  --color-control-thumb: #ffffff;
+  --color-control-thumb-stroke: rgb(15 23 42 / 0.14);
+
   /* Deeper format accents readable on the cream bg. */
   --format-latex: #7c3aed;
   --format-typst: #0e7490; /* was #0891b2 — 4.5:1+ for the 10px chip label on white cards */
@@ -50,6 +54,7 @@
   --color-warn: #b45309;
   --color-err: #be123c;
   --color-ok: #047857;
+  --color-info: #2a5a8f; /* muted steel-blue, AA on paper */
   --color-danger-fill: var(--color-err); /* #be123c crimson is dark enough for white labels */
 
   /* Two-layer drop + crisp white inset highlight per design HTML. */

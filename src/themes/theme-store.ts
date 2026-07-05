@@ -1,7 +1,17 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 
-export const THEMES = ["daylight", "lamplight", "aurora", "paper"] as const;
+export const THEMES = [
+  "light",
+  "dark",
+  "daylight",
+  "lamplight",
+  "aurora",
+  "paper",
+] as const;
 export type Theme = (typeof THEMES)[number];
+
+/** Picker grouping: plain neutral themes vs the stylized brand themes. */
+export type ThemeCategory = "basic" | "styled";
 
 export interface ThemeInfo {
   /** Display label. */
@@ -9,6 +19,8 @@ export interface ThemeInfo {
   /** Dark-surface theme — the single truth for every light/dark decision
    * (Markdown preview prose variant, Settings picker swatch). */
   dark: boolean;
+  /** Which section of the Settings theme picker this belongs to. */
+  category: ThemeCategory;
 }
 
 /**
@@ -22,10 +34,12 @@ export interface ThemeInfo {
  * `BUILTIN_BASES` in `src-tauri/src/themes.rs`.
  */
 export const THEME_ROSTER: Record<Theme, ThemeInfo> = {
-  daylight: { label: "Daylight", dark: false },
-  lamplight: { label: "Lamplight", dark: true },
-  aurora: { label: "Aurora", dark: true },
-  paper: { label: "Paper", dark: false },
+  light: { label: "Light", dark: false, category: "basic" },
+  dark: { label: "Dark", dark: true, category: "basic" },
+  daylight: { label: "Daylight", dark: false, category: "styled" },
+  lamplight: { label: "Lamplight", dark: true, category: "styled" },
+  aurora: { label: "Aurora", dark: true, category: "styled" },
+  paper: { label: "Paper", dark: false, category: "styled" },
 };
 
 /** Display labels for each built-in theme. Derived from {@link THEME_ROSTER}. */

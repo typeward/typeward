@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { bootCoreCommands, registerAdapterCommands, unregisterAdapterCommands } from "./boot";
 import { _resetForTests, commands, getCommand } from "./registry";
-import type { EditorAdapter } from "~/adapters/types";
+import type { EditorAdapter, Project } from "~/adapters/types";
+import { openFile, resetTabs, setProject } from "~/stores/editor-store";
 
 // bootCoreCommands is idempotent across the entire app lifetime — calling
 // it many times must register each command exactly once. We can't reset its
@@ -43,6 +44,24 @@ describe("bootCoreCommands", () => {
     expect(getCommand("core.togglePalette")?.shortcut).toBe("Mod+K");
     expect(getCommand("core.newProject")?.shortcut).toBe("Mod+N");
     expect(getCommand("core.save")?.shortcut).toBe("Mod+S");
+  });
+
+  it("core.save is a save+compile command gated only on an active file (no dirty gate)", () => {
+    bootCoreCommands();
+    const save = getCommand("core.save");
+    expect(save?.title).toBe("Save and compile");
+    expect(save?.scope).toBe("editor");
+
+    setProject({ rootPath: "/A", rootFile: "main.tex", format: "latex", name: "A" } as Project);
+    resetTabs();
+    expect(save?.when?.()).toBe(false); // no active file
+
+    // A CLEAN active file must still enable the command (old behavior gated on dirty).
+    openFile({ path: "/A/main.tex", relPath: "main.tex", content: "x", dirty: false });
+    expect(save?.when?.()).toBe(true);
+
+    resetTabs();
+    setProject(null);
   });
 });
 

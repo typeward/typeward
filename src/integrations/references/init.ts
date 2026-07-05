@@ -8,11 +8,14 @@
  * unregisters their previous instance before registering the new one.
  */
 
-import { createEffect, createMemo, createRoot } from "solid-js";
+import { createEffect, createMemo, createRoot, untrack } from "solid-js";
 
 import { hasEntitlement } from "~/integrations/entitlements";
 import { integrationsSettings } from "~/stores/settings-store";
+import { project } from "~/stores/editor-store";
+import { recordError } from "~/lib/telemetry";
 
+import { refreshLibraryBib } from "./aggregator";
 import { createBetterBibTexProvider } from "./zotero/better-bibtex";
 import { createZoteroWebProvider } from "./zotero/web";
 import { createMendeleyProvider } from "./mendeley";
@@ -98,6 +101,23 @@ export function initReferenceProviders(): void {
       }
       known.clear();
       for (const id of desired) known.add(id);
+    });
+
+    // When the provider plan changes while a project is open, rewrite
+    // library.bib so stale keys (e.g. a just-disabled Zotero) stop resolving.
+    // Skip the first run so opening the app doesn't force a cold network export.
+    let first = true;
+    createEffect(() => {
+      plan();
+      if (first) {
+        first = false;
+        return;
+      }
+      const proj = untrack(project);
+      if (proj)
+        void refreshLibraryBib(proj).catch((e) =>
+          recordError("references-refresh", "post-toggle refresh failed", e),
+        );
     });
   });
 }
