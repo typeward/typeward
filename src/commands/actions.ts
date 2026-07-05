@@ -1,12 +1,19 @@
 import { describeIpcError } from "~/lib/errors";
-import { notifyInfo } from "~/lib/toast";
+import { notifyError, notifyInfo } from "~/lib/toast";
 import type { EditorAdapter, Project, ProjectFormat } from "~/adapters/types";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
+import { effectiveBuild } from "~/adapters/latex/build-config";
+import { matchSelectionToSource } from "~/lib/pdf-annotations/anchor";
+import type { CreateThreadInput } from "~/lib/pdf-annotations/types";
+import { lineRange } from "~/lib/reviews/lines";
+import { createThread } from "~/lib/reviews/types";
+import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
 import {
   pathRelativeToProjectRoot,
+  resolveForwardWithWasmSynctex,
+  resolveInverseWithWasmSynctex,
   syncForwardWithWasmSynctex,
-  syncInverseWithWasmSynctex,
 } from "~/adapters/latex/synctex";
 import { suffixWithConflict } from "~/integrations/cloud/core";
 import { notifyLocalSave } from "~/integrations/cloud/init";
@@ -29,7 +36,7 @@ import {
   type OpenFile,
 } from "~/stores/editor-store";
 import { currentCursorLine } from "~/stores/editor-view-store";
-import { compileEngine, editorSettings } from "~/stores/settings-store";
+import { editorSettings } from "~/stores/settings-store";
 import {
   navigateTo,
   setPaletteOpen,
@@ -61,14 +68,56 @@ export async function saveActiveFile(): Promise<void> {
   const file = activeFile();
   const p = project();
   if (!file || !p) return;
-  // `file` is an immutable store snapshot, so its content/identity stay fixed
-  // across the awaits below even if the user keeps typing.
+  await saveOpenFile(p, file);
+}
+
+// Per-file save serialization. Autosave (from the debounce timer) and an
+// explicit Mod+S can target the same file concurrently; both run the
+// read-compare-write conflict guard, and interleaving them would let one
+// clobber the other's base-hash bookkeeping (or double-write the sidecar).
+// Each save chains onto the file's in-flight tail so they run strictly in
+// order. The stored tail never rejects, so a failed save can't wedge the chain.
+const saveChainByPath = new Map<string, Promise<void>>();
+
+/**
+ * Serialize `work` behind any in-flight save of `key`. The stored tail never
+ * rejects, so a failed save can't wedge the chain; the caller still sees the
+ * real result/rejection via the returned promise.
+ */
+function chainOnPath<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const run = (saveChainByPath.get(key) ?? Promise.resolve()).then(work, work);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  saveChainByPath.set(key, tail);
+  void tail.finally(() => {
+    if (saveChainByPath.get(key) === tail) saveChainByPath.delete(key);
+  });
+  return run;
+}
+
+/**
+ * Persist one open buffer: conflict-guarded write, cloud push notify, and the
+ * auto-compile branch. Shared by the explicit save path and autosave. `file` is
+ * an immutable store snapshot, so its content/identity stay fixed across the
+ * awaits even if the user keeps typing.
+ */
+export function saveOpenFile(p: Project, file: OpenFile): Promise<void> {
+  return chainOnPath(file.path, () => performSave(p, file));
+}
+
+async function performSave(p: Project, file: OpenFile): Promise<void> {
   await writeBufferWithConflictGuard(p, file);
   notifyLocalSave(p.rootPath, [file.relPath]);
-  // Auto-compile rides the explicit save path only — compileActiveProject
-  // saves via saveAllDirtyFiles, so this can't recurse, and its
-  // "already compiling" guard absorbs rapid save bursts.
-  if (editorSettings().autoCompile) void compileActiveProject();
+  // Auto-compile rides the save path only — compileActiveProject saves via
+  // saveAllDirtyFiles, so this can't recurse, and its "already compiling" guard
+  // absorbs rapid save bursts. LaTeX honors the per-project override; Typst uses
+  // the global setting. Guard against a stale autosave flush (from a
+  // switched-away tab) compiling a project the user has already left.
+  const autoCompile =
+    p.format === "latex" ? effectiveBuild(p).autoCompile : editorSettings().autoCompile;
+  if (autoCompile && p.rootPath === project()?.rootPath) void compileActiveProject();
 }
 
 /**
@@ -82,7 +131,7 @@ export async function saveAllDirtyFiles(): Promise<void> {
   const saved: string[] = [];
   for (const file of openFiles()) {
     if (!file.dirty) continue;
-    await writeBufferWithConflictGuard(p, file);
+    await chainOnPath(file.path, () => writeBufferWithConflictGuard(p, file));
     saved.push(file.relPath);
   }
   notifyLocalSave(p.rootPath, saved);
@@ -207,6 +256,19 @@ export async function compileActiveProject(): Promise<void> {
   }
 }
 
+/**
+ * Mod+S action: save every dirty buffer, then compile. Saving first (rather
+ * than relying on compile's internal save) guarantees Ctrl+S during an active
+ * compile still persists — `compileActiveProject` returns early on its
+ * compiling-guard, but the buffers are already on disk for the next run. No
+ * double-compile: `saveAllDirtyFiles` never triggers auto-compile (only the
+ * per-file save path does), so compile fires exactly once here.
+ */
+export async function saveAndCompileActiveProject(): Promise<void> {
+  await saveAllDirtyFiles();
+  void compileActiveProject();
+}
+
 // ----- Global actions ------------------------------------------------------
 
 export const openPalette = (): void => {
@@ -255,7 +317,7 @@ export async function syncForwardFromCursor(): Promise<void> {
   const line = currentCursorLine();
   if (!line) return;
 
-  if (compileEngine() === "texlive-wasm") {
+  if (effectiveBuild(p).engine === "texlive-wasm") {
     await syncForwardWithWasmSynctex(p, result.outputPath, file.relPath, line);
     return;
   }
@@ -276,23 +338,23 @@ export async function syncForwardFromCursor(): Promise<void> {
 }
 
 /**
- * Inverse search: PDF click → cursor in source. Translates an absolute
- * source path returned by SyncTeX into a project-relative one and routes through the
- * goto-source intent signal so EditorScreen can open the file if needed.
+ * Inverse-search lookup ONLY (no navigation): PDF (page, x, y) → source
+ * (relPath, line), or null. Split out so the PDF selection chip can anchor a
+ * new thread to the clicked source line without also moving the editor cursor.
+ * Branches on the active engine (wasm reader vs the synctex CLI).
  */
-export async function syncInverseFromPdfClick(
+export async function resolveInverse(
   pageNum: number,
   x: number,
   y: number,
-): Promise<void> {
+): Promise<{ relPath: string; line: number } | null> {
   const p = project();
-  if (!p) return;
+  if (!p) return null;
   const result = lastResult();
-  if (!result?.outputPath) return;
+  if (!result?.outputPath) return null;
 
-  if (compileEngine() === "texlive-wasm") {
-    await syncInverseWithWasmSynctex(p, result.outputPath, pageNum, x, y);
-    return;
+  if (effectiveBuild(p).engine === "texlive-wasm") {
+    return resolveInverseWithWasmSynctex(p, result.outputPath, pageNum, x, y);
   }
 
   try {
@@ -303,12 +365,128 @@ export async function syncInverseFromPdfClick(
       x,
       y,
     });
-    if (!loc) return;
+    if (!loc) return null;
     const relPath = pathRelativeToProjectRoot(p.rootPath, loc.file);
-    if (relPath) requestGotoSource(relPath, loc.line);
+    return relPath ? { relPath, line: loc.line } : null;
   } catch (e) {
     recordError("synctex-inverse", "synctex_inverse IPC threw", e);
+    return null;
   }
+}
+
+/**
+ * Forward-search lookup ONLY (no scroll): source (relPath, line) → PDF
+ * (page, y in points), or null. The annotation mapper (E10c) uses this to place
+ * review/TODO highlights; the cursor forward-search still scrolls via
+ * `syncForwardFromCursor`.
+ */
+export async function resolveForward(
+  p: Project,
+  outputPath: string,
+  relPath: string,
+  line: number,
+): Promise<{ page: number; y: number } | null> {
+  if (effectiveBuild(p).engine === "texlive-wasm") {
+    return resolveForwardWithWasmSynctex(p, outputPath, relPath, line);
+  }
+  try {
+    const loc = await ipc.synctexForward({
+      projectRoot: p.rootPath,
+      pdfPath: outputPath,
+      sourceFile: relPath,
+      line,
+    });
+    return loc ? { page: loc.page, y: loc.y } : null;
+  } catch (e) {
+    recordError("synctex-forward", "synctex_forward IPC threw", e);
+    return null;
+  }
+}
+
+/**
+ * Inverse search: PDF click → cursor in source. Routes through the goto-source
+ * intent signal so EditorScreen can open the file if needed.
+ */
+export async function syncInverseFromPdfClick(
+  pageNum: number,
+  x: number,
+  y: number,
+  selectedText?: string,
+): Promise<void> {
+  const loc = await resolveInverse(pageNum, x, y);
+  if (!loc) return;
+  if (selectedText) {
+    const p = project();
+    const content = p ? await readProjectSource(p, loc.relPath) : null;
+    const match =
+      content !== null
+        ? matchSelectionToSource(content, loc.line, selectedText)
+        : null;
+    if (match) {
+      requestGotoSource(loc.relPath, loc.line, {
+        from: match.fromOffset,
+        to: match.toOffset,
+      });
+      return;
+    }
+  }
+  requestGotoSource(loc.relPath, loc.line);
+}
+
+/**
+ * Source text for a project file — live buffer preferred (its offsets match the
+ * review store), disk fallback; null if unreadable. Shared by the annotation
+ * mapper and PDF-selection thread creation.
+ */
+export async function readProjectSource(p: Project, rel: string): Promise<string | null> {
+  const buf = openFiles().find((f) => f.relPath === rel);
+  if (buf) return buf.content;
+  try {
+    return await ipc.readProjectTextFile(p.rootPath, rel);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create a review/TODO thread from a PDF text selection (E10b/E11). SyncTeX
+ * inverse resolves the coarse source line; the fuzzy word matcher narrows to the
+ * selected words, falling back to the whole line. Opens the review panel
+ * targeted at the new thread. Shared by the in-pane viewer and the detached
+ * preview window's bridge.
+ */
+export async function createThreadFromPdfSelection(input: CreateThreadInput): Promise<void> {
+  const p = project();
+  if (!p) return;
+  const loc = await resolveInverse(input.page, input.x, input.y);
+  if (!loc) {
+    notifyError(
+      "Couldn't anchor the comment",
+      "SyncTeX couldn't map that selection to source. Recompile with SyncTeX enabled.",
+    );
+    return;
+  }
+  const content = await readProjectSource(p, loc.relPath);
+  if (content === null) {
+    notifyError("Couldn't anchor the comment", `Could not read ${loc.relPath}.`);
+    return;
+  }
+  const match = matchSelectionToSource(content, loc.line, input.selectedText);
+  const range = match
+    ? { from: match.fromOffset, to: match.toOffset }
+    : lineRange(content, loc.line);
+  const anchorText = content.slice(range.from, range.to).trim() || input.selectedText;
+  const thread = createThread(
+    loc.relPath,
+    range.from,
+    range.to,
+    anchorText,
+    "You",
+    input.body,
+    input.kind,
+  );
+  addThread(thread);
+  requestReviewPanelIntent(thread.id, input.kind === "todo" ? "todo" : "review");
 }
 
 // Inject the orchestration into the compile-runner leaf so adapter build/sync

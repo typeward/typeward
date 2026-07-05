@@ -2,15 +2,28 @@
 
 ## Built-in themes
 
-Exactly four themes since the 2026-06-11 "Desk Lamp" redesign.
-**Daylight is the app default.**
+Six built-in themes since the 2026-06-11 "Desk Lamp" redesign, split into two
+picker categories (`THEME_ROSTER[t].category` in `theme-store.ts`): **Basic**
+(plain, flat neutrals — no ambient glow, no drop shadows) and **Styled** (the
+stylized brand themes with glow + drops). **Daylight is the app default.**
 
-| Theme | Base | Source design file | Notes |
-|---|---|---|---|
-| **Daylight** | light | `design_files/t1/Typeward.html` (light tokens) + `design_files/sample_identity.txt` / `sample.png` | **Default.** Warm ivory `#F8F4EA`, charcoal ink `#22211E`, near-black primary actions `#101210` (near-flat `.accent-grad` — "no loud gradients"), aged-brass `#B79A5C` text selection, seal-red `#A84935` errors, paper-gray `#D8D0C2` hairlines. No saturated tech colors in chrome; blue only in code syntax |
-| **Lamplight** | dark | `design_files/t1/Typeward.html` (dark tokens) | The "lights out" room: warm black `#0D0C0A`, parchment text, amber `#E8A34D`, lamp-glow ambient |
-| **Aurora** | dark | `tokens.css` defaults | Original violet/cyan glass aesthetic. Still the `:root` token baseline (no `data-theme` attribute) |
-| **Paper** | light | `design_files/old/themes/Typeward Light.html` | Cool white/slate light theme |
+| Theme | Category | Base | Source design file | Notes |
+|---|---|---|---|---|
+| **Daylight** | styled | light | `design_files/t1/Typeward.html` (light tokens) + `design_files/sample_identity.txt` / `sample.png` | **Default.** Warm ivory `#F8F4EA`, charcoal ink `#22211E`, near-black primary actions `#101210` (near-flat `.accent-grad` — "no loud gradients"), aged-brass `#B79A5C` text selection, seal-red `#A84935` errors, paper-gray `#D8D0C2` hairlines. No saturated tech colors in chrome; blue only in code syntax |
+| **Lamplight** | styled | dark | `design_files/t1/Typeward.html` (dark tokens) | The "lights out" room: warm black `#0D0C0A`, parchment text, amber `#E8A34D`, lamp-glow ambient |
+| **Aurora** | styled | dark | `tokens.css` defaults | Original violet/cyan glass aesthetic. Still the `:root` token baseline (no `data-theme` attribute) |
+| **Paper** | styled | light | `design_files/old/themes/Typeward Light.html` | Cool white/slate light theme |
+| **Light** | basic | light | — | Plain neutral light: white surfaces, gray chrome, near-flat blue accent. Flat — glow + drop shadows forced off |
+| **Dark** | basic | dark | — | Plain neutral dark: `#1e1e1e` surfaces, light-blue accent, VS Code syntax. Flat — glow + drop shadows forced off |
+
+**Glow + drop shadows are a category behavior, not a token.** The
+`data-glow="on"|off"` attribute on `<html>` is derived in `ui-store.ts` from
+the theme category and the Appearance → Glow toggle: styled themes honor the
+toggle, basic themes force `off` regardless. Basic themes also zero the
+`--shadow-glass-drop/-raised/-accent-btn/-glass-inset` tokens to the no-op
+shadow `0 0 0 rgb(0 0 0 / 0)` (never `none` — the tokens join comma-separated
+`box-shadow` lists), so their surfaces are flat; the Switch/Slider thumbs read
+via `--color-control-thumb-stroke` hairlines instead of `--shadow-raised`.
 
 Obsidian and Graphite were retired in the Desk Lamp redesign; the seven
 community ports (Catppuccin, Dracula, Gruvbox, Mono, Nord, Solarized Light,
@@ -40,6 +53,16 @@ Beyond surface/fg tokens, every theme file defines:
 - `--color-text-selection` — CodeMirror + global `::selection` highlight.
   Defaults to an accent wash; Daylight overrides with brass so selection
   reads like a highlighter pass on paper (its ink accent would render gray).
+- `--color-ok/warn/err/info` — status tokens. `--color-info` (blue family,
+  added 2026-07-05) drives the grammar "misc" lint family (blue underline +
+  wash) alongside err/warn/ok for spelling/grammar/style; each theme tunes it
+  (Daylight ink-blue, Paper/Lamplight muted steel). Custom themes may override.
+- `--color-control-track-off/-thumb/-thumb-stroke` — form-control tokens
+  (Switch/Slider, added 2026-07-05). The thumb is **constant per theme** and
+  the **track** carries state (platform convention): off-track is a visible
+  gray pill (`--color-control-track-off`), the on-track is `.accent-grad`. The
+  thumb hairline (`--color-control-thumb-stroke`) keeps a light thumb defined
+  against light accents once `--shadow-raised` is zeroed on the basic themes.
 
 ## Display typography (added 2026-06-11, reverted same day)
 
@@ -95,10 +118,17 @@ wants.
 ```
 
 - `name` (required): display name, 1–64 chars.
-- `base` (required): one of `daylight` / `lamplight` / `aurora` / `paper`.
-  Every token the file doesn't override falls through to the base, and the
-  base drives light/dark decisions downstream (Markdown preview prose, boot
-  splash tint, shadow tokens).
+- `base` (required): one of the six built-ins — `daylight` / `lamplight` /
+  `aurora` / `paper` (styled) or `light` / `dark` (basic). Every token the
+  file doesn't override falls through to the base, and the base drives
+  light/dark decisions downstream (Markdown preview prose, boot splash tint,
+  shadow tokens).
+- **A custom theme inherits its base's category.** Basing on `light`/`dark`
+  means glows and drop shadows are permanently off (the base forces
+  `data-glow="off"` and zeroes the shadow tokens); basing on a styled theme
+  leaves glow under the user's Appearance → Glow toggle. A theme file cannot
+  flip this via tokens — token files carry values, not behavior flags, and the
+  `data-glow` derivation reads the base category, not any token.
 - `tokens`: map of CSS custom property → value. Max 200 tokens; keys must
   match `--[a-z0-9-]+`; values are capped at 256 chars and reject `;{}<>\`
   (style-injection guard — see below).

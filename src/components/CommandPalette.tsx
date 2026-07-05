@@ -8,7 +8,7 @@ import { commands as registryCommands } from "~/commands/registry";
 import { dispatchCommand } from "~/commands/run";
 import { shortcutTokens } from "~/lib/shortcuts";
 import { getActiveEditorView } from "~/stores/editor-view-store";
-import { projects } from "~/stores/projects-store";
+import { isTrashed, projects } from "~/stores/projects-store";
 
 /**
  * Shared command palette overlay. Renders once at the App root so Cmd+K
@@ -97,6 +97,7 @@ export const CommandPalette: Component = () => {
       }));
 
     const recentProjects: PaletteRow[] = projects()
+      .filter((p) => !isTrashed(p))
       .filter((p) => matchesQuery(q, p.name, p.rootFile, p.format))
       .slice(0, 5)
       .map<PaletteRow>((p) => ({

@@ -40,29 +40,35 @@ describe("cm6 review offset remapping", () => {
 
   it("seeds thread ranges into the comment field", () => {
     const { view } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     expect(getCurrentRanges(view)).toEqual([
-      { id: "t1", from: 10, to: 15, status: "open" },
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
     ]);
     view.destroy();
   });
 
   it("shifts a thread right when text is inserted before it", () => {
     const { view } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     view.dispatch({ changes: { from: 0, insert: "12345" } });
     expect(getCurrentRanges(view)).toEqual([
-      { id: "t1", from: 15, to: 20, status: "open" },
+      { id: "t1", from: 15, to: 20, status: "open", kind: "comment" },
     ]);
     view.destroy();
   });
 
   it("leaves a thread in place when text is inserted after it", () => {
     const { view } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     view.dispatch({ changes: { from: 18, insert: "ZZ" } });
     expect(getCurrentRanges(view)).toEqual([
-      { id: "t1", from: 10, to: 15, status: "open" },
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
     ]);
     view.destroy();
   });
@@ -70,28 +76,50 @@ describe("cm6 review offset remapping", () => {
   it("remaps multiple threads independently", () => {
     const { view } = makeView(DOC);
     dispatchSetThreads(view, [
-      { id: "a", from: 2, to: 5, status: "open" },
-      { id: "b", from: 12, to: 16, status: "resolved" },
+      { id: "a", from: 2, to: 5, status: "open", kind: "comment" },
+      { id: "b", from: 12, to: 16, status: "resolved", kind: "comment" },
     ]);
     // Insert between the two anchors: only the later one shifts.
     view.dispatch({ changes: { from: 8, insert: "XXX" } });
     const ranges = getCurrentRanges(view);
-    expect(ranges).toContainEqual({ id: "a", from: 2, to: 5, status: "open" });
+    expect(ranges).toContainEqual({
+      id: "a",
+      from: 2,
+      to: 5,
+      status: "open",
+      kind: "comment",
+    });
     expect(ranges).toContainEqual({
       id: "b",
       from: 15,
       to: 19,
       status: "resolved",
+      kind: "comment",
     });
     view.destroy();
   });
 
   it("drops a thread whose entire anchor is deleted", () => {
     const { view } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     // Delete a region that fully covers [10,15].
     view.dispatch({ changes: { from: 8, to: 17, insert: "" } });
     expect(getCurrentRanges(view)).toEqual([]);
+    view.destroy();
+  });
+
+  it("carries thread kind through the field and renders todo classes", () => {
+    const { view } = makeView(DOC);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "todo" },
+    ]);
+    expect(getCurrentRanges(view)).toEqual([
+      { id: "t1", from: 10, to: 15, status: "open", kind: "todo" },
+    ]);
+    expect(view.dom.querySelector(".cm-review-anchor--todo")).not.toBeNull();
+    expect(view.dom.querySelector(".cm-review-gutter-marker--todo")).not.toBeNull();
     view.destroy();
   });
 });
@@ -105,7 +133,9 @@ describe("cm6 persistenceBridge debounce + flush", () => {
   it("debounces offset persistence and fires after the quiet window", () => {
     vi.useFakeTimers();
     const { view, offsetCalls } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     view.dispatch({ changes: { from: 0, insert: "12345" } });
 
     expect(offsetCalls).toHaveLength(0);
@@ -120,7 +150,9 @@ describe("cm6 persistenceBridge debounce + flush", () => {
   it("resets the debounce on each edit so only the final remap persists", () => {
     vi.useFakeTimers();
     const { view, offsetCalls } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
 
     view.dispatch({ changes: { from: 0, insert: "12" } });
     vi.advanceTimersByTime(1_000);
@@ -140,7 +172,9 @@ describe("cm6 persistenceBridge debounce + flush", () => {
   it("destroy() flushes a pending remap instead of dropping it", () => {
     vi.useFakeTimers();
     const { view, offsetCalls } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     view.dispatch({ changes: { from: 0, insert: "12345" } });
 
     // Tab switch remounts the editor before the 2s debounce elapses.
@@ -159,7 +193,9 @@ describe("cm6 persistenceBridge debounce + flush", () => {
   it("destroy() with no pending edit does not persist", () => {
     vi.useFakeTimers();
     const { view, offsetCalls } = makeView(DOC);
-    dispatchSetThreads(view, [{ id: "t1", from: 10, to: 15, status: "open" }]);
+    dispatchSetThreads(view, [
+      { id: "t1", from: 10, to: 15, status: "open", kind: "comment" },
+    ]);
     // setThreads is an effect, not a doc change — no debounce armed.
     view.destroy();
     expect(offsetCalls).toHaveLength(0);

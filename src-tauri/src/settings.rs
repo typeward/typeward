@@ -39,8 +39,6 @@ pub struct EditorSettings {
     pub auto_compile: bool,
     #[serde(rename = "vimMode")]
     pub vim_mode: bool,
-    #[serde(rename = "spellCheck")]
-    pub spell_check: bool,
     #[serde(rename = "lineWrap")]
     pub line_wrap: bool,
     #[serde(rename = "fontSize")]
@@ -49,6 +47,41 @@ pub struct EditorSettings {
     // serde default keeps older settings.json files loading unchanged.
     #[serde(rename = "stopOnFirstError", default = "default_true")]
     pub stop_on_first_error: bool,
+    // Additive editor-behavior fields; each defaults so older settings.json
+    // files load unchanged. (The removed `spellCheck` key is simply ignored.)
+    #[serde(rename = "lineNumbers", default = "default_true")]
+    pub line_numbers: bool,
+    #[serde(rename = "highlightActiveLine", default = "default_true")]
+    pub highlight_active_line: bool,
+    #[serde(default = "default_true")]
+    pub autocomplete: bool,
+    #[serde(rename = "bracketMatching", default = "default_true")]
+    pub bracket_matching: bool,
+    #[serde(rename = "autoCloseBrackets", default = "default_true")]
+    pub auto_close_brackets: bool,
+    #[serde(rename = "tabSize", default = "default_tab_size")]
+    pub tab_size: u8,
+    #[serde(rename = "lineHeight", default = "default_line_height")]
+    pub line_height: String,
+    #[serde(rename = "autosaveDelayMs", default = "default_autosave_delay")]
+    pub autosave_delay_ms: u32,
+    #[serde(rename = "pdfDefaultZoom", default = "default_pdf_zoom")]
+    pub pdf_default_zoom: u16,
+    #[serde(rename = "pdfInvertDark", default)]
+    pub pdf_invert_dark: bool,
+}
+
+fn default_tab_size() -> u8 {
+    2
+}
+fn default_line_height() -> String {
+    "normal".into()
+}
+fn default_autosave_delay() -> u32 {
+    500
+}
+fn default_pdf_zoom() -> u16 {
+    110
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +90,10 @@ pub struct UiSettings {
     pub animations: bool,
     #[serde(rename = "ambientLights", default = "default_true")]
     pub ambient_lights: bool,
+    #[serde(rename = "accentGradient", default = "default_true")]
+    pub accent_gradient: bool,
+    #[serde(rename = "glowEffects", default = "default_true")]
+    pub glow_effects: bool,
     #[serde(rename = "customThemesEnabled")]
     pub custom_themes_enabled: bool,
     #[serde(rename = "activeCustomTheme")]
@@ -276,6 +313,21 @@ pub struct WorkspaceSettings {
     /// the count, so this is stored loosely.
     #[serde(rename = "statsCards", default = "default_stats_cards")]
     pub stats_cards: Vec<String>,
+    /// User-defined library spaces (the catalog; per-project membership lives in
+    /// each project.json `space` field). Order = display order. Additive.
+    #[serde(default)]
+    pub spaces: Vec<SpaceDef>,
+}
+
+/// A workspace "space" — a named, tinted grouping for the library sidebar. The
+/// `tint` is a named palette id (not a raw color) so themes re-tint it; the
+/// frontend maps it to CSS vars and coerces unknown names.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SpaceDef {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub tint: String,
 }
 
 fn default_stats_cards() -> Vec<String> {
@@ -290,7 +342,9 @@ fn default_stats_cards() -> Vec<String> {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: "aurora".into(),
+            // Daylight is the documented brand default; a fresh install with no
+            // settings.json must hydrate to it, not the Aurora :root baseline.
+            theme: "daylight".into(),
             accent: "violet-cyan".into(),
             editor: EditorSettings::default(),
             projects_root: default_projects_root().to_string_lossy().into(),
@@ -308,10 +362,19 @@ impl Default for EditorSettings {
         Self {
             auto_compile: false,
             vim_mode: false,
-            spell_check: true,
             line_wrap: true,
             font_size: 13,
             stop_on_first_error: true,
+            line_numbers: true,
+            highlight_active_line: true,
+            autocomplete: true,
+            bracket_matching: true,
+            auto_close_brackets: true,
+            tab_size: 2,
+            line_height: "normal".into(),
+            autosave_delay_ms: 500,
+            pdf_default_zoom: 110,
+            pdf_invert_dark: false,
         }
     }
 }
@@ -322,6 +385,8 @@ impl Default for UiSettings {
             density: "cozy".into(),
             animations: true,
             ambient_lights: true,
+            accent_gradient: true,
+            glow_effects: true,
             custom_themes_enabled: false,
             active_custom_theme: None,
         }
@@ -341,6 +406,7 @@ impl Default for WorkspaceSettings {
             dashboard_order: Vec::new(),
             project_card_words: false,
             stats_cards: default_stats_cards(),
+            spaces: Vec::new(),
         }
     }
 }

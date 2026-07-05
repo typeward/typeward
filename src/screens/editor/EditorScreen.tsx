@@ -34,7 +34,7 @@ import {
   setProject,
 } from "~/stores/editor-store";
 import { sha256Hex } from "~/lib/hash";
-import { setCursorLine } from "~/stores/editor-view-store";
+import { setCursorLine, setSelectionRange } from "~/stores/editor-view-store";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
   flushPendingReviewSave,
@@ -95,6 +95,24 @@ const EditorScreen: Component = () => {
       try {
         const p = await ipc.openProject(path);
         if (!token.isCurrent()) return;
+        // A trashed project must not open (covers palette / switcher / deep
+        // links). Bounce back to the library without stamping last-opened.
+        if (p.trashedAt != null) {
+          notifyError(
+            "Project is in the trash",
+            "Restore it from the library to open it.",
+          );
+          setOpening(false);
+          void stopAllSessions();
+          void stopWatching();
+          teardownAdapter();
+          void flushPendingReviewSave().then(resetThreads);
+          setProject(null);
+          resetTabs();
+          resetCompileState();
+          navigate("/projects");
+          return;
+        }
         // Tear down the previous project's LSP sessions fire-and-forget: the
         // session registry empties synchronously, per-start server ids can't
         // collide, and awaiting the shutdown handshake would let a wedged
@@ -107,6 +125,9 @@ const EditorScreen: Component = () => {
         if (!token.isCurrent()) return;
         teardownAdapter();
         setProject(p);
+        // Stamp last-opened for the library's "Last opened" sort. Single
+        // chokepoint — every open routes through here. Fire-and-forget.
+        void ipc.touchProjectOpened(p.rootPath).catch(() => {});
         setOpening(false);
         resetTabs();
         resetCompileState();
@@ -270,6 +291,7 @@ const EditorScreen: Component = () => {
   let lastHandledGeneration = 0;
   let pendingIntentRelPath: string | null = null;
   let pendingIntentLine = 0;
+  let pendingIntentRange: { from: number; to: number } | undefined;
 
   createEffect(() => {
     const intent = gotoSourceIntent();
@@ -278,14 +300,17 @@ const EditorScreen: Component = () => {
     // Capture intent details for the follow-up active-file effect.
     pendingIntentRelPath = intent.relPath;
     pendingIntentLine = intent.line;
+    pendingIntentRange = intent.range;
     lastHandledGeneration = intent.generation;
 
     const f = activeFile();
     if (f && f.relPath === intent.relPath) {
       // Already open and active — move the cursor on the next microtask
       // so any pending edits settle first.
+      const range = intent.range;
       queueMicrotask(() => {
-        setCursorLine(intent.line);
+        if (range) setSelectionRange(range.from, range.to);
+        else setCursorLine(intent.line);
         pendingIntentRelPath = null;
       });
     } else {
@@ -301,8 +326,10 @@ const EditorScreen: Component = () => {
     if (!f || !pendingIntentRelPath) return;
     if (f.relPath !== pendingIntentRelPath) return;
     const line = pendingIntentLine;
+    const range = pendingIntentRange;
     queueMicrotask(() => {
-      setCursorLine(line);
+      if (range) setSelectionRange(range.from, range.to);
+      else setCursorLine(line);
     });
     pendingIntentRelPath = null;
   });

@@ -323,6 +323,9 @@ const DEFAULT_CLIENT_CAPABILITIES = {
       contextSupport: true,
     },
     hover: { contentFormat: ["plaintext"] },
+    documentSymbol: {
+      hierarchicalDocumentSymbolSupport: true,
+    },
   },
   workspace: {
     workspaceFolders: true,

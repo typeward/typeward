@@ -19,6 +19,7 @@ tauri-plugin-shell = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "8"
@@ -45,8 +46,18 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 git2 = { version = "0.20", default-features = false, features = ["https"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
-# Grammar — Phase 5. Rust-native, runs in-process, zero network.
-harper-core = "0.59"
+# PDF annotation export (E7). `lopdf` edits existing PDFs (appends `/Annot`
+# objects to a page's `/Annots`); `pdf-writer` is create-only and can't reopen a
+# compiled PDF. Trimmed to just the parser — the date/rayon default features
+# aren't used for load → append-annotation → save.
+lopdf = { version = "0.43", default-features = false }
+
+# Grammar — Phase 5 (upgraded to Harper 2.x for E6). Rust-native, runs
+# in-process, zero network. `harper-tex` / `harper-typst` are Harper's
+# first-party format parsers so LaTeX/Typst markup is skipped, not linted.
+harper-core = "2.5"
+harper-tex = "2.5"
+harper-typst = "2.5"
 
 # WebDAV cloud provider. quick-xml is non-validating (immune to XXE /
 # entity-expansion by construction) so it can parse attacker-controlled
@@ -59,6 +70,21 @@ percent-encoding = "2"
 # `cfg(desktop)` isn't a cargo-known cfg, so gate by the concrete mobile targets.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-single-instance = "2"
+# Move-to-trash for project delete (Recycle Bin / Trash / freedesktop). Desktop
+# only — mobile has no trash concept, so project.rs falls back to a hard delete.
+trash = "5"
+
+# harper-core 2.5.0 (the latest published release, and current `master`) fails
+# to compile on rustc >= ~1.93: three lint rules call `then_kind_any` /
+# `then_kind_any_but_not` with a bare `&[fn_a, fn_b, fn_c]` array of distinct
+# fn-item types, which newer rustc no longer unifies into the generic
+# `&'static [F]` parameter (E0308). Upstream already fixed the same class of
+# call elsewhere (e.g. `soon_to_be.rs` casts `as fn(&TokenKind) -> bool`) but
+# missed these three. We vendor a copy carrying only that fix (tests/benches
+# stripped) until a fixed harper-core is published, then this block + the
+# vendor/ dir can be deleted and the crates.io release used directly.
+[patch.crates-io]
+harper-core = { path = "vendor/harper-core" }
 
 [profile.release]
 panic = "abort"

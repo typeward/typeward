@@ -75,18 +75,52 @@ async function readWasmSynctex(
   return null;
 }
 
+/** Lookup-only forward: (source line) → (page, y in PDF pts), or null. Split
+ *  from the scroll action so the annotation mapper can reuse it. */
+export async function resolveForwardWithWasmSynctex(
+  p: Project,
+  outputPath: string,
+  relPath: string,
+  line: number,
+): Promise<{ page: number; y: number } | null> {
+  try {
+    const lookup = await readWasmSynctex(p.rootPath, outputPath);
+    const hit = lookup?.forward(relPath, line)[0];
+    return hit ? { page: hit.page, y: hit.y } : null;
+  } catch (e) {
+    recordError("synctex-forward", "wasm synctex forward lookup threw", e);
+    return null;
+  }
+}
+
 export async function syncForwardWithWasmSynctex(
   p: Project,
   outputPath: string,
   relPath: string,
   line: number,
 ): Promise<void> {
+  const hit = await resolveForwardWithWasmSynctex(p, outputPath, relPath, line);
+  if (hit) requestPdfScroll(hit.page, hit.y);
+}
+
+/** Lookup-only inverse: (page, x, y) → (relPath, line), or null. Split from the
+ *  goto action so the PDF selection chip can anchor without navigating. */
+export async function resolveInverseWithWasmSynctex(
+  p: Project,
+  outputPath: string,
+  pageNum: number,
+  x: number,
+  y: number,
+): Promise<{ relPath: string; line: number } | null> {
   try {
     const lookup = await readWasmSynctex(p.rootPath, outputPath);
-    const hit = lookup?.forward(relPath, line)[0];
-    if (hit) requestPdfScroll(hit.page, hit.y);
+    const hit = lookup?.reverse(pageNum, x, y)[0];
+    if (!hit) return null;
+    const relPath = synctexSourceToProjectRel(p.rootPath, hit.file);
+    return relPath ? { relPath, line: hit.line } : null;
   } catch (e) {
-    recordError("synctex-forward", "wasm synctex forward lookup threw", e);
+    recordError("synctex-inverse", "wasm synctex inverse lookup threw", e);
+    return null;
   }
 }
 
@@ -97,13 +131,6 @@ export async function syncInverseWithWasmSynctex(
   x: number,
   y: number,
 ): Promise<void> {
-  try {
-    const lookup = await readWasmSynctex(p.rootPath, outputPath);
-    const hit = lookup?.reverse(pageNum, x, y)[0];
-    if (!hit) return;
-    const relPath = synctexSourceToProjectRel(p.rootPath, hit.file);
-    if (relPath) requestGotoSource(relPath, hit.line);
-  } catch (e) {
-    recordError("synctex-inverse", "wasm synctex inverse lookup threw", e);
-  }
+  const hit = await resolveInverseWithWasmSynctex(p, outputPath, pageNum, x, y);
+  if (hit) requestGotoSource(hit.relPath, hit.line);
 }

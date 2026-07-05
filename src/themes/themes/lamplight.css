@@ -9,8 +9,8 @@
 
   --color-fg-1: #ede6d8;
   --color-fg-2: rgb(237 230 216 / 0.62);
-  --color-fg-3: rgb(237 230 216 / 0.51); /* was 0.42 — 4.6:1 on bg (AA body) */
-  --color-fg-4: rgb(237 230 216 / 0.38); /* was 0.28 — 3.1:1 on bg (AA UI floor) */
+  --color-fg-3: rgb(237 230 216 / 0.56); /* was 0.51 — ≈4.6:1 on bare bg, still fine on glass */
+  --color-fg-4: rgb(237 230 216 / 0.40); /* was 0.38 — keeps the 3:1 floor on bare bg */
 
   /* Glass — t1 dark card tokens (4.5% white fill, 9% white stroke). */
   --color-glass-fill: rgb(255 255 255 / 0.045);
@@ -32,6 +32,10 @@
   --color-card-bg: rgb(23 21 15 / 0.60);
   --color-card-bg-soft: rgb(23 21 15 / 0.40);
 
+  --color-control-track-off: rgb(237 230 216 / 0.16);
+  --color-control-thumb: #ede6d8;
+  --color-control-thumb-stroke: rgb(0 0 0 / 0.30);
+
   /* Format accents from the design's dark code palette. */
   --format-latex: #8fb0e8;
   --format-typst: #94c2a0;
@@ -45,6 +49,7 @@
   --color-ok: #5fa855;
   --color-warn: #e8a34d;
   --color-err: #d9907e;
+  --color-info: #7fa4d6; /* muted steel-blue on the warm dark bg */
   --color-danger-fill: #9d685b; /* deeper than the salmon err so white labels clear 4.6:1 */
 
   /* Deep black drop + a whisper of amber halo (t1 --win-shadow). */

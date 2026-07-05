@@ -148,12 +148,15 @@ const AppShell: Component<{ children?: any }> = (props) => {
   // Suppress the webview's browser context menu (Reload / Inspect) on app
   // chrome; editable surfaces keep it for native cut/copy/paste, and so do
   // copyable read-only surfaces (logs, previews, selected text) — killing
-  // the menu there would kill right-click Copy.
+  // the menu there would kill right-click Copy. `.cm-content` is intentionally
+  // absent: the editor renders its own ContextMenu (text-shell), which
+  // stopPropagation()s before this handler runs, so a failed open never falls
+  // back to the browser menu.
   const onContextMenu = (e: MouseEvent) => {
     const t = e.target instanceof Element ? e.target : null;
     if (
       t?.closest(
-        'input, textarea, [contenteditable="true"], .cm-content, .select-text, .select-all, .md-preview',
+        'input, textarea, [contenteditable="true"], .select-text, .select-all, .md-preview',
       )
     )
       return;

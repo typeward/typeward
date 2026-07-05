@@ -1,0 +1,75 @@
+/* Dark — a plain, neutral dark theme (the "Basic" category). Neutral #1e1e1e
+ * surfaces, a light-blue accent, VS Code-ish syntax, and no ambient glow.
+ * Overrides the Aurora :root baseline; inherits Aurora's dark drop shadows. */
+
+[data-theme="dark"] {
+  --color-bg-base: #1e1e1e;
+
+  --color-fg-1: #d4d4d4;
+  --color-fg-2: #9da3a8;
+  --color-fg-3: #8b9196;
+  --color-fg-4: #6e7479;
+
+  /* Glass — faint white films on the neutral bg. */
+  --color-glass-fill: rgb(255 255 255 / 0.03);
+  --color-glass-stroke: rgb(255 255 255 / 0.08);
+  --color-glass-stroke-strong: rgb(255 255 255 / 0.13);
+  --color-glass-inset-fill: rgb(255 255 255 / 0.03);
+  --color-glass-inset-stroke: rgb(255 255 255 / 0.07);
+  --color-glass-soft-fill: rgb(255 255 255 / 0.02);
+
+  --color-control-fill: rgb(255 255 255 / 0.05);
+  --color-control-fill-hover: rgb(255 255 255 / 0.1);
+  --color-control-stroke: rgb(255 255 255 / 0.12);
+  --color-overlay-dim: rgb(0 0 0 / 0.2);
+  --color-overlay-scrim: rgb(0 0 0 / 0.55);
+  --color-popover-bg: rgb(30 30 30 / 0.98);
+  --color-topbar-bg: rgb(30 30 30 / 0.85);
+  --color-selection-bg: rgb(90 162 247 / 0.14);
+  --color-text-selection: rgb(90 162 247 / 0.3);
+  --color-card-bg: rgb(37 37 38 / 0.9);
+  --color-card-bg-soft: rgb(37 37 38 / 0.6);
+
+  --color-control-track-off: rgb(255 255 255 / 0.16);
+  --color-control-thumb: #ffffff;
+  --color-control-thumb-stroke: rgb(0 0 0 / 0.30);
+
+  --format-latex: #b8a4f0;
+  --format-typst: #4ec9b0;
+
+  /* Light-blue accent with dark ink on top (Aurora convention). */
+  --color-accent-1: #5aa2f7;
+  --color-accent-2: #3d8bf2;
+  --color-accent-fg: #0c0e10;
+  --accent-text-1: #7ab4f9;
+  --accent-text-2: #5aa2f7;
+
+  /* Editor syntax — VS Code dark palette. */
+  --syntax-cmd: #569cd6;
+  --syntax-env: #4ec9b0;
+  --syntax-math: #ce9178;
+  --syntax-comment: #6a9955;
+  --syntax-bracket: var(--color-fg-3);
+  --syntax-attr: #9cdcfe;
+
+  --color-ok: #3fb950;
+  --color-warn: #d29922;
+  --color-err: #f85149;
+  --color-info: #58a6ff;
+  --color-danger-fill: var(--color-err);
+
+  /* Flat basic theme — override Aurora's inherited dark drops with the no-op
+   * shadow (never `none`: these tokens join comma-separated box-shadow lists).
+   * Switch/Slider thumbs read via their hairline stroke instead of
+   * --shadow-raised. --shadow-glass-inset-inner is left inherited. */
+  --shadow-glass-inset: 0 0 0 rgb(0 0 0 / 0);
+  --shadow-glass-drop: 0 0 0 rgb(0 0 0 / 0);
+  --shadow-raised: 0 0 0 rgb(0 0 0 / 0);
+  --shadow-accent-btn: 0 0 0 rgb(0 0 0 / 0);
+
+  /* Flat — no ambient glow even when ambient lights are on. */
+  --blob-1-op: 0;
+  --blob-2-op: 0;
+  --blob-3-op: 0;
+  --blob-4-op: 0;
+}

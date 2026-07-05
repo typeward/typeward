@@ -1,28 +1,38 @@
 /**
  * Bottom drawer ported from `design_files/Editor.html` (LogsDrawer, line
- * 7921+). Lives below the three-pane editor area and houses build output,
- * parsed issues, and (later) bibliography / chat. Collapsible to a 36px
- * header strip when minimized.
+ * 7921+). Lives below the three-pane editor area and houses build output and
+ * parsed diagnostics. Collapsible to a 36px header strip when minimized.
  *
- * Phase 1 wires the two functional tabs (Logs / Issues); Bibliography and
- * Chat are empty-state placeholders until the relevant features land.
+ * Five tabs — All logs / Errors / Warnings / Info / Grammar — each icon + name
+ * + counter only (no subheadings). The same tab set + bodies back both the
+ * drawer and the in-preview `LogsView` variant.
  */
 
 import {
-  AlertCircle,
   AlertTriangle,
   CheckCircle2,
   ChevronsDown,
   ChevronsUp,
+  Info,
+  SpellCheck,
   Terminal,
   XCircle,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on } from "solid-js";
 import { compileState, lastResult, requestGotoSource } from "~/stores/editor-store";
+import { grammarTotalCount } from "~/stores/grammar-store";
+import { logsTabIntent } from "~/stores/ui-store";
 import { formatShortcutForDisplay } from "~/lib/shortcuts";
+import { GrammarProblemsPanel } from "./GrammarProblemsPanel";
 
-type LogsTabId = "logs" | "issues";
+const TAB_IDS: readonly LogsTabId[] = ["all", "errors", "warnings", "info", "grammar"];
+function asLogsTabId(raw: string): LogsTabId | null {
+  return (TAB_IDS as readonly string[]).includes(raw) ? (raw as LogsTabId) : null;
+}
+
+type LogsTabId = "all" | "errors" | "warnings" | "info" | "grammar";
+type DiagSeverity = "error" | "warning" | "info";
 
 interface LogsTabDef {
   id: LogsTabId;
@@ -31,9 +41,27 @@ interface LogsTabDef {
 }
 
 const TABS: LogsTabDef[] = [
-  { id: "logs", label: "Logs", icon: Terminal },
-  { id: "issues", label: "Issues", icon: AlertCircle },
+  { id: "all", label: "All logs", icon: Terminal },
+  { id: "errors", label: "Errors", icon: XCircle },
+  { id: "warnings", label: "Warnings", icon: AlertTriangle },
+  { id: "info", label: "Info", icon: Info },
+  { id: "grammar", label: "Grammar", icon: SpellCheck },
 ];
+
+function diagCount(severity: DiagSeverity): number {
+  return lastResult()?.diagnostics.filter((d) => d.severity === severity).length ?? 0;
+}
+
+/** Per-tab counter values. `all` has no badge. */
+function tabCounts(): Record<LogsTabId, number> {
+  return {
+    all: 0,
+    errors: diagCount("error"),
+    warnings: diagCount("warning"),
+    info: diagCount("info"),
+    grammar: grammarTotalCount(),
+  };
+}
 
 /**
  * `embedded` — when true, the drawer fills its parent's height and the
@@ -41,20 +69,12 @@ const TABS: LogsTabDef[] = [
  * PDF preview pane (`consolePosition === "pdf-tab"`).
  */
 export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
-  const [tab, setTab] = createSignal<LogsTabId>("issues");
+  const [tab, setTab] = createSignal<LogsTabId>("errors");
   const [minimized, setMinimized] = createSignal(!props.embedded);
 
-  const result = lastResult;
-  const errs = createMemo(
-    () => result()?.diagnostics.filter((d) => d.severity === "error") ?? [],
-  );
-  const warns = createMemo(
-    () => result()?.diagnostics.filter((d) => d.severity === "warning") ?? [],
-  );
-  const counts = createMemo<Record<LogsTabId, number>>(() => ({
-    logs: 0,
-    issues: errs().length + warns().length,
-  }));
+  const errs = createMemo(() => diagCount("error"));
+  const warns = createMemo(() => diagCount("warning"));
+  const counts = createMemo(tabCounts);
 
   const handleSelectTab = (id: LogsTabId) => {
     setTab(id);
@@ -66,9 +86,24 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
     on(compileState, (state) => {
       if (state === "error") {
         setMinimized(false);
-        setTab("issues");
+        setTab("errors");
       }
     }),
+  );
+
+  // Status-bar "N problems" (and any future caller) can raise a specific tab.
+  createEffect(
+    on(
+      logsTabIntent,
+      (intent) => {
+        if (!intent) return;
+        const id = asLogsTabId(intent.tab);
+        if (!id) return;
+        setTab(id);
+        setMinimized(false);
+      },
+      { defer: true },
+    ),
   );
 
   return (
@@ -82,56 +117,54 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
     >
       {/* Header */}
       <div class="flex h-9 flex-shrink-0 items-center gap-0.5 border-b border-glass-stroke px-2">
-        {/* Tablist wraps only the tab group — the status pills on the right
-            aren't tabs. */}
-        <div role="tablist" aria-label="Log panels" class="flex items-center gap-0.5">
-        <For each={TABS}>
-          {(t) => {
-            const active = () => tab() === t.id && !minimized();
-            const count = () => counts()[t.id];
-            return (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={active()}
-                onClick={() => handleSelectTab(t.id)}
-                class={`relative flex h-8 items-center gap-1.5 px-2.5 text-sm font-medium ${
-                  active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
-                }`}
-              >
-                <t.icon size={12} class="" />
-                {t.label}
-                <Show when={count() > 0}>
-                  <span
-                    class="mono rounded-full px-1.5 py-0.5 text-[10px]"
-                    style={{
-                      background: active()
-                        ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
-                        : "var(--color-control-fill)",
-                      color: active() ? "var(--color-accent-1)" : "var(--color-fg-3)",
-                    }}
-                  >
-                    {count()}
-                  </span>
-                </Show>
-                <Show when={active()}>
-                  <span
-                    class="absolute -bottom-px left-2.5 right-2.5 h-[2px] rounded"
-                    style={{
-                      background:
-                        "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))",
-                    }}
-                  />
-                </Show>
-              </button>
-            );
-          }}
-        </For>
+        <div role="tablist" aria-label="Log panels" class="flex items-center gap-0.5 overflow-x-auto scroll">
+          <For each={TABS}>
+            {(t) => {
+              const active = () => tab() === t.id && !minimized();
+              const count = () => counts()[t.id];
+              return (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active()}
+                  onClick={() => handleSelectTab(t.id)}
+                  class={`relative flex h-8 flex-shrink-0 items-center gap-1.5 px-2.5 text-sm font-medium ${
+                    active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
+                  }`}
+                >
+                  <t.icon size={12} class="" />
+                  {t.label}
+                  <Show when={count() > 0}>
+                    <span
+                      class="mono rounded-full px-1.5 py-0.5 text-[10px]"
+                      style={{
+                        background: active()
+                          ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
+                          : "var(--color-control-fill)",
+                        color: active() ? "var(--color-accent-1)" : "var(--color-fg-3)",
+                      }}
+                    >
+                      {count()}
+                    </span>
+                  </Show>
+                  <Show when={active()}>
+                    <span
+                      class="absolute -bottom-px left-2.5 right-2.5 h-[2px] rounded"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, var(--color-accent-1), var(--color-accent-2))",
+                      }}
+                    />
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
         </div>
 
         <div class="ml-auto flex items-center gap-1.5">
           {/* Inline status pills — always visible, even when minimized */}
-          <Show when={result()}>
+          <Show when={lastResult()}>
             <StatusPill
               dot={
                 compileState() === "ok"
@@ -143,20 +176,14 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
             >
               {lastResult()!.durationMs}ms
             </StatusPill>
-            <Show when={errs().length > 0}>
-              <StatusPill
-                icon={<XCircle size={10} />}
-                tint="var(--color-err)"
-              >
-                {errs().length} error{errs().length === 1 ? "" : "s"}
+            <Show when={errs() > 0}>
+              <StatusPill icon={<XCircle size={10} />} tint="var(--color-err)">
+                {errs()} error{errs() === 1 ? "" : "s"}
               </StatusPill>
             </Show>
-            <Show when={warns().length > 0}>
-              <StatusPill
-                icon={<AlertTriangle size={10} />}
-                tint="var(--color-warn)"
-              >
-                {warns().length} warning{warns().length === 1 ? "" : "s"}
+            <Show when={warns() > 0}>
+              <StatusPill icon={<AlertTriangle size={10} />} tint="var(--color-warn)">
+                {warns()} warning{warns() === 1 ? "" : "s"}
               </StatusPill>
             </Show>
           </Show>
@@ -178,17 +205,10 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
         </div>
       </div>
 
-      {/* Body — always visible when embedded, gated on minimize state otherwise. */}
+      {/* Body */}
       <Show when={props.embedded || !minimized()}>
         <div class="min-h-0 flex-1 overflow-auto scroll">
-          <Switch>
-            <Match when={tab() === "logs"}>
-              <LogsTabBody />
-            </Match>
-            <Match when={tab() === "issues"}>
-              <IssuesTabBody />
-            </Match>
-          </Switch>
+          <TabBody tab={tab()} />
         </div>
       </Show>
     </div>
@@ -206,18 +226,36 @@ const StatusPill: Component<{
     style={props.tint ? { color: props.tint } : { color: "var(--color-fg-2)" }}
   >
     <Show when={props.dot}>
-      <span
-        class="h-1.5 w-1.5 rounded-full"
-        style={{ background: props.dot }}
-      />
+      <span class="h-1.5 w-1.5 rounded-full" style={{ background: props.dot }} />
     </Show>
     {props.icon}
     {props.children}
   </span>
 );
 
+// Shared body switch for both the drawer and the in-preview LogsView.
+const TabBody: Component<{ tab: LogsTabId }> = (props) => (
+  <Switch>
+    <Match when={props.tab === "all"}>
+      <LogsTabBody />
+    </Match>
+    <Match when={props.tab === "errors"}>
+      <DiagnosticsTab severity="error" primary />
+    </Match>
+    <Match when={props.tab === "warnings"}>
+      <DiagnosticsTab severity="warning" />
+    </Match>
+    <Match when={props.tab === "info"}>
+      <DiagnosticsTab severity="info" />
+    </Match>
+    <Match when={props.tab === "grammar"}>
+      <GrammarProblemsPanel />
+    </Match>
+  </Switch>
+);
+
 // =================================================================
-// Logs tab — raw build output
+// All logs tab — raw build output
 // =================================================================
 
 const LogsTabBody: Component = () => {
@@ -240,52 +278,57 @@ const LogsTabBody: Component = () => {
 };
 
 // =================================================================
-// Issues tab — parsed diagnostics + success/failure summary card
+// Errors / Warnings / Info — one flat IssueCard list per severity.
+// The `primary` (Errors) tab also carries the success + raw-log-tail cards.
 // =================================================================
 
-const IssuesTabBody: Component = () => {
+const SEVERITY_ICON: Record<DiagSeverity, Component<{ size?: number }>> = {
+  error: XCircle,
+  warning: AlertTriangle,
+  info: Info,
+};
+
+const DiagnosticsTab: Component<{ severity: DiagSeverity; primary?: boolean }> = (props) => {
   const result = lastResult;
+  const items = createMemo(
+    () => result()?.diagnostics.filter((d) => d.severity === props.severity) ?? [],
+  );
   const errs = createMemo(
     () => result()?.diagnostics.filter((d) => d.severity === "error") ?? [],
   );
   const warns = createMemo(
     () => result()?.diagnostics.filter((d) => d.severity === "warning") ?? [],
   );
+  const Icon = SEVERITY_ICON[props.severity];
 
   return (
     <Show
       when={result()}
       fallback={
         <EmptyTab
-          title="No issues"
-          body="Compile a document to surface errors and warnings here."
+          title="Nothing yet"
+          body="Compile a document to surface diagnostics here."
         />
       }
     >
       <div class="space-y-2 p-3">
-        <For each={errs()}>
+        <For each={items()}>
           {(d) => (
             <IssueCard
-              severity="error"
-              icon={<XCircle size={12} />}
+              severity={props.severity}
+              icon={<Icon size={12} />}
               title={d.message}
               meta={`${d.file}:${d.line}`}
               onJump={d.file ? () => requestGotoSource(d.file, d.line) : undefined}
             />
           )}
         </For>
-        <For each={warns()}>
-          {(d) => (
-            <IssueCard
-              severity="warning"
-              icon={<AlertTriangle size={12} />}
-              title={d.message}
-              meta={`${d.file}:${d.line}`}
-              onJump={d.file ? () => requestGotoSource(d.file, d.line) : undefined}
-            />
-          )}
-        </For>
-        <Show when={result()!.ok && errs().length === 0 && warns().length === 0}>
+        {/* Non-primary tabs: a quiet empty state when this severity is clear. */}
+        <Show when={!props.primary && items().length === 0}>
+          <EmptyTab title="Nothing here" body="No diagnostics of this kind." />
+        </Show>
+        {/* Errors tab only: success + failure summary cards. */}
+        <Show when={props.primary && result()!.ok && errs().length === 0 && warns().length === 0}>
           <IssueCard
             severity="success"
             icon={<CheckCircle2 size={12} />}
@@ -293,9 +336,7 @@ const IssuesTabBody: Component = () => {
             meta={`${result()!.durationMs}ms`}
           />
         </Show>
-        <Show when={!result()!.ok && errs().length === 0 && warns().length === 0}>
-          {/* Build failed but log parser didn't pick anything up — surface
-            * the raw log so the user can see what happened. */}
+        <Show when={props.primary && !result()!.ok && errs().length === 0}>
           <div
             class="rounded-lg p-3"
             style={{
@@ -313,7 +354,7 @@ const IssuesTabBody: Component = () => {
               </div>
               <div class="flex-1">
                 <div class="text-sm font-semibold" style={{ color: "var(--color-err)" }}>
-                  Compile failed — see the Logs tab for full output
+                  Compile failed — see the All logs tab for full output
                 </div>
                 <pre class="mono select-text mt-2 max-h-[120px] overflow-auto whitespace-pre-wrap text-xs text-fg-3 scroll">
                   {result()!.log.slice(-500)}
@@ -327,15 +368,16 @@ const IssuesTabBody: Component = () => {
   );
 };
 
-const SEVERITY_FG: Record<"error" | "warning" | "success", string> = {
+const SEVERITY_FG: Record<"error" | "warning" | "info" | "success", string> = {
   error: "var(--color-err)",
   warning: "var(--color-warn)",
+  info: "var(--color-fg-3)",
   success: "var(--color-ok)",
 };
 
 /** `onJump` makes the card clickable — jumps the editor to file:line. */
 const IssueCard: Component<{
-  severity: "error" | "warning" | "success";
+  severity: "error" | "warning" | "info" | "success";
   icon: JSX.Element;
   title: string;
   meta: string;
@@ -381,69 +423,48 @@ const IssueCard: Component<{
 const EmptyTab: Component<{ title: string; body: string }> = (props) => (
   <div class="flex h-full flex-col items-center justify-center gap-2 px-6 py-8 text-center">
     <div class="text-base font-semibold text-fg-1">{props.title}</div>
-    <div class="max-w-[380px] text-xs leading-relaxed text-fg-3">
-      {props.body}
-    </div>
+    <div class="max-w-[380px] text-xs leading-relaxed text-fg-3">{props.body}</div>
   </div>
 );
 
 // =================================================================
 // LogsView — full-pane variant rendered inside the preview pane when
-// `consolePosition === "pdf-tab"` and `previewMode === "console"`.
-// Two selectable cards (Logs / Issues) switch a single content panel.
+// `consolePosition === "pdf-tab"` and `previewMode === "console"`. Same five
+// tabs as the drawer, rendered as a compact selector row (icon + name + count).
 // =================================================================
 
 export const LogsView: Component = () => {
-  const [tab, setTab] = createSignal<LogsTabId>("logs");
-  const result = lastResult;
-  const errs = createMemo(
-    () => result()?.diagnostics.filter((d) => d.severity === "error") ?? [],
-  );
-  const warns = createMemo(
-    () => result()?.diagnostics.filter((d) => d.severity === "warning") ?? [],
-  );
-  const issueCount = () => errs().length + warns().length;
+  const [tab, setTab] = createSignal<LogsTabId>("all");
+  const counts = createMemo(tabCounts);
 
-  const logsSubtitle = () => {
-    const log = result()?.log?.trim();
-    if (!log) return "No build output yet";
-    const lines = log.split("\n").length;
-    return `${lines} line${lines === 1 ? "" : "s"} of output`;
-  };
-  const issuesSubtitle = () => {
-    if (!result()) return "Compile to surface diagnostics";
-    if (issueCount() === 0) return "No errors or warnings";
-    const parts: string[] = [];
-    if (errs().length > 0)
-      parts.push(`${errs().length} error${errs().length === 1 ? "" : "s"}`);
-    if (warns().length > 0)
-      parts.push(
-        `${warns().length} warning${warns().length === 1 ? "" : "s"}`,
-      );
-    return parts.join(", ");
-  };
+  // The preview switch into console mode is owned by the caller (status bar);
+  // this only picks the requested tab once the view is mounted.
+  createEffect(
+    on(
+      logsTabIntent,
+      (intent) => {
+        if (!intent) return;
+        const id = asLogsTabId(intent.tab);
+        if (id) setTab(id);
+      },
+      { defer: true },
+    ),
+  );
 
   return (
-    <div
-      class="flex h-full flex-col gap-2 p-2"
-      style={{ background: "var(--color-overlay-dim)" }}
-    >
-      <div class="grid flex-shrink-0 grid-cols-2 gap-2">
-        <SelectorCard
-          active={tab() === "logs"}
-          onClick={() => setTab("logs")}
-          icon={<Terminal size={14} />}
-          label="Logs"
-          subtitle={logsSubtitle()}
-        />
-        <SelectorCard
-          active={tab() === "issues"}
-          onClick={() => setTab("issues")}
-          icon={<AlertCircle size={14} />}
-          label="Issues"
-          subtitle={issuesSubtitle()}
-          count={issueCount() || undefined}
-        />
+    <div class="flex h-full flex-col gap-2 p-2" style={{ background: "var(--color-overlay-dim)" }}>
+      <div class="grid flex-shrink-0 grid-cols-5 gap-1.5">
+        <For each={TABS}>
+          {(t) => (
+            <CompactSelector
+              active={tab() === t.id}
+              onClick={() => setTab(t.id)}
+              icon={<t.icon size={13} />}
+              label={t.label}
+              count={counts()[t.id] || undefined}
+            />
+          )}
+        </For>
       </div>
 
       <div
@@ -451,77 +472,43 @@ export const LogsView: Component = () => {
         style={{ border: "1px solid var(--color-glass-stroke)" }}
       >
         <div class="min-h-0 flex-1 overflow-auto scroll">
-          <Switch>
-            <Match when={tab() === "logs"}>
-              <LogsTabBody />
-            </Match>
-            <Match when={tab() === "issues"}>
-              <IssuesTabBody />
-            </Match>
-          </Switch>
+          <TabBody tab={tab()} />
         </div>
       </div>
     </div>
   );
 };
 
-const SelectorCard: Component<{
+const CompactSelector: Component<{
   active: boolean;
   onClick: () => void;
   icon: JSX.Element;
   label: string;
-  subtitle: string;
   count?: number;
 }> = (props) => (
   <button
     type="button"
     onClick={props.onClick}
     aria-pressed={props.active}
-    class="lift glass-soft flex items-center gap-2.5 rounded-xl px-3 py-2 text-left"
+    class="lift glass-soft flex min-w-0 flex-col items-center gap-1 rounded-lg px-1.5 py-2 text-center"
     style={
       props.active
         ? {
             background: "color-mix(in srgb, var(--color-accent-1) 10%, transparent)",
             border: "1px solid color-mix(in srgb, var(--color-accent-1) 45%, transparent)",
+            color: "var(--color-accent-1)",
           }
-        : {
-            border: "1px solid var(--color-glass-stroke)",
-          }
+        : { border: "1px solid var(--color-glass-stroke)", color: "var(--color-fg-2)" }
     }
   >
-    <span
-      class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md"
-      style={{
-        background: props.active
-          ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
-          : "var(--color-control-fill)",
-        color: props.active ? "var(--color-accent-1)" : "var(--color-fg-2)",
-      }}
-    >
+    <span class="flex items-center gap-1">
       {props.icon}
+      <Show when={props.count !== undefined && props.count > 0}>
+        <span class="mono rounded-full px-1 text-[10px]" style={{ background: "var(--color-control-fill)" }}>
+          {props.count}
+        </span>
+      </Show>
     </span>
-    <span class="min-w-0 flex-1">
-      <span
-        class={`block text-sm font-semibold ${
-          props.active ? "text-fg-1" : "text-fg-2"
-        }`}
-      >
-        {props.label}
-      </span>
-      <span class="block truncate text-[10px] text-fg-3">{props.subtitle}</span>
-    </span>
-    <Show when={props.count !== undefined && props.count > 0}>
-      <span
-        class="mono rounded-full px-1.5 py-0.5 text-[10px]"
-        style={{
-          background: props.active
-            ? "color-mix(in srgb, var(--color-accent-1) 18%, transparent)"
-            : "var(--color-control-fill)",
-          color: props.active ? "var(--color-accent-1)" : "var(--color-fg-3)",
-        }}
-      >
-        {props.count}
-      </span>
-    </Show>
+    <span class="block w-full truncate text-[11px] font-medium">{props.label}</span>
   </button>
 );

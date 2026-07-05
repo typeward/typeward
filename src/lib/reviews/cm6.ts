@@ -18,6 +18,8 @@ import {
 import type { CommentThread } from "~/lib/reviews/types";
 import { recoverThreads } from "~/lib/reviews/recovery";
 
+type ThreadKind = "comment" | "todo";
+
 class CommentMark extends RangeValue {
   startSide = 1;
   endSide = -1;
@@ -27,6 +29,7 @@ class CommentMark extends RangeValue {
   constructor(
     public threadId: string,
     public status: "open" | "resolved",
+    public kind: ThreadKind,
   ) {
     super();
   }
@@ -35,7 +38,8 @@ class CommentMark extends RangeValue {
     return (
       other instanceof CommentMark &&
       this.threadId === other.threadId &&
-      this.status === other.status
+      this.status === other.status &&
+      this.kind === other.kind
     );
   }
 }
@@ -45,6 +49,7 @@ interface ThreadInput {
   from: number;
   to: number;
   status: "open" | "resolved";
+  kind: ThreadKind;
 }
 
 const setThreads = StateEffect.define<ThreadInput[]>();
@@ -58,7 +63,7 @@ function buildRangeSet(
     .sort((a, b) => a.from - b.from || a.to - b.to);
   if (valid.length === 0) return RangeSet.empty;
   const ranges: Range<CommentMark>[] = valid.map((t) =>
-    new CommentMark(t.id, t.status).range(t.from, t.to),
+    new CommentMark(t.id, t.status, t.kind).range(t.from, t.to),
   );
   return RangeSet.of(ranges, true);
 }
@@ -82,6 +87,14 @@ const commentField = StateField.define<RangeSet<CommentMark>>({
 
 const openDeco = Decoration.mark({ class: "cm-review-anchor-open" });
 const resolvedDeco = Decoration.mark({ class: "cm-review-anchor-resolved" });
+// TODO threads keep the base open/resolved classes (existing selectors keep
+// working) plus a modifier that warm-tints the wash — matching the PDF bands.
+const openTodoDeco = Decoration.mark({
+  class: "cm-review-anchor-open cm-review-anchor--todo",
+});
+const resolvedTodoDeco = Decoration.mark({
+  class: "cm-review-anchor-resolved cm-review-anchor--todo",
+});
 
 const commentDecorations = EditorView.decorations.compute(
   [commentField],
@@ -90,7 +103,15 @@ const commentDecorations = EditorView.decorations.compute(
     const decos: Range<Decoration>[] = [];
     const cursor = ranges.iter();
     while (cursor.value) {
-      const deco = cursor.value.status === "open" ? openDeco : resolvedDeco;
+      const isTodo = cursor.value.kind === "todo";
+      const deco =
+        cursor.value.status === "open"
+          ? isTodo
+            ? openTodoDeco
+            : openDeco
+          : isTodo
+            ? resolvedTodoDeco
+            : resolvedDeco;
       decos.push(deco.range(cursor.from, cursor.to));
       cursor.next();
     }
@@ -99,16 +120,24 @@ const commentDecorations = EditorView.decorations.compute(
 );
 
 class CommentGutterMarker extends GutterMarker {
+  constructor(private kind: ThreadKind) {
+    super();
+  }
+
   toDOM() {
     const el = document.createElement("span");
-    el.className = "cm-review-gutter-marker";
-    el.textContent = "○";
-    el.title = "Review comment";
+    const isTodo = this.kind === "todo";
+    el.className = isTodo
+      ? "cm-review-gutter-marker cm-review-gutter-marker--todo"
+      : "cm-review-gutter-marker";
+    el.textContent = isTodo ? "◆" : "○";
+    el.title = isTodo ? "TODO" : "Review comment";
     return el;
   }
 }
 
-const singleMarker = new CommentGutterMarker();
+const singleMarker = new CommentGutterMarker("comment");
+const todoMarker = new CommentGutterMarker("todo");
 
 const commentGutter = gutter({
   class: "cm-review-gutter",
@@ -121,7 +150,11 @@ const commentGutter = gutter({
       const lineFrom = view.state.doc.lineAt(cursor.from).from;
       if (!seen.has(lineFrom)) {
         seen.add(lineFrom);
-        markers.push(singleMarker.range(lineFrom));
+        markers.push(
+          (cursor.value.kind === "todo" ? todoMarker : singleMarker).range(
+            lineFrom,
+          ),
+        );
       }
       cursor.next();
     }
@@ -240,12 +273,21 @@ export function dispatchSetThreads(
 
 function rangesEqual(
   desired: ThreadInput[],
-  current: Map<string, { from: number; to: number; status: "open" | "resolved" }>,
+  current: Map<
+    string,
+    { from: number; to: number; status: "open" | "resolved"; kind: ThreadKind }
+  >,
 ): boolean {
   if (desired.length !== current.size) return false;
   for (const d of desired) {
     const c = current.get(d.id);
-    if (!c || c.from !== d.from || c.to !== d.to || c.status !== d.status) {
+    if (
+      !c ||
+      c.from !== d.from ||
+      c.to !== d.to ||
+      c.status !== d.status ||
+      c.kind !== d.kind
+    ) {
       return false;
     }
   }
@@ -279,7 +321,13 @@ export function syncThreadsToView(
   for (const t of fileThreads) {
     const live = current.get(t.id);
     if (live) {
-      desired.push({ id: t.id, from: live.from, to: live.to, status: t.status });
+      desired.push({
+        id: t.id,
+        from: live.from,
+        to: live.to,
+        status: t.status,
+        kind: t.kind ?? "comment",
+      });
     } else {
       absent.push(t);
     }
@@ -292,6 +340,7 @@ export function syncThreadsToView(
         from: r.fromOffset,
         to: r.toOffset,
         status: r.thread.status,
+        kind: r.thread.kind ?? "comment",
       });
     }
   }
@@ -305,6 +354,7 @@ export function getCurrentRanges(view: EditorView): Array<{
   from: number;
   to: number;
   status: "open" | "resolved";
+  kind: ThreadKind;
 }> {
   const ranges = view.state.field(commentField);
   const result: Array<{
@@ -312,6 +362,7 @@ export function getCurrentRanges(view: EditorView): Array<{
     from: number;
     to: number;
     status: "open" | "resolved";
+    kind: ThreadKind;
   }> = [];
   const cursor = ranges.iter();
   while (cursor.value) {
@@ -320,6 +371,7 @@ export function getCurrentRanges(view: EditorView): Array<{
       from: cursor.from,
       to: cursor.to,
       status: cursor.value.status,
+      kind: cursor.value.kind,
     });
     cursor.next();
   }

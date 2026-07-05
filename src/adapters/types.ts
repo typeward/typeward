@@ -15,6 +15,22 @@ export interface Project {
   name: string;
   /** User-set deadline, ISO date (`YYYY-MM-DD`). Optional. */
   deadline?: string;
+  /** Free-form tags for library filtering. Persisted. */
+  tags?: string[];
+  /** Space id (from the workspace spaces catalog) this project belongs to. */
+  space?: string;
+  /** Archived (hidden from the default library view). Persisted. */
+  archived?: boolean;
+  /**
+   * In-app soft-trash stamp (epoch millis). Present hides the project from every
+   * library view except Trashed and blocks opening; cleared on restore.
+   */
+  trashedAt?: number;
+  /**
+   * Last-opened time (epoch millis). Unlike createdAt/modifiedAt this IS
+   * persisted to project.json — stamped on open via `touchProjectOpened`.
+   */
+  lastOpenedAt?: number;
   /**
    * Filesystem timestamps (epoch millis) attached by `list_projects` only —
    * derived from folder/root-file mtime, never persisted to project.json.
@@ -27,6 +43,25 @@ export interface Project {
    * with `integrations` absent; default to an empty object at read time.
    */
   integrations?: ProjectIntegrations;
+  /**
+   * Per-project LaTeX build overrides (engine, flags). Absent falls back to the
+   * global compile settings. Persisted; validated on write.
+   */
+  build?: ProjectBuild;
+}
+
+/** Per-project LaTeX build config; every field optional (unset = global default). */
+export interface ProjectBuild {
+  engine?: "pdflatex" | "xelatex" | "lualatex" | "tectonic";
+  /**
+   * Curated multi-pass build recipe. Unset defers to `latexmk`. Mirrors the
+   * strict `BuildRecipe` enum in `compile.rs`; never a free-form command.
+   */
+  recipe?: "latexmk" | "engine-only" | "engine-bibtex" | "engine-biber";
+  shellEscape?: boolean;
+  synctex?: boolean;
+  stopOnFirstError?: boolean;
+  autoCompile?: boolean;
 }
 
 export interface ProjectIntegrations {

@@ -39,7 +39,7 @@ export function previewKindForFile(relPath: string): "markdown" | "pdf" {
 const LANGUAGE_TO_GRAMMAR: Record<EditorLanguage, GrammarSyntax> = {
   latex: "latex",
   typst: "typst",
-  markdown: "plain",
+  markdown: "markdown",
   plain: "plain",
 };
 

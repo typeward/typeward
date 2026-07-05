@@ -2,6 +2,8 @@
 @import "./themes/tokens.css";
 @import "./themes/density.css";
 @import "./themes/motion.css";
+@import "./themes/themes/light.css";
+@import "./themes/themes/dark.css";
 @import "./themes/themes/daylight.css";
 @import "./themes/themes/lamplight.css";
 @import "./themes/themes/paper.css";

@@ -5,7 +5,7 @@ import { For, Show, createSignal } from "solid-js";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { project } from "~/stores/editor-store";
-import { projects } from "~/stores/projects-store";
+import { isTrashed, projects } from "~/stores/projects-store";
 
 /**
  * Editor top-bar pill — shows the current project name, opens a dropdown of
@@ -27,7 +27,7 @@ export const ProjectSwitcherMenu: Component<{
 
   const others = () =>
     projects()
-      .filter((p) => p.rootPath !== project()?.rootPath)
+      .filter((p) => !isTrashed(p) && p.rootPath !== project()?.rootPath)
       .slice(0, 6);
 
   const choose = (rootPath: string) => {

@@ -1,13 +1,23 @@
-import { Columns3, FileText, FileType2, Layout as LayoutIcon, Terminal } from "lucide-solid";
+import {
+  Columns3,
+  FileText,
+  FileType2,
+  Layout as LayoutIcon,
+  SquareArrowOutUpRight,
+  Terminal,
+} from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { Show, createSignal } from "solid-js";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
+import { detachPreview, getPreviewWindow } from "~/lib/preview-window/bridge";
+import { isTabletViewport } from "~/stores/viewport-store";
 import {
   type ConsolePosition,
   type EditorLayout,
   consolePosition,
   editorLayout,
+  previewDetached,
   setConsolePosition,
   setEditorLayout,
 } from "~/stores/ui-store";
@@ -22,6 +32,14 @@ export const LayoutMenu: Component = () => {
   installDismiss(() => rootRef, open, () => setOpen(false));
   useListboxOpenFocus(open, () => rootRef);
   const onTrigger = () => setOpen((v) => !v);
+
+  // Switching to an in-pane layout while detached first closes the preview
+  // window — its armed destroy listener flips previewDetached off — so the
+  // preview isn't left living in both places.
+  const chooseLayout = async (v: EditorLayout) => {
+    if (previewDetached()) await (await getPreviewWindow())?.close();
+    setEditorLayout(v);
+  };
 
   return (
     <div ref={rootRef} class="relative">
@@ -50,29 +68,37 @@ export const LayoutMenu: Component = () => {
               two always-selected options would announce as multi-select. */}
           <Section label="Pane layout">
             <LayoutOption
-              value="split"
-              current={editorLayout()}
-              onChoose={setEditorLayout}
+              active={editorLayout() === "split" && !previewDetached()}
+              onChoose={() => void chooseLayout("split")}
               icon={<Columns3 size={13} />}
               label="Split view"
               hint="Files + Editor + Preview"
             />
             <LayoutOption
-              value="editor"
-              current={editorLayout()}
-              onChoose={setEditorLayout}
+              active={editorLayout() === "editor" && !previewDetached()}
+              onChoose={() => void chooseLayout("editor")}
               icon={<FileType2 size={13} />}
               label="Editor only"
               hint="Hide preview"
             />
             <LayoutOption
-              value="preview"
-              current={editorLayout()}
-              onChoose={setEditorLayout}
+              active={editorLayout() === "preview" && !previewDetached()}
+              onChoose={() => void chooseLayout("preview")}
               icon={<FileText size={13} />}
               label="PDF only"
               hint="Hide editor"
             />
+            {/* Detach leaves editorLayout untouched so reattach restores the
+                prior split; it's a separate mode, not a fourth layout. */}
+            <Show when={!isTabletViewport()}>
+              <LayoutOption
+                active={previewDetached()}
+                onChoose={() => void detachPreview()}
+                icon={<SquareArrowOutUpRight size={13} />}
+                label="Detached preview"
+                hint="PDF in its own window"
+              />
+            </Show>
           </Section>
           <div class="my-2 h-px" style={{ background: "var(--color-control-stroke)" }} />
           <Section label="Logs">
@@ -107,21 +133,20 @@ const Section: Component<{ label: string; children: JSX.Element }> = (props) => 
 );
 
 const LayoutOption: Component<{
-  value: EditorLayout;
-  current: EditorLayout;
-  onChoose: (v: EditorLayout) => void;
+  active: boolean;
+  onChoose: () => void;
   icon: JSX.Element;
   label: string;
   hint: string;
 }> = (props) => {
-  const active = () => props.current === props.value;
+  const active = () => props.active;
   return (
     <button
       type="button"
       role="option"
       aria-selected={active()}
       tabindex={-1}
-      onClick={() => props.onChoose(props.value)}
+      onClick={() => props.onChoose()}
       class={`lift flex items-center gap-2.5 rounded-md p-2 text-left ${
         active()
           ? "bg-[var(--color-control-fill-hover)]"

@@ -6,17 +6,43 @@ import type {
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
 import { runCompile, runSyncForward } from "~/commands/compile-runner";
-import { compileEngine, editorSettings } from "~/stores/settings-store";
+import { buildOptionsWire, effectiveBuild } from "~/adapters/latex/build-config";
+
+/**
+ * Shell-escape is dangerous (arbitrary program execution during compile), so
+ * the first time a project asks for it we prompt for a per-machine trust grant
+ * (stored in Rust, outside the project). Returns whether the flag may be used.
+ */
+export const ensureShellEscapeTrust = async (project: Project): Promise<boolean> => {
+  const current = await ipc.shellEscapeTrustGet(project.rootPath).catch(() => null);
+  if (current === "granted") return true;
+  if (current === "denied") return false;
+  const { ask } = await import("@tauri-apps/plugin-dialog");
+  const ok = await ask(
+    "This project requests shell-escape, which lets the document run arbitrary programs during compile. Allow it on this machine?",
+    { title: "Allow shell-escape?", kind: "warning" },
+  );
+  await ipc
+    .shellEscapeTrustSet(project.rootPath, ok ? "granted" : "denied")
+    .catch(() => {});
+  return ok;
+};
 
 const compile = async (project: Project): Promise<CompileResult> => {
-  const engine = compileEngine();
-  if (engine === "texlive-wasm") {
+  const eff = effectiveBuild(project);
+  if (eff.engine === "texlive-wasm") {
     const { compileWithTexliveWasm } = await import(
       "~/providers/compile/texlive-wasm-provider"
     );
     return compileWithTexliveWasm(project);
   }
-  return ipc.compileLatex(project, engine, editorSettings().stopOnFirstError);
+  const wire = buildOptionsWire(eff);
+  // Prompt for shell-escape trust the first time; declining compiles without it
+  // rather than erroring.
+  if (wire.shellEscape && !(await ensureShellEscapeTrust(project))) {
+    return ipc.compileLatex(project, { ...wire, shellEscape: false });
+  }
+  return ipc.compileLatex(project, wire);
 };
 
 /**

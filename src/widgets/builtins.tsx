@@ -22,7 +22,7 @@ import {
   toIsoDate,
 } from "~/lib/deadlines";
 import { installDismiss } from "~/lib/dismiss";
-import { projects } from "~/stores/projects-store";
+import { isTrashed, projects } from "~/stores/projects-store";
 import { setStatsCards, statsCards } from "~/stores/workspace-store";
 import { registerWidget } from "./registry";
 
@@ -101,17 +101,19 @@ registerWidget({
 
 // ---------- Recent projects ----------
 
-const RecentProjectsWidget: Component = () => (
+const RecentProjectsWidget: Component = () => {
+  const recent = () => projects().filter((p) => !isTrashed(p));
+  return (
   <div class="flex h-full flex-col gap-1 overflow-auto scroll">
     <Show
-      when={projects().length > 0}
+      when={recent().length > 0}
       fallback={
         <div class="flex h-full items-center justify-center text-[length:var(--ui-font-xs)] text-fg-3">
           No projects yet.
         </div>
       }
     >
-      <For each={projects().slice(0, 5)}>
+      <For each={recent().slice(0, 5)}>
         {(p) => (
           <button
             type="button"
@@ -130,7 +132,8 @@ const RecentProjectsWidget: Component = () => (
       </For>
     </Show>
   </div>
-);
+  );
+};
 
 registerWidget({
   id: "recent-projects",

@@ -109,10 +109,23 @@
   /* .glass-soft body tint — light themes invert to a faint ink wash. */
   --color-glass-soft-fill: rgb(255 255 255 / 0.02);
 
+  /*
+   * Form-control tokens (Switch/Slider). The thumb is CONSTANT per theme and
+   * the TRACK carries state (platform convention: iOS/macOS/Material) — the
+   * off-track is a visible gray pill, the on-track is .accent-grad. The thumb
+   * hairline keeps a light thumb defined against light accents once
+   * --shadow-raised is zeroed on the basic themes.
+   */
+  --color-control-track-off: rgb(255 255 255 / 0.14);
+  --color-control-thumb: #e6e8ec;
+  --color-control-thumb-stroke: rgb(0 0 0 / 0.30);
+
   /* Status */
   --color-ok: #10b981;
   --color-warn: #f59e0b;
   --color-err: #f43f5e;
+  /* Informational status (grammar "misc"-family lints, blue underline). */
+  --color-info: #3b82f6;
   /*
    * Filled danger-button surface. Deeper than --color-err, which on dark
    * themes stays light enough to read as error TEXT on the bg — too light to

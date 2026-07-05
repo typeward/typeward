@@ -32,6 +32,9 @@ import {
   resolveThreadById,
   reopenThreadById,
   removeThread,
+  openCommentThreadCount,
+  openTodoThreads,
+  openTodoThreadCount,
   loadThreads,
   flushPendingReviewSave,
   resetThreads,
@@ -90,6 +93,22 @@ describe("review-store", () => {
     addThread(t);
     removeThread(t.id);
     expect(allThreads()).toHaveLength(0);
+  });
+
+  it("count helpers split open threads by kind", () => {
+    addThread(createThread("main.tex", 0, 5, "c1", "Alice", "C", "comment"));
+    addThread(createThread("main.tex", 6, 9, "c2", "Alice", "C"));
+    const todo = createThread("main.tex", 10, 13, "t1", "Alice", "T", "todo");
+    addThread(todo);
+
+    expect(openCommentThreadCount()).toBe(2);
+    expect(openTodoThreadCount()).toBe(1);
+    expect(openTodoThreads().map((t) => t.id)).toEqual([todo.id]);
+
+    // Resolving a TODO drops it from both the todo list and its count.
+    resolveThreadById(todo.id);
+    expect(openTodoThreadCount()).toBe(0);
+    expect(openCommentThreadCount()).toBe(2);
   });
 });
 

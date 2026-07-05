@@ -1,6 +1,7 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import * as ipc from "~/ipc";
 import { isTauriMobile } from "~/lib/platform";
+import { isPreviewWindow } from "~/lib/window-role";
 import {
   ACCENTS,
   type Accent,
@@ -12,19 +13,24 @@ import {
   theme,
 } from "~/themes/theme-store";
 import {
+  accentGradient,
   activeCustomTheme,
   ambientLights,
   animations,
   customThemesEnabled,
   type Density,
   density,
+  glowEffects,
+  setAccentGradient,
   setActiveCustomTheme,
   setAmbientLights,
   setAnimations,
   setCustomThemesEnabled,
   setDensity,
+  setGlowEffects,
 } from "~/stores/ui-store";
 import {
+  coerceSpaceTint,
   dashboardEnabled,
   dashboardOrder,
   defaultSort,
@@ -43,8 +49,10 @@ import {
   setEnableTags,
   setNotificationsPanelDefault,
   setProjectCardWords,
+  setSpaces,
   setStatsCards,
   setWidgetEnabled,
+  spaces,
   statsCards,
   widgetEnabled,
 } from "~/stores/workspace-store";
@@ -77,24 +85,65 @@ function migrateCompileEngine(raw: string): CompileEngine {
   return isTauriMobile() ? "texlive-wasm" : "system-tex";
 }
 
+export type LineHeightMode = "compact" | "normal" | "relaxed";
+
 export interface EditorSettings {
   autoCompile: boolean;
   vimMode: boolean;
-  spellCheck: boolean;
   lineWrap: boolean;
   fontSize: number;
   /** Pass -halt-on-error to latexmk/pdflatex (Tectonic always halts). */
   stopOnFirstError: boolean;
+  lineNumbers: boolean;
+  highlightActiveLine: boolean;
+  autocomplete: boolean;
+  bracketMatching: boolean;
+  autoCloseBrackets: boolean;
+  /** Editor indent width in spaces; one of 2/4/8. */
+  tabSize: number;
+  lineHeight: LineHeightMode;
+  /** When on, the idle debounce writes the buffer to disk (a real save); when
+   *  off, it only writes a crash-recovery snapshot. */
+  autosaveEnabled: boolean;
+  /** Autosave debounce in ms (frontend timer). */
+  autosaveDelayMs: number;
+  /** Default PDF zoom percentage the preview opens at. */
+  pdfDefaultZoom: number;
+  /** Invert the PDF (dark-mode reading) when a dark theme is active. */
+  pdfInvertDark: boolean;
 }
 
 const DEFAULT_EDITOR: EditorSettings = {
   autoCompile: false,
   vimMode: false,
-  spellCheck: true,
   lineWrap: true,
   fontSize: 13,
   stopOnFirstError: true,
+  lineNumbers: true,
+  highlightActiveLine: true,
+  autocomplete: true,
+  bracketMatching: true,
+  autoCloseBrackets: true,
+  tabSize: 2,
+  lineHeight: "normal",
+  autosaveEnabled: true,
+  autosaveDelayMs: 500,
+  pdfDefaultZoom: 110,
+  pdfInvertDark: false,
 };
+
+/** Line-height multipliers for the three modes (consumed by CodeMirror). */
+export const LINE_HEIGHT_VALUES: Record<LineHeightMode, string> = {
+  compact: "1.5",
+  normal: "1.65",
+  relaxed: "1.85",
+};
+
+function clampNumber(raw: number, min: number, max: number, fallback: number): number {
+  return typeof raw === "number" && Number.isFinite(raw)
+    ? Math.min(max, Math.max(min, raw))
+    : fallback;
+}
 
 const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
   references: {
@@ -169,11 +218,29 @@ const FIELDS: FieldSpec[] = [
     validate: (raw) => validEnum<Accent>(raw, ACCENTS, "violet-cyan"),
   }),
   field<EditorSettings>({
-    read: (s) => s.editor,
+    // The IPC editor shape types lineHeight as a plain string; the validate
+    // below narrows it back to LineHeightMode at the load boundary.
+    read: (s) => s.editor as EditorSettings,
     value: editorSettings,
     apply: setEditorSettings,
     write: (out, v) => {
       out.editor = v;
+    },
+    // Merge over defaults (older settings.json predates the new fields) and
+    // clamp the free-numeric/enum fields at the load boundary.
+    validate: (raw) => {
+      const merged = { ...DEFAULT_EDITOR, ...raw };
+      return {
+        ...merged,
+        tabSize: [2, 4, 8].includes(merged.tabSize) ? merged.tabSize : 2,
+        lineHeight: validEnum<LineHeightMode>(
+          merged.lineHeight,
+          ["compact", "normal", "relaxed"],
+          "normal",
+        ),
+        autosaveDelayMs: clampNumber(merged.autosaveDelayMs, 200, 5000, 500),
+        pdfDefaultZoom: clampNumber(merged.pdfDefaultZoom, 50, 300, 110),
+      };
     },
   }),
   field<string>({
@@ -225,6 +292,22 @@ const FIELDS: FieldSpec[] = [
     apply: setAmbientLights,
     write: (out, v) => {
       out.ui.ambientLights = v;
+    },
+  }),
+  field<boolean>({
+    read: (s) => s.ui.accentGradient ?? true,
+    value: accentGradient,
+    apply: setAccentGradient,
+    write: (out, v) => {
+      out.ui.accentGradient = v;
+    },
+  }),
+  field<boolean>({
+    read: (s) => s.ui.glowEffects ?? true,
+    value: glowEffects,
+    apply: setGlowEffects,
+    write: (out, v) => {
+      out.ui.glowEffects = v;
     },
   }),
   field<boolean>({
@@ -333,6 +416,28 @@ const FIELDS: FieldSpec[] = [
       out.workspace.statsCards = statsCards();
     },
   },
+  // spaces catalog: drop malformed entries (missing id/name) and coerce each
+  // tint to a known palette id so a hand-edited settings.json can't render an
+  // untinted/broken space.
+  field<ipc.SpaceDef[]>({
+    read: (s) => s.workspace.spaces ?? [],
+    value: spaces,
+    apply: setSpaces,
+    write: (out, v) => {
+      out.workspace.spaces = v;
+    },
+    validate: (raw) =>
+      (Array.isArray(raw) ? raw : [])
+        .filter(
+          (sp) =>
+            sp &&
+            typeof sp.id === "string" &&
+            sp.id.length > 0 &&
+            typeof sp.name === "string" &&
+            sp.name.length > 0,
+        )
+        .map((sp) => ({ id: sp.id, name: sp.name, tint: coerceSpaceTint(sp.tint) })),
+  }),
   // integrations merges over defaults so a settings.json predating a provider
   // still gets its default block.
   {
@@ -392,6 +497,11 @@ createRoot(() => {
   createEffect(() => {
     const next = buildSettings();
     if (!settingsLoaded()) return;
+    // The detached preview window (E11) shares this bundle but holds a read-only
+    // snapshot; letting it persist would clobber the main window's newer fields
+    // (it only receives theme/accent over the bridge). Main window is the single
+    // writer of settings.json.
+    if (isPreviewWindow) return;
     const json = JSON.stringify(next);
     if (json === lastSavedJson) return;
     lastSavedJson = json;

@@ -301,6 +301,46 @@ body {
   display: none;
 }
 
+/* Per-user toggle (Settings → Appearance → Accent). When the accent gradient
+ * is off, every gradient surface collapses to the solid accent-1. `.accent-grad`
+ * keeps its `color: var(--color-accent-fg)` from the base rule. `.glow-accent`
+ * is left alone — it's a glow, not a gradient fill. */
+:root[data-accent-gradient="off"] {
+  --accent-text-1: var(--color-accent-1);
+  --accent-text-2: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .accent-grad,
+:root[data-accent-gradient="off"] .accent-border,
+:root[data-accent-gradient="off"] .caret,
+:root[data-accent-gradient="off"] .side-active::before {
+  background: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .lift.accent-grad:hover {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
+    color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+  );
+  background-color: var(--color-accent-1);
+}
+
+/* Glow off — basic themes force this via data-glow, styled themes toggle it in
+ * Appearance. An off-override block rather than :not() wrapping the base rules,
+ * so the glow surfaces keep a designed flat fallback instead of dead hovers. */
+:root[data-glow="off"] .glow-accent {
+  box-shadow: none;
+}
+:root[data-glow="off"] .card-shell:hover {
+  box-shadow: var(--shadow-glass-inset), var(--shadow-glass-drop);
+}
+:root[data-glow="off"] .card-glow:hover {
+  border-color: var(--color-glass-stroke-strong);
+  box-shadow: none;
+}
+:root[data-glow="off"] .avatar-ring,
+:root[data-glow="off"] .avatar-ring-2 {
+  box-shadow: 0 0 0 2px var(--color-bg-base);
+}
+
 .blob {
   position: absolute;
   border-radius: 50%;
@@ -555,6 +595,16 @@ body {
 .cm-review-anchor-resolved {
   background: color-mix(in srgb, var(--color-accent-1) 4%, transparent);
 }
+/* TODO threads carry an extra modifier class over the base open/resolved
+ * anchor — warm-tinted to match the PDF annotation bands. Placed after the
+ * base rules so the single-class background override wins for open todos. */
+.cm-review-anchor--todo {
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--color-warn) 35%, transparent);
+}
+.cm-review-anchor-resolved.cm-review-anchor--todo {
+  background: color-mix(in srgb, var(--color-warn) 4%, transparent);
+}
 .cm-review-gutter { width: 20px; }
 .cm-review-gutter-marker {
   color: var(--color-accent-1);
@@ -562,4 +612,119 @@ body {
   font-size: 10px;
   line-height: 1;
 }
+.cm-review-gutter-marker--todo { color: var(--color-warn); }
 .cm-review-gutter-marker:hover { opacity: 1; }
+
+/* --- Grammar (Harper) lint underlines, styled per LintKind ---
+ * The linter tags each range with a `cm-lint-<kind>` mark class. We replace
+ * the default wavy background with a per-kind text-decoration underline so
+ * spelling / grammar / style read distinctly. Only our grammar ranges are
+ * retargeted (the attribute-substring guard) — LSP and compile lint underlines
+ * keep the default. Colors come from theme tokens so all four themes hold up. */
+.cm-lintRange[class*="cm-lint-"] {
+  background-image: none;
+  text-decoration-skip-ink: none;
+}
+
+/* Four families (see src/lib/grammar/kinds.ts — the single source): each gets
+ * a colored underline plus a faint same-hue wash, Grammarly-style. Spelling and
+ * grammar carry the firmer wavy line; the advisory style/misc families use a
+ * dashed line. Family classes track kinds.ts's KIND_TO_FAMILY map. */
+
+/* Spelling family (red): misspellings, typos. */
+.cm-lintRange.cm-lint-spelling,
+.cm-lintRange.cm-lint-typo,
+.cm-lintRange.cm-lint-malapropism,
+.cm-lintRange.cm-lint-eggcorn {
+  text-decoration: underline wavy var(--color-err);
+  background: color-mix(in srgb, var(--color-err) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Grammar family (amber): agreement, punctuation, capitalization. */
+.cm-lintRange.cm-lint-grammar,
+.cm-lintRange.cm-lint-agreement,
+.cm-lintRange.cm-lint-boundaryerror,
+.cm-lintRange.cm-lint-capitalization,
+.cm-lintRange.cm-lint-punctuation {
+  text-decoration: underline wavy var(--color-warn);
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Style family (green, advisory): prose polish. */
+.cm-lintRange.cm-lint-style,
+.cm-lintRange.cm-lint-enhancement,
+.cm-lintRange.cm-lint-readability,
+.cm-lintRange.cm-lint-redundancy,
+.cm-lintRange.cm-lint-repetition,
+.cm-lintRange.cm-lint-formatting {
+  text-decoration: underline dashed var(--color-ok);
+  background: color-mix(in srgb, var(--color-ok) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Misc family (blue, advisory): word choice, usage, regionalisms. */
+.cm-lintRange.cm-lint-wordchoice,
+.cm-lintRange.cm-lint-miscellaneous,
+.cm-lintRange.cm-lint-nonstandard,
+.cm-lintRange.cm-lint-regionalism,
+.cm-lintRange.cm-lint-usage {
+  text-decoration: underline dashed var(--color-info);
+  background: color-mix(in srgb, var(--color-info) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Kind chip prepended to the lint tooltip message: a family-colored dot + the
+ * humanized kind. `--dot` is set inline by renderMessage from the family var. */
+.cm-lint-message { display: block; line-height: 1.5; }
+.cm-lint-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-right: 0.5em;
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--color-fg-1);
+  vertical-align: baseline;
+}
+.cm-lint-kind-chip::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 999px;
+  background: var(--dot, var(--color-info));
+}
+
+/* --- Grammar lint tooltip: restyle the built-in @codemirror/lint tooltip into
+ * a popover card (matches the app's glass popovers), dropping the default
+ * severity border-left and the redundant source line. */
+.cm-tooltip.cm-tooltip-lint {
+  background: var(--color-popover-bg);
+  border: 1px solid var(--color-glass-stroke-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-glass-drop);
+  padding: 0;
+  max-width: 340px;
+}
+.cm-tooltip-lint .cm-diagnostic {
+  border-left: none;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.8rem;
+  color: var(--color-fg-2);
+}
+.cm-tooltip-lint .cm-diagnosticSource { display: none; }
+.cm-tooltip-lint .cm-diagnosticAction {
+  display: inline-block;
+  margin: 0.5em 0.35em 0 0;
+  padding: 0.2em 0.6em;
+  border-radius: 6px;
+  border: 1px solid var(--color-control-stroke);
+  background: var(--color-control-fill);
+  color: var(--color-fg-1);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.cm-tooltip-lint .cm-diagnosticAction:hover {
+  background: var(--color-control-fill-hover);
+}

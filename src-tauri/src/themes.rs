@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-const BUILTIN_BASES: [&str; 4] = ["daylight", "lamplight", "aurora", "paper"];
+const BUILTIN_BASES: [&str; 6] = ["light", "dark", "daylight", "lamplight", "aurora", "paper"];
 const MAX_THEME_FILE_BYTES: u64 = 64 * 1024;
 const MAX_TOKENS: usize = 200;
 const MAX_TOKEN_VALUE_CHARS: usize = 256;

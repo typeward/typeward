@@ -250,7 +250,7 @@ pub async fn synctex_inverse(args: InverseArgs) -> Result<Option<InverseLocation
     .map_err(|e| e.to_string())?
 }
 
-fn resolve_pdf_under_root(root: &Path, pdf_path: &str) -> Result<Option<PathBuf>, String> {
+pub(crate) fn resolve_pdf_under_root(root: &Path, pdf_path: &str) -> Result<Option<PathBuf>, String> {
     let pdf = PathBuf::from(pdf_path);
     if !pdf.exists() {
         return Ok(None);

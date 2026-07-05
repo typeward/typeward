@@ -33,6 +33,7 @@
  * that the label color on gradients flips back to white.
  */
 [data-theme="daylight"][data-accent="amber-rose"],
+[data-theme="light"][data-accent="amber-rose"],
 [data-theme="paper"][data-accent="amber-rose"] {
   --color-accent-1: #92400e;
   --color-accent-2: #9f1239;
@@ -40,6 +41,7 @@
 }
 
 [data-theme="daylight"][data-accent="emerald-teal"],
+[data-theme="light"][data-accent="emerald-teal"],
 [data-theme="paper"][data-accent="emerald-teal"] {
   --color-accent-1: #065f46;
   --color-accent-2: #0f766e;
@@ -47,6 +49,7 @@
 }
 
 [data-theme="daylight"][data-accent="indigo-pink"],
+[data-theme="light"][data-accent="indigo-pink"],
 [data-theme="paper"][data-accent="indigo-pink"] {
   --color-accent-1: #4f46e5;
   --color-accent-2: #be185d;
