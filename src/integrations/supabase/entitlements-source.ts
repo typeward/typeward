@@ -8,9 +8,14 @@
  *   - At sign-out, swap back to the free-tier stub.
  *   - On boot (with a persisted session), restore the cached snapshot
  *     immediately, then re-fetch in the background to refresh.
+ *   - On window focus (throttled to once per 30s) and via the manual
+ *     "Refresh plan" button, `refreshEntitlements()` re-runs the fetch.
  *
- * Cache TTL is 7 days; after that we collapse to free-tier and surface
- * an in-app banner the user can dismiss by going online.
+ * Cache TTL is 30 days; after that we collapse to free-tier and surface
+ * an in-app banner the user can dismiss by going online. Cheap clock-tamper
+ * guards reject a snapshot stamped in the future or read after the wall
+ * clock moved backwards past `lastSeenWallClock` — determined tampering
+ * wins anyway, these only raise the floor.
  */
 
 import { createEffect, createRoot, createSignal } from "solid-js";
@@ -32,7 +37,9 @@ import { getSupabaseClient } from "./client";
 import { supabaseSession, supabaseSessionReady } from "./session";
 
 const CACHE_SERVICE = "supabase.entitlements";
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+export const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const CLOCK_SKEW_MS = 5 * 60 * 1000;
+const FOCUS_REFRESH_MIN_GAP_MS = 30_000;
 
 /**
  * Whether the last entitlement refresh reached Supabase. UI (e.g. the plan
@@ -45,12 +52,35 @@ const [entitlementSyncStatus, setEntitlementSyncStatus] =
   createSignal<EntitlementSyncStatus>("online");
 export { entitlementSyncStatus };
 
-interface CachedSnapshot {
+export interface CachedSnapshot {
   fetchedAt: number;
   /** Raw RPC rows from `get_entitlements`. */
   rows: Array<{ plan_id?: string; feature_key: string; value: string }>;
   /** The plan id resolved at fetch time (for the tier label). */
   plan: Tier;
+  /**
+   * Highest wall clock observed while this snapshot was cached (stamped on
+   * every read/write). `Date.now()` falling behind it means the system clock
+   * was set backwards, so the snapshot can't be trusted against the TTL.
+   * Optional — snapshots written before the field existed still load.
+   */
+  lastSeenWallClock?: number;
+}
+
+/**
+ * TTL + clock-tamper check. Pure so it's unit-testable without keyring
+ * mocks. `Date.now()` is UTC-epoch, so timezone/DST changes never trip
+ * these guards — only actual system-clock jumps beyond the skew allowance.
+ */
+export function isSnapshotUsable(snapshot: CachedSnapshot, now: number): boolean {
+  if (snapshot.fetchedAt > now + CLOCK_SKEW_MS) return false;
+  if (
+    snapshot.lastSeenWallClock !== undefined &&
+    now < snapshot.lastSeenWallClock - CLOCK_SKEW_MS
+  ) {
+    return false;
+  }
+  return now - snapshot.fetchedAt < CACHE_TTL_MS;
 }
 
 function planFromRows(rows: CachedSnapshot["rows"]): Tier {
@@ -93,20 +123,30 @@ function buildSource(snapshot: CachedSnapshot): EntitlementSource {
   };
 }
 
+async function writeCache(userId: string, snapshot: CachedSnapshot): Promise<void> {
+  await setChunkedCredential(
+    CACHE_SERVICE,
+    userId,
+    JSON.stringify({ ...snapshot, lastSeenWallClock: Date.now() }),
+  );
+}
+
 async function readCache(userId: string): Promise<CachedSnapshot | null> {
   // Chunked: the Pro snapshot of feature rows (JSON) exceeds Windows
   // Credential Manager's single-blob cap.
   const raw = await getChunkedCredential(CACHE_SERVICE, userId);
   if (!raw) return null;
+  let snapshot: CachedSnapshot;
   try {
-    return JSON.parse(raw) as CachedSnapshot;
+    snapshot = JSON.parse(raw) as CachedSnapshot;
   } catch {
     return null;
   }
-}
-
-async function writeCache(userId: string, snapshot: CachedSnapshot): Promise<void> {
-  await setChunkedCredential(CACHE_SERVICE, userId, JSON.stringify(snapshot));
+  if (!isSnapshotUsable(snapshot, Date.now())) return null;
+  // Re-persist so lastSeenWallClock advances to the time observed here —
+  // a later backwards clock jump is then detectable.
+  void writeCache(userId, snapshot).catch(() => undefined);
+  return snapshot;
 }
 
 async function fetchEntitlements(): Promise<CachedSnapshot | null> {
@@ -126,6 +166,69 @@ function isCurrentSessionUser(userId: string): boolean {
   return supabaseSession()?.user.id === userId;
 }
 
+async function refreshFor(userId: string): Promise<void> {
+  const fresh = await fetchEntitlements();
+  if (!isCurrentSessionUser(userId)) return;
+  if (fresh) {
+    setEntitlementSource(buildSource(fresh));
+    setEntitlementSyncStatus("online");
+    void writeCache(userId, fresh).catch(() => undefined);
+    return;
+  }
+  // Refresh failed (offline / RPC error). Don't silently strip a paying
+  // user of their plan: keep serving a usable cached snapshot. Only when
+  // there is no usable cache do we fall through to the free stub — and in
+  // that case make it visible rather than a silent downgrade.
+  recordError(
+    "entitlements-refresh",
+    `get_entitlements failed for ${userId}; falling back to cache`,
+  );
+  const cached = await readCache(userId).catch(() => null);
+  if (!isCurrentSessionUser(userId)) return;
+  if (cached) {
+    setEntitlementSource(buildSource(cached));
+    setEntitlementSyncStatus("offline-cached");
+  } else {
+    // Toast only on the transition into the uncached state — the focus
+    // refetch would otherwise re-toast every 30s while offline.
+    const alreadyNotified = entitlementSyncStatus() === "offline-uncached";
+    setEntitlementSyncStatus("offline-uncached");
+    if (!alreadyNotified) {
+      notifyError(
+        "Couldn't verify your plan",
+        "You appear to be offline. Some paid features may be locked until Typeward can reach your account again.",
+      );
+    }
+  }
+}
+
+/**
+ * Re-fetch entitlements for the current session user and swap the source.
+ * No-op when signed out or Supabase isn't configured. Called from the
+ * window-focus listener and the Settings → Account "Refresh plan" button.
+ */
+export async function refreshEntitlements(): Promise<void> {
+  if (!getSupabaseClient()) return;
+  const session = supabaseSession();
+  if (!session) return;
+  await refreshFor(session.user.id);
+}
+
+let focusListenerInstalled = false;
+
+function installFocusRefresh(): void {
+  if (focusListenerInstalled) return;
+  focusListenerInstalled = true;
+  // performance.now() is monotonic — a wall-clock jump can't wedge the throttle.
+  let lastRunAt = -Infinity;
+  window.addEventListener("focus", () => {
+    const now = performance.now();
+    if (now - lastRunAt < FOCUS_REFRESH_MIN_GAP_MS) return;
+    lastRunAt = now;
+    void refreshEntitlements();
+  });
+}
+
 /**
  * Mount the source-swap effect. Called once at boot from App.tsx.
  *
@@ -134,6 +237,7 @@ function isCurrentSessionUser(userId: string): boolean {
  *   - Signed out → reset to stub.
  */
 export function initSupabaseEntitlements(): void {
+  installFocusRefresh();
   createRoot(() => {
     createEffect(() => {
       if (!supabaseSessionReady()) return;
@@ -146,43 +250,14 @@ export function initSupabaseEntitlements(): void {
       resetEntitlementSource();
 
       // Restore cache first so the UI doesn't bounce while we fetch.
-      void readCache(userId).then((cached) => {
-        if (!isCurrentSessionUser(userId)) return;
-        if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-          setEntitlementSource(buildSource(cached));
-        }
-      });
+      void readCache(userId)
+        .then((cached) => {
+          if (!isCurrentSessionUser(userId)) return;
+          if (cached) setEntitlementSource(buildSource(cached));
+        })
+        .catch(() => undefined);
 
-      // Then refresh.
-      void fetchEntitlements().then(async (fresh) => {
-        if (!isCurrentSessionUser(userId)) return;
-        if (fresh) {
-          setEntitlementSource(buildSource(fresh));
-          setEntitlementSyncStatus("online");
-          void writeCache(userId, fresh).catch(() => undefined);
-          return;
-        }
-        // Refresh failed (offline / RPC error). Don't silently strip a paying
-        // user of their plan: keep serving a within-TTL cached snapshot. Only
-        // when there is no usable cache do we fall through to the free stub —
-        // and in that case make it visible rather than a silent downgrade.
-        recordError(
-          "entitlements-refresh",
-          `get_entitlements failed for ${userId}; falling back to cache`,
-        );
-        const cached = await readCache(userId);
-        if (!isCurrentSessionUser(userId)) return;
-        if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-          setEntitlementSource(buildSource(cached));
-          setEntitlementSyncStatus("offline-cached");
-        } else {
-          setEntitlementSyncStatus("offline-uncached");
-          notifyError(
-            "Couldn't verify your plan",
-            "You appear to be offline. Some paid features may be locked until Typeward can reach your account again.",
-          );
-        }
-      });
+      void refreshFor(userId);
     });
   });
 }
