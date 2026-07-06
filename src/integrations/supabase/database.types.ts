@@ -163,7 +163,9 @@ export interface Database {
     Functions: {
       get_entitlements: {
         Args: Record<string, never>;
-        Returns: Array<{ feature_key: string; value: string }>;
+        // plan_id added by the 20260706 migration; optional so cached
+        // snapshots and a not-yet-migrated backend still typecheck.
+        Returns: Array<{ plan_id?: string; feature_key: string; value: string }>;
       };
     };
     Enums: Record<string, never>;

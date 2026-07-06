@@ -48,14 +48,18 @@ export { entitlementSyncStatus };
 interface CachedSnapshot {
   fetchedAt: number;
   /** Raw RPC rows from `get_entitlements`. */
-  rows: Array<{ feature_key: string; value: string }>;
+  rows: Array<{ plan_id?: string; feature_key: string; value: string }>;
   /** The plan id resolved at fetch time (for the tier label). */
   plan: Tier;
 }
 
 function planFromRows(rows: CachedSnapshot["rows"]): Tier {
-  // The plan isn't returned by get_entitlements directly; derive from the
-  // presence of a Pro-only feature flag. Cheap and stable.
+  // get_entitlements returns the resolved plan_id on every row since the
+  // 20260706 migration. The dropbox-flag sniff below covers snapshots and
+  // deployments predating it — delete the fallback once staging and prod
+  // both run the new RPC and one release has shipped.
+  const declared = rows[0]?.plan_id;
+  if (declared === "free" || declared === "pro") return declared;
   const lookup = (key: string): boolean =>
     rows.find((r) => r.feature_key === key)?.value === "true";
   if (lookup("integrations.cloud.dropbox")) return "pro";
@@ -110,7 +114,7 @@ async function fetchEntitlements(): Promise<CachedSnapshot | null> {
   if (!client) return null;
   const { data, error } = await client.rpc("get_entitlements");
   if (error || !data) return null;
-  const rows = data as Array<{ feature_key: string; value: string }>;
+  const rows = data as Array<{ plan_id?: string; feature_key: string; value: string }>;
   return {
     fetchedAt: Date.now(),
     rows,
