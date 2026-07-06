@@ -16,7 +16,7 @@
  */
 
 /** Account + billing page on the Typeward website (allowlisted in capabilities). */
-const ACCOUNT_BILLING_URL = "https://typeward.app/account";
+const ACCOUNT_BILLING_URL = "https://account.typeward.com";
 
 import { ExternalLink, LogIn, LogOut, Mail, ShieldCheck } from "lucide-solid";
 import { openUrl } from "@tauri-apps/plugin-opener";

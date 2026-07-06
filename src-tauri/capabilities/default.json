@@ -81,7 +81,7 @@
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
         { "url": "https://tug.org/*" },
-        { "url": "https://typeward.app/*" },
+        { "url": "https://account.typeward.com/*" },
         { "url": "https://www.zotero.org/*" },
         { "url": "https://console.anthropic.com/*" },
         { "url": "https://platform.openai.com/*" },
