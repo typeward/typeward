@@ -18,7 +18,15 @@
 /** Account + billing page on the Typeward website (allowlisted in capabilities). */
 const ACCOUNT_BILLING_URL = "https://account.typeward.com";
 
-import { ExternalLink, LogIn, LogOut, Mail, ShieldCheck } from "lucide-solid";
+import {
+  AlertTriangle,
+  ExternalLink,
+  LogIn,
+  LogOut,
+  Mail,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-solid";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Component } from "solid-js";
 import { Show, createResource, createSignal } from "solid-js";
@@ -30,6 +38,7 @@ import {
   getSupabaseClient,
   supabaseEnabled,
 } from "~/integrations/supabase/client";
+import { refreshEntitlements } from "~/integrations/supabase/entitlements-source";
 import {
   signOut,
   supabaseSession,
@@ -184,6 +193,20 @@ const SignedInCard: Component = () => {
     },
   );
 
+  const [refreshing, setRefreshing] = createSignal(false);
+  const handleRefreshPlan = async () => {
+    if (refreshing()) return;
+    setRefreshing(true);
+    try {
+      await refreshEntitlements();
+      await refetchPlan();
+    } catch (e) {
+      notifyError("Couldn't refresh your plan", errorText(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   const handleSignOut = async () => {
     try {
       await signOut();
@@ -211,11 +234,33 @@ const SignedInCard: Component = () => {
             </Button>
           </div>
         </Show>
+        <Show when={planSummary()?.status === "past_due"}>
+          <div
+            class="flex items-center gap-2 rounded-md border px-3 py-2 text-sm"
+            style={{
+              background: "color-mix(in srgb, var(--color-warn) 10%, transparent)",
+              "border-color": "color-mix(in srgb, var(--color-warn) 35%, transparent)",
+              color: "var(--color-warn)",
+            }}
+          >
+            <AlertTriangle class="ui-icon-sm shrink-0" />
+            <span class="flex-1">Payment issue — update your card.</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              leadingIcon={<ExternalLink class="ui-icon-sm" />}
+              onClick={() => void openUrl(ACCOUNT_BILLING_URL)}
+            >
+              Update card
+            </Button>
+          </div>
+        </Show>
         <Show
           when={
             planSummary()?.status &&
             planSummary()!.status !== "active" &&
-            planSummary()!.status !== "error"
+            planSummary()!.status !== "error" &&
+            planSummary()!.status !== "past_due"
           }
         >
           <div class="text-xs text-fg-3">
@@ -230,6 +275,17 @@ const SignedInCard: Component = () => {
             onClick={() => void openUrl(ACCOUNT_BILLING_URL)}
           >
             Manage plan & billing
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            leadingIcon={
+              <RefreshCw class={refreshing() ? "ui-icon-sm animate-spin" : "ui-icon-sm"} />
+            }
+            disabled={refreshing()}
+            onClick={() => void handleRefreshPlan()}
+          >
+            {refreshing() ? "Refreshing…" : "Refresh plan"}
           </Button>
           <Button
             variant="ghost"
