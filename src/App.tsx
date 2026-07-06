@@ -83,6 +83,10 @@ function bootSupabaseDeferred(): void {
  */
 const AppCrash: Component<{ err: unknown; reset: () => void }> = (props) => {
   recordError("ui-crash", "render error caught by app ErrorBoundary", props.err);
+  // Boundary-caught errors never reach window.onerror, so Sentry's global
+  // handlers can't see them — report explicitly. Dynamic import keeps the SDK
+  // chunk off this module's static graph.
+  void import("~/lib/sentry").then((m) => m.reportCrash(props.err)).catch(() => {});
   return (
     <div
       role="alert"
