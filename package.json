@@ -28,6 +28,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@kobalte/core": "^0.13.11",
     "@replit/codemirror-vim": "^6.3.0",
+    "@sentry/browser": "^10.63.0",
     "@solidjs/router": "^0.16.1",
     "@supabase/supabase-js": "^2.108.2",
     "@tauri-apps/api": "^2.11.1",
@@ -47,6 +48,7 @@
     "texlive-wasm": "file:../texlive-wasm"
   },
   "devDependencies": {
+    "@sentry/vite-plugin": "^5.3.0",
     "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/vite": "^4.3.1",
     "@tauri-apps/cli": "^2.11.3",

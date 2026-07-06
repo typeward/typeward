@@ -2,9 +2,23 @@
 import { defaultClientConditions, defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { fileURLToPath, URL } from "node:url";
 
 const host = process.env.TAURI_DEV_HOST;
+
+// Sentry source-map upload. The auth token lives in .env.sentry-build-plugin
+// (gitignored; see .env.example) — Vite doesn't load env files into
+// process.env at config-eval time, so pull it in explicitly. No token means
+// no upload and no sourcemap generation: maps must never reach dist/
+// un-deleted, because `tauri build` ships dist/ verbatim (source leak).
+try {
+  process.loadEnvFile(fileURLToPath(new URL("./.env.sentry-build-plugin", import.meta.url)));
+} catch {
+  /* token file absent — upload disabled */
+}
+const sentryUpload =
+  !!process.env.SENTRY_AUTH_TOKEN && !process.env.VITEST && !process.env.TAURI_ENV_DEBUG;
 
 // KaTeX ships woff2 + woff + ttf for all 20 math faces; every Tauri webview
 // target (WebKitGTK / WKWebView / WebView2 / Android WebView) supports woff2,
@@ -30,7 +44,24 @@ function katexWoff2Only() {
 export default defineConfig({
   // hot:false under Vitest — solid-refresh's virtual module ("/@solid-refresh")
   // can't be loaded by the vitest module runner and kills .tsx test suites.
-  plugins: [solid({ hot: !process.env.VITEST }), tailwindcss(), katexWoff2Only()],
+  plugins: [
+    solid({ hot: !process.env.VITEST }),
+    tailwindcss(),
+    katexWoff2Only(),
+    // Must come last so it sees the final chunks. Symbolication matches via
+    // injected Debug IDs, not release names, so no release config is needed.
+    ...(sentryUpload
+      ? [
+          sentryVitePlugin({
+            org: "typeward",
+            project: "javascript-solid",
+            authToken: process.env.SENTRY_AUTH_TOKEN,
+            telemetry: false,
+            sourcemaps: { filesToDeleteAfterUpload: ["dist/**/*.map"] },
+          }),
+        ]
+      : []),
+  ],
   resolve: {
     alias: {
       "~": fileURLToPath(new URL("./src", import.meta.url)),
@@ -82,7 +113,9 @@ export default defineConfig({
     // `true` uses Vite 8's default Oxc minifier. The old "esbuild" minifier is
     // deprecated under Rolldown-Vite and mishandled __VITE_PRELOAD__ markers.
     minify: !process.env.TAURI_ENV_DEBUG,
-    sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // "hidden" emits maps for the Sentry upload without sourceMappingURL
+    // comments in the chunks; the plugin deletes them from dist/ afterwards.
+    sourcemap: process.env.TAURI_ENV_DEBUG ? true : sentryUpload ? "hidden" : false,
     // The codemirror vendor chunk is a deliberately-split, long-cached vendor
     // bundle (~240 KB gzip); it legitimately exceeds the 500 KB raw default.
     chunkSizeWarningLimit: 800,

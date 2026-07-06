@@ -194,6 +194,22 @@ const CORE_COMMANDS: EditorCommand[] = [
   },
 ];
 
+// Dev builds only: exercises the full unhandled-error -> Sentry transport ->
+// CSP pipeline. Tree-shaken out of release bundles.
+if (import.meta.env.DEV) {
+  CORE_COMMANDS.push({
+    id: "dev.sentryTest",
+    title: "Send Sentry test error",
+    subtitle: "Throw an unhandled error to verify Sentry delivery (dev only)",
+    group: "Developer",
+    scope: "global",
+    run: async () => {
+      const { sendTestError } = await import("~/lib/sentry");
+      sendTestError();
+    },
+  });
+}
+
 /**
  * Idempotent by id — registerCommand replaces, so calling this more than
  * once is safe and re-syncs the registry to the canonical core set.
