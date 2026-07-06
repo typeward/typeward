@@ -167,6 +167,9 @@ const [compileEngine, setCompileEngine] = createSignal<CompileEngine>("system-te
 const [onboarded, setOnboarded] = createSignal<boolean>(false);
 const [integrationsSettings, setIntegrationsSettings] =
   createSignal<ipc.IntegrationsSettings>(DEFAULT_INTEGRATIONS);
+// Egress opt-in: OFF by default — the Sentry SDK is never even fetched unless
+// the user enables this (see src/lib/sentry-gate.ts).
+const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
 const [settingsLoaded, setSettingsLoaded] = createSignal<boolean>(false);
 
 /**
@@ -450,6 +453,15 @@ const FIELDS: FieldSpec[] = [
       out.integrations = integrationsSettings();
     },
   },
+  // --- privacy ---
+  field<boolean>({
+    read: (s) => s.privacy?.shareCrashReports ?? false,
+    value: shareCrashReports,
+    apply: setShareCrashReports,
+    write: (out, v) => {
+      out.privacy = { shareCrashReports: v };
+    },
+  }),
 ];
 
 /**
@@ -468,6 +480,7 @@ export function buildSettings(): ipc.AppSettings {
     ui: {},
     workspace: {},
     integrations: undefined,
+    privacy: undefined,
   } as unknown as ipc.AppSettings;
   for (const f of FIELDS) f.serialize(out);
   return out;
@@ -521,9 +534,11 @@ export {
   onboarded,
   projectsRoot,
   settingsLoaded,
+  shareCrashReports,
   setCompileEngine,
   setEditorSettings,
   setIntegrationsSettings,
   setOnboarded,
   setProjectsRoot,
+  setShareCrashReports,
 };

@@ -45,6 +45,8 @@ import {
   setCompileEngine,
   setEditorSettings,
   setIntegrationsSettings,
+  setShareCrashReports,
+  shareCrashReports,
 } from "~/stores/settings-store";
 import { previousRoute, setPreviousRoute } from "~/stores/nav-store";
 import {
@@ -1255,6 +1257,18 @@ const resetAppData = async (): Promise<void> => {
 const SecurityPanel: Component = () => {
   return (
     <div class="space-y-3">
+      <Card
+        title="Privacy"
+        subtitle="What leaves this machine. Everything is off by default."
+      >
+        <Row
+          label="Share crash reports"
+          hint="Send crash and error reports to Sentry to help fix bugs. Off keeps diagnostics in the local log only. Takes effect immediately."
+        >
+          <Switch checked={shareCrashReports()} onChange={setShareCrashReports} />
+        </Row>
+      </Card>
+
       <Card
         title="Two-factor authentication"
         subtitle="Add a second factor to protect your account."

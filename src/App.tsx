@@ -1,13 +1,14 @@
 import type { Component } from "solid-js";
 import { ErrorBoundary, Show, Suspense, createEffect, createSignal, lazy, onCleanup, onMount } from "solid-js";
 import { Router, Route, useNavigate } from "@solidjs/router";
-import { onboarded, settingsLoaded } from "~/stores/settings-store";
+import { onboarded, settingsLoaded, shareCrashReports } from "~/stores/settings-store";
 import { refresh as refreshProjects } from "~/stores/projects-store";
 import { describeIpcError } from "~/lib/errors";
 // Side-effect imports: instantiate the settings store + theme store on boot
 // so their createRoot effects are mounted before any screen renders.
 import "~/stores/settings-store";
 import { setupAutosave } from "~/lib/autosave";
+import { installSentryGate } from "~/lib/sentry-gate";
 import { installFrontendErrorHook, recordError } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
 import { initAiProviders } from "~/integrations/ai/init";
@@ -46,6 +47,7 @@ void ProjectsScreen.preload();
 
 setupAutosave();
 installFrontendErrorHook();
+installSentryGate();
 bootCoreCommands();
 initReferenceProviders();
 initCloudSync();
@@ -84,9 +86,12 @@ function bootSupabaseDeferred(): void {
 const AppCrash: Component<{ err: unknown; reset: () => void }> = (props) => {
   recordError("ui-crash", "render error caught by app ErrorBoundary", props.err);
   // Boundary-caught errors never reach window.onerror, so Sentry's global
-  // handlers can't see them — report explicitly. Dynamic import keeps the SDK
-  // chunk off this module's static graph.
-  void import("~/lib/sentry").then((m) => m.reportCrash(props.err)).catch(() => {});
+  // handlers can't see them — report explicitly, but only when the user has
+  // opted into crash reporting (otherwise this would fetch the SDK chunk for
+  // a no-op: reportCrash is a no-op on an uninitialized client anyway).
+  if (shareCrashReports()) {
+    void import("~/lib/sentry").then((m) => m.reportCrash(props.err)).catch(() => {});
+  }
   return (
     <div
       role="alert"
