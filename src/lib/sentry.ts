@@ -43,6 +43,17 @@ export function initSentry(): void {
 }
 
 /**
+ * Opt-out at runtime (Settings -> Security -> Share crash reports OFF).
+ * `close()` flushes in-flight events and disables the client; a later
+ * re-enable goes through initSentry() again, which creates a fresh client.
+ */
+export function shutdownSentry(): void {
+  if (!initialized) return;
+  initialized = false;
+  void Sentry.close(2000).catch(() => {});
+}
+
+/**
  * For errors caught by Solid ErrorBoundaries — those never reach
  * window.onerror, so Sentry's global handlers can't see them.
  */

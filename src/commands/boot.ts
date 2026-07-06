@@ -204,6 +204,15 @@ if (import.meta.env.DEV) {
     group: "Developer",
     scope: "global",
     run: async () => {
+      const { shareCrashReports } = await import("~/stores/settings-store");
+      if (!shareCrashReports()) {
+        const { notifyError } = await import("~/lib/toast");
+        notifyError(
+          "Crash reporting is off",
+          "Enable Settings > Security > Share crash reports first - the test would silently no-op.",
+        );
+        return;
+      }
       const { sendTestError } = await import("~/lib/sentry");
       sendTestError();
     },

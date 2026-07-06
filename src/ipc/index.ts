@@ -380,6 +380,13 @@ export interface AppSettings {
   ui: UiSettings;
   workspace: WorkspaceSettings;
   integrations: IntegrationsSettings;
+  // Optional: settings.json files predating the privacy section lack it.
+  privacy?: PrivacySettings;
+}
+
+/** Egress opt-ins — everything defaults to OFF (zero reporting unless enabled). */
+export interface PrivacySettings {
+  shareCrashReports: boolean;
 }
 
 export interface UiSettings {

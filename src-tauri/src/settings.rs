@@ -31,6 +31,16 @@ pub struct Settings {
     pub workspace: WorkspaceSettings,
     #[serde(default)]
     pub integrations: IntegrationsSettings,
+    #[serde(default)]
+    pub privacy: PrivacySettings,
+}
+
+/// Egress opt-ins. Everything here defaults to OFF — the app promises zero
+/// network reporting unless the user explicitly enables it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrivacySettings {
+    #[serde(rename = "shareCrashReports", default)]
+    pub share_crash_reports: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -353,6 +363,7 @@ impl Default for Settings {
             ui: UiSettings::default(),
             workspace: WorkspaceSettings::default(),
             integrations: IntegrationsSettings::default(),
+            privacy: PrivacySettings::default(),
         }
     }
 }
