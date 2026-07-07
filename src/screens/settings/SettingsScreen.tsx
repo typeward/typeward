@@ -1,6 +1,7 @@
 import { describeIpcError } from "~/lib/errors";
 import { useNavigate } from "@solidjs/router";
 import {
+  Activity,
   ArrowLeft,
   Bell,
   BookMarked,
@@ -37,6 +38,7 @@ import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { currentTier } from "~/integrations/entitlements";
 import { signOut, supabaseUser } from "~/integrations/supabase/session";
 import { AccountSection } from "./AccountSection";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import {
   IntegrationsPanel,
   aiEntitled,
@@ -114,6 +116,7 @@ type SectionId =
   | "account"
   | "notifications"
   | "security"
+  | "diagnostics"
   | "editor"
   | "appearance"
   | "shortcuts"
@@ -148,6 +151,7 @@ const NAV: NavGroup[] = [
       { id: "account", label: "Account & plan", icon: Key },
       { id: "notifications", label: "Notifications", icon: Bell },
       { id: "security", label: "Security", icon: Shield },
+      { id: "diagnostics", label: "Diagnostics", icon: Activity },
     ],
   },
   {
@@ -315,6 +319,9 @@ const SettingsScreen: Component = () => {
               </Show>
               <Show when={active() === "security"}>
                 <SecurityPanel />
+              </Show>
+              <Show when={active() === "diagnostics"}>
+                <DiagnosticsPanel />
               </Show>
               {/* Locked integration sections render a quiet Pro state instead
                   of their cards; entitled users see everything as before. */}
@@ -1323,7 +1330,7 @@ const SecurityPanel: Component = () => {
       >
         <Row
           label="Share crash reports"
-          hint="Send crash and error reports to Sentry to help fix bugs. Off keeps diagnostics in the local log only. Takes effect immediately."
+          hint="Send crash and error reports to Sentry to help fix bugs: enables in-app error reporting and an automatic scan for crashes from previous runs at launch. Off keeps diagnostics in the local log only (browse and report individual events under Diagnostics). Takes effect immediately."
         >
           <Switch checked={shareCrashReports()} onChange={setShareCrashReports} />
         </Row>
