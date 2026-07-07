@@ -80,6 +80,7 @@
         { "url": "https://www.dropbox.com/oauth2/authorize*" },
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
+        { "url": "https://github.com/typeward/app/issues/new*" },
         { "url": "https://tug.org/*" },
         { "url": "https://account.typeward.com/*" },
         { "url": "https://www.zotero.org/*" },
