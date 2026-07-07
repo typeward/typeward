@@ -2,3 +2,8 @@
 # dev machines stop flagging untouched files (the Cargo.toml "phantom
 # modification" class of churn).
 * text=auto
+
+# Harper's weir rule parser rejects `\r` outright (UnsupportedToken) — the
+# vendored rule files must check out with LF even on Windows hosts, or every
+# grammar test fails at build-script time.
+src-tauri/vendor/harper-core/**/*.weir text eol=lf
