@@ -4,9 +4,9 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
+  BadgeCheck,
   Check,
   Cpu,
-  Download,
   Loader2,
   Package,
   RefreshCw,
@@ -14,62 +14,28 @@ import {
   Sigma,
 } from "lucide-solid";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { Component } from "solid-js";
+import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
+import { setRequestProDialog } from "~/commands/palette-store";
+import { PRO_FEATURES, PRO_PRICING_LINE } from "~/config/pro";
 import { dismissBootSplash } from "~/lib/boot-splash";
 import * as ipc from "~/ipc";
 import { setCompileEngine, setOnboarded } from "~/stores/settings-store";
+import { setSettingsSectionIntent } from "~/stores/nav-store";
 
-// Pandoc is probed by the Rust detector but unused since Markdown-as-project
-// was dropped — don't show it or count it as "missing".
+// The Rust detector also probes pandoc (unused since Markdown-as-project was
+// dropped) and typst (Pro — its setup lives behind the gate, not in the free
+// first run). Only the LaTeX chain matters here.
 const RELEVANT_ENGINES = (engines: ipc.EngineProbe["engines"]) =>
-  engines.filter((e) => e.name !== "pandoc");
+  engines.filter((e) => e.name !== "pandoc" && e.name !== "typst");
 
-type StepId = "welcome" | "formats" | "engines" | "install";
-const STEP_ORDER: StepId[] = ["welcome", "formats", "engines", "install"];
-
-// Format options shown on Step 2.
-interface FormatOption {
-  id: "latex" | "typst";
-  name: string;
-  glyph: string;
-  desc: string;
-  color: string;
-  size: string;
-  engine: string;
-  recommended?: boolean;
-}
-
-const FORMATS: FormatOption[] = [
-  {
-    id: "latex",
-    name: "LaTeX",
-    glyph: "τ",
-    desc: "Mathematical typesetting · papers, theses",
-    color: "var(--format-latex)",
-    size: "4.2 GB",
-    engine: "TeX Live · pdflatex / xelatex / lualatex",
-    recommended: true,
-  },
-  {
-    id: "typst",
-    name: "Typst",
-    glyph: "§",
-    desc: "Modern compile-fast alternative to LaTeX",
-    color: "var(--format-typst)",
-    size: "62 MB",
-    engine: "typst CLI · v0.13",
-    recommended: true,
-  },
-];
+type StepId = "welcome" | "engines" | "plan";
+const STEP_ORDER: StepId[] = ["welcome", "engines", "plan"];
 
 const OnboardingScreen: Component = () => {
   const navigate = useNavigate();
   const [step, setStep] = createSignal<StepId>("welcome");
-  const [picked, setPicked] = createSignal<Set<FormatOption["id"]>>(
-    new Set(["latex"]),
-  );
   const [probe, setProbe] = createSignal<ipc.EngineProbe | null>(null);
   const [probing, setProbing] = createSignal(false);
   const [probeError, setProbeError] = createSignal<string | null>(null);
@@ -89,15 +55,6 @@ const OnboardingScreen: Component = () => {
     if (i > 0) setStep(STEP_ORDER[i - 1]);
   };
 
-  const togglePick = (id: FormatOption["id"]) => {
-    setPicked((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
   const runProbe = async () => {
     setProbing(true);
     setProbeError(null);
@@ -111,9 +68,9 @@ const OnboardingScreen: Component = () => {
     }
   };
 
-  const finish = () => {
+  const finish = (path = "/projects") => {
     void (async () => {
-      // The engine probe normally runs on step 3 — but the welcome step's
+      // The engine probe normally runs on step 2 — but the welcome step's
       // skip button calls finish() directly, and defaulting to Tectonic on a
       // machine with a full TeX Live install would be wrong. Probe first.
       let p = probe();
@@ -126,8 +83,13 @@ const OnboardingScreen: Component = () => {
       }
       setCompileEngine(p?.anyLatexAvailable ? "system-tex" : "tectonic");
       setOnboarded(true);
-      navigate("/projects");
+      navigate(path);
     })();
+  };
+
+  const finishToSignIn = () => {
+    setSettingsSectionIntent("account");
+    finish("/settings");
   };
 
   return (
@@ -150,9 +112,6 @@ const OnboardingScreen: Component = () => {
               <Match when={step() === "welcome"}>
                 <WelcomePane />
               </Match>
-              <Match when={step() === "formats"}>
-                <FormatsPane picked={picked()} onToggle={togglePick} />
-              </Match>
               <Match when={step() === "engines"}>
                 <EnginesPane
                   probe={probe()}
@@ -164,19 +123,19 @@ const OnboardingScreen: Component = () => {
                   }}
                 />
               </Match>
-              <Match when={step() === "install"}>
-                <InstallPane picked={picked()} probe={probe()} />
+              <Match when={step() === "plan"}>
+                <PlanPane />
               </Match>
             </SolidSwitch>
           </div>
           <Footer
             step={step()}
             stepIndex={stepIndex()}
-            picked={picked()}
             probe={probe()}
             onBack={goBack}
             onNext={goNext}
-            onFinish={finish}
+            onFinish={() => finish()}
+            onSignIn={finishToSignIn}
           />
         </div>
       </div>
@@ -242,29 +201,27 @@ const StepBar: Component<{ step: number }> = (props) => (
 // Footer (next/back/finish)
 // =================================================================
 
+// The plan step's two actions are deliberately equal-weight: finishing on
+// Free and reading about Pro are both fine outcomes — no preselected upsell.
+const EQUAL_BTN =
+  "flex h-[38px] items-center gap-2 rounded-[10px] border border-glass-stroke px-[18px] text-base font-medium text-fg-1 hover:bg-[var(--color-control-fill)]";
+
 const Footer: Component<{
   step: StepId;
   stepIndex: number;
-  picked: Set<FormatOption["id"]>;
   probe: ipc.EngineProbe | null;
   onBack: () => void;
   onNext: () => void;
   onFinish: () => void;
+  onSignIn: () => void;
 }> = (props) => {
-  const leftText = createMemo(() => {
+  const leftText = createMemo<JSX.Element>(() => {
     switch (props.step) {
       case "welcome":
         return (
           <span class="flex items-center gap-1.5">
             <Shield size={12} class="text-fg-2" />
             Local-first · your files stay on this machine
-          </span>
-        );
-      case "formats":
-        return (
-          <span>
-            {props.picked.size} of {FORMATS.length} selected · adjust later in
-            Settings
           </span>
         );
       case "engines": {
@@ -274,15 +231,17 @@ const Footer: Component<{
         const ready = engines.filter((e) => e.installed).length;
         return <span>{ready} ready · {engines.length - ready} missing</span>;
       }
-      case "install":
-        return <span>Engines can be changed anytime in Settings → Editor.</span>;
+      case "plan":
+        return (
+          <button
+            type="button"
+            onClick={props.onSignIn}
+            class="rounded-md px-1.5 py-1 text-sm text-fg-3 underline-offset-2 hover:text-fg-1 hover:underline"
+          >
+            Already have an account? Sign in
+          </button>
+        );
     }
-  });
-
-  const primaryLabel = createMemo(() => {
-    if (props.step === "welcome") return "Get started";
-    if (props.step === "install") return "Open Typeward";
-    return "Continue";
   });
 
   return (
@@ -311,14 +270,31 @@ const Footer: Component<{
             Skip setup
           </button>
         </Show>
-        <button
-          type="button"
-          onClick={props.step === "install" ? props.onFinish : props.onNext}
-          class="glow-accent flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-base font-semibold accent-grad"
+        <Show
+          when={props.step === "plan"}
+          fallback={
+            <button
+              type="button"
+              onClick={props.onNext}
+              class="glow-accent flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-base font-semibold accent-grad"
+            >
+              Continue
+              <ArrowRight size={12} stroke-width={2.2} />
+            </button>
+          }
         >
-          {primaryLabel()}
-          <ArrowRight size={12} stroke-width={2.2} />
-        </button>
+          <button
+            type="button"
+            onClick={() => setRequestProDialog(true)}
+            class={EQUAL_BTN}
+          >
+            See what's in Pro
+          </button>
+          <button type="button" onClick={props.onFinish} class={EQUAL_BTN}>
+            Get started
+            <ArrowRight size={12} stroke-width={2.2} />
+          </button>
+        </Show>
       </div>
     </div>
   );
@@ -337,8 +313,8 @@ const GLYPHS: Array<{ t: string; x: string; y: number; s: number; rot: number; o
 ];
 
 const FORMAT_PILLS = [
-  { icon: Sigma, label: "LaTeX" },
-  { icon: Package, label: "Typst" },
+  { icon: Sigma, label: "LaTeX", pro: false },
+  { icon: Package, label: "Typst", pro: true },
 ];
 
 const WelcomePane: Component = () => (
@@ -387,8 +363,8 @@ const WelcomePane: Component = () => (
       class="mx-auto m-0 max-w-[460px] text-base leading-[1.55] text-fg-2"
       style={{ "text-wrap": "pretty" }}
     >
-      A calm editor for the documents that matter. We'll set up the engines you
-      need and get you writing in under two minutes.
+      A calm, local-first LaTeX editor. We'll check your TeX setup and get you
+      writing in under a minute — no account needed.
     </p>
 
     <div class="mt-7 flex justify-center gap-2.5">
@@ -403,6 +379,11 @@ const WelcomePane: Component = () => (
           >
             <b.icon size={12} style={{ color: "var(--color-accent-2)" }} />
             {b.label}
+            <Show when={b.pro}>
+              <span class="mono text-[10px] uppercase tracking-wider text-fg-3">
+                Pro
+              </span>
+            </Show>
           </div>
         )}
       </For>
@@ -411,96 +392,7 @@ const WelcomePane: Component = () => (
 );
 
 // =================================================================
-// Step 2 — Formats
-// =================================================================
-
-const FormatsPane: Component<{
-  picked: Set<FormatOption["id"]>;
-  onToggle: (id: FormatOption["id"]) => void;
-}> = (props) => (
-  <div class="px-[22px] pt-7 pb-[22px]">
-    <h2 class="m-0 mb-1.5 text-[20px] font-semibold tracking-tight text-fg-1">
-      What do you write?
-    </h2>
-    <p class="m-0 mb-5 text-base text-fg-2">
-      Pick what you write — the next step checks your machine for the right
-      engines. You can add more later.
-    </p>
-
-    <div class="grid grid-cols-2 gap-2.5">
-      <For each={FORMATS}>
-        {(f) => {
-          const on = () => props.picked.has(f.id);
-          return (
-            <button
-              type="button"
-              onClick={() => props.onToggle(f.id)}
-              class="relative rounded-xl p-3.5 text-left transition-all"
-              style={{
-                background: on() ? "var(--color-control-fill)" : "var(--color-glass-soft-fill)",
-                border: on()
-                  ? "1px solid color-mix(in srgb, var(--color-accent-1) 45%, transparent)"
-                  : "1px solid var(--color-control-stroke)",
-                "box-shadow": on()
-                  ? "0 0 0 1px color-mix(in srgb, var(--color-accent-1) 20%, transparent), 0 8px 24px color-mix(in srgb, var(--color-accent-1) 10%, transparent)"
-                  : "none",
-              }}
-            >
-              <Show when={f.recommended}>
-                <div
-                  class="absolute right-3 -top-[7px] rounded-md px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.04em] accent-grad"
-                >
-                  Recommended
-                </div>
-              </Show>
-              <div class="flex items-center gap-2.5">
-                <div
-                  class="flex h-[38px] w-[38px] items-center justify-center rounded-[9px] italic font-semibold"
-                  style={{
-                    background: `linear-gradient(135deg, color-mix(in srgb, ${f.color} 20%, transparent), color-mix(in srgb, ${f.color} 7%, transparent))`,
-                    border: `1px solid color-mix(in srgb, ${f.color} 20%, transparent)`,
-                    "font-family": "'Times New Roman', serif",
-                    "font-size": "20px",
-                    color: f.color,
-                  }}
-                >
-                  {f.glyph}
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="text-base font-semibold text-fg-1">{f.name}</div>
-                  <div class="mt-px text-xs text-fg-2">{f.desc}</div>
-                </div>
-                <div
-                  class="flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full"
-                  style={
-                    on()
-                      ? { background: "linear-gradient(135deg, var(--color-accent-1), var(--color-accent-2))" }
-                      : {
-                          border: "1.5px solid var(--color-control-stroke)",
-                        }
-                  }
-                >
-                  <Show when={on()}>
-                    <Check size={10} stroke-width={3} style={{ color: "var(--color-accent-fg)" }} />
-                  </Show>
-                </div>
-              </div>
-              <div
-                class="mono mt-2.5 flex items-center gap-2 border-t border-glass-stroke pt-2 text-xs text-fg-3"
-              >
-                <Package size={10} />
-                <span class="flex-1 truncate">{f.engine}</span>
-              </div>
-            </button>
-          );
-        }}
-      </For>
-    </div>
-  </div>
-);
-
-// =================================================================
-// Step 3 — Engine detection
+// Step 2 — Engine detection
 // =================================================================
 
 const ENGINE_META: Record<string, { glyph: string; color: string; label: string; sub: string }> = {
@@ -508,9 +400,7 @@ const ENGINE_META: Record<string, { glyph: string; color: string; label: string;
   xelatex: { glyph: "τ", color: "var(--format-latex)", label: "XeLaTeX", sub: "Unicode-aware LaTeX" },
   lualatex: { glyph: "τ", color: "var(--format-latex)", label: "LuaLaTeX", sub: "LaTeX with Lua scripting" },
   latexmk: { glyph: "λ", color: "var(--format-latex)", label: "latexmk", sub: "Build manager for LaTeX" },
-  tectonic: { glyph: "T", color: "var(--color-accent-2)", label: "Tectonic", sub: "Lightweight TeX engine" },
-  typst: { glyph: "§", color: "var(--format-typst)", label: "Typst", sub: "Modern typesetter" },
-  pandoc: { glyph: "#", color: "var(--color-fg-3)", label: "Pandoc", sub: "Universal document converter" },
+  tectonic: { glyph: "T", color: "var(--color-accent-2)", label: "Tectonic", sub: "Bundled with Typeward" },
 };
 
 const EnginesPane: Component<{
@@ -536,10 +426,11 @@ const EnginesPane: Component<{
         </div>
         <div class="flex-1">
           <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
-            Checking your system
+            Checking your TeX setup
           </h2>
           <p class="m-0 text-sm text-fg-2">
-            We scanned for the engines your formats need. Here's what we found.
+            Typeward compiles with your system TeX when you have one, or its
+            bundled Tectonic engine — zero install either way.
           </p>
         </div>
         <button
@@ -656,8 +547,9 @@ const EnginesPane: Component<{
           >
             <AlertTriangle size={14} class="mt-0.5" style={{ color: "var(--color-warn)" }} />
             <div class="text-sm text-fg-2">
-              <span class="font-semibold text-fg-1">No LaTeX engine detected — </span>
-              You can install TeX Live from{" "}
+              <span class="font-semibold text-fg-1">No system TeX detected — </span>
+              that's fine: Typeward's bundled Tectonic engine compiles LaTeX
+              with nothing to install. Prefer a full TeX Live? Get it from{" "}
               <button
                 type="button"
                 onClick={() => void openUrl("https://tug.org/texlive/")}
@@ -666,8 +558,7 @@ const EnginesPane: Component<{
               >
                 tug.org
               </button>
-              , or use Typeward's bundled Tectonic engine. Either choice can be
-              changed later in Settings.
+              . Either choice can be changed later in Settings → Editor.
             </div>
           </div>
         </Show>
@@ -677,107 +568,63 @@ const EnginesPane: Component<{
 };
 
 // =================================================================
-// Step 4 — Install
+// Step 3 — Plan awareness
 // =================================================================
 
-const InstallPane: Component<{
-  picked: Set<FormatOption["id"]>;
-  probe: ipc.EngineProbe | null;
-}> = (props) => {
-  // No runtime installer exists — Tectonic ships bundled and Typst is a
-  // user install detected on PATH. This pane is an honest summary of what
-  // each picked format will use, not a fake progress screen.
-  const items = createMemo(() => {
-    const out: Array<{ id: string; name: string; sub: string; ready: boolean }> = [];
-    if (props.picked.has("latex")) {
-      const systemTex = props.probe?.anyLatexAvailable ?? false;
-      out.push({
-        id: "latex",
-        name: "LaTeX",
-        sub: systemTex
-          ? "System TeX detected — Typeward will use it."
-          : "No system TeX found — Typeward's bundled Tectonic engine will be used. Nothing to download.",
-        ready: true,
-      });
-    }
-    if (props.picked.has("typst")) {
-      const typstReady =
-        props.probe?.engines.some((e) => e.name === "typst" && e.installed) ?? false;
-      out.push({
-        id: "typst",
-        name: "Typst",
-        sub: typstReady
-          ? "typst CLI detected on PATH — ready."
-          : "Install the typst CLI from typst.app — Typeward detects it on PATH automatically.",
-        ready: typstReady,
-      });
-    }
-    return out;
-  });
-
-  return (
-    <div class="px-[22px] py-6">
-      <div class="mb-[18px] flex items-start gap-3.5">
-        <div
-          class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
-          style={{
-            background:
-              "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
-            border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
-          }}
-        >
-          <Download size={16} style={{ color: "var(--color-accent-1)" }} />
-        </div>
-        <div>
-          <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
-            You're set
-          </h2>
-          <p class="m-0 text-sm text-fg-2">
-            Here's what each format will compile with. Engines can be changed
-            anytime in Settings → Editor.
-          </p>
-        </div>
+const PlanPane: Component = () => (
+  <div class="px-[22px] py-6">
+    <div class="mb-[18px] flex items-start gap-3.5">
+      <div
+        class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
+        style={{
+          background:
+            "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
+          border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
+        }}
+      >
+        <BadgeCheck size={16} style={{ color: "var(--color-accent-1)" }} />
       </div>
-
-      <div class="flex flex-col gap-2">
-        <For each={items()}>
-          {(t) => (
-            <div
-              class="flex items-center gap-2.5 rounded-[11px] px-3.5 py-3"
-              style={{
-                background: "var(--color-glass-soft-fill)",
-                border: "1px solid var(--color-glass-stroke)",
-              }}
-            >
-              <div
-                class="flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-full"
-                style={
-                  t.ready
-                    ? {
-                        background: "color-mix(in srgb, var(--color-ok) 15%, transparent)",
-                        border: "1px solid color-mix(in srgb, var(--color-ok) 40%, transparent)",
-                      }
-                    : {
-                        background: "color-mix(in srgb, var(--color-warn) 12%, transparent)",
-                        border: "1px solid color-mix(in srgb, var(--color-warn) 35%, transparent)",
-                      }
-                }
-              >
-                <Show
-                  when={t.ready}
-                  fallback={<AlertTriangle size={11} style={{ color: "var(--color-warn)" }} />}
-                >
-                  <Check size={12} stroke-width={2.5} style={{ color: "var(--color-ok)" }} />
-                </Show>
-              </div>
-              <div class="min-w-0 flex-1">
-                <span class="text-base font-semibold text-fg-1">{t.name}</span>
-                <div class="mt-0.5 text-xs text-fg-2">{t.sub}</div>
-              </div>
-            </div>
-          )}
-        </For>
+      <div>
+        <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
+          You're ready to write
+        </h2>
+        <p class="m-0 text-sm text-fg-2">
+          Typeward Free is the full LaTeX editor — no account needed.
+        </p>
       </div>
     </div>
-  );
-};
+
+    <div class="flex flex-col gap-2">
+      <div
+        class="rounded-[11px] px-3.5 py-3"
+        style={{
+          background: "var(--color-glass-soft-fill)",
+          border: "1px solid var(--color-glass-stroke)",
+        }}
+      >
+        <div class="text-base font-semibold text-fg-1">Typeward Free</div>
+        <div class="mt-0.5 text-xs leading-relaxed text-fg-2">
+          Edit, compile, and preview LaTeX with SyncTeX; built-in templates,
+          themes, autosave and recovery, PDF and source exports. Everything
+          works offline.
+        </div>
+      </div>
+
+      <div
+        class="rounded-[11px] px-3.5 py-3"
+        style={{
+          background: "var(--color-glass-soft-fill)",
+          border: "1px solid var(--color-glass-stroke)",
+        }}
+      >
+        <div class="flex flex-wrap items-baseline gap-x-2">
+          <span class="text-base font-semibold text-fg-1">Typeward Pro</span>
+          <span class="text-xs text-fg-3">{PRO_PRICING_LINE}</span>
+        </div>
+        <div class="mt-0.5 text-xs leading-relaxed text-fg-2">
+          {PRO_FEATURES.map((f) => f.label).join(" · ")}
+        </div>
+      </div>
+    </div>
+  </div>
+);
