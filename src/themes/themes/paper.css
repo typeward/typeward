@@ -30,9 +30,13 @@
   --color-card-bg: rgb(255 255 255 / 0.88);
   --color-card-bg-soft: rgb(255 255 255 / 0.65);
 
+  --color-control-track-off: rgb(15 23 42 / 0.14);
+  --color-control-thumb: #ffffff;
+  --color-control-thumb-stroke: rgb(15 23 42 / 0.14);
+
   /* Deeper format accents readable on the cream bg. */
   --format-latex: #7c3aed;
-  --format-typst: #0891b2;
+  --format-typst: #0e7490; /* was #0891b2 — 4.5:1+ for the 10px chip label on white cards */
 
   --color-accent-1: #7c3aed;
   --color-accent-2: #07809d; /* teal — deepened (was #0891b2) so white label clears 4.6:1 */
@@ -43,13 +47,14 @@
   /* Editor syntax — deep violet/teal variants readable on white cards. */
   --syntax-cmd: #7c3aed;
   --syntax-env: #047857;
-  --syntax-math: #0891b2;
+  --syntax-math: #0e7490; /* was #0891b2 — 4.5:1+ for body-size code text */
   --syntax-comment: #687281; /* was #94a3b8 — darkened to 4.6:1 on bg (AA) */
   --syntax-attr: #0f766e;
 
   --color-warn: #b45309;
   --color-err: #be123c;
   --color-ok: #047857;
+  --color-info: #2a5a8f; /* muted steel-blue, AA on paper */
   --color-danger-fill: var(--color-err); /* #be123c crimson is dark enough for white labels */
 
   /* Two-layer drop + crisp white inset highlight per design HTML. */
@@ -59,6 +64,9 @@
     0 1px 2px rgb(15 23 42 / 0.04);
   --shadow-glass-inset-inner: inset 0 1px 2px rgb(15 23 42 / 0.04);
   --shadow-raised: 0 1px 3px rgb(15 23 42 / 0.18);
+  --shadow-accent-btn:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 1px 3px rgb(15 23 42 / 0.18);
 
   /* Ambient: cool pastels per design_files/themes/Typeward Light.html. */
   --blob-1: #ddd6fe;

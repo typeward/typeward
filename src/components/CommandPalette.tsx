@@ -1,13 +1,14 @@
 import { Command, Sparkles } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { EditorCommand, Project } from "~/adapters/types";
 import { closePalette } from "~/commands/actions";
 import { navigateTo, paletteOpen_ } from "~/commands/palette-store";
 import { commands as registryCommands } from "~/commands/registry";
 import { dispatchCommand } from "~/commands/run";
 import { shortcutTokens } from "~/lib/shortcuts";
-import { projects } from "~/stores/projects-store";
+import { getActiveEditorView } from "~/stores/editor-view-store";
+import { isTrashed, projects } from "~/stores/projects-store";
 
 /**
  * Shared command palette overlay. Renders once at the App root so Cmd+K
@@ -51,13 +52,24 @@ export const CommandPalette: Component = () => {
   const [query, setQuery] = createSignal("");
   const [selectedIdx, setSelectedIdx] = createSignal(0);
   let inputRef: HTMLInputElement | undefined;
+  let restoreFocusTo: HTMLElement | null = null;
 
   createEffect(() => {
     if (paletteOpen_()) {
+      restoreFocusTo =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
       setQuery("");
       setSelectedIdx(0);
       // Defer focus until the input has actually rendered.
       queueMicrotask(() => inputRef?.focus());
+    } else if (restoreFocusTo) {
+      // Hand focus back on close — otherwise it drops to <body> and the
+      // keyboard router gates every editor-scoped shortcut until a click.
+      if (restoreFocusTo.isConnected) restoreFocusTo.focus();
+      else getActiveEditorView()?.focus();
+      restoreFocusTo = null;
     }
   });
 
@@ -85,6 +97,7 @@ export const CommandPalette: Component = () => {
       }));
 
     const recentProjects: PaletteRow[] = projects()
+      .filter((p) => !isTrashed(p))
       .filter((p) => matchesQuery(q, p.name, p.rootFile, p.format))
       .slice(0, 5)
       .map<PaletteRow>((p) => ({
@@ -132,6 +145,16 @@ export const CommandPalette: Component = () => {
     if (selectedIdx() >= max) setSelectedIdx(Math.max(0, max - 1));
   });
 
+  // Selection is aria-activedescendant, not DOM focus, so keyboard moves
+  // don't scroll natively — keep the highlighted row inside the fold.
+  createEffect(
+    on(selectedIdx, (i) => {
+      document
+        .getElementById(`palette-option-${i}`)
+        ?.scrollIntoView({ block: "nearest" });
+    }),
+  );
+
   const handleKey = (e: KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -142,6 +165,7 @@ export const CommandPalette: Component = () => {
       const max = rows().length;
       setSelectedIdx((i) => (max === 0 ? 0 : (i - 1 + max) % max));
     } else if (e.key === "Enter") {
+      if (e.isComposing) return;
       e.preventDefault();
       const row = rows()[selectedIdx()];
       if (row) row.run();
@@ -188,7 +212,7 @@ export const CommandPalette: Component = () => {
                 setQuery(e.currentTarget.value);
                 setSelectedIdx(0);
               }}
-              class="flex-1 rounded-md bg-transparent text-[14px] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="flex-1 rounded-md bg-transparent text-base text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
             <kbd
               class="mono rounded px-1.5 py-0.5 text-[10px] text-fg-2"
@@ -210,7 +234,7 @@ export const CommandPalette: Component = () => {
             <Show
               when={rows().length > 0}
               fallback={
-                <div class="px-3 py-8 text-center text-[12px] text-fg-3">
+                <div class="px-3 py-8 text-center text-sm text-fg-3">
                   No matches for "{query()}"
                 </div>
               }
@@ -243,7 +267,7 @@ export const CommandPalette: Component = () => {
                               <Command size={12} />
                             </div>
                             <div class="min-w-0 flex-1">
-                              <div class="truncate text-[13px] text-fg-1">
+                              <div class="truncate text-base text-fg-1">
                                 {row.title}
                               </div>
                               <Show when={row.subtitle}>
@@ -279,7 +303,7 @@ export const CommandPalette: Component = () => {
             </Show>
           </div>
 
-          <div class="mono flex h-[34px] items-center gap-3 border-t border-glass-stroke px-3 text-[11px] text-fg-3">
+          <div class="mono flex h-[34px] items-center gap-3 border-t border-glass-stroke px-3 text-xs text-fg-3">
             <span class="flex items-center gap-1">
               <kbd
                 class="rounded px-1 py-0.5 text-[10px]"

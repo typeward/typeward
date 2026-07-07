@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::integrations::credentials;
 
-#[derive(Debug, Error, Serialize)]
+#[derive(Debug, Error)]
 pub enum GitError {
     #[error("repository at {0} could not be opened")]
     OpenFailed(String),
@@ -111,20 +111,38 @@ pub struct GitAuthor {
 // ----- Helpers -----------------------------------------------------------
 
 fn open_repo(path: &Path) -> Result<Repository, GitError> {
-    Repository::open(path).map_err(|_| GitError::OpenFailed(path.to_string_lossy().into_owned()))
+    let repo = Repository::open(path)
+        .map_err(|_| GitError::OpenFailed(path.to_string_lossy().into_owned()))?;
+    // Any git operation on a repo is also our chance to guarantee the sidecar
+    // is excluded — covers repos opened/initialized outside Typeward too.
+    crate::project::ensure_sidecar_git_excluded(path);
+    Ok(repo)
+}
+
+/// Git-relative path check: is this path inside Typeward's `.typeward/` sidecar?
+/// Matches the first path segment case-insensitively, mirroring the cloud
+/// engine's `normalizeRemoteRelPath` guard. Used to keep snapshots / build
+/// output / review comments / project.json out of status, the clean-worktree
+/// check, and stage-all.
+fn is_sidecar_path(rel: &str) -> bool {
+    rel.replace('\\', "/")
+        .split('/')
+        .next()
+        .map(|seg| seg.eq_ignore_ascii_case(".typeward"))
+        .unwrap_or(false)
 }
 
 /// Existing-repo operations: the repo must be a project the user opened.
 /// Webview XSS == arbitrary IPC, so a bare "absolute path" check would let a
-/// compromised renderer run git against any repo on disk.
+/// compromised renderer run git against any repo on disk. Routes through the
+/// canonical `project::require_registered_root` gate.
 fn validate_repo_path(repo_path: &str) -> Result<PathBuf, GitError> {
     let path = PathBuf::from(repo_path);
     if !path.is_absolute() {
         return Err(GitError::InvalidPath(repo_path.to_string()));
     }
-    if !crate::project::is_registered_root(&path) {
-        return Err(GitError::InvalidPath(repo_path.to_string()));
-    }
+    crate::project::require_registered_root(&path)
+        .map_err(|_| GitError::InvalidPath(repo_path.to_string()))?;
     Ok(path)
 }
 
@@ -136,11 +154,8 @@ fn validate_new_repo_path(repo_path: &str) -> Result<PathBuf, GitError> {
     if !path.is_absolute() {
         return Err(GitError::InvalidPath(repo_path.to_string()));
     }
-    if !(crate::project::is_registered_root(&path)
-        || crate::project::is_new_path_under_projects_root(&path))
-    {
-        return Err(GitError::InvalidPath(repo_path.to_string()));
-    }
+    crate::project::require_new_or_registered_root(&path)
+        .map_err(|_| GitError::InvalidPath(repo_path.to_string()))?;
     Ok(path)
 }
 
@@ -197,10 +212,14 @@ fn ensure_clean_worktree(repo: &Repository) -> Result<(), GitError> {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(true);
     let statuses = repo.statuses(Some(&mut opts))?;
-    if statuses
-        .iter()
-        .any(|entry| entry.status() != git2::Status::CURRENT)
-    {
+    let dirty = statuses.iter().any(|entry| {
+        if entry.status() == git2::Status::CURRENT {
+            return false;
+        }
+        // Typeward's own sidecar must never block a pull.
+        !entry.path().map(is_sidecar_path).unwrap_or(false)
+    });
+    if dirty {
         return Err(GitError::DirtyWorktree);
     }
     Ok(())
@@ -271,7 +290,7 @@ fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
 // ----- IPC commands ------------------------------------------------------
 
 #[tauri::command]
-pub async fn git_init(repo_path: String, bare: Option<bool>) -> Result<(), GitError> {
+pub async fn git_init(repo_path: String, bare: Option<bool>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_new_repo_path(&repo_path)?;
         std::fs::create_dir_all(&path)?;
@@ -280,14 +299,17 @@ pub async fn git_init(repo_path: String, bare: Option<bool>) -> Result<(), GitEr
         } else {
             Repository::init(&path)?;
         }
+        crate::project::ensure_sidecar_git_excluded(&path);
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, GitError> {
+pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, String> {
     tokio::task::spawn_blocking(move || -> Result<GitStatusSummary, GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -299,7 +321,7 @@ pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, GitError>
         let mut files = Vec::with_capacity(statuses.len());
         for entry in statuses.iter() {
             let rel = entry.path().unwrap_or("").to_string();
-            if rel.is_empty() {
+            if rel.is_empty() || is_sidecar_path(&rel) {
                 continue;
             }
             let (staged, unstaged, untracked) = classify(entry.status());
@@ -338,29 +360,38 @@ pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, GitError>
         })
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_stage(repo_path: String, paths: Vec<String>) -> Result<(), GitError> {
+pub async fn git_stage(repo_path: String, paths: Vec<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
         let mut index = repo.index()?;
+        // Never stage the sidecar, even when the caller passes an explicit path
+        // or the empty-paths stage-all default sweeps the whole tree.
+        let mut skip_sidecar = |path: &Path, _matched: &[u8]| -> i32 {
+            i32::from(is_sidecar_path(&path.to_string_lossy()))
+        };
         if paths.is_empty() {
-            index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+            index.add_all(["*"].iter(), IndexAddOption::DEFAULT, Some(&mut skip_sidecar))?;
         } else {
-            index.add_all(paths.iter(), IndexAddOption::DEFAULT, None)?;
+            index.add_all(paths.iter(), IndexAddOption::DEFAULT, Some(&mut skip_sidecar))?;
         }
         index.write()?;
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_unstage(repo_path: String, paths: Vec<String>) -> Result<(), GitError> {
+pub async fn git_unstage(repo_path: String, paths: Vec<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -383,7 +414,9 @@ pub async fn git_unstage(repo_path: String, paths: Vec<String>) -> Result<(), Gi
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -391,7 +424,7 @@ pub async fn git_commit(
     repo_path: String,
     message: String,
     author: Option<GitAuthor>,
-) -> Result<String, GitError> {
+) -> Result<String, String> {
     tokio::task::spawn_blocking(move || -> Result<String, GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -409,11 +442,13 @@ pub async fn git_commit(
         Ok(oid.to_string())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitCommit>, GitError> {
+pub async fn git_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitCommit>, String> {
     let cap = limit.unwrap_or(50).min(500);
     tokio::task::spawn_blocking(move || -> Result<Vec<GitCommit>, GitError> {
         let path = validate_repo_path(&repo_path)?;
@@ -438,11 +473,13 @@ pub async fn git_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitC
         Ok(out)
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_branch_list(repo_path: String) -> Result<Vec<GitBranch>, GitError> {
+pub async fn git_branch_list(repo_path: String) -> Result<Vec<GitBranch>, String> {
     tokio::task::spawn_blocking(move || -> Result<Vec<GitBranch>, GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -470,7 +507,9 @@ pub async fn git_branch_list(repo_path: String) -> Result<Vec<GitBranch>, GitErr
         Ok(out)
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -478,7 +517,7 @@ pub async fn git_branch_create(
     repo_path: String,
     name: String,
     checkout: Option<bool>,
-) -> Result<(), GitError> {
+) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -490,18 +529,22 @@ pub async fn git_branch_create(
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_branch_checkout(repo_path: String, name: String) -> Result<(), GitError> {
+pub async fn git_branch_checkout(repo_path: String, name: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
         checkout_branch(&repo, &name)
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 fn checkout_branch(repo: &Repository, name: &str) -> Result<(), GitError> {
@@ -513,7 +556,7 @@ fn checkout_branch(repo: &Repository, name: &str) -> Result<(), GitError> {
 }
 
 #[tauri::command]
-pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), GitError> {
+pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
@@ -527,7 +570,9 @@ pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), 
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -535,7 +580,7 @@ pub async fn git_pull(
     repo_path: String,
     remote: Option<String>,
     author: Option<GitAuthor>,
-) -> Result<(), GitError> {
+) -> Result<(), String> {
     let remote_name = remote.unwrap_or_else(|| "origin".to_string());
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
@@ -577,7 +622,9 @@ pub async fn git_pull(
         ))
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -585,7 +632,7 @@ pub async fn git_push(
     repo_path: String,
     remote: Option<String>,
     branch: Option<String>,
-) -> Result<(), GitError> {
+) -> Result<(), String> {
     let remote_name = remote.unwrap_or_else(|| "origin".to_string());
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
@@ -608,11 +655,13 @@ pub async fn git_push(
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn git_clone(url: String, dest_path: String) -> Result<(), GitError> {
+pub async fn git_clone(url: String, dest_path: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let dest = validate_new_repo_path(&dest_path)?;
         if dest.exists() {
@@ -628,10 +677,13 @@ pub async fn git_clone(url: String, dest_path: String) -> Result<(), GitError> {
         let mut builder = git2::build::RepoBuilder::new();
         builder.fetch_options(fetch_opts);
         builder.clone(&url, &dest)?;
+        crate::project::ensure_sidecar_git_excluded(&dest);
         Ok(())
     })
     .await
-    .map_err(|e| GitError::Join(e.to_string()))?
+    .map_err(|e| GitError::Join(e.to_string()))
+    .and_then(|r| r)
+    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

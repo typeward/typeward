@@ -37,7 +37,7 @@ export const PaneSwitcher: Component = () => {
               role="tab"
               aria-selected={active()}
               onClick={() => setActivePane(opt.pane)}
-              class={`lift flex h-11 flex-1 items-center justify-center gap-1.5 rounded-lg text-[13px] font-medium transition ${
+              class={`lift flex h-11 flex-1 items-center justify-center gap-1.5 rounded-lg text-base font-medium transition ${
                 active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
               }`}
               style={

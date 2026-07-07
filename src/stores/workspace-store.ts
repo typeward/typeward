@@ -1,4 +1,5 @@
 import { createSignal } from "solid-js";
+import type { SpaceDef } from "~/ipc";
 
 export type ProjectsView = "cards" | "list";
 export type ProjectsSort =
@@ -10,9 +11,39 @@ export type ProjectsSort =
   | "deadline"
   | "format";
 
-// Spaces/Tags render sample data until the real features land — opt-in only.
-const [enableSpaces, setEnableSpaces] = createSignal<boolean>(false);
-const [enableTags, setEnableTags] = createSignal<boolean>(false);
+// Spaces/Tags are real features (persisted per-project + a spaces catalog), so
+// they default on. Users can still hide the sidebar sections in Settings.
+const [enableSpaces, setEnableSpaces] = createSignal<boolean>(true);
+const [enableTags, setEnableTags] = createSignal<boolean>(true);
+
+/**
+ * Named tint palette for spaces (and hashed tag colors). Ids, not raw colors,
+ * so themes re-tint them; the render layer maps each to CSS vars.
+ */
+export const SPACE_TINTS = [
+  "accent",
+  "violet",
+  "teal",
+  "amber",
+  "rose",
+  "green",
+  "slate",
+] as const;
+export type SpaceTint = (typeof SPACE_TINTS)[number];
+
+/** Coerce an arbitrary persisted tint string to a known palette id. */
+export function coerceSpaceTint(raw: string | undefined): SpaceTint {
+  return (SPACE_TINTS as readonly string[]).includes(raw ?? "")
+    ? (raw as SpaceTint)
+    : "accent";
+}
+
+/**
+ * The library spaces catalog (id + name + tint). Per-project membership lives
+ * in each project's `space` field; this is just the set of defined spaces.
+ * Persisted through settings-store under `workspace.spaces`.
+ */
+const [spaces, setSpaces] = createSignal<SpaceDef[]>([]);
 const [notificationsPanelDefault, setNotificationsPanelDefault] =
   createSignal<boolean>(false);
 const [defaultView, setDefaultView] = createSignal<ProjectsView>("cards");
@@ -76,8 +107,10 @@ export {
   setEnableTags,
   setNotificationsPanelDefault,
   setProjectCardWords,
+  setSpaces,
   setStatsCards,
   setWidgetEnabled,
+  spaces,
   statsCards,
   toggleWidget,
   widgetEnabled,

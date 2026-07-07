@@ -17,6 +17,14 @@
 //!
 //! Multiple concurrent OAuth flows are supported — each begins on its own
 //! port and is keyed by state in [`OauthManager`].
+//!
+//! Flow ownership is split across two IPCs, so cleanup does not rely on
+//! [`oauth_wait`] ever being called: [`oauth_cancel`] lets an abandoned sign-in
+//! release its loopback listener(s) immediately, and [`oauth_begin`] also arms
+//! a Rust-side expiry task that removes and shuts down the flow after
+//! [`CALLBACK_TIMEOUT`] regardless. Without this, a flow whose caller never
+//! reaches `oauth_wait` would park its port until process exit — fatal for a
+//! fixed registered port (Mendeley), where the next attempt cannot rebind.
 
 use std::collections::HashMap;
 use std::net::{Ipv6Addr, SocketAddr};
@@ -38,7 +46,10 @@ use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, oneshot, Mutex};
 
+use tauri::Manager;
+
 use crate::integrations::credentials;
+use crate::integrations::http::{blocking, outbound_client_builder, OutboundRedirect};
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -441,18 +452,27 @@ async fn resolve_client_secret_ref(reference: CredentialRef) -> Result<String, O
             reference.service, reference.account
         )));
     }
-    tokio::task::spawn_blocking(move || {
-        credentials::get_secret(&reference.service, &reference.account)
-    })
-    .await
-    .map_err(|e| OauthError::Credential(e.to_string()))?
-    .map_err(|e| OauthError::Credential(e.to_string()))?
-    .ok_or_else(|| OauthError::Credential("missing Mendeley client secret".into()))
+    blocking(move || credentials::get_secret(&reference.service, &reference.account))
+        .await
+        .map_err(OauthError::Credential)?
+        .map_err(|e| OauthError::Credential(e.to_string()))?
+        .ok_or_else(|| OauthError::Credential("missing Mendeley client secret".into()))
 }
 
 #[tauri::command]
 pub async fn oauth_begin(
     req: OauthBeginRequest,
+    app: tauri::AppHandle,
+    manager: tauri::State<'_, OauthManager>,
+) -> Result<OauthBeginResponse, String> {
+    oauth_begin_inner(req, app, manager)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn oauth_begin_inner(
+    req: OauthBeginRequest,
+    app: tauri::AppHandle,
     manager: tauri::State<'_, OauthManager>,
 ) -> Result<OauthBeginResponse, OauthError> {
     validate_oauth_endpoint(&req.auth_url, OauthEndpointKind::Authorization)?;
@@ -494,7 +514,7 @@ pub async fn oauth_begin(
         shutdown: shutdown_tx.clone(),
     };
 
-    let app = Router::new()
+    let router = Router::new()
         .route(&callback_path, get(callback_handler))
         .with_state(callback_state);
 
@@ -502,10 +522,10 @@ pub async fn oauth_begin(
     // IPv6) so `localhost` resolves to whichever the browser picks. Each parks
     // until the broadcast fires — on callback (success/error) or wait timeout.
     for listener in listeners {
-        let app = app.clone();
+        let router = router.clone();
         let mut shutdown_rx = shutdown_tx.subscribe();
         tokio::spawn(async move {
-            let _ = axum::serve(listener, app)
+            let _ = axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_rx.recv().await;
                 })
@@ -524,14 +544,48 @@ pub async fn oauth_begin(
     });
     manager.insert(state.clone(), flow);
 
+    // Backstop against a flow that never reaches oauth_wait (the caller throws
+    // between begin and wait, or the user closes the sign-in dialog with no
+    // cancel). oauth_wait's own timeout only runs while someone is waiting;
+    // this reclaims the port + map entry after the same deadline unconditionally.
+    let cleanup_app = app.clone();
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(CALLBACK_TIMEOUT).await;
+        if let Some(flow) = cleanup_app.state::<OauthManager>().take(&cleanup_state) {
+            flow.shutdown_server();
+        }
+    });
+
     Ok(OauthBeginResponse {
         url: auth_url,
         state,
     })
 }
 
+/// Release an abandoned OAuth flow: take it out of the manager and shut down its
+/// loopback listener(s). Idempotent — an unknown or already-consumed `state` is
+/// a no-op success, so the frontend can call it unconditionally from a
+/// `finally`/abort path when it did not reach `oauth_wait`.
+#[tauri::command]
+pub fn oauth_cancel(state: String, manager: tauri::State<'_, OauthManager>) -> Result<(), String> {
+    if let Some(flow) = manager.take(&state) {
+        flow.shutdown_server();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn oauth_wait(
+    state: String,
+    manager: tauri::State<'_, OauthManager>,
+) -> Result<OauthTokens, String> {
+    oauth_wait_inner(state, manager)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn oauth_wait_inner(
     state: String,
     manager: tauri::State<'_, OauthManager>,
 ) -> Result<OauthTokens, OauthError> {
@@ -572,11 +626,10 @@ pub async fn oauth_wait(
 }
 
 async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, OauthError> {
-    // Redirects are disabled: a token POST must not be bounced to an attacker
-    // host carrying the auth code + verifier.
+    // Redirects are disabled (OutboundRedirect::None): a token POST must not be
+    // bounced to an attacker host carrying the auth code + verifier.
     validate_oauth_endpoint(&flow.token_url, OauthEndpointKind::Token)?;
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+    let client = outbound_client_builder(OutboundRedirect::None)
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| OauthError::TokenExchange(e.to_string()))?;

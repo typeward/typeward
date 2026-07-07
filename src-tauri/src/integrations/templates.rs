@@ -22,7 +22,7 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 use thiserror::Error;
 
-use crate::project::{self, Project, ProjectFormat, ProjectIntegrations};
+use crate::project::{self, Project, ProjectFormat};
 
 #[derive(Debug, Error, Serialize)]
 pub enum TemplateError {
@@ -205,8 +205,7 @@ pub async fn template_instantiate(
             root_file: manifest.root_file.clone(),
             format: manifest.format,
             name: name.clone(),
-            deadline: None,
-            integrations: ProjectIntegrations::default(),
+            ..Default::default()
         };
         project::write_project(&project)?;
         Ok(project)

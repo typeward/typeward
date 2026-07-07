@@ -2,6 +2,7 @@ import { Check, ChevronDown, ChevronUp, MessageCircle, AlertTriangle, Trash2, Ro
 import type { Component } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
 import type { CommentThread } from "~/lib/reviews/types";
+import { formatShortcutForDisplay } from "~/lib/shortcuts";
 
 export interface ThreadCardProps {
   thread: CommentThread;
@@ -81,7 +82,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
               e.stopPropagation();
               props.onClickAnchor();
             }}
-            class="mono block max-w-full truncate text-[11px] text-fg-2 hover:text-[var(--color-accent-1)]"
+            class="mono block max-w-full truncate text-xs text-fg-2 hover:text-[var(--color-accent-1)]"
             title="Jump to anchor in editor"
           >
             {props.orphaned ? `(anchor lost) ${props.thread.anchorText}` : `"${props.thread.anchorText}"`}
@@ -92,11 +93,11 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
             <Show when={props.lineNumber !== null}>:{props.lineNumber}</Show>
           </div>
 
-          <div class="mt-1 text-[12px] text-fg-2">
+          <div class="mt-1 text-sm text-fg-2">
             <span class="font-medium text-fg-1">{rootComment()?.author}</span>
             <span class="text-fg-3"> · {relativeTime(rootComment()?.createdAt ?? "")}</span>
           </div>
-          <div class="mt-0.5 text-[12px] text-fg-2 leading-relaxed">
+          <div class="mt-0.5 select-text text-sm text-fg-2 leading-relaxed">
             {rootComment()?.body}
           </div>
 
@@ -132,11 +133,11 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
               <For each={replies()}>
                 {(reply) => (
                   <div class="rounded-md px-2 py-1.5" style={{ background: "var(--color-glass-soft-fill)" }}>
-                    <div class="text-[11px]">
+                    <div class="text-xs">
                       <span class="font-medium text-fg-1">{reply.author}</span>
                       <span class="text-fg-3"> · {relativeTime(reply.createdAt)}</span>
                     </div>
-                    <div class="mt-0.5 text-[12px] text-fg-2 leading-relaxed">{reply.body}</div>
+                    <div class="mt-0.5 select-text text-sm text-fg-2 leading-relaxed">{reply.body}</div>
                   </div>
                 )}
               </For>
@@ -148,8 +149,8 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
               value={replyText()}
               onInput={(e) => setReplyText(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Reply... (Ctrl+Enter to send)"
-              class="w-full resize-none rounded-md border border-glass-stroke bg-transparent px-2 py-1.5 text-[12px] text-fg-1 placeholder:text-fg-3 focus:border-[var(--color-accent-1)] focus:outline-none"
+              placeholder={`Reply... (${formatShortcutForDisplay("Mod+Enter")} to send)`}
+              class="w-full resize-none rounded-md border border-glass-stroke bg-transparent px-2 py-1.5 text-sm text-fg-1 placeholder:text-fg-2 focus:border-[var(--color-accent-1)] focus:outline-none"
               rows={2}
             />
             <div class="mt-1.5 flex items-center gap-1.5">
@@ -157,8 +158,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
                 type="button"
                 onClick={handleReply}
                 disabled={!replyText().trim()}
-                class="rounded-md px-2.5 py-1 text-[11px] font-medium disabled:opacity-40"
-                style={{ background: "var(--color-accent-1)", color: "var(--color-accent-fg)" }}
+                class="accent-grad rounded-md px-2.5 py-1 text-xs font-medium disabled:opacity-40"
               >
                 Reply
               </button>
@@ -167,7 +167,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
                 <button
                   type="button"
                   onClick={props.onReopen}
-                  class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-fg-3 hover:text-fg-1"
+                  class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-fg-3 hover:text-fg-1"
                   style={{ background: "var(--color-control-fill)" }}
                 >
                   <RotateCcw size={10} /> Reopen
@@ -177,7 +177,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
                 <button
                   type="button"
                   onClick={props.onResolve}
-                  class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-fg-3 hover:text-fg-1"
+                  class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-fg-3 hover:text-fg-1"
                   style={{ background: "var(--color-control-fill)" }}
                 >
                   <Check size={10} /> Resolve
@@ -188,7 +188,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
                 <button
                   type="button"
                   onClick={props.onReanchor}
-                  class="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-[var(--color-warn)] hover:text-fg-1"
+                  class="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-[var(--color-warn)] hover:text-fg-1"
                   style={{ background: "var(--color-control-fill)" }}
                 >
                   <Crosshair size={10} /> Re-anchor
@@ -198,9 +198,11 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
               <button
                 type="button"
                 onClick={props.onDelete}
-                class="ml-auto flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-fg-3 hover:text-[var(--color-err)]"
+                aria-label="Delete thread"
+                title="Delete thread"
+                class="ml-auto flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-fg-3 hover:text-[var(--color-err)]"
               >
-                <Trash2 size={10} />
+                <Trash2 size={12} />
               </button>
             </div>
           </div>

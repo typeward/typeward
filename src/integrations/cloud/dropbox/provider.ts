@@ -25,6 +25,7 @@ import type {
 } from "~/integrations/types";
 
 import { dropboxAuthRef, hasDropboxTokens, type DropboxAccount } from "./auth";
+export type { DropboxAccount } from "./auth";
 
 const API = "https://api.dropboxapi.com";
 const CONTENT = "https://content.dropboxapi.com";

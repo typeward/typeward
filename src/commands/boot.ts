@@ -3,17 +3,17 @@ import {
   closePalette,
   openNewProjectDialog,
   openSettings,
-  saveActiveFile,
+  saveAndCompileActiveProject,
   toggleCommandPalette,
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
+import { notifyError, notifySuccess } from "~/lib/toast";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import { paletteOpen_, setRequestSaveTemplate } from "./palette-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
-import { addThread } from "~/stores/review-store";
-import { dispatchSetThreads, getCurrentRanges } from "~/lib/reviews/cm6";
+import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
 import { toggleFocusMode } from "~/stores/ui-store";
 
 /**
@@ -79,14 +79,14 @@ const CORE_COMMANDS: EditorCommand[] = [
   },
   {
     id: "core.save",
-    title: "Save file",
-    subtitle: "Persist the active editor buffer to disk",
+    title: "Save and compile",
+    subtitle: "Persist every dirty buffer, then compile the project",
     shortcut: "Mod+S",
     group: "File",
     scope: "editor",
-    when: () => activeFile()?.dirty === true,
+    when: () => activeFile() !== null,
     run: async () => {
-      await saveActiveFile();
+      await saveAndCompileActiveProject();
     },
   },
   {
@@ -98,7 +98,16 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => project() !== null,
     run: async () => {
       const proj = project();
-      if (proj) await refreshLibraryBib(proj);
+      if (!proj) return;
+      const result = await refreshLibraryBib(proj);
+      if (result.providersFailed > 0) {
+        notifyError(
+          `${result.providersFailed} reference source${result.providersFailed === 1 ? "" : "s"} failed`,
+          result.failures.map((f) => `${f.providerId}: ${f.message}`).join("\n"),
+        );
+      } else {
+        notifySuccess("Reference library refreshed", `${result.totalKeys} citations`);
+      }
     },
   },
   {
@@ -122,23 +131,53 @@ const CORE_COMMANDS: EditorCommand[] = [
       if (sel.from === sel.to) return;
       const anchorText = view.state.doc.sliceString(sel.from, sel.to);
       const thread = createThread(f.relPath, sel.from, sel.to, anchorText, "You", "");
+      // The store is the single source of truth; the CM decoration bridge
+      // (syncThreadsToView, driven from the shell) picks this up and renders
+      // the new anchor. No direct RangeSet dispatch here.
       addThread(thread);
-      const existing = getCurrentRanges(view);
-      dispatchSetThreads(view, [
-        ...existing,
-        { id: thread.id, from: sel.from, to: sel.to, status: "open" },
-      ]);
+    },
+  },
+  {
+    id: "review.addTodo",
+    title: "Add TODO",
+    subtitle: "Flag the current selection as a TODO",
+    shortcut: "Mod+Shift+T",
+    group: "Review",
+    scope: "editor",
+    when: () => {
+      const view = getActiveEditorView();
+      if (!view) return false;
+      const sel = view.state.selection.main;
+      return sel.from !== sel.to && activeFile() !== null;
+    },
+    run: () => {
+      const view = getActiveEditorView();
+      const f = activeFile();
+      if (!view || !f) return;
+      const sel = view.state.selection.main;
+      if (sel.from === sel.to) return;
+      const anchorText = view.state.doc.sliceString(sel.from, sel.to);
+      const thread = createThread(
+        f.relPath,
+        sel.from,
+        sel.to,
+        anchorText,
+        "You",
+        "",
+        "todo",
+      );
+      addThread(thread);
     },
   },
   {
     id: "review.togglePanel",
-    title: "Toggle Review Panel",
-    subtitle: "Show or hide the review sidebar",
+    title: "Open Review Panel",
+    subtitle: "Show the review sidebar",
     group: "Review",
     scope: "global",
     when: () => project() !== null,
     run: () => {
-      window.dispatchEvent(new CustomEvent("typeward:toggle-review-panel"));
+      requestReviewPanelIntent();
     },
   },
   {
@@ -154,6 +193,31 @@ const CORE_COMMANDS: EditorCommand[] = [
     },
   },
 ];
+
+// Dev builds only: exercises the full unhandled-error -> Sentry transport ->
+// CSP pipeline. Tree-shaken out of release bundles.
+if (import.meta.env.DEV) {
+  CORE_COMMANDS.push({
+    id: "dev.sentryTest",
+    title: "Send Sentry test error",
+    subtitle: "Throw an unhandled error to verify Sentry delivery (dev only)",
+    group: "Developer",
+    scope: "global",
+    run: async () => {
+      const { shareCrashReports } = await import("~/stores/settings-store");
+      if (!shareCrashReports()) {
+        const { notifyError } = await import("~/lib/toast");
+        notifyError(
+          "Crash reporting is off",
+          "Enable Settings > Security > Share crash reports first - the test would silently no-op.",
+        );
+        return;
+      }
+      const { sendTestError } = await import("~/lib/sentry");
+      sendTestError();
+    },
+  });
+}
 
 /**
  * Idempotent by id — registerCommand replaces, so calling this more than

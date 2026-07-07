@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from "solid-js";
+import { createMemo, createRoot, createSignal } from "solid-js";
 import type { CompileResult, Project } from "~/adapters/types";
 
 export interface OpenFile {
@@ -8,6 +8,15 @@ export interface OpenFile {
   relPath: string;
   content: string;
   dirty: boolean;
+  /**
+   * SHA-256 of the on-disk content this buffer was loaded from (and updated on
+   * every successful save). The save path compares the live disk hash against
+   * this to detect that the file changed underneath the buffer — e.g. a cloud
+   * pull applied a collaborator's edit — so a save can preserve the other copy
+   * instead of silently reverting it. Undefined for buffers whose disk origin
+   * is unknown (conflict-inspection tabs), which skip the guard.
+   */
+  baseHash?: string;
 }
 
 /**
@@ -32,6 +41,8 @@ export interface GotoSourceIntent {
   /** Path relative to project.rootPath. */
   relPath: string;
   line: number;
+  /** When set, select these 0-based document offsets instead of the line. */
+  range?: { from: number; to: number };
   generation: number;
 }
 
@@ -58,16 +69,26 @@ export const requestPdfScroll = (page: number, y: number): void => {
   setPdfScrollTargetInternal({ page, y, generation: _scrollGen });
 };
 
-export const requestGotoSource = (relPath: string, line: number): void => {
+export const requestGotoSource = (
+  relPath: string,
+  line: number,
+  range?: { from: number; to: number },
+): void => {
   _gotoGen++;
-  setGotoSourceIntentInternal({ relPath, line, generation: _gotoGen });
+  setGotoSourceIntentInternal({ relPath, line, range, generation: _gotoGen });
 };
 
-const activeFile = createMemo<OpenFile | null>(() => {
-  const i = activeIndex();
-  const files = openFiles();
-  return i >= 0 && i < files.length ? files[i] : null;
-});
+// Owned by a module-level root so this page-lifetime memo isn't created in a
+// stray reactive scope (which logs "computations created outside a createRoot
+// or render will never be disposed" at boot). The root is intentionally never
+// disposed — this store lives for the app's lifetime.
+const activeFile = createRoot(() =>
+  createMemo<OpenFile | null>(() => {
+    const i = activeIndex();
+    const files = openFiles();
+    return i >= 0 && i < files.length ? files[i] : null;
+  }),
+);
 
 /** Replace the currently-active file's state (content, dirty, etc.). */
 function updateActiveFile(patch: Partial<OpenFile>): void {
@@ -85,13 +106,21 @@ function updateActiveFile(patch: Partial<OpenFile>): void {
  * Otherwise append a new tab and activate it.
  */
 function openFile(file: OpenFile): void {
-  const existing = openFiles().findIndex((f) => f.path === file.path);
-  if (existing >= 0) {
-    setActiveIndex(existing);
-    return;
-  }
+  if (activateFileIfOpen(file.path)) return;
   setOpenFiles((prev) => [...prev, file]);
   setActiveIndex(openFiles().length - 1);
+}
+
+/**
+ * Activate an already-open tab by absolute path. Returns false when no tab
+ * matches. Lets callers skip the disk read entirely for open files — the
+ * dedupe branch of openFile discards freshly-read content anyway.
+ */
+function activateFileIfOpen(path: string): boolean {
+  const existing = openFiles().findIndex((f) => f.path === path);
+  if (existing < 0) return false;
+  setActiveIndex(existing);
+  return true;
 }
 
 /**
@@ -112,6 +141,40 @@ function markFileCleanIfUnchanged(path: string, content: string): void {
 }
 
 /**
+ * Record the disk base hash for an open tab after a successful write, so the
+ * save-time conflict guard measures against what actually hit disk. No-op if
+ * the tab was closed meanwhile.
+ */
+function setFileBaseHash(path: string, baseHash: string): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.path === path);
+    if (i < 0 || prev[i].baseHash === baseHash) return prev;
+    const next = prev.slice();
+    next[i] = { ...next[i], baseHash };
+    return next;
+  });
+}
+
+/**
+ * Adopt fresh on-disk content into an already-open tab and mark it clean —
+ * used after a sync conflict is resolved on disk (e.g. "keep theirs") so the
+ * buffer matches the canonical file and a follow-up save can't resurrect the
+ * discarded version. No-op if the file isn't open. (For the active tab the
+ * mounted CodeMirror instance keeps rendering its own doc until it remounts on
+ * the next tab switch — the store is corrected either way, so the save path
+ * never writes stale content.)
+ */
+function adoptDiskContent(path: string, content: string, baseHash: string): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.path === path);
+    if (i < 0) return prev;
+    const next = prev.slice();
+    next[i] = { ...next[i], content, dirty: false, baseHash };
+    return next;
+  });
+}
+
+/**
  * Restore a snapshot's content into the editor: replace the buffer of an
  * already-open tab (marking it dirty) or open a new tab for it. Used by crash
  * recovery, where the orphaned file is frequently the root file that was
@@ -126,6 +189,30 @@ function restoreFileContent(file: OpenFile): void {
     return next;
   });
   if (activeIndex() < 0) setActiveIndex(0);
+}
+
+/**
+ * Rename an open tab in place: repoint its absolute + relative path while
+ * preserving the buffer content, dirty flag, and baseHash. The rename moved the
+ * exact bytes on disk, so baseHash stays valid. The active tab's CodeMirror
+ * remounts because `text-shell` keys it on `activeFile().path`. No-op if the
+ * file isn't open (a rename from the tree on a non-open file needs no buffer
+ * bookkeeping).
+ */
+function renameOpenFile(oldRel: string, newRel: string, newAbs: string): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.relPath === oldRel);
+    if (i < 0) return prev;
+    const next = prev.slice();
+    next[i] = { ...next[i], path: newAbs, relPath: newRel };
+    return next;
+  });
+}
+
+/** Close whichever tab holds `relPath` (used after deleting a file). No-op if not open. */
+function closeFileByRelPath(relPath: string): void {
+  const i = openFiles().findIndex((f) => f.relPath === relPath);
+  if (i >= 0) closeFile(i);
 }
 
 /** Close a tab by index. Adjusts activeIndex to a sibling. */
@@ -148,11 +235,26 @@ function resetTabs(): void {
   setActiveIndex(-1);
 }
 
+/**
+ * Clear compile status + last result on project switch. Without this a fresh
+ * project renders the previous project's PDF (via `lastResult.outputPath`) and
+ * shows its stale compile status/duration until its own first compile. Bumping
+ * pdfVersion invalidates any cached PDF render for the now-null output path.
+ */
+function resetCompileState(): void {
+  setCompileState("idle");
+  setLastResult(null);
+  bumpPdfVersion();
+}
+
 export {
+  activateFileIfOpen,
   activeFile,
   activeIndex,
+  adoptDiskContent,
   bumpPdfVersion,
   closeFile,
+  closeFileByRelPath,
   compileState,
   gotoSourceIntent,
   lastResult,
@@ -162,10 +264,13 @@ export {
   pdfScrollTarget,
   pdfVersion,
   project,
+  renameOpenFile,
+  resetCompileState,
   resetTabs,
   restoreFileContent,
   setActiveIndex,
   setCompileState,
+  setFileBaseHash,
   setLastResult,
   setProject,
   updateActiveFile,

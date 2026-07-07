@@ -58,6 +58,19 @@ jobs:
         working-directory: app
         run: npm test
 
+      # Guards the load-bearing editor code-split (vite.config.ts advancedChunks):
+      # a bundler bump that breaks the runtime-helpers group id match would fold
+      # the helpers into a vendor chunk and drag pdfjs/codemirror/markdown into the
+      # boot path silently. check:bundle inspects dist/index.html and fails if that
+      # regresses. Runs after a real production build.
+      - name: Build frontend bundle
+        working-directory: app
+        run: npm run build
+
+      - name: Check bundle shape
+        working-directory: app
+        run: npm run check:bundle
+
   rust:
     name: Cargo tests
     runs-on: ubuntu-24.04

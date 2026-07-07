@@ -27,6 +27,18 @@ import type { CloudFsProvider } from "~/integrations/types";
 
 export type CloudProviderId = "dropbox" | "webdav";
 
+/**
+ * Registry idiom (cloud): unlike references (open reactive list) and AI
+ * (single-active union + lazy map), cloud has no long-lived registry — this is
+ * a per-account factory with an exhaustive `switch`, because a provider is
+ * instantiated on demand per active project.
+ *
+ * NOTE: `baseUrl`/`username`/`allowPrivateHost` are WebDAV-only and sit here as
+ * optionals with an `asWebdav` runtime throw. The clean shape is a discriminated
+ * union on `provider`, but the construction/copy sites live in cloud/init.ts and
+ * cloud/create.ts (not owned by this change); tightening is deferred to a pass
+ * that can touch those together.
+ */
 export interface CloudAccountRef {
   provider: CloudProviderId;
   accountId: string;

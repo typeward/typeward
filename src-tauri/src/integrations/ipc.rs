@@ -26,10 +26,25 @@ pub fn frame_meta_body(meta_json: &[u8], body: &[u8]) -> Vec<u8> {
 /// The raw byte body of a binary-upload command's request. The bytes arrive as
 /// the IPC ArrayBuffer body (not a JSON number array); a non-raw or absent body
 /// (e.g. a metadata-only call) reads as empty.
+///
+/// Callers whose contract is "this command must carry a byte body" want
+/// [`raw_body_required`] instead — the empty fallback here silently uploads a
+/// zero-length file when the body is missing.
 pub fn raw_body(request: &tauri::ipc::Request<'_>) -> Vec<u8> {
     match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
         _ => Vec::new(),
+    }
+}
+
+/// Like [`raw_body`] but errors when the request has no raw byte body, so a
+/// write command can't be tricked into persisting an empty file. This is the
+/// variant the binary-write commands use; `raw_body` stays lenient for callers
+/// where a metadata-only body is a legitimate shape.
+pub fn raw_body_required(request: &tauri::ipc::Request<'_>) -> Result<Vec<u8>, String> {
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => Ok(bytes.clone()),
+        _ => Err("expected a raw request body".to_string()),
     }
 }
 

@@ -1,5 +1,6 @@
 import type { EditorCommand } from "~/adapters/types";
-import { errorText, notifyError } from "~/components/feedback/Toaster";
+import { notifyError } from "~/lib/toast";
+import { describeIpcError as errorText } from "~/lib/errors";
 
 /**
  * Single execution path for command `run()` from both the keyboard router and

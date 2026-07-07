@@ -21,10 +21,11 @@ svg {
  * match :focus-visible on every focus and carry their own ring styles). */
 button:focus-visible,
 a:focus-visible,
+[role="button"]:focus-visible,
 [role="tab"]:focus-visible,
 [role="option"]:focus-visible,
 select:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--color-accent-1) 70%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--color-accent-1) 90%, transparent);
   outline-offset: 2px;
 }
 
@@ -168,20 +169,34 @@ body {
 
 /* Scrollbar (WebKit only — Chromium-based webview on Tauri) ------------ */
 
-.scroll::-webkit-scrollbar {
+.scroll {
+  /* A scroller that hits its end must not chain into the app shell
+   * (rubber-banding the window on macOS). */
+  overscroll-behavior: contain;
+}
+
+.scroll::-webkit-scrollbar,
+.md-preview pre::-webkit-scrollbar,
+.md-preview .katex-display::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-.scroll::-webkit-scrollbar-track {
+.scroll::-webkit-scrollbar-track,
+.md-preview pre::-webkit-scrollbar-track,
+.md-preview .katex-display::-webkit-scrollbar-track {
   background: transparent;
 }
-.scroll::-webkit-scrollbar-thumb {
+.scroll::-webkit-scrollbar-thumb,
+.md-preview pre::-webkit-scrollbar-thumb,
+.md-preview .katex-display::-webkit-scrollbar-thumb {
   background: var(--color-control-fill);
   border-radius: 8px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
-.scroll::-webkit-scrollbar-thumb:hover {
+.scroll::-webkit-scrollbar-thumb:hover,
+.md-preview pre::-webkit-scrollbar-thumb:hover,
+.md-preview .katex-display::-webkit-scrollbar-thumb:hover {
   background: var(--color-control-fill-hover);
 }
 
@@ -216,15 +231,6 @@ body {
   animation: blink 1.05s steps(1) infinite;
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -200% 0;
-  }
-  100% {
-    background-position: 200% 0;
-  }
-}
-
 /* SyncTeX forward-search highlight: gradient ribbon that pulses on, then
  * fades to 0 opacity. Triggered by PdfViewer when scrollTarget changes. */
 @keyframes synctex-pulse {
@@ -240,16 +246,6 @@ body {
     opacity: 0;
     transform: scaleY(1);
   }
-}
-.shimmer {
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgb(255 255 255 / 0.06) 50%,
-    transparent 100%
-  );
-  background-size: 200% 100%;
-  animation: shimmer 1.6s linear infinite;
 }
 
 /* Caret used in the Composer prompt — gradient bar that blinks. */
@@ -303,6 +299,46 @@ body {
  * lights are disabled, the blob layer is fully removed from the paint tree. */
 :root[data-ambient="off"] .ambient {
   display: none;
+}
+
+/* Per-user toggle (Settings → Appearance → Accent). When the accent gradient
+ * is off, every gradient surface collapses to the solid accent-1. `.accent-grad`
+ * keeps its `color: var(--color-accent-fg)` from the base rule. `.glow-accent`
+ * is left alone — it's a glow, not a gradient fill. */
+:root[data-accent-gradient="off"] {
+  --accent-text-1: var(--color-accent-1);
+  --accent-text-2: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .accent-grad,
+:root[data-accent-gradient="off"] .accent-border,
+:root[data-accent-gradient="off"] .caret,
+:root[data-accent-gradient="off"] .side-active::before {
+  background: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .lift.accent-grad:hover {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
+    color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+  );
+  background-color: var(--color-accent-1);
+}
+
+/* Glow off — basic themes force this via data-glow, styled themes toggle it in
+ * Appearance. An off-override block rather than :not() wrapping the base rules,
+ * so the glow surfaces keep a designed flat fallback instead of dead hovers. */
+:root[data-glow="off"] .glow-accent {
+  box-shadow: none;
+}
+:root[data-glow="off"] .card-shell:hover {
+  box-shadow: var(--shadow-glass-inset), var(--shadow-glass-drop);
+}
+:root[data-glow="off"] .card-glow:hover {
+  border-color: var(--color-glass-stroke-strong);
+  box-shadow: none;
+}
+:root[data-glow="off"] .avatar-ring,
+:root[data-glow="off"] .avatar-ring-2 {
+  box-shadow: 0 0 0 2px var(--color-bg-base);
 }
 
 .blob {
@@ -420,51 +456,6 @@ body {
   );
 }
 
-/* Animated border-flow gradient used on the Composer's top edge. */
-@keyframes border-flow {
-  0% {
-    background-position: 0% 50%;
-  }
-  100% {
-    background-position: 200% 50%;
-  }
-}
-.composer-glow {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    color-mix(in srgb, var(--color-accent-1) 35%, transparent),
-    color-mix(in srgb, var(--color-accent-2) 35%, transparent),
-    transparent
-  );
-  background-size: 200% 100%;
-  animation: border-flow 3.6s linear infinite;
-}
-
-/* Tiny "paper" surface used as document thumbnails on project cards. */
-.thumb {
-  background: linear-gradient(180deg, #fbfaf6 0%, #f4f2ec 100%);
-  color: #1f2937;
-}
-
-/* Mini-doc lines used inside .thumb to mimic paragraphs. */
-.doc-line {
-  background: rgb(31 41 55 / 0.55);
-  border-radius: 0.5px;
-}
-.doc-line.dim {
-  background: rgb(31 41 55 / 0.3);
-}
-.doc-line.darker {
-  background: rgb(17 24 39 / 0.85);
-}
-
-/* Math glyphs that appear in the mini-doc thumbnails. */
-.glyph-eq {
-  font-family: "Cambria", "Times New Roman", serif;
-  font-style: italic;
-}
-
 .no-emoji {
   font-variant-emoji: text;
 }
@@ -474,7 +465,7 @@ body {
  * prose scale lives here. Token-driven, so the light/dark variant classes
  * the component sets need no per-theme rules of their own. */
 .md-preview {
-  font-size: 14px;
+  font-size: var(--ui-font-base);
   line-height: 1.7;
 }
 .md-preview h1,
@@ -584,6 +575,17 @@ body {
   margin: 1em 0;
   overflow-x: auto;
 }
+/* Placeholder emitted when the sandboxed renderer refuses an image
+ * (traversal, absolute path, unknown scheme) — the author must see that
+ * something was blocked rather than nothing at all. */
+.md-img-blocked {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-fg-3);
+  border: 1px dashed var(--color-glass-stroke-strong);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
 
 /* --- Review comment anchors --- */
 .cm-review-anchor-open {
@@ -593,12 +595,136 @@ body {
 .cm-review-anchor-resolved {
   background: color-mix(in srgb, var(--color-accent-1) 4%, transparent);
 }
-.cm-review-gutter { width: 16px; }
+/* TODO threads carry an extra modifier class over the base open/resolved
+ * anchor — warm-tinted to match the PDF annotation bands. Placed after the
+ * base rules so the single-class background override wins for open todos. */
+.cm-review-anchor--todo {
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--color-warn) 35%, transparent);
+}
+.cm-review-anchor-resolved.cm-review-anchor--todo {
+  background: color-mix(in srgb, var(--color-warn) 4%, transparent);
+}
+.cm-review-gutter { width: 20px; }
 .cm-review-gutter-marker {
   color: var(--color-accent-1);
-  cursor: pointer;
   opacity: 0.7;
   font-size: 10px;
   line-height: 1;
 }
+.cm-review-gutter-marker--todo { color: var(--color-warn); }
 .cm-review-gutter-marker:hover { opacity: 1; }
+
+/* --- Grammar (Harper) lint underlines, styled per LintKind ---
+ * The linter tags each range with a `cm-lint-<kind>` mark class. We replace
+ * the default wavy background with a per-kind text-decoration underline so
+ * spelling / grammar / style read distinctly. Only our grammar ranges are
+ * retargeted (the attribute-substring guard) — LSP and compile lint underlines
+ * keep the default. Colors come from theme tokens so all four themes hold up. */
+.cm-lintRange[class*="cm-lint-"] {
+  background-image: none;
+  text-decoration-skip-ink: none;
+}
+
+/* Four families (see src/lib/grammar/kinds.ts — the single source): each gets
+ * a colored underline plus a faint same-hue wash, Grammarly-style. Spelling and
+ * grammar carry the firmer wavy line; the advisory style/misc families use a
+ * dashed line. Family classes track kinds.ts's KIND_TO_FAMILY map. */
+
+/* Spelling family (red): misspellings, typos. */
+.cm-lintRange.cm-lint-spelling,
+.cm-lintRange.cm-lint-typo,
+.cm-lintRange.cm-lint-malapropism,
+.cm-lintRange.cm-lint-eggcorn {
+  text-decoration: underline wavy var(--color-err);
+  background: color-mix(in srgb, var(--color-err) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Grammar family (amber): agreement, punctuation, capitalization. */
+.cm-lintRange.cm-lint-grammar,
+.cm-lintRange.cm-lint-agreement,
+.cm-lintRange.cm-lint-boundaryerror,
+.cm-lintRange.cm-lint-capitalization,
+.cm-lintRange.cm-lint-punctuation {
+  text-decoration: underline wavy var(--color-warn);
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Style family (green, advisory): prose polish. */
+.cm-lintRange.cm-lint-style,
+.cm-lintRange.cm-lint-enhancement,
+.cm-lintRange.cm-lint-readability,
+.cm-lintRange.cm-lint-redundancy,
+.cm-lintRange.cm-lint-repetition,
+.cm-lintRange.cm-lint-formatting {
+  text-decoration: underline dashed var(--color-ok);
+  background: color-mix(in srgb, var(--color-ok) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Misc family (blue, advisory): word choice, usage, regionalisms. */
+.cm-lintRange.cm-lint-wordchoice,
+.cm-lintRange.cm-lint-miscellaneous,
+.cm-lintRange.cm-lint-nonstandard,
+.cm-lintRange.cm-lint-regionalism,
+.cm-lintRange.cm-lint-usage {
+  text-decoration: underline dashed var(--color-info);
+  background: color-mix(in srgb, var(--color-info) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Kind chip prepended to the lint tooltip message: a family-colored dot + the
+ * humanized kind. `--dot` is set inline by renderMessage from the family var. */
+.cm-lint-message { display: block; line-height: 1.5; }
+.cm-lint-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-right: 0.5em;
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--color-fg-1);
+  vertical-align: baseline;
+}
+.cm-lint-kind-chip::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 999px;
+  background: var(--dot, var(--color-info));
+}
+
+/* --- Grammar lint tooltip: restyle the built-in @codemirror/lint tooltip into
+ * a popover card (matches the app's glass popovers), dropping the default
+ * severity border-left and the redundant source line. */
+.cm-tooltip.cm-tooltip-lint {
+  background: var(--color-popover-bg);
+  border: 1px solid var(--color-glass-stroke-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-glass-drop);
+  padding: 0;
+  max-width: 340px;
+}
+.cm-tooltip-lint .cm-diagnostic {
+  border-left: none;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.8rem;
+  color: var(--color-fg-2);
+}
+.cm-tooltip-lint .cm-diagnosticSource { display: none; }
+.cm-tooltip-lint .cm-diagnosticAction {
+  display: inline-block;
+  margin: 0.5em 0.35em 0 0;
+  padding: 0.2em 0.6em;
+  border-radius: 6px;
+  border: 1px solid var(--color-control-stroke);
+  background: var(--color-control-fill);
+  color: var(--color-fg-1);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.cm-tooltip-lint .cm-diagnosticAction:hover {
+  background: var(--color-control-fill-hover);
+}

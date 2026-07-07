@@ -13,19 +13,28 @@ import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { Glass } from "~/components/glass/Glass";
 import { Button } from "~/components/primitives/Button";
 import { RecoveryDialog } from "~/components/editor/RecoveryDialog";
+import {
+  errorText,
+  notifyError,
+  notifyInfo,
+} from "~/components/feedback/Toaster";
 import * as ipc from "~/ipc";
 import {
+  activateFileIfOpen,
   activeFile,
   compileState,
   gotoSourceIntent,
   lastResult,
   openFile as openFileInStore,
+  openFiles,
   project,
+  resetCompileState,
   resetTabs,
   restoreFileContent,
   setProject,
 } from "~/stores/editor-store";
-import { setCursorLine } from "~/stores/editor-view-store";
+import { sha256Hex } from "~/lib/hash";
+import { setCursorLine, setSelectionRange } from "~/stores/editor-view-store";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
   flushPendingReviewSave,
@@ -37,6 +46,7 @@ import { startWatching, stopWatching } from "~/stores/watcher-store";
 import { TextShell } from "./shells/text-shell";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
 import { adapterFor } from "~/commands/actions";
+import { asLspLanguage } from "~/adapters/languages";
 import {
   registerAdapterCommands,
   unregisterAdapterCommands,
@@ -44,11 +54,17 @@ import {
 import { focusMode } from "~/stores/ui-store";
 import type { EditorAdapter } from "~/adapters/types";
 
+const BINARY_EXT = /\.(png|jpe?g|gif|pdf|eps|webp|bmp|ico|woff2?|ttf|otf|zip)$/i;
+
 const EditorScreen: Component = () => {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const [orphans, setOrphans] = createSignal<ipc.Snapshot[]>([]);
   const [recoveryOpen, setRecoveryOpen] = createSignal(false);
+  // True while the open chain for ?path is in flight and no project is
+  // mounted yet — drives the "Opening…" state instead of a misleading
+  // "No project open" flash on every cold open.
+  const [opening, setOpening] = createSignal(false);
   const loadGuard = createAsyncGenerationGuard();
 
   let registeredAdapter: EditorAdapter | null = null;
@@ -64,20 +80,44 @@ const EditorScreen: Component = () => {
     const token = loadGuard.next();
     const path = typeof params.path === "string" ? params.path : null;
     if (!path) {
+      setOpening(false);
       void stopAllSessions();
       void stopWatching();
       teardownAdapter();
       void flushPendingReviewSave().then(resetThreads);
       setProject(null);
       resetTabs();
+      resetCompileState();
       return;
     }
+    setOpening(true);
     void (async () => {
       try {
         const p = await ipc.openProject(path);
         if (!token.isCurrent()) return;
-        // Tear down any previous project's LSP sessions + watcher before swapping.
-        await stopAllSessions();
+        // A trashed project must not open (covers palette / switcher / deep
+        // links). Bounce back to the library without stamping last-opened.
+        if (p.trashedAt != null) {
+          notifyError(
+            "Project is in the trash",
+            "Restore it from the library to open it.",
+          );
+          setOpening(false);
+          void stopAllSessions();
+          void stopWatching();
+          teardownAdapter();
+          void flushPendingReviewSave().then(resetThreads);
+          setProject(null);
+          resetTabs();
+          resetCompileState();
+          navigate("/projects");
+          return;
+        }
+        // Tear down the previous project's LSP sessions fire-and-forget: the
+        // session registry empties synchronously, per-start server ids can't
+        // collide, and awaiting the shutdown handshake would let a wedged
+        // language server stall the new project's first paint for up to 2s.
+        void stopAllSessions();
         await stopWatching();
         // Persist any pending review-comment save to the *previous* project
         // before its threads are cleared.
@@ -85,44 +125,55 @@ const EditorScreen: Component = () => {
         if (!token.isCurrent()) return;
         teardownAdapter();
         setProject(p);
+        // Stamp last-opened for the library's "Last opened" sort. Single
+        // chokepoint — every open routes through here. Fire-and-forget.
+        void ipc.touchProjectOpened(p.rootPath).catch(() => {});
+        setOpening(false);
         resetTabs();
+        resetCompileState();
         resetThreads();
         void loadThreads(token.isCurrent);
         // Bind the matching adapter's commands into the registry so the
         // palette and Mod+Enter work format-specifically.
         const adapter = adapterFor(p);
-        if (adapter) {
-          registerAdapterCommands(adapter);
-          registeredAdapter = adapter;
-        }
+        registerAdapterCommands(adapter);
+        registeredAdapter = adapter;
         // Start the file watcher so external edits / new files / deletions
         // refresh the FileTree (it reads `fsVersion` as a resource source).
         void startWatching(p.rootPath, token.isCurrent);
-        try {
-          const found = await ipc.listOrphanSnapshots(p.rootPath);
-          if (!token.isCurrent()) return;
-          if (found.length > 0) {
-            setOrphans(found);
-            setRecoveryOpen(true);
+        // Start the LSP for the adapter's primary language. Silently no-ops if
+        // the binary isn't installed or the format ships no language server.
+        const lspLang = asLspLanguage(adapter.languageId);
+        if (lspLang) void startSession(lspLang, p, token.isCurrent);
+        // Recovery is fire-and-forget so the snapshot-dir walk never gates
+        // the root file's first paint; the dialog opening a beat later is
+        // fine (handleRestore replaces content in already-open tabs).
+        void (async () => {
+          try {
+            const found = await ipc.listOrphanSnapshots(p.rootPath);
+            if (!token.isCurrent()) return;
+            if (found.length > 0) {
+              setOrphans(found);
+              setRecoveryOpen(true);
+            }
+          } catch {
+            /* recovery best-effort */
           }
-        } catch {
-          /* recovery best-effort */
-        }
-        // Start the matching LSP for the project's primary format. Silently
-        // no-ops if the binary isn't installed.
-        if (p.format === "latex") void startSession("latex", p, token.isCurrent);
-        else if (p.format === "typst") void startSession("typst", p, token.isCurrent);
+        })();
         await openFile(p.rootFile, p, token.isCurrent);
       } catch (e) {
         if (!token.isCurrent()) return;
         console.error("Failed to open project", e);
+        notifyError("Couldn't open project", errorText(e));
         // The previous project's runtime must not outlive its blanked UI.
+        setOpening(false);
         void stopAllSessions();
         void stopWatching();
         teardownAdapter();
         void flushPendingReviewSave().then(resetThreads);
         setProject(null);
         resetTabs();
+        resetCompileState();
       }
     })();
   });
@@ -135,6 +186,72 @@ const EditorScreen: Component = () => {
     void flushPendingReviewSave().then(resetThreads);
   });
 
+  // Closing a tab confirms discarding a dirty buffer; closing the window has
+  // to as well, or the same edits vanish without a prompt.
+  let unlistenClose: (() => void) | undefined;
+  let closeGuardDisposed = false;
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const win = getCurrentWindow();
+      unlistenClose = await win.onCloseRequested(async (event) => {
+        const dirty = openFiles().filter((f) => f.dirty).length;
+        if (dirty === 0) {
+          // No dirty files, but a review-comment save may still be pending on
+          // the debounce — flush it before the window goes away, or the last
+          // comment edits are lost (they don't mark any file dirty).
+          event.preventDefault();
+          try {
+            await flushPendingReviewSave();
+          } catch {
+            /* never block window close on a review-save failure */
+          }
+          void win.destroy();
+          return;
+        }
+        event.preventDefault();
+        let discard = false;
+        try {
+          const { ask } = await import("@tauri-apps/plugin-dialog");
+          discard = await ask(
+            `Close without saving? ${dirty} ${dirty === 1 ? "file has" : "files have"} unsaved changes.`,
+            {
+              title: "Unsaved changes",
+              kind: "warning",
+              okLabel: "Close anyway",
+              cancelLabel: "Keep editing",
+            },
+          );
+        } catch {
+          discard = window.confirm(
+            `Close without saving? ${dirty} file(s) have unsaved changes.`,
+          );
+        }
+        // destroy(), not close() — close() would re-fire this handler.
+        if (discard) {
+          try {
+            await flushPendingReviewSave();
+          } catch {
+            /* never block window close on a review-save failure */
+          }
+          void win.destroy();
+        }
+      });
+      // Unmount can win the race against the listen() roundtrip — drop the
+      // registration immediately or it leaks for the session.
+      if (closeGuardDisposed) {
+        unlistenClose();
+        unlistenClose = undefined;
+      }
+    } catch {
+      /* non-Tauri context — no window close to guard */
+    }
+  })();
+  onCleanup(() => {
+    closeGuardDisposed = true;
+    unlistenClose?.();
+  });
+
   const openFile = async (
     relPath: string,
     ownerProject: NonNullable<ReturnType<typeof project>> | null = project(),
@@ -142,13 +259,27 @@ const EditorScreen: Component = () => {
   ) => {
     const p = ownerProject;
     if (!p) return;
+    // The FileTree lists figures and other binaries; the text-read IPC would
+    // reject them with a raw UTF-8 error, so answer the click up front.
+    if (BINARY_EXT.test(relPath)) {
+      notifyInfo("Binary file", "This file can't be opened in the text editor.");
+      return;
+    }
     const abs = joinPath(p.rootPath, relPath);
+    // Already open: activate the tab directly — the store's dedupe branch
+    // would discard a fresh disk read anyway, so skip the IPC round-trip.
+    if (activateFileIfOpen(abs)) return;
     try {
       const content = await ipc.readProjectTextFile(p.rootPath, relPath);
       if (!isCurrent()) return;
-      openFileInStore({ path: abs, relPath, content, dirty: false });
+      // Record the hash of the content we loaded from disk so the save path can
+      // later tell whether the file changed underneath the buffer.
+      const baseHash = await sha256Hex(content);
+      if (!isCurrent()) return;
+      openFileInStore({ path: abs, relPath, content, dirty: false, baseHash });
     } catch (e) {
       console.error("Failed to read file", abs, e);
+      notifyError("Couldn't open file", errorText(e));
     }
   };
 
@@ -160,6 +291,7 @@ const EditorScreen: Component = () => {
   let lastHandledGeneration = 0;
   let pendingIntentRelPath: string | null = null;
   let pendingIntentLine = 0;
+  let pendingIntentRange: { from: number; to: number } | undefined;
 
   createEffect(() => {
     const intent = gotoSourceIntent();
@@ -168,14 +300,17 @@ const EditorScreen: Component = () => {
     // Capture intent details for the follow-up active-file effect.
     pendingIntentRelPath = intent.relPath;
     pendingIntentLine = intent.line;
+    pendingIntentRange = intent.range;
     lastHandledGeneration = intent.generation;
 
     const f = activeFile();
     if (f && f.relPath === intent.relPath) {
       // Already open and active — move the cursor on the next microtask
       // so any pending edits settle first.
+      const range = intent.range;
       queueMicrotask(() => {
-        setCursorLine(intent.line);
+        if (range) setSelectionRange(range.from, range.to);
+        else setCursorLine(intent.line);
         pendingIntentRelPath = null;
       });
     } else {
@@ -191,8 +326,10 @@ const EditorScreen: Component = () => {
     if (!f || !pendingIntentRelPath) return;
     if (f.relPath !== pendingIntentRelPath) return;
     const line = pendingIntentLine;
+    const range = pendingIntentRange;
     queueMicrotask(() => {
-      setCursorLine(line);
+      if (range) setSelectionRange(range.from, range.to);
+      else setCursorLine(line);
     });
     pendingIntentRelPath = null;
   });
@@ -218,6 +355,15 @@ const EditorScreen: Component = () => {
     <div class="no-emoji relative h-full w-full overflow-hidden bg-bg-base">
       <AmbientBackdrop />
       <Switch>
+        <Match when={!project() && opening()}>
+          <OpeningProject
+            name={
+              typeof params.path === "string"
+                ? params.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? ""
+                : ""
+            }
+          />
+        </Match>
         <Match when={!project()}>
           <NoProject onBack={() => navigate("/projects")} />
         </Match>
@@ -307,20 +453,22 @@ const EditorTopBar: Component<{
           {(bc) => (
             <div class="glass-soft flex h-7 items-center gap-1.5 rounded-md px-3">
               <Folder size={12} style={{ opacity: 0.5 }} />
-              <span class="text-[12px] text-fg-2">{bc().space}</span>
+              <span class="text-sm text-fg-2">{bc().space}</span>
               <Show when={bc().sub}>
                 <span class="text-fg-4">/</span>
-                <span class="text-[12px] text-fg-2">{bc().sub}</span>
+                <span class="text-sm text-fg-2">{bc().sub}</span>
               </Show>
               <span class="text-fg-4">/</span>
-              <span class="text-[12px] font-medium text-fg-1">{bc().file}</span>
+              <span class="text-sm font-medium text-fg-1">{bc().file}</span>
             </div>
           )}
         </Show>
-        <div class="flex items-center gap-1.5 text-[11px] text-fg-3">
+        <div class="flex items-center gap-1.5 text-xs text-fg-3">
           <span class="relative flex h-1.5 w-1.5">
+            {/* Pulse only while unsaved — a perpetual animation keeps the
+                compositor from ever reaching idle for the whole session. */}
             <span
-              class="pulse absolute inset-0 rounded-full"
+              class={`${activeFile()?.dirty ? "pulse " : ""}absolute inset-0 rounded-full`}
               style={{ background: activeFile()?.dirty ? "var(--color-warn)" : "var(--color-ok)" }}
             />
             <span
@@ -337,7 +485,12 @@ const EditorTopBar: Component<{
 
       {/* right cluster — collaborator avatars only (none until Phase 4) */}
       <div class="flex items-center gap-2">
-        <div class="glass-soft flex h-7 items-center gap-1.5 rounded-full px-2.5">
+        {/* role=status: the only live region compile results ever reach —
+            keeps success/failure announced to assistive tech. */}
+        <div
+          role="status"
+          class="glass-soft flex h-7 items-center gap-1.5 rounded-full px-2.5"
+        >
           <span
             class="h-1.5 w-1.5 rounded-full"
             style={{
@@ -351,9 +504,9 @@ const EditorTopBar: Component<{
                       : "var(--color-fg-4)",
             }}
           />
-          <span class="text-[11px] text-fg-2">{compileLabel()}</span>
-          <span class="mono text-[11px] text-fg-4">·</span>
-          <span class="mono text-[11px] text-fg-2">{compileDuration()}</span>
+          <span class="text-xs text-fg-2">{compileLabel()}</span>
+          <span class="mono text-xs text-fg-4">·</span>
+          <span class="mono text-xs text-fg-2">{compileDuration()}</span>
         </div>
         <SyncStatusBadge />
         <LayoutMenu />
@@ -370,14 +523,27 @@ const EditorTopBar: Component<{
   );
 };
 
+const OpeningProject: Component<{ name: string }> = (props) => (
+  <div class="relative z-10 flex h-full items-center justify-center p-8">
+    <Glass class="flex w-[440px] max-w-full flex-col items-center gap-3 p-6 text-center">
+      <div class="flex h-10 w-10 items-center justify-center rounded-full bg-glass-fill">
+        <Folder size={20} class="text-fg-3" />
+      </div>
+      <h2 class="text-base font-semibold text-fg-1">
+        Opening {props.name || "project"}…
+      </h2>
+    </Glass>
+  </div>
+);
+
 const NoProject: Component<{ onBack: () => void }> = (props) => (
   <div class="relative z-10 flex h-full items-center justify-center p-8">
     <Glass class="flex w-[440px] max-w-full flex-col items-center gap-3 p-6 text-center">
       <div class="flex h-10 w-10 items-center justify-center rounded-full bg-glass-fill">
         <FileQuestion size={20} class="text-fg-3" />
       </div>
-      <h2 class="text-[14px] font-semibold text-fg-1">No project open</h2>
-      <p class="text-[12px] text-fg-3">
+      <h2 class="text-base font-semibold text-fg-1">No project open</h2>
+      <p class="text-sm text-fg-3">
         Pick a project from the Projects screen to start editing.
       </p>
       <Button variant="primary" size="md" onClick={props.onBack}>

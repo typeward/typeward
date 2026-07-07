@@ -1,12 +1,11 @@
 import type {
-  CodeMirrorExtension,
   CompileResult,
   EditorAdapter,
   EditorCommand,
   Project,
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
-import { compileActiveProject } from "~/commands/actions";
+import { runCompile } from "~/commands/compile-runner";
 
 const compile = (project: Project): Promise<CompileResult> => {
   return ipc.compileTypst(project);
@@ -16,6 +15,11 @@ const compile = (project: Project): Promise<CompileResult> => {
  * Typst compiles natively to PDF — no LaTeX engine required, which is
  * one of its main selling points. tinymist provides LSP completions when
  * present on PATH (wired via the LSP store on project load).
+ *
+ * The build handler reaches the orchestration through the compile-runner leaf
+ * module rather than importing commands/actions directly, keeping the
+ * adapter -> actions dependency one-way (actions imports this module for
+ * adapterFor).
  */
 const commands: EditorCommand[] = [
   {
@@ -27,7 +31,7 @@ const commands: EditorCommand[] = [
     scope: "editor",
     when: () => true,
     run: async () => {
-      await compileActiveProject();
+      await runCompile();
     },
   },
 ];
@@ -35,10 +39,6 @@ const commands: EditorCommand[] = [
 export const TypstAdapter: EditorAdapter = {
   languageId: "typst",
   format: "typst",
-  previewKind: "pdf",
-  cmExtensions(): CodeMirrorExtension[] {
-    return [];
-  },
   compile,
   commands,
 };

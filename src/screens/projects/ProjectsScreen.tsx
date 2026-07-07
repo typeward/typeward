@@ -1,24 +1,32 @@
+import { describeIpcError } from "~/lib/errors";
 import { useNavigate } from "@solidjs/router";
 import {
-  BookMarked,
   CalendarClock,
-  ChevronDown,
-  Compass,
-  FlaskConical,
+  Cloud,
   FileText,
-  Folder as FolderIcon,
   FolderOpen,
-  GraduationCap,
-  LayoutGrid,
-  List,
+  GitBranch,
+  MoreHorizontal,
   Plus,
-  Tag,
-  Upload,
+  SearchX,
+  Trash2,
+  Users,
   X,
 } from "lucide-solid";
-import type { Component, JSX } from "solid-js";
-import { For, Show, createEffect, createMemo, createResource, createSignal, onMount } from "solid-js";
+import type { Component } from "solid-js";
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onMount,
+} from "solid-js";
 import type { Project, ProjectFormat } from "~/adapters/types";
+import { stripMarkupForWordCount } from "~/adapters/format-tables";
 import { createCloudBackedProject } from "~/integrations/cloud/create";
 import {
   cloudProviderForAccount,
@@ -29,6 +37,7 @@ import { CloneDialog } from "~/components/vcs/CloneDialog";
 import { TemplateGallery } from "~/components/templates/TemplateGallery";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import * as ipc from "~/ipc";
+import type { SpaceDef } from "~/ipc";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
@@ -36,10 +45,16 @@ import { Dialog } from "~/components/primitives/Dialog";
 import { Button } from "~/components/primitives/Button";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { NotificationsPanel, unreadCount } from "~/components/projects/NotificationsPanel";
-import { currentTier } from "~/integrations/entitlements";
+import { LibrarySidebar } from "~/components/projects/LibrarySidebar";
+import { LibraryViewControls } from "~/components/projects/LibraryViewControls";
+import { ProjectMenu } from "~/components/projects/ProjectMenu";
+import { TagEditorPopover } from "~/components/projects/TagEditorPopover";
+import type { LibrarySelection } from "~/components/projects/library-selection";
+import { tagTint, tintColor } from "~/components/projects/tints";
 import { dismissBootSplash } from "~/lib/boot-splash";
 import { installDismiss } from "~/lib/dismiss";
-import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
+import { notifyError, notifySuccess } from "~/lib/toast";
+import { absoluteStamp, relativeTime } from "~/lib/time";
 import { openPalette } from "~/commands/actions";
 import {
   requestNewProject_,
@@ -47,36 +62,35 @@ import {
 } from "~/commands/palette-store";
 import {
   create,
+  duplicate,
   error as projectsError,
+  isShared,
+  isTrashed,
+  isYours,
   loading,
   projects,
   refresh,
+  remove,
+  rename,
   setDeadline,
+  setTrashed,
 } from "~/stores/projects-store";
 import {
   DEADLINE_TONE_COLOR,
   deadlineStatus,
 } from "~/lib/deadlines";
+import { project as editorProject, setProject } from "~/stores/editor-store";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
-  dashboardEnabled,
   defaultSort,
   defaultView,
-  enableSpaces,
-  enableTags,
   notificationsPanelDefault,
   projectCardWords,
-  type ProjectsSort,
-  type ProjectsView,
-  setDashboardEnabled,
-  setDefaultSort,
-  setDefaultView,
+  spaces,
 } from "~/stores/workspace-store";
-import { DashboardPanel } from "~/widgets/DashboardPanel";
 
 // =================================================================
-// Display metadata helpers — disk only carries name + format today;
-// the rest is rendered with placeholder "—" until real fields land.
+// Display metadata helpers
 // =================================================================
 
 const FORMAT_LABEL: Record<ProjectFormat, string> = {
@@ -90,28 +104,6 @@ const FORMAT_ACCENT: Record<ProjectFormat, string> = {
   typst: "var(--format-typst)",
 };
 
-const SORT_LABEL: Record<ProjectsSort, string> = {
-  "last-opened": "Default order",
-  name: "Name (A–Z)",
-  "name-desc": "Name (Z–A)",
-  created: "Date created",
-  modified: "Last modified",
-  deadline: "Deadline",
-  format: "Format",
-};
-
-// `list_projects` now carries fs created/modified timestamps + the user-set
-// deadline, so every sort below resolves against real data.
-const AVAILABLE_SORTS: readonly ProjectsSort[] = [
-  "last-opened",
-  "name",
-  "name-desc",
-  "created",
-  "modified",
-  "deadline",
-  "format",
-];
-
 // =================================================================
 // Screen root
 // =================================================================
@@ -122,15 +114,41 @@ const ProjectsScreen: Component = () => {
   const [notifOpen, setNotifOpen] = createSignal(notificationsPanelDefault());
   const [importError, setImportError] = createSignal<string | null>(null);
 
+  // Session-scoped library filter + search (reset on revisit, matching the
+  // palette / focus-mode precedent).
+  const [selection, setSelection] = createSignal<LibrarySelection>({ kind: "all" });
+  const [search, setSearch] = createSignal("");
+
+  // Deleting a space (or a persisted selection pointing at a since-removed one)
+  // would otherwise strand the filter on an id with no sidebar row and, if the
+  // space had members, silently show a subset with no escape — reset to All.
+  createEffect(() => {
+    const sel = selection();
+    if (sel.kind === "space" && !spaces().some((s) => s.id === sel.id)) {
+      setSelection({ kind: "all" });
+    }
+  });
+
+  // Context menu, tag editor, and the rename/duplicate/delete dialogs are all
+  // driven from screen-level signals so a single instance serves every card.
+  const [menu, setMenu] =
+    createSignal<{ project: Project; x: number; y: number } | null>(null);
+  const [tagEditor, setTagEditor] =
+    createSignal<{ project: Project; x: number; y: number } | null>(null);
+  const [renameTarget, setRenameTarget] = createSignal<Project | null>(null);
+  const [duplicateTarget, setDuplicateTarget] = createSignal<Project | null>(null);
+  const [deleteTarget, setDeleteTarget] = createSignal<Project | null>(null);
+  const [restoreTarget, setRestoreTarget] = createSignal<Project | null>(null);
+
   onMount(() => {
     dismissBootSplash();
-    void refresh();
+    // AppShell prefetches the library as soon as settings resolve — don't
+    // stack a second list_projects on top of one already in flight.
+    if (!loading()) void refresh();
   });
 
   // Import an EXISTING folder (a manually-copied repo / unzipped project) as a
   // Typeward project — distinct from "New project", which scaffolds a starter.
-  // The Rust gate only allows folders under the projects root, so default the
-  // picker there and surface an actionable error otherwise.
   const importFolder = async () => {
     setImportError(null);
     const root = projectsRoot();
@@ -146,7 +164,7 @@ const ProjectsScreen: Component = () => {
       await refresh();
       openProject(project);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = describeIpcError(e);
       setImportError(
         /outside the projects root/i.test(msg)
           ? `Import only works for folders inside your projects root${
@@ -168,34 +186,131 @@ const ProjectsScreen: Component = () => {
     navigate(`/editor?path=${encodeURIComponent(project.rootPath)}`);
   };
 
-  const sortedProjects = createMemo<Project[]>(() => {
-    const list = [...projects()];
+  // A trashed project can't be opened — clicking one prompts to restore first.
+  const handleOpen = (project: Project) => {
+    if (isTrashed(project)) setRestoreTarget(project);
+    else openProject(project);
+  };
+
+  // Soft-trash / restore route through the store; when the trashed project is
+  // the one currently open, tear the editor runtime (and its cloud engine) down.
+  const trashProject = async (p: Project) => {
+    try {
+      await setTrashed(p.rootPath, true);
+      if (editorProject()?.rootPath === p.rootPath) setProject(null);
+      notifySuccess("Moved to trash", p.name);
+    } catch (e) {
+      notifyError(describeIpcError(e));
+    }
+  };
+  const restoreProject = async (p: Project) => {
+    try {
+      await setTrashed(p.rootPath, false);
+    } catch (e) {
+      notifyError(describeIpcError(e));
+    }
+  };
+
+  // Known tags across the whole library — feeds the tag-editor suggestions.
+  // Trashed projects are excluded so restoring is the only way their tags
+  // re-surface as suggestions.
+  const knownTags = createMemo<string[]>(() => {
+    const set = new Set<string>();
+    for (const p of projects()) {
+      if (isTrashed(p)) continue;
+      for (const t of p.tags ?? []) set.add(t);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  });
+
+  const untrashedCount = createMemo(
+    () => projects().filter((p) => !isTrashed(p)).length,
+  );
+
+  // Single filter → search → sort pipeline replacing the old sortedProjects.
+  const visibleProjects = createMemo<Project[]>(() => {
+    const sel = selection();
+    const q = search().trim().toLowerCase();
+
+    // 0. Trash split — Trashed shows only trashed; every other view excludes it.
+    let list = projects().filter((p) => isTrashed(p) === (sel.kind === "trash"));
+
+    // 1. Archive split (non-trash views only) — Archived shows only archived;
+    //    every other non-trash view excludes archived.
+    if (sel.kind !== "trash")
+      list = list.filter((p) => !!p.archived === (sel.kind === "archive"));
+
+    // 2. Selection filter.
+    if (sel.kind === "yours") list = list.filter(isYours);
+    else if (sel.kind === "shared") list = list.filter(isShared);
+    else if (sel.kind === "space") list = list.filter((p) => p.space === sel.id);
+    else if (sel.kind === "tag")
+      list = list.filter((p) => p.tags?.includes(sel.tag));
+
+    // 3. Search — case-insensitive over name, rootFile, tags.
+    if (q) {
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.rootFile.toLowerCase().includes(q) ||
+          (p.tags ?? []).some((t) => t.toLowerCase().includes(q)),
+      );
+    }
+
+    // 4. Sort.
+    const sorted = [...list];
     switch (defaultSort()) {
       case "name":
-        return list.sort((a, b) => a.name.localeCompare(b.name));
+        return sorted.sort((a, b) => a.name.localeCompare(b.name));
       case "name-desc":
-        return list.sort((a, b) => b.name.localeCompare(a.name));
+        return sorted.sort((a, b) => b.name.localeCompare(a.name));
       case "format":
-        return list.sort(
-          (a, b) => a.format.localeCompare(b.format) || a.name.localeCompare(b.name),
+        return sorted.sort(
+          (a, b) =>
+            a.format.localeCompare(b.format) || a.name.localeCompare(b.name),
         );
       case "created":
-        return list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+        return sorted.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
       case "modified":
-        return list.sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0));
+        return sorted.sort((a, b) => (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0));
       case "deadline":
-        // Soonest first; projects without a deadline sink to the bottom.
-        return list.sort((a, b) => {
+        return sorted.sort((a, b) => {
           const da = a.deadline ? Date.parse(a.deadline) : Number.POSITIVE_INFINITY;
           const db = b.deadline ? Date.parse(b.deadline) : Number.POSITIVE_INFINITY;
           return da - db || a.name.localeCompare(b.name);
         });
-      // "last-opened" has no backing metadata yet — keep the Rust listing's
-      // name order as the stable default.
+      case "last-opened":
       default:
-        return list;
+        // Most-recently-opened first; never-opened projects sink to the bottom.
+        return sorted.sort((a, b) => {
+          const ta = a.lastOpenedAt ?? Number.NEGATIVE_INFINITY;
+          const tb = b.lastOpenedAt ?? Number.NEGATIVE_INFINITY;
+          return tb - ta || a.name.localeCompare(b.name);
+        });
     }
   });
+
+  const filtersActive = () =>
+    selection().kind !== "all" || search().trim() !== "";
+
+  // Which empty state (if any) to render in place of the grid/list. Shared is
+  // always empty today (dedicated coming-soon state); trash falls back to the
+  // filter state when a search is active so "Clear filters" stays reachable.
+  const emptyMode = (): "none" | "filter" | "shared" | "trash" => {
+    const sel = selection();
+    if (sel.kind === "shared") return "shared";
+    if (visibleProjects().length > 0) return "none";
+    if (sel.kind === "trash") return search().trim() !== "" ? "filter" : "trash";
+    return filtersActive() ? "filter" : "none";
+  };
+
+  const clearFilters = () => {
+    setSelection({ kind: "all" });
+    setSearch("");
+  };
+
+  const openMenu = (project: Project, x: number, y: number) =>
+    setMenu({ project, x, y });
 
   return (
     <div class="no-emoji relative h-full w-full overflow-hidden bg-bg-base">
@@ -204,6 +319,7 @@ const ProjectsScreen: Component = () => {
       <div class="relative z-10 flex h-full flex-col">
         <TopBar
           notifications={unreadCount()}
+          search={{ value: search(), onInput: setSearch }}
           onOpenPalette={() => openPalette()}
           onToggleNotifications={() => setNotifOpen((v) => !v)}
           onOpenSettings={() => {
@@ -213,40 +329,36 @@ const ProjectsScreen: Component = () => {
         />
 
         <div class="relative flex min-h-0 flex-1 gap-2 p-2">
-          <Sidebar
+          <LibrarySidebar
+            projects={projects()}
+            selection={selection()}
+            onSelect={setSelection}
             onNewProject={() => setDialogOpen(true)}
             onImport={() => void importFolder()}
-            totalCount={projects().length}
           />
 
           <div class="flex min-w-0 flex-1 flex-col gap-2">
-            {/* Library header — the library IS the screen now; the old
-                ComposerHero (AI compose preview) was demoted out entirely.
-                The opt-in Dashboard panel below carries activity + cards. */}
             <div class="flex items-end justify-between px-2 pt-3">
               <div>
-                <h1 class="text-[24px] font-semibold leading-tight tracking-tight text-fg-1">
+                <h1 class="text-xl font-semibold tracking-tight text-fg-1">
                   Library
                 </h1>
-                <div class="mono mt-0.5 text-[length:var(--ui-font-xs)] text-fg-3">
-                  {projects().length} project{projects().length === 1 ? "" : "s"} ·
+                <div class="mono mt-0.5 text-xs text-fg-3">
+                  {untrashedCount()} project{untrashedCount() === 1 ? "" : "s"} ·
                   local-first
                 </div>
               </div>
+              <LibraryViewControls />
             </div>
-            <Show when={dashboardEnabled()}>
-              <DashboardPanel />
-            </Show>
-            <Toolbar />
 
-            <div class="mt-1 flex-1 overflow-auto scroll px-1 pb-2">
+            <div class="mt-2 flex-1 overflow-auto scroll px-1 pb-2">
               <Show when={importError()}>
-                <div class="mb-3 flex items-start justify-between gap-3 rounded-lg border border-[var(--color-err)]/30 p-3 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
-                  <span>{importError()}</span>
+                <div class="mb-3 flex items-start justify-between gap-3 rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
+                  <span class="select-text">{importError()}</span>
                   <button
                     type="button"
                     onClick={() => setImportError(null)}
-                    class="flex-shrink-0 text-fg-3 hover:text-fg-1"
+                    class="-m-1.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded p-1.5 text-fg-3 hover:text-fg-1"
                     aria-label="Dismiss"
                   >
                     <X size={14} />
@@ -254,39 +366,62 @@ const ProjectsScreen: Component = () => {
                 </div>
               </Show>
               <Show when={projectsError()}>
-                <div class="mb-3 rounded-lg border border-[var(--color-err)]/30 p-3 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+                <div class="mb-3 select-text rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
                   Failed to list projects: {projectsError()}
                 </div>
               </Show>
               <Show
                 when={!loading() || projects().length > 0}
                 fallback={
-                  <div class="py-10 text-center text-[length:var(--ui-font-sm)] text-fg-3">
+                  <div class="py-10 text-center text-sm text-fg-3">
                     Loading projects…
                   </div>
                 }
               >
-                <Show
-                  when={defaultView() === "cards"}
+                <Switch
                   fallback={
-                    <ProjectList
-                      projects={sortedProjects()}
-                      onOpen={openProject}
-                      onNew={() => setDialogOpen(true)}
-                    />
+                    <>
+                      <Show
+                        when={defaultView() === "cards"}
+                        fallback={
+                          <ProjectList
+                            projects={visibleProjects()}
+                            showNew={selection().kind !== "trash"}
+                            trash={selection().kind === "trash"}
+                            onOpen={handleOpen}
+                            onNew={() => setDialogOpen(true)}
+                            onMenu={openMenu}
+                          />
+                        }
+                      >
+                        <ProjectGrid
+                          projects={visibleProjects()}
+                          showNew={selection().kind !== "trash"}
+                          trash={selection().kind === "trash"}
+                          onOpen={handleOpen}
+                          onNew={() => setDialogOpen(true)}
+                          onMenu={openMenu}
+                        />
+                      </Show>
+                      <Show when={visibleProjects().length > 0}>
+                        <div class="mono py-6 text-center text-xs text-fg-3">
+                          — end of {visibleProjects().length} project
+                          {visibleProjects().length === 1 ? "" : "s"} —
+                        </div>
+                      </Show>
+                    </>
                   }
                 >
-                  <ProjectGrid
-                    projects={sortedProjects()}
-                    onOpen={openProject}
-                    onNew={() => setDialogOpen(true)}
-                  />
-                </Show>
-                <Show when={projects().length > 0}>
-                  <div class="mono py-6 text-center text-[11px] text-fg-3">
-                    — end of {projects().length} project{projects().length === 1 ? "" : "s"} —
-                  </div>
-                </Show>
+                  <Match when={emptyMode() === "shared"}>
+                    <SharedComingSoonState />
+                  </Match>
+                  <Match when={emptyMode() === "trash"}>
+                    <TrashEmptyState />
+                  </Match>
+                  <Match when={emptyMode() === "filter"}>
+                    <EmptyFilterState onClear={clearFilters} />
+                  </Match>
+                </Switch>
               </Show>
             </div>
           </div>
@@ -294,6 +429,100 @@ const ProjectsScreen: Component = () => {
           <NotificationsPanel open={notifOpen()} onClose={() => setNotifOpen(false)} />
         </div>
       </div>
+
+      <Show when={menu()}>
+        {(m) => (
+          <ProjectMenu
+            project={m().project}
+            x={m().x}
+            y={m().y}
+            spaces={spaces()}
+            onClose={() => setMenu(null)}
+            onOpen={() => {
+              openProject(m().project);
+              setMenu(null);
+            }}
+            onRename={() => {
+              setRenameTarget(m().project);
+              setMenu(null);
+            }}
+            onDuplicate={() => {
+              setDuplicateTarget(m().project);
+              setMenu(null);
+            }}
+            onDelete={() => {
+              setDeleteTarget(m().project);
+              setMenu(null);
+            }}
+            onTrash={() => {
+              const p = m().project;
+              setMenu(null);
+              void trashProject(p);
+            }}
+            onRestore={() => {
+              const p = m().project;
+              setMenu(null);
+              void restoreProject(p);
+            }}
+            onEditTags={() => {
+              setTagEditor({ project: m().project, x: m().x, y: m().y });
+              setMenu(null);
+            }}
+          />
+        )}
+      </Show>
+
+      <Show when={tagEditor()}>
+        {(t) => (
+          <TagEditorPopover
+            project={t().project}
+            x={t().x}
+            y={t().y}
+            suggestions={knownTags()}
+            onClose={() => setTagEditor(null)}
+          />
+        )}
+      </Show>
+
+      <NameDialog
+        open={renameTarget() != null}
+        title="Rename project"
+        description="Changes the display name only — the folder path is unchanged."
+        initial={renameTarget()?.name ?? ""}
+        confirmLabel="Rename"
+        onClose={() => setRenameTarget(null)}
+        onSubmit={(name) => rename(renameTarget()!.rootPath, name)}
+      />
+
+      <NameDialog
+        open={duplicateTarget() != null}
+        title="Duplicate project"
+        description="Copies the project into a new folder under your projects root."
+        initial={duplicateTarget() ? `${duplicateTarget()!.name} copy` : ""}
+        confirmLabel="Duplicate"
+        onClose={() => setDuplicateTarget(null)}
+        onSubmit={async (name) => {
+          await duplicate(duplicateTarget()!.rootPath, name);
+        }}
+      />
+
+      <RestorePromptDialog
+        project={restoreTarget()}
+        onClose={() => setRestoreTarget(null)}
+        onRestoreOpen={async (p) => {
+          await setTrashed(p.rootPath, false);
+          openProject(p);
+        }}
+      />
+
+      <DeleteConfirmDialog
+        project={deleteTarget()}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={async (p) => {
+          await remove(p.rootPath);
+          if (editorProject()?.rootPath === p.rootPath) setProject(null);
+        }}
+      />
 
       <NewProjectDialog
         open={dialogOpen()}
@@ -310,290 +539,82 @@ const ProjectsScreen: Component = () => {
 export default ProjectsScreen;
 
 // =================================================================
-// Sidebar
+// Empty filter state
 // =================================================================
 
-interface SidebarItem {
-  id: string;
-  label: string;
-  icon: Component<{ size?: number; class?: string }>;
-  count?: number;
-  active?: boolean;
-  dot?: string;
-  tint?: string;
-}
-
-const Sidebar: Component<{
-  onNewProject: () => void;
-  onImport: () => void;
-  totalCount: number;
-}> = (props) => {
-  const navigate = useNavigate();
-  // Only views that exist. Recently-opened/Starred/Archive/Trash were dead
-  // nav with no backing data — they return when their features do.
-  const librarySection = (): SidebarItem[] => [
-    { id: "all", label: "All projects", icon: FolderIcon, count: props.totalCount, active: true },
-  ];
-
-  const spacesSection = (): SidebarItem[] => [
-    { id: "sp1", label: "Stochastic Lab", icon: FlaskConical, dot: "var(--color-accent-1)" },
-    { id: "sp2", label: "Thesis 2026", icon: GraduationCap, dot: "var(--color-accent-2)" },
-    { id: "sp3", label: "Conference Drafts", icon: Compass, dot: "var(--color-warn)" },
-    { id: "sp4", label: "Reading group", icon: BookMarked, dot: "var(--color-ok)" },
-  ];
-
-  const tagsSection = (): SidebarItem[] => [
-    { id: "t1", label: "icml-2026", icon: Tag, tint: "var(--color-accent-1)" },
-    { id: "t2", label: "neurips-2025", icon: Tag, tint: "var(--color-accent-2)" },
-    { id: "t3", label: "in-review", icon: Tag, tint: "var(--color-warn)" },
-    { id: "t4", label: "archived", icon: Tag, tint: "var(--color-fg-3)" },
-  ];
-
-  return (
+const EmptyFilterState: Component<{ onClear: () => void }> = (props) => (
+  <div class="flex flex-col items-center gap-3 py-16 text-center">
     <div
-      class="glass flex flex-col overflow-hidden rounded-xl"
-      style={{ width: "240px", height: "100%" }}
+      class="flex h-12 w-12 items-center justify-center rounded-2xl"
+      style={{ background: "var(--color-control-fill)" }}
     >
-      <div class="border-b border-glass-stroke p-3">
-        <button
-          type="button"
-          onClick={props.onNewProject}
-          class="lift glow-accent relative flex h-9 w-full items-center justify-center gap-2 rounded-lg accent-grad text-[length:var(--ui-font-sm)] font-semibold"
-        >
-          <Plus size={14} stroke-width={2.4} />
-          <span>New project</span>
-          <span class="ml-1">
-            <KbdHint shortcut="Mod+N" size="md" tone="dark" />
-          </span>
-        </button>
-        <div class="mt-2 grid grid-cols-1 gap-1.5">
-          {/* Imports an existing folder under the projects root. Clone +
-              Overleaf zip import live in the New-project dialog. */}
-          <SidebarMiniButton
-            icon={<Upload size={11} style={{ opacity: 0.7 }} />}
-            onClick={props.onImport}
-          >
-            Import folder
-          </SidebarMiniButton>
-        </div>
-      </div>
-
-      <div class="flex-1 space-y-3.5 overflow-auto scroll p-2">
-        <SidebarGroup label="Library" items={librarySection()} />
-        <Show when={enableSpaces()}>
-          <SidebarGroup label="Spaces · sample" items={spacesSection()} />
-        </Show>
-        <Show when={enableTags()}>
-          <SidebarGroup label="Tags · sample" items={tagsSection()} />
-        </Show>
-      </div>
-
-      {/* Subscription footer — Storage info removed (premature; lands with cloud sync) */}
-      <div class="border-t border-glass-stroke p-3">
-        <button
-          type="button"
-          onClick={() => {
-            setPreviousRoute("/projects");
-            navigate("/settings");
-          }}
-          class="lift glass-soft flex h-7 w-full items-center justify-center gap-1.5 rounded-md text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
-        >
-          <span class="h-1.5 w-1.5 rounded-full" style={{ background: "var(--color-accent-1)" }} />
-          <span class="capitalize">{currentTier()} plan</span>
-          <span class="mono text-fg-4">·</span>
-          <span class="text-fg-3">Manage</span>
-        </button>
+      <SearchX size={20} class="text-fg-3" />
+    </div>
+    <div>
+      <div class="text-base font-semibold text-fg-1">No projects match</div>
+      <div class="mt-0.5 text-sm text-fg-3">
+        Nothing here for the current filter and search.
       </div>
     </div>
-  );
-};
-
-const SidebarGroup: Component<{
-  label: string;
-  items: SidebarItem[];
-}> = (props) => (
-  <div>
-    <div class="label-xs mb-1.5 flex items-center justify-between px-2 text-fg-3">
-      <span>{props.label}</span>
-    </div>
-    <For each={props.items}>
-      {(item) => (
-        <button
-          type="button"
-          class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-[length:var(--ui-font-base)] ${
-            item.active
-              ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
-              : "text-fg-2 hover:bg-[var(--color-control-fill)]"
-          }`}
-          style={{ height: "var(--ui-row)" }}
-        >
-          <Show
-            when={item.dot}
-            fallback={<item.icon class="ui-icon-menu" />}
-          >
-            <span
-              class="h-1.5 w-1.5 rounded-full"
-              style={{ background: item.dot }}
-            />
-          </Show>
-          <span class={item.active ? "font-medium" : ""}>{item.label}</span>
-          <Show when={item.count != null}>
-            <span class="mono ml-auto text-[length:var(--ui-font-xs)] text-fg-3">{item.count}</span>
-          </Show>
-        </button>
-      )}
-    </For>
+    <Button variant="secondary" size="sm" onClick={props.onClear}>
+      Clear filters
+    </Button>
   </div>
 );
 
-const SidebarMiniButton: Component<{
-  icon: JSX.Element;
-  children: JSX.Element;
-  onClick?: () => void;
-}> = (props) => (
-  <button
-    type="button"
-    onClick={() => props.onClick?.()}
-    class="lift glass-soft flex items-center justify-center gap-1.5 rounded-md text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
-    style={{ height: "var(--ui-row-sm)" }}
-  >
-    {props.icon}
-    <span>{props.children}</span>
-  </button>
-);
-
-// =================================================================
-// Toolbar — Widgets / Sort / View
-// =================================================================
-
-const Toolbar: Component = () => {
-  const [sortOpen, setSortOpen] = createSignal(false);
-  let sortRef: HTMLDivElement | undefined;
-  installDismiss(() => sortRef, sortOpen, () => setSortOpen(false));
-  useListboxOpenFocus(sortOpen, () => sortRef);
-  return (
-    <div class="flex items-center gap-2 px-1 pt-1">
-      <button
-        type="button"
-        onClick={() => setDashboardEnabled(!dashboardEnabled())}
-        class={`lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-sm)] hover:bg-[var(--color-control-fill)] ${
-          dashboardEnabled() ? "text-fg-1" : "text-fg-2"
-        }`}
-        title={dashboardEnabled() ? "Hide the widgets panel" : "Show activity and cards above the grid"}
-      >
-        <LayoutGrid
-          size={12}
-          style={{
-            opacity: 0.7,
-            color: dashboardEnabled() ? "var(--color-accent-1)" : undefined,
-          }}
-        />
-        <span>Widgets</span>
-      </button>
-
-      <div class="ml-auto flex items-center gap-1.5">
-        <div class="relative" ref={sortRef}>
-          <button
-            type="button"
-            onClick={() => setSortOpen((v) => !v)}
-            aria-haspopup="listbox"
-            aria-expanded={sortOpen()}
-            class="lift glass-soft flex h-8 items-center gap-1.5 rounded-md px-2.5 text-[length:var(--ui-font-xs)] text-fg-2 hover:bg-[var(--color-control-fill)]"
-          >
-            <span>
-              Sort: <span class="text-fg-1">{SORT_LABEL[defaultSort()]}</span>
-            </span>
-            <ChevronDown size={10} style={{ opacity: 0.5 }} />
-          </button>
-          <Show when={sortOpen()}>
-            <div
-              role="listbox"
-              tabindex={-1}
-              onKeyDown={(e) => handleListboxKeydown(e, sortRef, () => setSortOpen(false))}
-              class="glass absolute right-0 top-full z-30 mt-1 w-[180px] rounded-lg"
-              style={{ padding: "6px", background: "var(--color-popover-bg)" }}
-            >
-              <For each={AVAILABLE_SORTS}>
-                {(key) => {
-                  const active = () => defaultSort() === key;
-                  return (
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={active()}
-                      tabindex={-1}
-                      onClick={() => {
-                        setDefaultSort(key);
-                        setSortOpen(false);
-                      }}
-                      class={`lift flex w-full items-center justify-between rounded-md px-2.5 text-left text-[length:var(--ui-font-sm)] ${
-                        active()
-                          ? "bg-[var(--color-control-fill-hover)] text-fg-1"
-                          : "text-fg-2 hover:bg-[var(--color-control-fill)]"
-                      }`}
-                      style={{ height: "var(--ui-row-sm)" }}
-                    >
-                      <span>{SORT_LABEL[key]}</span>
-                      <Show when={active()}>
-                        <span class="h-1.5 w-1.5 rounded-full" style={{ background: "var(--color-accent-1)" }} />
-                      </Show>
-                    </button>
-                  );
-                }}
-              </For>
-            </div>
-          </Show>
-        </div>
-
-        <div class="glass-soft flex items-center gap-0.5 rounded-md p-0.5">
-          <ViewToggleButton
-            view="cards"
-            active={defaultView() === "cards"}
-            label="Cards"
-            icon={<LayoutGrid size={12} />}
-          />
-          <ViewToggleButton
-            view="list"
-            active={defaultView() === "list"}
-            label="List"
-            icon={<List size={12} />}
-          />
-        </div>
+const SharedComingSoonState: Component = () => (
+  <div class="flex flex-col items-center gap-3 py-16 text-center">
+    <div
+      class="flex h-12 w-12 items-center justify-center rounded-2xl"
+      style={{ background: "var(--color-control-fill)" }}
+    >
+      <Users size={20} class="text-fg-3" />
+    </div>
+    <div>
+      <div class="text-base font-semibold text-fg-1">
+        Nothing shared with you yet
+      </div>
+      <div class="mt-0.5 text-sm text-fg-3">
+        Sharing and collaboration are coming soon.
       </div>
     </div>
-  );
-};
+  </div>
+);
 
-const ViewToggleButton: Component<{
-  view: ProjectsView;
-  active: boolean;
-  label: string;
-  icon: JSX.Element;
-}> = (props) => (
-  <button
-    type="button"
-    onClick={() => setDefaultView(props.view)}
-    aria-label={props.label}
-    title={props.label}
-    class={`flex h-7 w-7 items-center justify-center rounded ${
-      props.active
-        ? "bg-[var(--color-selection-bg)] text-fg-1"
-        : "text-fg-2 hover:bg-[var(--color-control-fill)]"
-    }`}
-  >
-    {props.icon}
-  </button>
+const TrashEmptyState: Component = () => (
+  <div class="flex flex-col items-center gap-3 py-16 text-center">
+    <div
+      class="flex h-12 w-12 items-center justify-center rounded-2xl"
+      style={{ background: "var(--color-control-fill)" }}
+    >
+      <Trash2 size={20} class="text-fg-3" />
+    </div>
+    <div>
+      <div class="text-base font-semibold text-fg-1">Trash is empty</div>
+      <div class="mt-0.5 text-sm text-fg-3">
+        Projects you move to the trash can be restored or deleted permanently.
+      </div>
+    </div>
+  </div>
 );
 
 // =================================================================
 // Project grid / list / cards
 // =================================================================
 
-const ProjectGrid: Component<{
+interface CardCollectionProps {
   projects: Project[];
+  /** Render the New-project affordance (suppressed in the trash view). */
+  showNew: boolean;
+  /** Trash view — cards/rows dim, hide the deadline editor, and swap the
+   *  modified line for "Trashed …". */
+  trash: boolean;
   onOpen: (p: Project) => void;
   onNew: () => void;
-}> = (props) => (
+  onMenu: (p: Project, x: number, y: number) => void;
+}
+
+const ProjectGrid: Component<CardCollectionProps> = (props) => (
   <div
     class="grid gap-3"
     style={{
@@ -601,39 +622,53 @@ const ProjectGrid: Component<{
       "grid-auto-rows": "min-content",
     }}
   >
-    <NewProjectTile onClick={props.onNew} />
+    <Show when={props.showNew}>
+      <NewProjectTile onClick={props.onNew} />
+    </Show>
     <For each={props.projects}>
-      {(p) => <ProjectCard project={p} onOpen={() => props.onOpen(p)} />}
+      {(p) => (
+        <ProjectCard
+          project={p}
+          trash={props.trash}
+          onOpen={() => props.onOpen(p)}
+          onMenu={(x, y) => props.onMenu(p, x, y)}
+        />
+      )}
     </For>
   </div>
 );
 
-const ProjectList: Component<{
-  projects: Project[];
-  onOpen: (p: Project) => void;
-  onNew: () => void;
-}> = (props) => (
+const ProjectList: Component<CardCollectionProps> = (props) => (
   <div class="flex flex-col gap-1.5">
-    <button
-      type="button"
-      onClick={props.onNew}
-      class="card-glow lift flex items-center gap-3 rounded-md px-3 hover:bg-[var(--color-control-fill)]"
-      style={{
-        height: "var(--ui-row-lg)",
-        background: "var(--color-card-bg-soft)",
-        border: "1px dashed var(--color-glass-stroke-strong)",
-      }}
-    >
-      <span class="flex h-7 w-7 items-center justify-center rounded-md accent-grad">
-        <Plus size={13} stroke-width={2.4} />
-      </span>
-      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">New project</span>
-      <span class="ml-auto">
-        <KbdHint shortcut="Mod+N" size="sm" />
-      </span>
-    </button>
+    <Show when={props.showNew}>
+      <button
+        type="button"
+        onClick={props.onNew}
+        class="card-glow lift flex items-center gap-3 rounded-md px-3 hover:bg-[var(--color-control-fill)]"
+        style={{
+          height: "var(--ui-row-lg)",
+          background: "var(--color-card-bg-soft)",
+          border: "1px dashed var(--color-glass-stroke-strong)",
+        }}
+      >
+        <span class="flex h-6 w-6 items-center justify-center rounded-md accent-grad">
+          <Plus size={13} stroke-width={2.4} />
+        </span>
+        <span class="text-sm font-medium text-fg-1">New project</span>
+        <span class="ml-auto">
+          <KbdHint shortcut="Mod+N" size="sm" />
+        </span>
+      </button>
+    </Show>
     <For each={props.projects}>
-      {(p) => <ProjectRow project={p} onOpen={() => props.onOpen(p)} />}
+      {(p) => (
+        <ProjectRow
+          project={p}
+          trash={props.trash}
+          onOpen={() => props.onOpen(p)}
+          onMenu={(x, y) => props.onMenu(p, x, y)}
+        />
+      )}
     </For>
   </div>
 );
@@ -642,7 +677,7 @@ const NewProjectTile: Component<{ onClick: () => void }> = (props) => (
   <button
     type="button"
     onClick={props.onClick}
-    class="card-glow flex flex-col items-center justify-center gap-2.5 overflow-hidden rounded-xl"
+    class="card-glow flex flex-col items-start justify-between overflow-hidden rounded-xl text-left"
     style={{
       height: "180px",
       background: "var(--color-card-bg-soft)",
@@ -650,16 +685,12 @@ const NewProjectTile: Component<{ onClick: () => void }> = (props) => (
       padding: "var(--ui-pad-card)",
     }}
   >
-    <div class="glow-accent flex h-12 w-12 items-center justify-center rounded-2xl accent-grad">
-      <Plus size={18} stroke-width={2.4} />
+    <div class="glow-accent flex h-7 w-7 items-center justify-center rounded-md accent-grad">
+      <Plus size={16} stroke-width={2.4} />
     </div>
-    <div class="text-center">
-      <div class="text-[length:var(--ui-font-base)] font-semibold text-fg-1">
-        New project
-      </div>
-      <div class="mt-0.5 text-[length:var(--ui-font-xs)] text-fg-3">
-        template, import, or compose
-      </div>
+    <div>
+      <div class="text-base font-semibold text-fg-1">New project</div>
+      <div class="mt-0.5 text-xs text-fg-3">template, import, or compose</div>
     </div>
     <KbdHint shortcut="Mod+N" size="sm" />
   </button>
@@ -672,22 +703,134 @@ const openOnKey = (onOpen: () => void) => (e: KeyboardEvent) => {
   }
 };
 
-const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props) => {
+/** Resolve a project's space to its catalog entry (for the tint bar + title). */
+const spaceOf = (p: Project): SpaceDef | undefined =>
+  p.space ? spaces().find((s) => s.id === p.space) : undefined;
+
+/** Cloud + git presence chips, shown inline in the card/row footer. */
+const SyncChips: Component<{ project: Project }> = (props) => {
+  const cloud = () => props.project.integrations?.cloudOrigin;
+  const git = () => props.project.integrations?.git;
+  return (
+    <>
+      <Show when={cloud()}>
+        {(c) => (
+          <span
+            class="flex flex-shrink-0 items-center text-fg-3"
+            title={`Synced · ${c().provider}`}
+          >
+            <Cloud size={11} />
+          </span>
+        )}
+      </Show>
+      <Show when={git()}>
+        {(g) => (
+          <span
+            class="flex flex-shrink-0 items-center text-fg-3"
+            title={`Git repository${g().branch ? ` · ${g().branch}` : ""}`}
+          >
+            <GitBranch size={11} />
+          </span>
+        )}
+      </Show>
+    </>
+  );
+};
+
+/** Full created/modified/last-opened stamps for a card/row title attribute. */
+function metaTitle(p: Project): string {
+  const parts: string[] = [];
+  if (p.createdAt != null) parts.push(`Created ${absoluteStamp(p.createdAt)}`);
+  if (p.modifiedAt != null) parts.push(`Modified ${absoluteStamp(p.modifiedAt)}`);
+  if (p.lastOpenedAt != null)
+    parts.push(`Last opened ${absoluteStamp(p.lastOpenedAt)}`);
+  return parts.join(" · ");
+}
+
+const OverflowButton: Component<{ onOpen: (x: number, y: number) => void }> = (
+  props,
+) => (
+  <button
+    type="button"
+    aria-label="Project options"
+    onClick={(e) => {
+      e.stopPropagation();
+      const r = e.currentTarget.getBoundingClientRect();
+      props.onOpen(r.left, r.bottom + 4);
+    }}
+    class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+  >
+    <MoreHorizontal size={14} />
+  </button>
+);
+
+const ArchivedChip: Component = () => (
+  <span
+    class="mono rounded px-1.5 py-0.5 text-[10px] text-fg-3"
+    style={{ background: "var(--color-control-fill)" }}
+  >
+    Archived
+  </span>
+);
+
+const TagChip: Component<{ tag: string }> = (props) => (
+  <span
+    class="mono flex items-center gap-1 rounded px-1 py-0.5 text-[9px] text-fg-3"
+    style={{ background: "var(--color-control-fill)" }}
+  >
+    <span
+      class="h-1 w-1 rounded-full"
+      style={{ background: tagTint(props.tag) }}
+    />
+    <span class="max-w-[72px] truncate">{props.tag}</span>
+  </span>
+);
+
+interface CardProps {
+  project: Project;
+  trash: boolean;
+  onOpen: () => void;
+  onMenu: (x: number, y: number) => void;
+}
+
+const ProjectCard: Component<CardProps> = (props) => {
   const accentColor = FORMAT_ACCENT[props.project.format];
+  const tags = () => props.project.tags ?? [];
+  const space = () => spaceOf(props.project);
+  const cardTitle = () => {
+    const s = space();
+    const meta = metaTitle(props.project);
+    return [s ? `Space: ${s.name}` : "", meta].filter(Boolean).join(" · ");
+  };
   return (
     <div
       role="button"
       tabindex={0}
+      title={cardTitle() || undefined}
       onClick={props.onOpen}
       onKeyDown={openOnKey(props.onOpen)}
-      class="card-glow group flex cursor-pointer flex-col gap-2 rounded-xl text-left"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        props.onMenu(e.clientX, e.clientY);
+      }}
+      class={`card-glow group relative flex flex-col gap-2 overflow-hidden rounded-xl text-left ${
+        props.project.archived || props.trash ? "opacity-60" : ""
+      }`}
       style={{
         height: "180px",
         background: "var(--color-card-bg)",
         padding: "var(--ui-pad-card)",
       }}
     >
-      <div class="flex items-center justify-between gap-2">
+      <Show when={space()}>
+        {(s) => (
+          <span
+            class="pointer-events-none absolute inset-y-0 left-0 w-[3px]"
+            style={{ background: tintColor(s().tint) }}
+          />
+        )}
+      </Show>
+      <div class="flex items-center gap-2">
         <span
           class="mono rounded px-1.5 py-0.5 text-[10px] font-medium"
           style={{
@@ -698,14 +841,22 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
         >
           {FORMAT_LABEL[props.project.format]}
         </span>
-        <DeadlineEditor
-          deadline={props.project.deadline}
-          onChange={(d) => void setDeadline(props.project.rootPath, d)}
-        />
+        <Show when={props.project.archived}>
+          <ArchivedChip />
+        </Show>
+        <div class="ml-auto flex items-center gap-0.5">
+          <Show when={!props.trash}>
+            <DeadlineEditor
+              deadline={props.project.deadline}
+              onChange={(d) => void setDeadline(props.project.rootPath, d)}
+            />
+          </Show>
+          <OverflowButton onOpen={props.onMenu} />
+        </div>
       </div>
 
       <div
-        class="mt-1 flex-1 text-[length:var(--ui-font-base)] font-semibold leading-snug text-fg-1"
+        class="mt-1 flex-1 text-base font-semibold leading-snug text-fg-1"
         style={{
           "text-wrap": "pretty",
           display: "-webkit-box",
@@ -717,12 +868,38 @@ const ProjectCard: Component<{ project: Project; onOpen: () => void }> = (props)
         {props.project.name}
       </div>
 
-      <div class="mono flex items-center justify-between gap-2 text-[11px] text-fg-3">
-        <span class="flex min-w-0 items-center gap-1.5">
-          <FolderOpen size={10} style={{ opacity: 0.6 }} />
-          <span class="truncate">{props.project.rootFile}</span>
-        </span>
-        <ProjectWordCount project={props.project} />
+      <Show when={tags().length > 0}>
+        <div class="flex flex-wrap items-center gap-1">
+          <For each={tags().slice(0, 3)}>{(t) => <TagChip tag={t} />}</For>
+          <Show when={tags().length > 3}>
+            <span class="mono text-[9px] text-fg-2">+{tags().length - 3}</span>
+          </Show>
+        </div>
+      </Show>
+
+      <div class="mono flex flex-col gap-0.5 text-xs text-fg-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="flex min-w-0 items-center gap-1.5">
+            <FolderOpen size={10} style={{ opacity: 0.6 }} />
+            <span class="truncate">{props.project.rootFile}</span>
+            <SyncChips project={props.project} />
+          </span>
+          <ProjectWordCount project={props.project} />
+        </div>
+        <div class="truncate">
+          <Show
+            when={props.trash}
+            fallback={
+              <Show when={props.project.modifiedAt != null}>
+                Modified {relativeTime(props.project.modifiedAt!)}
+              </Show>
+            }
+          >
+            <Show when={props.project.trashedAt != null}>
+              Trashed {relativeTime(props.project.trashedAt!)}
+            </Show>
+          </Show>
+        </div>
       </div>
     </div>
   );
@@ -749,7 +926,7 @@ const ProjectWordCount: Component<{ project: Project }> = (props) => {
   return (
     <Show when={projectCardWords() && count() != null}>
       <span
-        class="flex flex-shrink-0 items-center gap-1"
+        class="flex flex-shrink-0 items-center gap-1 text-fg-2"
         title="Approximate words in the root file"
       >
         <FileText size={9} style={{ opacity: 0.6 }} />
@@ -760,50 +937,89 @@ const ProjectWordCount: Component<{ project: Project }> = (props) => {
 };
 
 function approxWordCount(text: string, format: ProjectFormat): number {
-  let t = text;
-  // Drop line comments, then markup tokens, leaving prose words.
-  if (format === "latex") {
-    t = t.replace(/(^|[^\\])%.*$/gm, "$1");
-    t = t.replace(/\\[a-zA-Z@]+\*?/g, " ");
-  } else {
-    t = t.replace(/\/\/.*$/gm, "");
-    t = t.replace(/#[a-zA-Z][\w.]*/g, " ");
-  }
+  let t = stripMarkupForWordCount(text, format);
   t = t.replace(/[{}[\]()\\$&#~^_*=]/g, " ");
   return t.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length;
 }
 
-const ProjectRow: Component<{ project: Project; onOpen: () => void }> = (props) => {
+const ProjectRow: Component<CardProps> = (props) => {
   const accentColor = FORMAT_ACCENT[props.project.format];
+  const tags = () => props.project.tags ?? [];
+  const space = () => spaceOf(props.project);
   return (
     <div
       role="button"
       tabindex={0}
       onClick={props.onOpen}
       onKeyDown={openOnKey(props.onOpen)}
-      class="card-glow group flex cursor-pointer items-center gap-3 rounded-md px-3 text-left"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        props.onMenu(e.clientX, e.clientY);
+      }}
+      class={`card-glow group relative flex items-center gap-3 overflow-hidden rounded-md px-3 text-left ${
+        props.project.archived || props.trash ? "opacity-60" : ""
+      }`}
       style={{
         height: "var(--ui-row-lg)",
         background: "var(--color-card-bg)",
       }}
     >
+      <Show when={space()}>
+        {(s) => (
+          <span
+            class="pointer-events-none absolute inset-y-0 left-0 w-[3px]"
+            style={{ background: tintColor(s().tint) }}
+          />
+        )}
+      </Show>
       <span
-        class="h-2 w-2 rounded-full"
+        class="h-2 w-2 flex-shrink-0 rounded-full"
         style={{ background: accentColor }}
       />
-      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+      <span class="min-w-0 truncate text-sm font-medium text-fg-1">
         {props.project.name}
       </span>
-      <span class="mono text-[11px] text-fg-3">
+      <Show when={props.project.archived}>
+        <ArchivedChip />
+      </Show>
+      <Show when={tags().length > 0}>
+        <div class="hidden items-center gap-1 xl:flex">
+          <For each={tags().slice(0, 2)}>{(t) => <TagChip tag={t} />}</For>
+          <Show when={tags().length > 2}>
+            <span class="mono text-[9px] text-fg-2">+{tags().length - 2}</span>
+          </Show>
+        </div>
+      </Show>
+      <span class="mono flex-shrink-0 text-xs text-fg-3">
         {FORMAT_LABEL[props.project.format]}
       </span>
-      <span class="mono ml-auto truncate text-[11px] text-fg-3" style={{ "max-width": "180px" }}>
-        {props.project.rootFile}
+      <span class="mono ml-auto flex flex-shrink-0 items-center gap-2 text-xs text-fg-3">
+        <span title={metaTitle(props.project) || undefined}>
+          <Show
+            when={props.trash}
+            fallback={
+              <Show when={props.project.modifiedAt != null}>
+                Modified {relativeTime(props.project.modifiedAt!)}
+              </Show>
+            }
+          >
+            <Show when={props.project.trashedAt != null}>
+              Trashed {relativeTime(props.project.trashedAt!)}
+            </Show>
+          </Show>
+        </span>
+        <span class="truncate" style={{ "max-width": "180px" }}>
+          {props.project.rootFile}
+        </span>
+        <SyncChips project={props.project} />
+        <Show when={!props.trash}>
+          <DeadlineEditor
+            deadline={props.project.deadline}
+            onChange={(d) => void setDeadline(props.project.rootPath, d)}
+          />
+        </Show>
+        <OverflowButton onOpen={props.onMenu} />
       </span>
-      <DeadlineEditor
-        deadline={props.project.deadline}
-        onChange={(d) => void setDeadline(props.project.rootPath, d)}
-      />
     </div>
   );
 };
@@ -832,26 +1048,21 @@ const DeadlineEditor: Component<{
     >
       <button
         type="button"
+        aria-label={status() ? "Change deadline" : "Set a deadline"}
         onClick={() => setOpen((v) => !v)}
         title={
           status()
             ? `Deadline: ${status()!.label} (${status()!.relative}) — click to change`
             : "Set a deadline"
         }
-        class="mono flex h-5 items-center gap-1 rounded px-1.5 text-[10px] hover:bg-[var(--color-control-fill)]"
+        class={`flex h-6 w-6 items-center justify-center rounded transition-opacity hover:bg-[var(--color-control-fill)] ${
+          status()
+            ? ""
+            : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+        }`}
         style={{ color: status() ? DEADLINE_TONE_COLOR[status()!.tone] : "var(--color-fg-3)" }}
       >
-        <CalendarClock size={10} />
-        <Show
-          when={status()}
-          fallback={
-            <span class="opacity-0 transition-opacity group-hover:opacity-100">
-              deadline
-            </span>
-          }
-        >
-          <span>{status()!.label}</span>
-        </Show>
+        <CalendarClock size={13} />
       </button>
       <Show when={open()}>
         <div
@@ -863,7 +1074,7 @@ const DeadlineEditor: Component<{
             type="date"
             value={props.deadline ?? ""}
             onInput={(e) => props.onChange(e.currentTarget.value || null)}
-            class="glass-inset rounded-md px-2 py-1.5 text-[length:var(--ui-font-sm)] text-fg-1 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset rounded-md px-2 py-1.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <Show when={status()}>
             <div class="flex items-center justify-between">
@@ -879,7 +1090,7 @@ const DeadlineEditor: Component<{
                   props.onChange(null);
                   setOpen(false);
                 }}
-                class="text-[length:var(--ui-font-xs)] text-fg-3 hover:text-[var(--color-err)]"
+                class="text-xs text-fg-3 hover:text-[var(--color-err)]"
               >
                 Clear
               </button>
@@ -890,6 +1101,226 @@ const DeadlineEditor: Component<{
     </div>
   );
 };
+
+// =================================================================
+// Shared name dialog (rename / duplicate) + delete confirm
+// =================================================================
+
+const NameDialog: Component<{
+  open: boolean;
+  title: string;
+  description?: string;
+  initial: string;
+  confirmLabel: string;
+  onClose: () => void;
+  onSubmit: (name: string) => Promise<void>;
+}> = (props) => {
+  const [name, setName] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const [err, setErr] = createSignal<string | null>(null);
+
+  // Seed the field from the target each time the dialog opens; leave it alone
+  // while closing so the value doesn't flicker during Kobalte's exit anim.
+  createEffect(() => {
+    if (props.open) {
+      setName(props.initial);
+      setErr(null);
+      setBusy(false);
+    }
+  });
+
+  const submit = async () => {
+    const n = name().trim();
+    if (!n) {
+      setErr("Name is required");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      await props.onSubmit(n);
+      props.onClose();
+    } catch (e) {
+      setErr(describeIpcError(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={props.open}
+      onOpenChange={(o) => {
+        if (!o) props.onClose();
+      }}
+      title={props.title}
+      description={props.description}
+      widthClass="w-[420px]"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => props.onClose()}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={() => void submit()} disabled={busy()}>
+            {busy() ? "Working…" : props.confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <div class="flex flex-col gap-3">
+        <input
+          type="text"
+          value={name()}
+          onInput={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.isComposing && !busy()) void submit();
+          }}
+          /* eslint-disable-next-line jsx-a11y/no-autofocus */
+          autofocus
+          class="glass-inset rounded-md px-3 py-2 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+        />
+        <Show when={err()}>
+          <div class="select-text text-sm text-[var(--color-err)]">{err()}</div>
+        </Show>
+      </div>
+    </Dialog>
+  );
+};
+
+const DeleteConfirmDialog: Component<{
+  project: Project | null;
+  onClose: () => void;
+  onConfirm: (project: Project) => Promise<void>;
+}> = (props) => {
+  const [busy, setBusy] = createSignal(false);
+  const [err, setErr] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    if (props.project) {
+      setErr(null);
+      setBusy(false);
+    }
+  });
+
+  const confirm = async () => {
+    const p = props.project;
+    if (!p) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await props.onConfirm(p);
+      props.onClose();
+    } catch (e) {
+      setErr(describeIpcError(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={props.project != null}
+      onOpenChange={(o) => {
+        if (!o) props.onClose();
+      }}
+      title="Delete permanently"
+      widthClass="w-[440px]"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => props.onClose()}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={() => void confirm()} disabled={busy()}>
+            {busy() ? "Deleting…" : "Delete permanently"}
+          </Button>
+        </>
+      }
+    >
+      <div class="flex flex-col gap-3 text-sm text-fg-2">
+        <p>
+          Remove{" "}
+          <span class="font-semibold text-fg-1">{props.project?.name}</span> from
+          your library and move its folder to the {trashLabel()}?
+        </p>
+        <Show when={props.project?.integrations?.cloudOrigin}>
+          <p class="text-fg-3">
+            The remote copy on your cloud provider stays untouched.
+          </p>
+        </Show>
+        <Show when={err()}>
+          <div class="select-text text-[var(--color-err)]">{err()}</div>
+        </Show>
+      </div>
+    </Dialog>
+  );
+};
+
+const RestorePromptDialog: Component<{
+  project: Project | null;
+  onClose: () => void;
+  onRestoreOpen: (project: Project) => Promise<void>;
+}> = (props) => {
+  const [busy, setBusy] = createSignal(false);
+  const [err, setErr] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    if (props.project) {
+      setErr(null);
+      setBusy(false);
+    }
+  });
+
+  const confirm = async () => {
+    const p = props.project;
+    if (!p) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await props.onRestoreOpen(p);
+      props.onClose();
+    } catch (e) {
+      setErr(describeIpcError(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={props.project != null}
+      onOpenChange={(o) => {
+        if (!o) props.onClose();
+      }}
+      title="Project is in the trash"
+      widthClass="w-[420px]"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => props.onClose()}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={() => void confirm()} disabled={busy()}>
+            {busy() ? "Restoring…" : "Restore & open"}
+          </Button>
+        </>
+      }
+    >
+      <div class="flex flex-col gap-3 text-sm text-fg-2">
+        <p>
+          <span class="font-semibold text-fg-1">{props.project?.name}</span> is
+          in the trash. Restore it to open it.
+        </p>
+        <Show when={err()}>
+          <div class="select-text text-[var(--color-err)]">{err()}</div>
+        </Show>
+      </div>
+    </Dialog>
+  );
+};
+
+function trashLabel(): string {
+  const platform =
+    typeof navigator !== "undefined" ? navigator.platform.toLowerCase() : "";
+  if (platform.includes("win")) return "Recycle Bin";
+  if (platform.includes("mac")) return "Trash";
+  return "system trash";
+}
 
 // =================================================================
 // New project dialog (unchanged from previous version)
@@ -936,7 +1367,7 @@ const NewProjectDialog: Component<{
       reset();
       props.onCreated(project);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(describeIpcError(e));
       setSubmitting(false);
     }
   };
@@ -962,7 +1393,7 @@ const NewProjectDialog: Component<{
       const provider = cloudProviderForAccount(acc);
       return await provider.listRoots();
     } catch (e) {
-      setErr(`Could not list remote folders: ${e instanceof Error ? e.message : String(e)}`);
+      setErr(`Could not list remote folders: ${describeIpcError(e)}`);
       return [];
     }
   });
@@ -1001,8 +1432,6 @@ const NewProjectDialog: Component<{
           format: format(),
           projectsRoot: projRoot,
         });
-        // Engine starts automatically once the project becomes the active
-        // one in editor-store; init.ts watches `project()`.
         project = result.project;
       } else {
         project = await create({ name: name().trim(), format: format() });
@@ -1019,7 +1448,7 @@ const NewProjectDialog: Component<{
       reset();
       props.onCreated(project);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(describeIpcError(e));
       setSubmitting(false);
     }
   };
@@ -1055,11 +1484,11 @@ const NewProjectDialog: Component<{
     >
       <div class="flex flex-col gap-4">
         <div class="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-glass-stroke px-3 py-2">
-          <span class="text-[11px] text-fg-3">Or start from:</span>
+          <span class="text-xs text-fg-3">Or start from:</span>
           <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
             Template
           </Button>
-          <span class="text-[11px] text-fg-3">·</span>
+          <span class="text-xs text-fg-3">·</span>
           <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
             Clone repository
           </Button>
@@ -1070,14 +1499,12 @@ const NewProjectDialog: Component<{
 
         <Show when={cloudAccounts().length > 0}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-              Where
-            </legend>
+            <legend class="text-sm font-medium text-fg-2">Where</legend>
             <div class="grid grid-cols-2 gap-2">
               <For each={[{ id: "local" as const, label: "Local", sub: "Folder under your projects root" }, { id: "cloud" as const, label: "Cloud", sub: "Sync with a connected provider" }]}>
                 {(opt) => (
                   <label
-                    class={`lift flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 ${
+                    class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
                       location() === opt.id
                         ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
                         : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
@@ -1092,10 +1519,8 @@ const NewProjectDialog: Component<{
                       class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
                     />
                     <div class="flex min-w-0 flex-1 flex-col">
-                      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
-                        {opt.label}
-                      </span>
-                      <span class="text-[11px] text-fg-3">{opt.sub}</span>
+                      <span class="text-sm font-medium text-fg-1">{opt.label}</span>
+                      <span class="text-xs text-fg-3">{opt.sub}</span>
                     </div>
                   </label>
                 )}
@@ -1106,14 +1531,12 @@ const NewProjectDialog: Component<{
 
         <Show when={location() === "cloud"}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-              Account
-            </legend>
+            <legend class="text-sm font-medium text-fg-2">Account</legend>
             <div class="flex flex-col gap-1">
               <For each={cloudAccounts()}>
                 {(acc) => (
                   <label
-                    class={`lift flex cursor-pointer items-center gap-2.5 rounded-md border px-2.5 py-1.5 ${
+                    class={`lift flex items-center gap-2.5 rounded-md border px-2.5 py-1.5 ${
                       account()?.accountId === acc.accountId &&
                       account()?.provider === acc.provider
                         ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
@@ -1133,10 +1556,10 @@ const NewProjectDialog: Component<{
                       }}
                       class="h-3 w-3 accent-[var(--color-accent-1)]"
                     />
-                    <span class="mono text-[11px] uppercase tracking-wider text-fg-3">
+                    <span class="mono text-xs uppercase tracking-wider text-fg-3">
                       {acc.provider}
                     </span>
-                    <span class="text-[length:var(--ui-font-sm)] text-fg-1">
+                    <span class="text-sm text-fg-1">
                       {acc.label ?? acc.accountId}
                     </span>
                   </label>
@@ -1148,19 +1571,15 @@ const NewProjectDialog: Component<{
 
         <Show when={location() === "cloud" && account()}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-              Remote folder
-            </legend>
+            <legend class="text-sm font-medium text-fg-2">Remote folder</legend>
             <Show
               when={!remoteRoots.loading}
-              fallback={
-                <div class="text-[11px] text-fg-3">Loading remote folders…</div>
-              }
+              fallback={<div class="text-xs text-fg-3">Loading remote folders…</div>}
             >
               <Show
                 when={(remoteRoots() ?? []).length > 0}
                 fallback={
-                  <div class="text-[11px] text-fg-3">
+                  <div class="text-xs text-fg-3">
                     No folders found. Create one in the provider's web UI, then
                     come back.
                   </div>
@@ -1170,7 +1589,7 @@ const NewProjectDialog: Component<{
                   <For each={remoteRoots() ?? []}>
                     {(folder) => (
                       <label
-                        class={`flex cursor-pointer items-center gap-2 border-b border-glass-stroke px-2.5 py-1.5 last:border-b-0 ${
+                        class={`flex items-center gap-2 border-b border-glass-stroke px-2.5 py-1.5 last:border-b-0 ${
                           remoteRoot()?.id === folder.id
                             ? "bg-[var(--color-selection-bg)]"
                             : "hover:bg-[var(--color-control-fill)]"
@@ -1186,9 +1605,7 @@ const NewProjectDialog: Component<{
                           }}
                           class="h-3 w-3 accent-[var(--color-accent-1)]"
                         />
-                        <span class="text-[length:var(--ui-font-sm)] text-fg-1">
-                          {folder.name}
-                        </span>
+                        <span class="text-sm text-fg-1">{folder.name}</span>
                       </label>
                     )}
                   </For>
@@ -1199,39 +1616,38 @@ const NewProjectDialog: Component<{
         </Show>
 
         <label class="flex flex-col gap-1.5">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-            Name
-          </span>
+          <span class="text-sm font-medium text-fg-2">Name</span>
           <input
             type="text"
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.isComposing && !submitting()) void submit();
+            }}
             placeholder="My thesis"
-            class="glass-inset rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset rounded-md px-3 py-2 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </label>
 
         <label class="flex flex-col gap-1.5">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-            Deadline <span class="text-[11px] font-normal text-fg-3">(optional)</span>
+          <span class="text-sm font-medium text-fg-2">
+            Deadline <span class="text-xs font-normal text-fg-3">(optional)</span>
           </span>
           <input
             type="date"
             value={deadlineInput()}
             onInput={(e) => setDeadlineInput(e.currentTarget.value)}
-            class="glass-inset w-fit rounded-md px-3 py-2 text-[length:var(--ui-font-sm)] text-fg-1 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
+            class="glass-inset w-fit rounded-md px-3 py-2 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </label>
 
         <fieldset class="flex flex-col gap-2">
-          <legend class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
-            Format
-          </legend>
+          <legend class="text-sm font-medium text-fg-2">Format</legend>
           <div class="grid grid-cols-2 gap-2">
             <For each={FORMATS}>
               {(f) => (
                 <label
-                  class={`lift flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5 ${
+                  class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
                     format() === f.id
                       ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
                       : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
@@ -1246,10 +1662,8 @@ const NewProjectDialog: Component<{
                     class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
                   />
                   <div class="flex min-w-0 flex-1 flex-col">
-                    <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
-                      {f.label}
-                    </span>
-                    <span class="text-[11px] text-fg-3">{f.sub}</span>
+                    <span class="text-sm font-medium text-fg-1">{f.label}</span>
+                    <span class="text-xs text-fg-3">{f.sub}</span>
                   </div>
                 </label>
               )}
@@ -1258,9 +1672,7 @@ const NewProjectDialog: Component<{
         </fieldset>
 
         <Show when={err()}>
-          <div class="text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
-            {err()}
-          </div>
+          <div class="select-text text-sm text-[var(--color-err)]">{err()}</div>
         </Show>
       </div>
       <CloneDialog

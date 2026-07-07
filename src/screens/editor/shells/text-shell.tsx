@@ -1,10 +1,19 @@
 import Resizable from "corvu/resizable";
 import {
   CheckCircle2,
+  ClipboardPaste,
+  Copy,
+  ListTodo,
+  ListX,
   Loader2,
+  MessageSquarePlus,
+  Scissors,
+  SpellCheck,
+  SquareX,
   X as XIcon,
   XCircle,
 } from "lucide-solid";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { Component } from "solid-js";
 import {
   Index,
@@ -20,7 +29,15 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
+import { BuildMenu } from "~/components/editor/BuildMenu";
+import { ProjectSettingsDialog } from "~/components/editor/ProjectSettingsDialog";
 import { CodeMirror } from "~/components/editor/CodeMirror";
+import {
+  ContextMenu,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  createContextMenuState,
+} from "~/components/primitives/ContextMenu";
 import {
   EditorSidebar,
   type LeftTab,
@@ -29,6 +46,7 @@ import { FormatToolbar } from "~/components/editor/FormatToolbar";
 import { LogsDrawer } from "~/components/editor/LogsDrawer";
 import { PaneSwitcher } from "~/components/layout/PaneSwitcher";
 import { PdfViewer } from "~/components/pdf/PdfViewer";
+import { PreviewBridge } from "~/components/pdf/PreviewBridge";
 
 // Defer the markdown preview stack (katex + markdown-it + dompurify, ~300 KB
 // raw) out of the editor's critical chunk — it loads only when a .md tab is
@@ -54,18 +72,44 @@ import {
   updateActiveFile,
 } from "~/stores/editor-store";
 import { LIGHT_THEMES, theme } from "~/themes/theme-store";
-import { cursorCol, cursorLine } from "~/stores/editor-view-store";
-import { editorSettings, integrationsSettings } from "~/stores/settings-store";
+import {
+  cursorCol,
+  cursorLine,
+  getActiveEditorView,
+} from "~/stores/editor-view-store";
+import { getCommand } from "~/commands/registry";
+import {
+  editorSettings,
+  integrationsSettings,
+  LINE_HEIGHT_VALUES,
+} from "~/stores/settings-store";
 import { harperLinter } from "~/lib/grammar/cm6";
-import { reviewExtension, dispatchSetThreads } from "~/lib/reviews/cm6";
-import { recoverThreads } from "~/lib/reviews/recovery";
-import { activeFileThreads, updateThreadOffsets } from "~/stores/review-store";
-import { getActiveEditorView } from "~/stores/editor-view-store";
-import type { GrammarSyntax } from "~/ipc";
+import { clearGrammarDiagnostics, grammarTotalCount } from "~/stores/grammar-store";
+import { asGrammarDialect } from "~/ipc";
+import { reviewExtension, syncThreadsToView } from "~/lib/reviews/cm6";
+import {
+  allThreads,
+  updateThreadOffsets,
+  reviewPanelIntent,
+  setReviewPanelIntent,
+  setFocusedThreadId,
+  requestThreadPanel,
+} from "~/stores/review-store";
+import { createPdfAnnotations } from "~/lib/pdf-annotations/mapper";
+import type { EditorView } from "@codemirror/view";
+import {
+  grammarSyntaxForLanguage,
+  languageForFile,
+  lspLanguageForFile,
+  previewKindForFile,
+} from "~/adapters/languages";
 import {
   consolePosition,
   editorLayout,
   focusMode,
+  previewDetached,
+  previewMode,
+  requestLogsTab,
   setPreviewMode,
   toggleFocusMode,
 } from "~/stores/ui-store";
@@ -79,6 +123,9 @@ import {
 } from "~/stores/viewport-store";
 import {
   compileActiveProject,
+  createThreadFromPdfSelection,
+  readProjectSource,
+  resolveForward,
   saveActiveFile,
   syncInverseFromPdfClick,
 } from "~/commands/actions";
@@ -118,22 +165,35 @@ export const TextShell: Component<{
     }),
   );
 
-  // `review.togglePanel` (command palette) dispatches this event; the
-  // sidebar tab state lives here.
-  const onToggleReview = () => {
-    setLeftTab("review");
+  // `review.togglePanel` (command palette) and the editor's review-gutter
+  // click both raise the review-panel intent; the sidebar tab state lives here.
+  // A threadId on the intent is handed to `focusedThreadId` so the panel can
+  // scroll to + expand it. Mirrors the requestNewProject pattern.
+  createEffect(() => {
+    const intent = reviewPanelIntent();
+    if (!intent) return;
+    setLeftTab(intent.panel);
     if (isTabletViewport()) setActivePane("sidebar");
-  };
-  window.addEventListener("typeward:toggle-review-panel", onToggleReview);
-  onCleanup(() =>
-    window.removeEventListener("typeward:toggle-review-panel", onToggleReview),
-  );
+    setFocusedThreadId(intent.threadId ?? null);
+    setReviewPanelIntent(null);
+  });
+
+  // The grammar linter mirrors its results into a cross-file store (read by
+  // the Logs Grammar tab). Drop them when grammar is switched off or the
+  // project changes, so stale entries from another project/session never show.
+  let lastGrammarRoot: string | undefined;
+  createEffect(() => {
+    const root = project()?.rootPath;
+    const grammarOn = integrationsSettings().grammar.enabled;
+    if (!grammarOn || root !== lastGrammarRoot) clearGrammarDiagnostics();
+    lastGrammarRoot = root;
+  });
 
   const pdfPath = createMemo(() => lastResult()?.outputPath ?? null);
 
   const previewKind = createMemo<"markdown" | "pdf">(() => {
     const f = activeFile();
-    return f?.relPath.toLowerCase().endsWith(".md") ? "markdown" : "pdf";
+    return f ? previewKindForFile(f.relPath) : "pdf";
   });
 
   const mdBaseDir = createMemo<string>(() => {
@@ -157,10 +217,33 @@ export const TextShell: Component<{
   };
 
   return (
-    <Show
-      when={!isTabletViewport()}
-      fallback={
-        <TabletLayout
+    <>
+      {/* Non-visual: mirrors PDF state to the detached preview window (E11).
+          Mounted here so it survives attach/detach and layout switches. */}
+      <PreviewBridge />
+      {/* Single per-project settings dialog, raised by the sidebar gear, the
+          engine pill's menu, and the status-bar build menu. */}
+      <ProjectSettingsDialog />
+      <Show
+        when={!isTabletViewport()}
+        fallback={
+          <TabletLayout
+            leftTab={leftTab()}
+            setLeftTab={setLeftTab}
+            outlineCollapsed={outlineCollapsed()}
+            setOutlineCollapsed={setOutlineCollapsed}
+            onSelectFile={handleSelectFile}
+            onSave={save}
+            onCompile={compile}
+            onEditorChange={handleEditorChange}
+            pdfPath={pdfPath()}
+            previewKind={previewKind()}
+            mdBaseDir={mdBaseDir()}
+            mdTheme={mdTheme()}
+          />
+        }
+      >
+        <DesktopLayout
           leftTab={leftTab()}
           setLeftTab={setLeftTab}
           outlineCollapsed={outlineCollapsed()}
@@ -174,23 +257,8 @@ export const TextShell: Component<{
           mdBaseDir={mdBaseDir()}
           mdTheme={mdTheme()}
         />
-      }
-    >
-      <DesktopLayout
-        leftTab={leftTab()}
-        setLeftTab={setLeftTab}
-        outlineCollapsed={outlineCollapsed()}
-        setOutlineCollapsed={setOutlineCollapsed}
-        onSelectFile={handleSelectFile}
-        onSave={save}
-        onCompile={compile}
-        onEditorChange={handleEditorChange}
-        pdfPath={pdfPath()}
-        previewKind={previewKind()}
-        mdBaseDir={mdBaseDir()}
-        mdTheme={mdTheme()}
-      />
-    </Show>
+      </Show>
+    </>
   );
 };
 
@@ -214,12 +282,86 @@ interface ShellProps {
 }
 
 // =================================================================
+// Right pane — the single owner of the markdown-vs-PDF decision, shared
+// verbatim by the desktop and tablet layouts (it used to be duplicated).
+// =================================================================
+
+const PreviewPane: Component<{
+  previewKind: "markdown" | "pdf";
+  pdfPath: string | null;
+  mdBaseDir: string;
+  mdTheme: "dark" | "light";
+  onCompile: () => void;
+}> = (props) => {
+  // Show the in-app .md preview only when a markdown tab is active AND the pane
+  // is in its default "pdf" mode. Console/AI (and any future pane mode) live
+  // inside PdfViewer, so mount it for those even over a markdown file —
+  // otherwise the compile-error -> console redirect (see the effect in
+  // TextShell) would silently no-op whenever a .md tab happened to be active.
+  const showMarkdown = () =>
+    props.previewKind === "markdown" && previewMode() === "pdf";
+
+  // In-PDF review/TODO highlights (E10c): open threads SyncTeX-forwarded to
+  // page geometry. Only maps LaTeX projects while the PDF is actually showing.
+  const annotations = createPdfAnnotations({
+    enabled: () =>
+      !showMarkdown() &&
+      previewMode() === "pdf" &&
+      project()?.format === "latex" &&
+      !!props.pdfPath,
+    threads: () => allThreads().filter((t) => t.status === "open"),
+    project,
+    outputPath: () => props.pdfPath,
+    pdfVersion,
+    getContent: (rel) => {
+      const p = project();
+      return p ? readProjectSource(p, rel) : Promise.resolve(null);
+    },
+    resolveForward,
+  });
+
+  return (
+    <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
+      <Switch>
+        <Match when={showMarkdown()}>
+          <Suspense fallback={null}>
+            <MarkdownPreview
+              content={() => activeFile()?.content ?? ""}
+              baseDir={props.mdBaseDir}
+              theme={() => props.mdTheme}
+            />
+          </Suspense>
+        </Match>
+        <Match when={!showMarkdown()}>
+          <PdfViewer
+            path={props.pdfPath}
+            version={pdfVersion()}
+            onCompile={props.onCompile}
+            compiling={compileState() === "compiling"}
+            scrollTarget={pdfScrollTarget()}
+            onPageClick={(page, x, y, selectedText) => {
+              void syncInverseFromPdfClick(page, x, y, selectedText);
+            }}
+            onCreateThread={(input) => void createThreadFromPdfSelection(input)}
+            onOpenThread={(threadId) => requestThreadPanel(threadId)}
+            annotations={annotations()}
+          />
+        </Match>
+      </Switch>
+    </div>
+  );
+};
+
+// =================================================================
 // Desktop layout — three corvu Resizable panes (existing behavior)
 // =================================================================
 
 const DesktopLayout: Component<ShellProps> = (props) => {
-  const showEditor = () => editorLayout() !== "preview";
-  const showPreview = () => editorLayout() !== "editor";
+  // When the preview is detached into its own window, the in-pane preview
+  // collapses and the editor takes the full width (forced visible even in the
+  // preview-only layout so the pane is never left blank).
+  const showEditor = () => editorLayout() !== "preview" || previewDetached();
+  const showPreview = () => editorLayout() !== "editor" && !previewDetached();
   const showDrawer = () => consolePosition() === "drawer";
 
   // The sidebar's initial width fits the full tab strip (measured by
@@ -229,10 +371,10 @@ const DesktopLayout: Component<ShellProps> = (props) => {
   const sidebar = createSidebarResize({
     minPx: 200,
     maxPx: 400,
-    defaultPx: 260,
+    defaultPx: 300,
     desiredPx: () => {
       const w = tabsWidth();
-      return w ? w + 4 : undefined;
+      return w ? Math.max(w + 4, 300) : undefined;
     },
   });
 
@@ -244,31 +386,13 @@ const DesktopLayout: Component<ShellProps> = (props) => {
     />
   );
   const previewPane = () => (
-    <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-      <Switch>
-        <Match when={props.previewKind === "markdown"}>
-          <Suspense fallback={null}>
-            <MarkdownPreview
-              content={() => activeFile()?.content ?? ""}
-              baseDir={props.mdBaseDir}
-              theme={() => props.mdTheme}
-            />
-          </Suspense>
-        </Match>
-        <Match when={props.previewKind === "pdf"}>
-          <PdfViewer
-            path={props.pdfPath}
-            version={pdfVersion()}
-            onCompile={props.onCompile}
-            compiling={compileState() === "compiling"}
-            scrollTarget={pdfScrollTarget()}
-            onPageClick={(page, x, y) => {
-              void syncInverseFromPdfClick(page, x, y);
-            }}
-          />
-        </Match>
-      </Switch>
-    </div>
+    <PreviewPane
+      previewKind={props.previewKind}
+      pdfPath={props.pdfPath}
+      mdBaseDir={props.mdBaseDir}
+      mdTheme={props.mdTheme}
+      onCompile={props.onCompile}
+    />
   );
 
   // Focus mode strips the chrome down to source + page. A separate branch
@@ -285,23 +409,23 @@ const DesktopLayout: Component<ShellProps> = (props) => {
             <Resizable.Handle aria-label="Resize preview" class="group relative w-[6px] shrink-0">
               <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
             </Resizable.Handle>
-            <Resizable.Panel initialSize={0.45} minSize={0.22}>
+            <Resizable.Panel initialSize={0.45} minSize="320px">
               {previewPane()}
             </Resizable.Panel>
           </Resizable>
         </Match>
         <Match when={showEditor()}>
-          <div class="flex min-h-0 flex-1">{editorPane()}</div>
+          <div class="min-h-0 flex-1">{editorPane()}</div>
         </Match>
         <Match when={showPreview()}>
-          <div class="flex min-h-0 flex-1">{previewPane()}</div>
+          <div class="min-h-0 flex-1">{previewPane()}</div>
         </Match>
       </Switch>
       <button
         type="button"
         onClick={() => toggleFocusMode()}
         title="Exit focus mode (Mod+Shift+F)"
-        class="lift absolute bottom-3 right-4 z-20 flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[11px] text-fg-3 opacity-50 hover:opacity-100"
+        class="lift absolute bottom-3 right-4 z-20 flex h-7 items-center gap-1.5 rounded-full px-2.5 text-xs text-fg-3 opacity-50 hover:opacity-100"
         style={{
           background: "var(--color-popover-bg)",
           border: "1px solid var(--color-glass-stroke)",
@@ -360,16 +484,16 @@ const DesktopLayout: Component<ShellProps> = (props) => {
                 >
                   <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
                 </Resizable.Handle>
-                <Resizable.Panel initialSize={0.45} minSize={0.22}>
+                <Resizable.Panel initialSize={0.45} minSize="320px">
                   {previewPane()}
                 </Resizable.Panel>
               </Resizable>
             </Match>
             <Match when={showEditor()}>
-              <div class="flex min-h-0 flex-1">{editorPane()}</div>
+              <div class="min-h-0 flex-1">{editorPane()}</div>
             </Match>
             <Match when={showPreview()}>
-              <div class="flex min-h-0 flex-1">{previewPane()}</div>
+              <div class="min-h-0 flex-1">{previewPane()}</div>
             </Match>
           </Switch>
 
@@ -423,31 +547,13 @@ const TabletLayout: Component<ShellProps> = (props) => {
             />
           </Match>
           <Match when={activePane() === "preview"}>
-            <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-              <Switch>
-                <Match when={props.previewKind === "markdown"}>
-                  <Suspense fallback={null}>
-                    <MarkdownPreview
-                      content={() => activeFile()?.content ?? ""}
-                      baseDir={props.mdBaseDir}
-                      theme={() => props.mdTheme}
-                    />
-                  </Suspense>
-                </Match>
-                <Match when={props.previewKind === "pdf"}>
-                  <PdfViewer
-                    path={props.pdfPath}
-                    version={pdfVersion()}
-                    onCompile={props.onCompile}
-                    compiling={compileState() === "compiling"}
-                    scrollTarget={pdfScrollTarget()}
-                    onPageClick={(page, x, y) => {
-                      void syncInverseFromPdfClick(page, x, y);
-                    }}
-                  />
-                </Match>
-              </Switch>
-            </div>
+            <PreviewPane
+              previewKind={props.previewKind}
+              pdfPath={props.pdfPath}
+              mdBaseDir={props.mdBaseDir}
+              mdTheme={props.mdTheme}
+              onCompile={props.onCompile}
+            />
           </Match>
         </Switch>
       </div>
@@ -479,7 +585,7 @@ const LogsSheet: Component = () => {
         type="button"
         aria-label="Close logs"
         onClick={() => setLogsSheetOpen(false)}
-        class="absolute inset-0 z-30 bg-black/40 backdrop-blur-[1px]"
+        class="absolute inset-0 z-30 bg-[var(--color-overlay-scrim)] backdrop-blur-[1px]"
       />
       <div
         class="absolute inset-x-2 bottom-2 z-40 flex max-h-[55vh] flex-col overflow-hidden rounded-xl"
@@ -512,37 +618,133 @@ const CenterPane: Component<{
   const editorKey = createMemo<string | null>(() => {
     const f = activeFile();
     if (!f?.path) return null;
-    const lspLang = languageToLspLanguage(languageFor(f.relPath));
+    const lspLang = lspLanguageForFile(f.relPath);
     const lspReady = lspLang ? !!findSession(lspLang) : false;
     const grammarOn = integrationsSettings().grammar.enabled;
-    return `${f.path}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}`;
+    const grammarLang = integrationsSettings().grammar.language ?? "";
+    return `${f.path}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}::${grammarLang}`;
   });
 
-  // Closing a dirty tab would silently discard the buffer (the autosave
-  // snapshot only resurfaces on the next project open) — confirm first.
+  // Closing a dirty buffer silently discards it (the autosave snapshot only
+  // resurfaces on the next project open), so any close that drops unsaved work
+  // funnels through one confirm. Falls back to window.confirm when the Tauri
+  // dialog plugin isn't reachable (dev/webview edge cases).
+  const confirmDiscard = async (message: string): Promise<boolean> => {
+    try {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      return await ask(message, {
+        title: "Unsaved changes",
+        kind: "warning",
+        okLabel: "Discard changes",
+        cancelLabel: "Keep open",
+      });
+    } catch {
+      return window.confirm(message);
+    }
+  };
+
   const requestCloseFile = async (index: number) => {
     const f = openFiles()[index];
-    if (f?.dirty) {
-      let discard = false;
-      try {
-        const { ask } = await import("@tauri-apps/plugin-dialog");
-        discard = await ask(
-          `"${f.relPath}" has unsaved changes. Close it and discard them?`,
-          {
-            title: "Unsaved changes",
-            kind: "warning",
-            okLabel: "Discard changes",
-            cancelLabel: "Keep open",
-          },
-        );
-      } catch {
-        discard = window.confirm(
-          `"${f.relPath}" has unsaved changes. Close and discard?`,
-        );
-      }
-      if (!discard) return;
-    }
+    if (
+      f?.dirty &&
+      !(await confirmDiscard(
+        `"${f.relPath}" has unsaved changes. Close it and discard them?`,
+      ))
+    )
+      return;
     closeFile(index);
+  };
+
+  // Right-click tab-strip actions. Multi-close walks from the highest index
+  // down so each closeFile() can't reindex a tab we're about to close.
+  const tabMenu = createContextMenuState<number>();
+
+  const closeOtherTabs = async (keepIndex: number) => {
+    const files = openFiles();
+    if (!files[keepIndex]) return;
+    const anyOtherDirty = files.some((f, i) => i !== keepIndex && f.dirty);
+    if (
+      anyOtherDirty &&
+      !(await confirmDiscard(
+        "Some of the other tabs have unsaved changes. Close them and discard?",
+      ))
+    )
+      return;
+    for (let i = files.length - 1; i >= 0; i--) {
+      if (i !== keepIndex) closeFile(i);
+    }
+  };
+
+  const closeSavedTabs = () => {
+    const files = openFiles();
+    for (let i = files.length - 1; i >= 0; i--) {
+      if (!files[i].dirty) closeFile(i);
+    }
+  };
+
+  // Right-click menu over the editor surface. Only opens when the click landed
+  // on CodeMirror's `.cm-content` (App.tsx no longer excludes it from native-
+  // menu suppression, so a non-`.cm-content` target falls through to that
+  // document-level suppressor rather than the browser menu). Clipboard runs
+  // through the Tauri plugin because `navigator.clipboard.readText()` is
+  // unreliable in the webview.
+  const editorMenu = createContextMenuState<{ hasSelection: boolean }>();
+
+  const onEditorContextMenu = (e: MouseEvent) => {
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target?.closest(".cm-content")) return;
+    const sel = getActiveEditorView()?.state.selection.main;
+    editorMenu.openAt(e, { hasSelection: !!sel && sel.from !== sel.to });
+  };
+
+  const cmCopy = async () => {
+    const v = getActiveEditorView();
+    if (!v) return;
+    const sel = v.state.selection.main;
+    if (sel.from === sel.to) return;
+    try {
+      await writeText(v.state.doc.sliceString(sel.from, sel.to));
+    } catch (err) {
+      notifyError("Couldn't copy", errorText(err));
+    }
+  };
+
+  const cmCut = async () => {
+    const v = getActiveEditorView();
+    if (!v) return;
+    const sel = v.state.selection.main;
+    if (sel.from === sel.to) return;
+    try {
+      await writeText(v.state.doc.sliceString(sel.from, sel.to));
+    } catch (err) {
+      notifyError("Couldn't cut", errorText(err));
+      return;
+    }
+    v.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: "" },
+      selection: { anchor: sel.from },
+    });
+    v.focus();
+  };
+
+  const cmPaste = async () => {
+    const v = getActiveEditorView();
+    if (!v) return;
+    let text: string | null;
+    try {
+      text = await readText();
+    } catch (err) {
+      notifyError("Couldn't paste", errorText(err));
+      return;
+    }
+    if (!text) return;
+    const sel = v.state.selection.main;
+    v.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: text },
+      selection: { anchor: sel.from + text.length },
+      scrollIntoView: true,
+    });
+    v.focus();
   };
 
   return (
@@ -552,12 +754,29 @@ const CenterPane: Component<{
       <div
         role="tablist"
         aria-label="Open files"
+        onKeyDown={(e) => {
+          // APG tabs pattern: arrows move + activate within the roving
+          // tabindex; without this, inactive tabs are keyboard-unreachable.
+          const count = openFiles().length;
+          if (count === 0) return;
+          let next: number;
+          if (e.key === "ArrowLeft") next = (activeIndex() - 1 + count) % count;
+          else if (e.key === "ArrowRight") next = (activeIndex() + 1) % count;
+          else if (e.key === "Home") next = 0;
+          else if (e.key === "End") next = count - 1;
+          else return;
+          e.preventDefault();
+          setActiveIndex(next);
+          const tabs =
+            e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]');
+          tabs[next]?.focus();
+        }}
         class={`flex ${tabHeight()} flex-shrink-0 items-center gap-0.5 overflow-x-auto border-b border-glass-stroke px-2 scroll`}
       >
         <Show
           when={openFiles().length > 0}
           fallback={
-            <span class="px-2 text-[12px] text-fg-3">No file open</span>
+            <span class="px-2 text-sm text-fg-3">No file open</span>
           }
         >
           <Index each={openFiles()}>
@@ -569,13 +788,14 @@ const CenterPane: Component<{
                   aria-selected={active()}
                   tabIndex={active() ? 0 : -1}
                   onClick={() => setActiveIndex(i)}
+                  onContextMenu={(e) => tabMenu.openAt(e, i)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
                       setActiveIndex(i);
                     }
                   }}
-                  class={`lift flex ${tabRowHeight()} flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium ${
+                  class={`lift flex ${tabRowHeight()} flex-shrink-0 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium ${
                     active() ? "text-fg-1" : "text-fg-2 hover:bg-[var(--color-control-fill)]"
                   }`}
                   style={
@@ -587,7 +807,9 @@ const CenterPane: Component<{
                       : undefined
                   }
                 >
-                  <span class="mono">{f().relPath}</span>
+                  <span class="mono max-w-[220px] truncate" title={f().relPath}>
+                    {f().relPath}
+                  </span>
                   <Show when={f().dirty}>
                     <span
                       class="h-1.5 w-1.5 rounded-full"
@@ -601,11 +823,11 @@ const CenterPane: Component<{
                       void requestCloseFile(i);
                     }}
                     class={`-mr-1 flex items-center justify-center rounded opacity-60 hover:bg-[var(--color-control-fill-hover)] hover:opacity-100 ${
-                      isTabletViewport() ? "h-11 w-11" : "h-4 w-4"
+                      isTabletViewport() ? "h-11 w-11" : "h-6 w-6"
                     }`}
                     aria-label={`Close ${f().relPath}`}
                   >
-                    <XIcon size={isTabletViewport() ? 16 : 10} />
+                    <XIcon size={isTabletViewport() ? 16 : 12} />
                   </button>
                 </div>
               );
@@ -621,20 +843,23 @@ const CenterPane: Component<{
         <FormatToolbar />
       </Show>
 
-      <div class="min-h-0 flex-1 overflow-hidden">
+      <div
+        class="min-h-0 flex-1 overflow-hidden"
+        onContextMenu={onEditorContextMenu}
+      >
         <Show
           when={editorKey()}
           keyed
           fallback={
-            <div class="flex h-full items-center justify-center text-[12px] text-fg-3">
+            <div class="flex h-full items-center justify-center text-sm text-fg-3">
               Open a file from the sidebar.
             </div>
           }
         >
           {(_key) => {
             const f = activeFile()!;
-            const lang = languageFor(f.relPath);
-            const lspLang = languageToLspLanguage(lang);
+            const lang = languageForFile(f.relPath);
+            const lspLang = lspLanguageForFile(f.relPath);
             const lspSession = lspLang ? findSession(lspLang) : undefined;
             const extras = lspSession
               ? lspSession.document({
@@ -645,34 +870,43 @@ const CenterPane: Component<{
             const grammarOn = integrationsSettings().grammar.enabled;
             const extrasList = Array.isArray(extras) ? extras : [extras];
             const grammarExt = grammarOn
-              ? [harperLinter({ syntax: grammarSyntaxFor(lang), file: f.relPath })]
+              ? [
+                  harperLinter({
+                    syntax: grammarSyntaxForLanguage(lang),
+                    file: f.relPath,
+                    dialect: asGrammarDialect(integrationsSettings().grammar.language),
+                  }),
+                ]
               : [];
             const reviewExt = reviewExtension({
-              onOffsetsChanged: (updates) => {
-                const af = activeFile();
-                if (af) updateThreadOffsets(af.relPath, updates.map((u) => ({
-                  id: u.id, fromOffset: u.from, toOffset: u.to, anchorText: u.anchorText,
-                })));
-              },
-              onGutterClick: () => {},
-            });
-            queueMicrotask(() => {
-              const view = getActiveEditorView();
-              if (!view) return;
-              const fileThreads = activeFileThreads();
-              if (fileThreads.length === 0) return;
-              const recovered = recoverThreads(fileThreads, f.content, f.relPath);
-              dispatchSetThreads(
-                view,
-                recovered
-                  .filter((r) => r.recoveryStatus !== "orphaned")
-                  .map((r) => ({
-                    id: r.thread.id,
-                    from: r.fromOffset,
-                    to: r.toOffset,
-                    status: r.thread.status,
+              // Close over the file captured at mount, not the global active
+              // file at debounce-fire time: the editor is keyed per file, so
+              // this closure always belongs to the file it was created for.
+              onOffsetsChanged: (updates) =>
+                updateThreadOffsets(
+                  f.relPath,
+                  updates.map((u) => ({
+                    id: u.id,
+                    fromOffset: u.from,
+                    toOffset: u.to,
+                    anchorText: u.anchorText,
                   })),
-              );
+                ),
+              onGutterClick: (threadId: string) =>
+                requestThreadPanel(threadId),
+            });
+            // The review store is the single source of truth for anchors; the
+            // CM decorations are derived. Seed on ready and re-derive on any
+            // store change (add / resolve / reopen / delete / re-anchor) so the
+            // gutter never shows a stale open/resolved state after a mutation.
+            const [reviewView, setReviewView] = createSignal<EditorView | null>(
+              null,
+            );
+            createEffect(() => {
+              const v = reviewView();
+              const threads = allThreads();
+              if (!v) return;
+              syncThreadsToView(v, threads, f.relPath, activeFile()?.content ?? f.content);
             });
             return (
               <CodeMirror
@@ -680,9 +914,17 @@ const CenterPane: Component<{
                 onChange={props.onEditorChange}
                 language={lang}
                 fontSize={editorSettings().fontSize}
+                lineHeight={LINE_HEIGHT_VALUES[editorSettings().lineHeight]}
                 lineWrap={editorSettings().lineWrap}
+                lineNumbers={editorSettings().lineNumbers}
+                highlightActiveLine={editorSettings().highlightActiveLine}
+                autocomplete={editorSettings().autocomplete}
+                bracketMatching={editorSettings().bracketMatching}
+                autoCloseBrackets={editorSettings().autoCloseBrackets}
+                tabSize={editorSettings().tabSize}
                 vimMode={editorSettings().vimMode}
                 lspActive={!!lspSession}
+                onReady={setReviewView}
                 extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
               />
             );
@@ -692,6 +934,91 @@ const CenterPane: Component<{
 
       <Show when={!focusMode()}>
         <StatusBar />
+      </Show>
+
+      <Show when={tabMenu.menu()}>
+        {(m) => (
+          <ContextMenu x={m().x} y={m().y} onClose={tabMenu.close} widthPx={200}>
+            <ContextMenuItem
+              icon={XIcon}
+              label="Close"
+              onClick={() => {
+                tabMenu.close();
+                void requestCloseFile(m().payload);
+              }}
+            />
+            <ContextMenuItem
+              icon={SquareX}
+              label="Close others"
+              disabled={openFiles().length < 2}
+              onClick={() => {
+                tabMenu.close();
+                void closeOtherTabs(m().payload);
+              }}
+            />
+            <ContextMenuItem
+              icon={ListX}
+              label="Close saved"
+              disabled={!openFiles().some((f) => !f.dirty)}
+              onClick={() => {
+                tabMenu.close();
+                closeSavedTabs();
+              }}
+            />
+          </ContextMenu>
+        )}
+      </Show>
+
+      <Show when={editorMenu.menu()}>
+        {(m) => (
+          <ContextMenu x={m().x} y={m().y} onClose={editorMenu.close} widthPx={200}>
+            <ContextMenuItem
+              icon={Scissors}
+              label="Cut"
+              disabled={!m().payload.hasSelection}
+              onClick={() => {
+                editorMenu.close();
+                void cmCut();
+              }}
+            />
+            <ContextMenuItem
+              icon={Copy}
+              label="Copy"
+              disabled={!m().payload.hasSelection}
+              onClick={() => {
+                editorMenu.close();
+                void cmCopy();
+              }}
+            />
+            <ContextMenuItem
+              icon={ClipboardPaste}
+              label="Paste"
+              onClick={() => {
+                editorMenu.close();
+                void cmPaste();
+              }}
+            />
+            <ContextMenuSeparator />
+            <ContextMenuItem
+              icon={MessageSquarePlus}
+              label="Add comment"
+              disabled={!m().payload.hasSelection}
+              onClick={() => {
+                editorMenu.close();
+                void getCommand("review.addComment")?.run();
+              }}
+            />
+            <ContextMenuItem
+              icon={ListTodo}
+              label="Add TODO"
+              disabled={!m().payload.hasSelection}
+              onClick={() => {
+                editorMenu.close();
+                void getCommand("review.addTodo")?.run();
+              }}
+            />
+          </ContextMenu>
+        )}
       </Show>
     </div>
   );
@@ -706,20 +1033,55 @@ const StatusBar: Component = () => {
     return `Ln ${l}, Col ${c}`;
   };
   return (
-    <div class="mono flex h-6 flex-shrink-0 items-center gap-3 border-t border-glass-stroke px-3 text-[11px] text-fg-3">
+    <div class="mono flex h-6 flex-shrink-0 items-center gap-3 border-t border-glass-stroke px-3 text-xs text-fg-3">
       <Show when={file()}>
         <Show when={lnCol()} fallback={<span class="opacity-60">Ln —, Col —</span>}>
           <span>{lnCol()}</span>
         </Show>
         <span class="opacity-50">·</span>
-        <span class="capitalize">{languageFor(file()!.relPath)}</span>
+        <span class="capitalize">{languageForFile(file()!.relPath)}</span>
         <span class="opacity-50">·</span>
         <span>UTF-8</span>
       </Show>
-      <span class="ml-auto flex items-center gap-1.5">
+      <Show when={project()?.format === "latex"}>
+        <span class="opacity-50">·</span>
+        <BuildMenu />
+      </Show>
+      <span class="ml-auto flex items-center gap-3">
+        <GrammarProblemsIndicator />
         <CompileIndicator />
       </span>
     </div>
+  );
+};
+
+const GrammarProblemsIndicator: Component = () => {
+  const enabled = () => integrationsSettings().grammar.enabled;
+  const count = () => grammarTotalCount();
+  const onClick = () => {
+    if (consolePosition() === "pdf-tab") {
+      setPreviewMode("console");
+      queueMicrotask(() => requestLogsTab("grammar"));
+    } else {
+      requestLogsTab("grammar");
+    }
+  };
+  return (
+    <Show when={enabled() && count() > 0}>
+      <button
+        type="button"
+        onClick={onClick}
+        title="Show grammar problems"
+        class="lift inline-flex items-center gap-1.5 text-fg-3 hover:text-fg-2"
+      >
+        <span
+          class="h-1.5 w-1.5 rounded-full"
+          style={{ background: "var(--color-warn)" }}
+        />
+        <SpellCheck size={12} />
+        {count()} problem{count() === 1 ? "" : "s"}
+      </button>
+    </Show>
   );
 };
 
@@ -747,29 +1109,3 @@ const CompileIndicator: Component = () => (
     </span>
   </Show>
 );
-
-function languageFor(
-  relPath: string,
-): "latex" | "markdown" | "typst" | "plain" {
-  const lower = relPath.toLowerCase();
-  if (lower.endsWith(".tex") || lower.endsWith(".bib")) return "latex";
-  if (lower.endsWith(".typ")) return "typst";
-  if (lower.endsWith(".md")) return "markdown";
-  return "plain";
-}
-
-function grammarSyntaxFor(
-  lang: "latex" | "markdown" | "typst" | "plain",
-): GrammarSyntax {
-  if (lang === "latex") return "latex";
-  if (lang === "typst") return "typst";
-  return "plain";
-}
-
-function languageToLspLanguage(
-  lang: "latex" | "markdown" | "typst" | "plain",
-): "latex" | "typst" | null {
-  if (lang === "latex") return "latex";
-  if (lang === "typst") return "typst";
-  return null;
-}

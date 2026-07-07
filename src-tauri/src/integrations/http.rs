@@ -2,13 +2,20 @@
 //! [`http_request`]; the frontend never has a `reqwest::Client` or an open
 //! socket, which keeps tokens unreachable from the webview process.
 //!
-//! Built on a single static `reqwest::Client` (HTTP/2, connection pool,
-//! sensible timeouts). Per-request:
-//!   - bearer header is added by name only; the actual token is fetched
+//! Every outbound `reqwest::Client` in the app — the shared static one here,
+//! the AI stream client, the OAuth token-exchange client, and the WebDAV
+//! per-host client — is constructed through [`outbound_client_builder`], the
+//! single choke point that installs a redirect policy by construction. There
+//! is no builder variant that follows redirects without re-screening the hop,
+//! so a new outbound path cannot silently become an SSRF primitive.
+//!
+//! Per-request:
+//!   - a bearer header is added by name only; the actual token is fetched
 //!     from the keyring inside Rust so it never crosses the IPC bridge
-//!   - a single 401 retry kicks in when an `auth_ref` is supplied: the
-//!     caller's `refresh_endpoint` is hit, the new bearer is persisted,
-//!     and the original request is replayed once
+//!   - for OAuth token-bundle services (Dropbox, Mendeley) the access token is
+//!     refreshed *pre-emptively* when it is within 60s of expiry
+//!     ([`oauth_bundle_access_token`]); static API keys attach verbatim. There
+//!     is no 401-triggered refresh/replay here (see [`http_request`]).
 //!   - retryable network errors (timeout, connection reset) get one
 //!     automatic retry with a 250ms delay; everything else surfaces as-is
 
@@ -26,15 +33,82 @@ use crate::integrations::credentials;
 fn client() -> &'static Client {
     static CLIENT: OnceLock<Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        Client::builder()
-            .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
+        outbound_client_builder(OutboundRedirect::Allowlist)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .pool_idle_timeout(Some(Duration::from_secs(90)))
-            .redirect(allowlist_redirect_policy())
             .build()
             .expect("reqwest client init")
     })
+}
+
+/// Redirect handling for an outbound client. There is intentionally no
+/// "unscreened" variant — every constructible client either re-validates each
+/// hop against the allowlist, refuses redirects outright, or follows only a
+/// pinned same-host hop, so no outbound path can regress into an open SSRF
+/// primitive.
+pub(crate) enum OutboundRedirect {
+    /// Re-run the outbound host/scheme allowlist on every hop (fixed-host funnels).
+    Allowlist,
+    /// Follow no redirects at all — token POSTs must not bounce the auth code
+    /// or a bearer to another host.
+    None,
+    /// Follow only same-host https hops. For WebDAV, whose host is
+    /// user-supplied and pinned to an SSRF-vetted address by the caller.
+    SameHost(String),
+}
+
+/// The one constructor for every outbound `reqwest` client in the app. It
+/// installs the redirect policy by construction (see [`OutboundRedirect`]) plus
+/// the shared user agent; callers layer on timeouts and, for WebDAV, address
+/// pinning. Routing all four outbound clients through here makes the redirect
+/// guard structural rather than a per-site convention that a fifth builder
+/// could forget.
+pub(crate) fn outbound_client_builder(redirect: OutboundRedirect) -> reqwest::ClientBuilder {
+    let policy = match redirect {
+        OutboundRedirect::Allowlist => allowlist_redirect_policy(),
+        OutboundRedirect::None => reqwest::redirect::Policy::none(),
+        OutboundRedirect::SameHost(host) => same_host_https_redirect_policy(&host),
+    };
+    Client::builder()
+        .user_agent(concat!("Typeward/", env!("CARGO_PKG_VERSION")))
+        .redirect(policy)
+}
+
+/// Redirect policy for user-supplied-host clients (WebDAV): follow only
+/// same-host https hops so a redirect can never escape the pinned, SSRF-vetted
+/// address. Bounded to 5 hops.
+fn same_host_https_redirect_policy(host: &str) -> reqwest::redirect::Policy {
+    let expected = host.to_ascii_lowercase();
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("too many redirects");
+        }
+        let same_host = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
+        if attempt.url().scheme() == "https"
+            && same_host.as_deref() == Some(expected.as_str())
+        {
+            attempt.follow()
+        } else {
+            attempt.error("redirect to a different host blocked")
+        }
+    })
+}
+
+/// Run a blocking closure on Tokio's blocking pool, flattening the `JoinError`
+/// (only produced when the task panics or is cancelled — a bug, not an expected
+/// runtime error) into its `Display` string. Callers map that string into their
+/// own domain error at the boundary. Centralizes the otherwise-repeated
+/// `spawn_blocking(...).await.map_err(Join)?` dance around keyring / blocking-fs
+/// / git calls.
+pub(crate) async fn blocking<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Error, Serialize)]
@@ -133,7 +207,7 @@ pub struct BinaryHttpResponse {
 /// compromised or open-redirect-prone allowlisted host could 3xx the
 /// request to loopback / private / arbitrary external hosts (SSRF),
 /// defeating the entire allowlist.
-pub(crate) fn allowlist_redirect_policy() -> reqwest::redirect::Policy {
+fn allowlist_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         if attempt.previous().len() >= 10 {
             return attempt.error("too many redirects");
@@ -320,18 +394,18 @@ struct OAuthRefreshResponse {
 async fn keyring_get(service: &str, account: &str) -> Result<Option<String>, HttpError> {
     let service = service.to_string();
     let account = account.to_string();
-    tokio::task::spawn_blocking(move || credentials::get_secret(&service, &account))
+    blocking(move || credentials::get_secret(&service, &account))
         .await
-        .map_err(|e| HttpError::Credential(e.to_string()))?
+        .map_err(HttpError::Credential)?
         .map_err(|e| HttpError::Credential(e.to_string()))
 }
 
 async fn keyring_set(service: &str, account: &str, secret: String) -> Result<(), HttpError> {
     let service = service.to_string();
     let account = account.to_string();
-    tokio::task::spawn_blocking(move || credentials::set_secret(&service, &account, &secret))
+    blocking(move || credentials::set_secret(&service, &account, &secret))
         .await
-        .map_err(|e| HttpError::Credential(e.to_string()))?
+        .map_err(HttpError::Credential)?
         .map_err(|e| HttpError::Credential(e.to_string()))
 }
 
@@ -454,28 +528,59 @@ async fn auth_header_value(auth: &AuthRef, host: &str) -> Result<Option<String>,
     Ok(secret.map(|secret| format!("{}{}", auth.prefix, secret)))
 }
 
-async fn perform_once(
-    req: &HttpRequest,
-    auth: Option<&AuthRef>,
-) -> Result<HttpResponse, HttpError> {
-    let method = parse_method(&req.method)?;
-    validate_outbound_request(&req.url, &req.headers, auth)?;
-    let mut builder = client().request(method, &req.url);
+/// Request body variant for [`build_outbound_request`]. Text and bytes share
+/// the whole validate/headers/auth path; only the payload type differs.
+pub(crate) enum OutboundBody<'a> {
+    None,
+    Text(&'a str),
+    Bytes(&'a [u8]),
+}
 
-    for (name, value) in &req.headers {
+/// The single place that turns request parts into a `reqwest::RequestBuilder`:
+/// validates the outbound URL + headers against the allowlist, attaches the
+/// caller headers, resolves the auth secret through [`auth_header_value`] (so
+/// OAuth token-bundle refresh happens uniformly), and sets the body. Every
+/// outbound path — `http_request`, `http_request_bytes`, and the AI stream —
+/// composes this so auth handling never diverges per call site.
+pub(crate) async fn build_outbound_request(
+    client: &Client,
+    method: &str,
+    url: &str,
+    headers: &HashMap<String, String>,
+    auth: Option<&AuthRef>,
+    body: OutboundBody<'_>,
+) -> Result<reqwest::RequestBuilder, HttpError> {
+    let method = parse_method(method)?;
+    validate_outbound_request(url, headers, auth)?;
+    let mut builder = client.request(method, url);
+
+    for (name, value) in headers {
         builder = builder.header(name, value);
     }
 
     if let Some(auth) = auth {
-        let host = normalized_host(&parse_url(&req.url)?)?;
+        let host = normalized_host(&parse_url(url)?)?;
         if let Some(value) = auth_header_value(auth, &host).await? {
             builder = builder.header(&auth.header, value);
         }
     }
 
-    if let Some(body) = &req.body {
-        builder = builder.body(body.clone());
-    }
+    builder = match body {
+        OutboundBody::None => builder,
+        OutboundBody::Text(text) => builder.body(text.to_owned()),
+        OutboundBody::Bytes(bytes) => builder.body(bytes.to_vec()),
+    };
+
+    Ok(builder)
+}
+
+async fn perform_once(
+    req: &HttpRequest,
+    auth: Option<&AuthRef>,
+) -> Result<HttpResponse, HttpError> {
+    let body = req.body.as_deref().map_or(OutboundBody::None, OutboundBody::Text);
+    let builder =
+        build_outbound_request(client(), &req.method, &req.url, &req.headers, auth, body).await?;
 
     let res = builder
         .send()
@@ -506,7 +611,11 @@ async fn perform_once(
 /// belongs in the per-provider OAuth adapter, which knows how to mint a
 /// new access token and which keyring entry to overwrite.
 #[tauri::command]
-pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, HttpError> {
+pub async fn http_request(req: HttpRequest) -> Result<HttpResponse, String> {
+    http_request_inner(req).await.map_err(|e| e.to_string())
+}
+
+async fn http_request_inner(req: HttpRequest) -> Result<HttpResponse, HttpError> {
     match perform_once(&req, req.auth_ref.as_ref()).await {
         Ok(res) => Ok(res),
         Err(HttpError::Network(_)) => {
@@ -536,7 +645,13 @@ struct BinaryRespMeta<'a> {
 /// array for now — the upload-side raw-request conversion is the remaining
 /// half of this change.)
 #[tauri::command]
-pub async fn http_request_bytes(req: BinaryHttpRequest) -> Result<tauri::ipc::Response, HttpError> {
+pub async fn http_request_bytes(req: BinaryHttpRequest) -> Result<tauri::ipc::Response, String> {
+    http_request_bytes_inner(req).await.map_err(|e| e.to_string())
+}
+
+async fn http_request_bytes_inner(
+    req: BinaryHttpRequest,
+) -> Result<tauri::ipc::Response, HttpError> {
     let res = match perform_once_bytes(&req, req.auth_ref.as_ref()).await {
         Ok(res) => res,
         Err(HttpError::Network(_)) => {
@@ -560,24 +675,9 @@ async fn perform_once_bytes(
     req: &BinaryHttpRequest,
     auth: Option<&AuthRef>,
 ) -> Result<BinaryHttpResponse, HttpError> {
-    let method = parse_method(&req.method)?;
-    validate_outbound_request(&req.url, &req.headers, auth)?;
-    let mut builder = client().request(method, &req.url);
-
-    for (name, value) in &req.headers {
-        builder = builder.header(name, value);
-    }
-
-    if let Some(auth) = auth {
-        let host = normalized_host(&parse_url(&req.url)?)?;
-        if let Some(value) = auth_header_value(auth, &host).await? {
-            builder = builder.header(&auth.header, value);
-        }
-    }
-
-    if let Some(body) = &req.body {
-        builder = builder.body(body.clone());
-    }
+    let body = req.body.as_deref().map_or(OutboundBody::None, OutboundBody::Bytes);
+    let builder =
+        build_outbound_request(client(), &req.method, &req.url, &req.headers, auth, body).await?;
 
     let res = builder
         .send()

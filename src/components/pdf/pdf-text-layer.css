@@ -1,0 +1,81 @@
+/*
+ * Minimal PDF text layer styles — a trimmed port of pdfjs-dist's
+ * web/pdf_viewer.css `.textLayer` block (we deliberately DON'T import theirs:
+ * it drags in editor/annotation/highlight chrome we never mount). The pdfjs v6
+ * TextLayer sets each span's `left`/`top` as a PERCENTAGE of the container and
+ * its `font-size` as `calc(var(--total-scale-factor) * var(--font-height))`, so
+ * the container only needs the page's pixel size and an ancestor that defines
+ * `--total-scale-factor` (the display scale). PdfViewer sets that + the
+ * `--scale-round-*` step vars on the page box; on zoom it calls
+ * `textLayer.update({viewport})` to re-bake the per-span `--scale-x`.
+ *
+ * The spans are transparent (the canvas underneath is the visible render); they
+ * exist only so the browser's native text selection has real glyph boxes to
+ * hit. `::selection` paints the wash with the theme's selection token.
+ */
+.pdf-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: transparent;
+  z-index: 2;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+.pdf-text-layer span[role="img"] {
+  user-select: none;
+  cursor: default;
+}
+
+.pdf-text-layer ::selection {
+  /* Falls back to a soft accent wash if the theme token is unset. */
+  background: var(--color-text-selection, rgba(90, 162, 247, 0.35));
+}
+
+.pdf-text-layer br::selection {
+  background: transparent;
+}
+
+.pdf-text-layer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.pdf-text-layer.selecting .endOfContent {
+  top: 0;
+}

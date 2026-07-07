@@ -1,3 +1,4 @@
+import { describeIpcError } from "~/lib/errors";
 import { useNavigate } from "@solidjs/router";
 import {
   AlertTriangle,
@@ -104,7 +105,7 @@ const OnboardingScreen: Component = () => {
       const result = await ipc.detectTex();
       setProbe(result);
     } catch (e) {
-      setProbeError(String(e));
+      setProbeError(describeIpcError(e));
     } finally {
       setProbing(false);
     }
@@ -134,7 +135,7 @@ const OnboardingScreen: Component = () => {
       <AmbientBackdrop />
       <div class="relative z-10 flex h-full items-center justify-center p-8">
         <div
-          class="flex w-[760px] max-w-full flex-col overflow-hidden rounded-[18px]"
+          class="flex w-[760px] max-w-full max-h-full flex-col overflow-hidden rounded-[18px]"
           style={{
             background: "var(--color-popover-bg)",
             border: "1px solid var(--color-glass-stroke)",
@@ -144,7 +145,7 @@ const OnboardingScreen: Component = () => {
           }}
         >
           <StepBar step={stepIndex()} />
-          <div class="relative flex-1">
+          <div class="relative min-h-0 flex-1 overflow-y-auto scroll">
             <SolidSwitch>
               <Match when={step() === "welcome"}>
                 <WelcomePane />
@@ -192,7 +193,7 @@ export default OnboardingScreen;
 const StepBar: Component<{ step: number }> = (props) => (
   <div class="flex h-[56px] flex-shrink-0 items-center border-b border-glass-stroke px-[22px]">
     <div
-      class="flex h-6 w-6 items-center justify-center rounded-[7px] text-[11px] font-bold"
+      class="flex h-6 w-6 items-center justify-center rounded-[7px] text-xs font-bold"
       style={{
         background: "linear-gradient(135deg, var(--color-accent-2) 0%, var(--color-accent-1) 100%)",
         color: "var(--color-accent-fg)",
@@ -200,10 +201,10 @@ const StepBar: Component<{ step: number }> = (props) => (
     >
       τ
     </div>
-    <span class="ml-2.5 text-[13px] font-semibold tracking-tight text-fg-1">
+    <span class="ml-2.5 text-base font-semibold tracking-tight text-fg-1">
       Typeward
     </span>
-    <span class="mono ml-2.5 text-[11px] text-fg-3">· first run · v0.0.1</span>
+    <span class="mono ml-2.5 text-xs text-fg-3">· first run · v0.0.1</span>
     <div class="ml-auto flex items-center gap-1.5">
       <For each={STEP_ORDER}>
         {(_, i) => {
@@ -230,7 +231,7 @@ const StepBar: Component<{ step: number }> = (props) => (
           );
         }}
       </For>
-      <span class="mono ml-2 text-[11px] text-fg-3">
+      <span class="mono ml-2 text-xs text-fg-3">
         {props.step + 1}/{STEP_ORDER.length}
       </span>
     </div>
@@ -289,13 +290,13 @@ const Footer: Component<{
       class="flex h-[64px] flex-shrink-0 items-center border-t border-glass-stroke px-[22px]"
       style={{ background: "var(--color-overlay-dim)" }}
     >
-      <div class="text-[12px] text-fg-2">{leftText()}</div>
+      <div class="text-sm text-fg-2">{leftText()}</div>
       <div class="ml-auto flex items-center gap-2">
         <Show when={props.stepIndex > 0}>
           <button
             type="button"
             onClick={props.onBack}
-            class="flex h-8 items-center gap-1.5 rounded-lg border border-glass-stroke px-3.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)]"
+            class="flex h-8 items-center gap-1.5 rounded-lg border border-glass-stroke px-3.5 text-sm text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
             <ArrowLeft size={12} />
             Back
@@ -305,7 +306,7 @@ const Footer: Component<{
           <button
             type="button"
             onClick={props.onFinish}
-            class="h-8 rounded-lg border border-glass-stroke px-3.5 text-[12px] text-fg-2 hover:bg-[var(--color-control-fill)]"
+            class="h-8 rounded-lg border border-glass-stroke px-3.5 text-sm text-fg-2 hover:bg-[var(--color-control-fill)]"
           >
             Skip setup
           </button>
@@ -313,7 +314,7 @@ const Footer: Component<{
         <button
           type="button"
           onClick={props.step === "install" ? props.onFinish : props.onNext}
-          class="glow-accent flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-[13px] font-semibold accent-grad"
+          class="glow-accent flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-base font-semibold accent-grad"
         >
           {primaryLabel()}
           <ArrowRight size={12} stroke-width={2.2} />
@@ -383,7 +384,7 @@ const WelcomePane: Component = () => (
       Welcome to <span class="accent-text">Typeward</span>
     </h1>
     <p
-      class="mx-auto m-0 max-w-[460px] text-[14px] leading-[1.55] text-fg-2"
+      class="mx-auto m-0 max-w-[460px] text-base leading-[1.55] text-fg-2"
       style={{ "text-wrap": "pretty" }}
     >
       A calm editor for the documents that matter. We'll set up the engines you
@@ -394,7 +395,7 @@ const WelcomePane: Component = () => (
       <For each={FORMAT_PILLS}>
         {(b) => (
           <div
-            class="flex h-7 items-center gap-1.5 rounded-[14px] px-2.5 text-[12px] text-fg-2"
+            class="flex h-7 items-center gap-1.5 rounded-[14px] px-2.5 text-sm text-fg-2"
             style={{
               background: "var(--color-control-fill)",
               border: "1px solid var(--color-control-stroke)",
@@ -421,7 +422,7 @@ const FormatsPane: Component<{
     <h2 class="m-0 mb-1.5 text-[20px] font-semibold tracking-tight text-fg-1">
       What do you write?
     </h2>
-    <p class="m-0 mb-5 text-[13px] text-fg-2">
+    <p class="m-0 mb-5 text-base text-fg-2">
       Pick what you write — the next step checks your machine for the right
       engines. You can add more later.
     </p>
@@ -434,7 +435,7 @@ const FormatsPane: Component<{
             <button
               type="button"
               onClick={() => props.onToggle(f.id)}
-              class="relative cursor-pointer rounded-xl p-3.5 text-left transition-all"
+              class="relative rounded-xl p-3.5 text-left transition-all"
               style={{
                 background: on() ? "var(--color-control-fill)" : "var(--color-glass-soft-fill)",
                 border: on()
@@ -447,7 +448,7 @@ const FormatsPane: Component<{
             >
               <Show when={f.recommended}>
                 <div
-                  class="absolute right-3 -top-[7px] rounded-md px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.06em] accent-grad"
+                  class="absolute right-3 -top-[7px] rounded-md px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.04em] accent-grad"
                 >
                   Recommended
                 </div>
@@ -466,8 +467,8 @@ const FormatsPane: Component<{
                   {f.glyph}
                 </div>
                 <div class="min-w-0 flex-1">
-                  <div class="text-[14px] font-semibold text-fg-1">{f.name}</div>
-                  <div class="mt-px text-[11px] text-fg-2">{f.desc}</div>
+                  <div class="text-base font-semibold text-fg-1">{f.name}</div>
+                  <div class="mt-px text-xs text-fg-2">{f.desc}</div>
                 </div>
                 <div
                   class="flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full"
@@ -485,7 +486,7 @@ const FormatsPane: Component<{
                 </div>
               </div>
               <div
-                class="mono mt-2.5 flex items-center gap-2 border-t border-glass-stroke pt-2 text-[11px] text-fg-3"
+                class="mono mt-2.5 flex items-center gap-2 border-t border-glass-stroke pt-2 text-xs text-fg-3"
               >
                 <Package size={10} />
                 <span class="flex-1 truncate">{f.engine}</span>
@@ -537,7 +538,7 @@ const EnginesPane: Component<{
           <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
             Checking your system
           </h2>
-          <p class="m-0 text-[12px] leading-[1.5] text-fg-2">
+          <p class="m-0 text-sm text-fg-2">
             We scanned for the engines your formats need. Here's what we found.
           </p>
         </div>
@@ -545,7 +546,7 @@ const EnginesPane: Component<{
           type="button"
           onClick={() => props.onProbe()}
           disabled={props.probing}
-          class="flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-[11px] text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
+          class="flex h-7 items-center gap-1.5 rounded-[7px] px-2.5 text-xs text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
           style={{
             background: "var(--color-control-fill)",
             border: "1px solid var(--color-control-stroke)",
@@ -557,7 +558,7 @@ const EnginesPane: Component<{
       </div>
 
       <Show when={props.probing && !props.probe}>
-        <div class="flex h-32 items-center justify-center gap-2 text-[12px] text-fg-2">
+        <div class="flex h-32 items-center justify-center gap-2 text-sm text-fg-2">
           <Loader2 size={14} class="animate-spin" />
           Scanning…
         </div>
@@ -565,7 +566,7 @@ const EnginesPane: Component<{
 
       <Show when={props.error}>
         <div
-          class="rounded-md p-3 text-[12px]"
+          class="select-text rounded-md p-3 text-sm"
           style={{
             background: "color-mix(in srgb, var(--color-err) 6%, transparent)",
             border: "1px solid color-mix(in srgb, var(--color-err) 18%, transparent)",
@@ -610,11 +611,11 @@ const EnginesPane: Component<{
                   </div>
                   <div class="min-w-0 flex-1">
                     <div class="flex items-baseline gap-2">
-                      <span class="text-[13px] font-semibold text-fg-1">{meta.label}</span>
-                      <span class="text-[11px] text-fg-3">{meta.sub}</span>
+                      <span class="text-base font-semibold text-fg-1">{meta.label}</span>
+                      <span class="text-xs text-fg-3">{meta.sub}</span>
                     </div>
                     <div
-                      class="mono mt-0.5 truncate text-[11px]"
+                      class="mono mt-0.5 truncate text-xs"
                       style={{ color: ok ? "var(--color-fg-2)" : "var(--color-err)" }}
                     >
                       {ok ? (e.version ?? e.path ?? "found") : `${e.name} not on PATH`}
@@ -623,13 +624,13 @@ const EnginesPane: Component<{
                   <Show
                     when={ok}
                     fallback={
-                      <span class="text-[11px] text-fg-3">
+                      <span class="text-xs text-fg-3">
                         Install it, then Re-scan
                       </span>
                     }
                   >
                     <div
-                      class="flex items-center gap-1.5 rounded-[14px] px-2.5 py-1 text-[11px] font-medium"
+                      class="flex items-center gap-1.5 rounded-[14px] px-2.5 py-1 text-xs font-medium"
                       style={{
                         background: "color-mix(in srgb, var(--color-ok) 12%, transparent)",
                         color: "var(--color-ok)",
@@ -654,7 +655,7 @@ const EnginesPane: Component<{
             }}
           >
             <AlertTriangle size={14} class="mt-0.5" style={{ color: "var(--color-warn)" }} />
-            <div class="text-[12px] leading-[1.5] text-fg-2">
+            <div class="text-sm text-fg-2">
               <span class="font-semibold text-fg-1">No LaTeX engine detected — </span>
               You can install TeX Live from{" "}
               <button
@@ -731,7 +732,7 @@ const InstallPane: Component<{
           <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
             You're set
           </h2>
-          <p class="m-0 text-[12px] leading-[1.5] text-fg-2">
+          <p class="m-0 text-sm text-fg-2">
             Here's what each format will compile with. Engines can be changed
             anytime in Settings → Editor.
           </p>
@@ -770,8 +771,8 @@ const InstallPane: Component<{
                 </Show>
               </div>
               <div class="min-w-0 flex-1">
-                <span class="text-[13px] font-semibold text-fg-1">{t.name}</span>
-                <div class="mt-0.5 text-[11px] text-fg-2">{t.sub}</div>
+                <span class="text-base font-semibold text-fg-1">{t.name}</span>
+                <div class="mt-0.5 text-xs text-fg-2">{t.sub}</div>
               </div>
             </div>
           )}

@@ -1,4 +1,4 @@
-import { EditorView } from "@codemirror/view";
+import type { EditorView } from "@codemirror/view";
 import { createSignal } from "solid-js";
 
 /**
@@ -66,6 +66,24 @@ export const setCursorLine = (line: number): void => {
     selection: { anchor: pos, head: pos },
     scrollIntoView: true,
   });
+};
+
+/**
+ * Select the range `[from, to)` (0-based document offsets), scroll it into
+ * view, and focus the editor. Offsets are clamped to the document; a
+ * degenerate or inverted range collapses to a caret at `from`.
+ */
+export const setSelectionRange = (from: number, to: number): void => {
+  if (!_view) return;
+  const len = _view.state.doc.length;
+  const a = Math.max(0, Math.min(len, from));
+  const b = Math.max(0, Math.min(len, to));
+  _view.focus();
+  _view.dispatch(
+    a < b
+      ? { selection: { anchor: a, head: b }, scrollIntoView: true }
+      : { selection: { anchor: a, head: a }, scrollIntoView: true },
+  );
 };
 
 /**

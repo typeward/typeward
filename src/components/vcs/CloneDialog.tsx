@@ -10,6 +10,7 @@
  * filling it.
  */
 
+import { describeIpcError } from "~/lib/errors";
 import { GitBranch } from "lucide-solid";
 import type { Component } from "solid-js";
 import { Show, createMemo, createSignal } from "solid-js";
@@ -80,7 +81,7 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
     try {
       await connectGithub();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     }
   };
 
@@ -142,7 +143,7 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
       props.onCloned?.(destPath);
       props.onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -171,32 +172,38 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
     >
       <div class="flex flex-col gap-3">
         <label class="flex flex-col gap-1">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">URL</span>
+          <span class="text-sm font-medium text-fg-2">URL</span>
           <input
             type="text"
             value={url()}
             onInput={(e) => setUrl(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.isComposing && !busy() && url().trim()) void handleClone();
+            }}
             placeholder="https://github.com/typeward/app.git"
-            class="glass-inset h-9 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             autofocus
           />
         </label>
 
         <label class="flex flex-col gap-1">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">Project name</span>
+          <span class="text-sm font-medium text-fg-2">Project name</span>
           <input
             type="text"
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.isComposing && !busy() && url().trim()) void handleClone();
+            }}
             placeholder={inferredName() || "my-thesis"}
-            class="glass-inset h-9 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
         </label>
 
         <Show when={kind() === "github"}>
           <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2">
             <GitBranch class="ui-icon-sm text-fg-3" />
-            <div class="flex-1 text-[11px] text-fg-2">
+            <div class="flex-1 text-xs text-fg-2">
               GitHub clones go through your signed-in account. Sign in once and Typeward stores the token in the system keyring.
             </div>
             <Button variant="secondary" size="sm" onClick={connectGithubInline}>
@@ -207,7 +214,7 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
 
         <Show when={kind() === "overleaf"}>
           <div class="flex flex-col gap-2">
-            <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2 text-[11px] text-fg-2">
+            <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2 text-xs text-fg-2">
               <GitBranch class="ui-icon-sm text-fg-3" />
               Overleaf's git bridge is a premium feature. Paste your account email + the project-specific token from Overleaf's Project → Git → Generate token.
             </div>
@@ -216,21 +223,21 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
               placeholder="Email (Overleaf account)"
               value={username()}
               onInput={(e) => setUsername(e.currentTarget.value)}
-              class="glass-inset h-8 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
             <input
               type="password"
               placeholder="Project token"
               value={password()}
               onInput={(e) => setPassword(e.currentTarget.value)}
-              class="glass-inset h-8 rounded-md px-2.5 font-mono text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="glass-inset h-9 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
           </div>
         </Show>
 
         <Show when={kind() === "generic"}>
           <div class="flex flex-col gap-2">
-            <div class="text-[11px] text-fg-3">
+            <div class="text-xs text-fg-3">
               Optional. Leave blank for public repos; fill for any HTTPS repo that needs basic auth or a personal access token.
             </div>
             <div class="flex gap-2">
@@ -239,21 +246,21 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
                 placeholder="Username (optional)"
                 value={username()}
                 onInput={(e) => setUsername(e.currentTarget.value)}
-                class="glass-inset h-8 flex-1 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+                class="glass-inset h-9 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
               />
               <input
                 type="password"
                 placeholder="Password / token (optional)"
                 value={password()}
                 onInput={(e) => setPassword(e.currentTarget.value)}
-                class="glass-inset h-8 flex-1 rounded-md px-2.5 font-mono text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+                class="glass-inset h-9 flex-1 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
               />
             </div>
           </div>
         </Show>
 
         <Show when={error()}>
-          <div class="rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+          <div class="select-text rounded-md border border-[var(--color-err)]/40 bg-[var(--color-err)]/10 px-3 py-2 text-sm text-[var(--color-err)]">
             {error()}
           </div>
         </Show>
