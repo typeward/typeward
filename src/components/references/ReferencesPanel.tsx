@@ -20,6 +20,7 @@ import {
 import { Dynamic } from "solid-js/web";
 
 import { citationSnippet } from "~/adapters/format-tables";
+import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
@@ -497,17 +498,19 @@ export const ReferencesPanel: Component = () => {
           </Show>
         </div>
 
-        <div class="flex-shrink-0 border-t border-glass-stroke px-2.5 py-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            class="w-full"
-            leadingIcon={<Plus class="ui-icon-sm" />}
-            onClick={() => setDoiOpen(true)}
-          >
-            Add from DOI
-          </Button>
-        </div>
+        <FeatureGate feature="integrations.references.doi_lookup">
+          <div class="flex-shrink-0 border-t border-glass-stroke px-2.5 py-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              class="w-full"
+              leadingIcon={<Plus class="ui-icon-sm" />}
+              onClick={() => setDoiOpen(true)}
+            >
+              Add from DOI
+            </Button>
+          </div>
+        </FeatureGate>
       </Show>
 
       <DoiLookupDialog

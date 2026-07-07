@@ -5,6 +5,7 @@ import { createSignal, Show } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
+import { hasEntitlement } from "~/integrations/entitlements";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import {
   appendLocalAddition,
@@ -39,6 +40,10 @@ export const DoiLookupDialog: Component<DoiLookupDialogProps> = (props) => {
     const proj = project();
     if (!proj) {
       setError("Open a project first.");
+      return;
+    }
+    if (!hasEntitlement("integrations.references.doi_lookup")) {
+      setError("DOI and arXiv lookup requires Typeward Pro.");
       return;
     }
     const classified = classifyLookupInput(input());

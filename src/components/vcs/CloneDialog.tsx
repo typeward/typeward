@@ -18,6 +18,7 @@ import { Show, createMemo, createSignal } from "solid-js";
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { setCredential } from "~/integrations/auth/credentials";
+import { assertEntitlement } from "~/integrations/entitlements";
 import {
   connectGithub,
   hasGithubCredential,
@@ -79,6 +80,7 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
   const connectGithubInline = async () => {
     setError(null);
     try {
+      assertEntitlement("integrations.vcs.github");
       await connectGithub();
     } catch (err) {
       setError(describeIpcError(err));
@@ -100,6 +102,9 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
     }
     setBusy(true);
     try {
+      assertEntitlement("integrations.vcs.git");
+      // Overleaf's git bridge rides the git IPC but is its own entitlement.
+      if (kind() === "overleaf") assertEntitlement("integrations.vcs.overleaf_import");
       // Stash credentials before triggering the clone so libgit2's
       // callback can find them.
       const host = hostFromUrl();

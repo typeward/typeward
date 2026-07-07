@@ -16,6 +16,7 @@ import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
+import { useEntitlement } from "~/integrations/entitlements";
 import * as ipc from "~/ipc";
 import type { Project } from "~/adapters/types";
 import { projectsRoot } from "~/stores/settings-store";
@@ -43,12 +44,24 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
     { initialValue: [] },
   );
 
-  const filtered = createMemo(() => {
+  // Typst templates and the custom-template source are Pro — locked entries
+  // are filtered out entirely rather than shown disabled.
+  const typstEntitled = useEntitlement("formats.typst");
+  const customEntitled = useEntitlement("templates.custom.max");
+  const available = createMemo(() => {
     // Reading templates() while the resource is errored would rethrow here.
     if (templates.error) return [];
+    return (templates() ?? []).filter(
+      (t) =>
+        (t.format !== "typst" || typstEntitled()) &&
+        (t.source !== "custom" || customEntitled()),
+    );
+  });
+
+  const filtered = createMemo(() => {
     const q = search().trim().toLowerCase();
-    if (!q) return templates() ?? [];
-    return (templates() ?? []).filter((t) => {
+    if (!q) return available();
+    return available().filter((t) => {
       const hay = [t.name, t.description, ...t.tags, t.format].join(" ").toLowerCase();
       return hay.includes(q);
     });

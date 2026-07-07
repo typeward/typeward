@@ -4,10 +4,17 @@ import type {
   EditorCommand,
   Project,
 } from "~/adapters/types";
+import { hasEntitlement } from "~/integrations/entitlements";
 import * as ipc from "~/ipc";
 import { runCompile } from "~/commands/compile-runner";
 
-const compile = (project: Project): Promise<CompileResult> => {
+const compile = async (project: Project): Promise<CompileResult> => {
+  // Typst is a Pro format. A free user can still open and read .typ files
+  // (it's a text editor); compiling is the enforcement point, and the message
+  // lands in the Issues tab via the compile orchestration's error path.
+  if (!hasEntitlement("formats.typst")) {
+    throw new Error("Typst support requires Typeward Pro.");
+  }
   return ipc.compileTypst(project);
 };
 

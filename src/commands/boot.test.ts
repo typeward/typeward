@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { bootCoreCommands, registerAdapterCommands, unregisterAdapterCommands } from "./boot";
 import { _resetForTests, commands, getCommand } from "./registry";
 import type { EditorAdapter, Project } from "~/adapters/types";
+import {
+  resetEntitlementSource,
+  setEntitlementSource,
+} from "~/integrations/entitlements";
 import { openFile, resetTabs, setProject } from "~/stores/editor-store";
 
 // bootCoreCommands is idempotent across the entire app lifetime — calling
@@ -61,6 +65,24 @@ describe("bootCoreCommands", () => {
     expect(save?.when?.()).toBe(true);
 
     resetTabs();
+    setProject(null);
+  });
+
+  it("core.saveTemplate hides on the free tier (custom templates are Pro)", () => {
+    bootCoreCommands();
+    const cmd = getCommand("core.saveTemplate");
+    setProject({ rootPath: "/A", rootFile: "main.tex", format: "latex", name: "A" } as Project);
+
+    expect(cmd?.when?.()).toBe(false);
+
+    setEntitlementSource({
+      current: () => "pro",
+      has: () => true,
+      reasonIfMissing: () => undefined,
+    });
+    expect(cmd?.when?.()).toBe(true);
+
+    resetEntitlementSource();
     setProject(null);
   });
 });

@@ -41,6 +41,7 @@ import {
   loadThreads,
   resetThreads,
 } from "~/stores/review-store";
+import { hasEntitlement } from "~/integrations/entitlements";
 import { startSession, stopAllSessions } from "~/stores/lsp-store";
 import { startWatching, stopWatching } from "~/stores/watcher-store";
 import { TextShell } from "./shells/text-shell";
@@ -143,8 +144,10 @@ const EditorScreen: Component = () => {
         void startWatching(p.rootPath, token.isCurrent);
         // Start the LSP for the adapter's primary language. Silently no-ops if
         // the binary isn't installed or the format ships no language server.
+        // tinymist belongs to the Pro Typst surface; texlab stays free.
         const lspLang = asLspLanguage(adapter.languageId);
-        if (lspLang) void startSession(lspLang, p, token.isCurrent);
+        if (lspLang && (lspLang !== "typst" || hasEntitlement("formats.typst")))
+          void startSession(lspLang, p, token.isCurrent);
         // Recovery is fire-and-forget so the snapshot-dir walk never gates
         // the root file's first paint; the dialog opening a beat later is
         // fine (handleRestore replaces content in already-open tabs).

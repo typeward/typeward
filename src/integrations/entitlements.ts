@@ -1,8 +1,10 @@
 /**
  * Entitlement gate. Every integration call site that's behind a paid tier
  * reads through `useEntitlement(key)` (this file). The fallback source is
- * the free tier so unsigned-out/offline users get local features, while
- * paid integrations fail closed until Supabase resolves a subscription.
+ * the free tier — the core LaTeX editor only (repriced 2026-07-08) — so
+ * signed-out/offline users keep editing and compiling, while every
+ * integration, format extension, and AI feature fails closed until Supabase
+ * resolves a subscription.
  *
  * Tokens / sessions never live here — credentials go through the keyring.
  * This module only consumes already-resolved tier + feature-flag state.
@@ -32,17 +34,11 @@ function warnIfUnknownKey(key: string): void {
   }
 }
 
-const FREE_ENTITLEMENTS = new Set<EntitlementKey>([
-  "integrations.references.zotero.local",
-  "integrations.references.doi_lookup",
-  "integrations.vcs.git",
-  "integrations.vcs.github",
-  "integrations.vcs.overleaf_import",
-  "integrations.ai.ollama",
-  "integrations.grammar.harper",
-  "templates.builtin.free",
-  "templates.custom.max",
-]);
+// Mirrors seed.sql's free plan exactly: Free is the core LaTeX editor, so
+// only the built-in template catalog is granted. `templates.custom.max` is
+// '0' on free — a zero cap grants nothing, hence deliberately absent here
+// (matching the Supabase source, where a numeric '0' reads as not entitled).
+const FREE_ENTITLEMENTS = new Set<EntitlementKey>(["templates.builtin.free"]);
 
 const freeTierSource: EntitlementSource = {
   current: () => "free",

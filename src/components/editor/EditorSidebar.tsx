@@ -47,6 +47,7 @@ import { Button } from "~/components/primitives/Button";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
 import { notifyError } from "~/lib/toast";
+import { useEntitlement } from "~/integrations/entitlements";
 import { refsAvailability } from "~/integrations/references/availability";
 import { citationProviders } from "~/integrations/references/registry";
 import {
@@ -130,6 +131,9 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   let naturalWidth = 0;
   let measureStripRef: HTMLDivElement | undefined;
 
+  // Git is Pro — the SCM tab needs the entitlement on top of a repo present.
+  const gitEntitled = useEntitlement("integrations.vcs.git");
+
   // The SCM tab is meaningless outside a git repo — `.git` can be a dir or
   // (worktrees) a file; `exists` covers both. Non-Tauri contexts resolve
   // false and simply hide the tab.
@@ -146,10 +150,12 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     { initialValue: false },
   );
 
-  // If SCM was active and the project switched to a non-repo, the tab
-  // strip no longer shows it — bounce back to Files.
+  const showScm = () => isGitRepo() && gitEntitled();
+
+  // If SCM was active and the project switched to a non-repo (or the
+  // entitlement lapsed), the tab strip no longer shows it — bounce to Files.
   createEffect(() => {
-    if (!isGitRepo() && props.tab === "scm") props.setTab("files");
+    if (!showScm() && props.tab === "scm") props.setTab("files");
   });
 
   // Refs earns a tab once at least one citation provider is registered
@@ -340,7 +346,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     ...(hasReferences()
       ? [{ id: "references" as LeftTab, label: "Refs", icon: BookMarked }]
       : []),
-    ...(isGitRepo()
+    ...(showScm()
       ? [{ id: "scm" as LeftTab, label: "SCM", icon: GitBranch }]
       : []),
     { id: "review", label: "Review", icon: MessageSquare, count: openCommentThreadCount() },
@@ -377,7 +383,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   createEffect(() => {
     // Track the reactive bits that add/remove tabs or change a counter width.
     hasReferences();
-    isGitRepo();
+    showScm();
     openCommentThreadCount();
     todoCount();
     queueMicrotask(measureTabs);

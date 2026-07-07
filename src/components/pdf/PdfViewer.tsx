@@ -27,6 +27,7 @@ import {
 } from "solid-js";
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
+import { hasAnyAiEntitlement } from "~/integrations/ai/registry";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { installDismiss } from "~/lib/dismiss";
@@ -160,9 +161,10 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       ? "auto"
       : "smooth";
 
-  // AI master switch. When it flips off while the chat is showing, fall
-  // back to the PDF so the pane never strands on a hidden mode.
-  const aiEnabled = () => integrationsSettings().ai.enabled;
+  // AI master switch AND entitlement (all AI is Pro) — when either flips off
+  // while the chat is showing, fall back to the PDF so the pane never strands
+  // on a hidden mode.
+  const aiEnabled = () => integrationsSettings().ai.enabled && hasAnyAiEntitlement();
   createEffect(() => {
     if (!aiEnabled() && previewMode() === "ai") setPreviewMode("pdf");
   });

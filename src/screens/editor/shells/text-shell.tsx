@@ -83,6 +83,7 @@ import {
   integrationsSettings,
   LINE_HEIGHT_VALUES,
 } from "~/stores/settings-store";
+import { hasEntitlement } from "~/integrations/entitlements";
 import { harperLinter } from "~/lib/grammar/cm6";
 import { clearGrammarDiagnostics, grammarTotalCount } from "~/stores/grammar-store";
 import { asGrammarDialect } from "~/ipc";
@@ -135,6 +136,12 @@ import { pathToFileUri } from "~/lib/lsp/cm6";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
 
+// Harper is Pro — grammar wiring needs the entitlement on top of the user
+// toggle. Locked means zero grammar UI and zero grammar IPC.
+const grammarActive = () =>
+  integrationsSettings().grammar.enabled &&
+  hasEntitlement("integrations.grammar.harper");
+
 export const TextShell: Component<{
   onSelectFile: (relPath: string) => void;
 }> = (props) => {
@@ -184,7 +191,7 @@ export const TextShell: Component<{
   let lastGrammarRoot: string | undefined;
   createEffect(() => {
     const root = project()?.rootPath;
-    const grammarOn = integrationsSettings().grammar.enabled;
+    const grammarOn = grammarActive();
     if (!grammarOn || root !== lastGrammarRoot) clearGrammarDiagnostics();
     lastGrammarRoot = root;
   });
@@ -620,7 +627,7 @@ const CenterPane: Component<{
     if (!f?.path) return null;
     const lspLang = lspLanguageForFile(f.relPath);
     const lspReady = lspLang ? !!findSession(lspLang) : false;
-    const grammarOn = integrationsSettings().grammar.enabled;
+    const grammarOn = grammarActive();
     const grammarLang = integrationsSettings().grammar.language ?? "";
     return `${f.path}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}::${grammarLang}`;
   });
@@ -867,7 +874,7 @@ const CenterPane: Component<{
                   languageId: lang,
                 }) ?? []
               : [];
-            const grammarOn = integrationsSettings().grammar.enabled;
+            const grammarOn = grammarActive();
             const extrasList = Array.isArray(extras) ? extras : [extras];
             const grammarExt = grammarOn
               ? [
@@ -1056,7 +1063,7 @@ const StatusBar: Component = () => {
 };
 
 const GrammarProblemsIndicator: Component = () => {
-  const enabled = () => integrationsSettings().grammar.enabled;
+  const enabled = () => grammarActive();
   const count = () => grammarTotalCount();
   const onClick = () => {
     if (consolePosition() === "pdf-tab") {

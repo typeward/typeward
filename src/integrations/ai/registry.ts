@@ -9,6 +9,7 @@
 
 import { createSignal } from "solid-js";
 
+import { hasEntitlement } from "~/integrations/entitlements";
 import type { AiProvider } from "~/integrations/types";
 
 import { createAnthropicProvider } from "./anthropic";
@@ -32,6 +33,17 @@ const [active, setActiveSignal] = createSignal<AiProviderId | null>(null);
 
 export function getAvailableProviderIds(): readonly AiProviderId[] {
   return ALL_IDS;
+}
+
+/**
+ * True when the current tier includes at least one AI provider. There is no
+ * aggregate `integrations.ai` key, so surfaces that hide the whole AI UI
+ * (settings card, chat pane, toolbar toggle) derive it from the per-provider
+ * keys. Reactive inside tracking scopes — hasEntitlement reads the source
+ * signal.
+ */
+export function hasAnyAiEntitlement(): boolean {
+  return ALL_IDS.some((id) => hasEntitlement(`integrations.ai.${id}`));
 }
 
 export function getProvider(id: AiProviderId, ollamaBaseUrl?: string): AiProvider {

@@ -21,7 +21,7 @@ import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { Switch } from "~/components/forms/Switch";
-import { assertEntitlement } from "~/integrations/entitlements";
+import { assertEntitlement, hasEntitlement } from "~/integrations/entitlements";
 import type { EntitlementKey } from "~/integrations/types";
 import {
   credentialExists,
@@ -30,7 +30,11 @@ import {
 } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
 import { createOllamaProvider } from "~/integrations/ai/ollama";
-import { type AiProviderId, getProvider } from "~/integrations/ai/registry";
+import {
+  type AiProviderId,
+  getProvider,
+  hasAnyAiEntitlement,
+} from "~/integrations/ai/registry";
 import {
   connectMendeley,
   disconnectMendeley,
@@ -54,6 +58,25 @@ import { notifySuccess } from "~/lib/toast";
 import * as ipc from "~/ipc";
 
 export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
+
+/**
+ * Category-level entitlement checks. Every integration is Pro (repricing
+ * 2026-07-08), so a category with no entitled provider hides entirely —
+ * card shell AND its Settings nav row (SettingsScreen imports these) —
+ * per the locked-renders-nothing rule. Reactive inside tracking scopes.
+ */
+export const referencesEntitled = (): boolean =>
+  hasEntitlement("integrations.references.zotero.local") ||
+  hasEntitlement("integrations.references.zotero.web") ||
+  hasEntitlement("integrations.references.mendeley");
+export const cloudEntitled = (): boolean =>
+  hasEntitlement("integrations.cloud.dropbox") ||
+  hasEntitlement("integrations.cloud.webdav");
+export const vcsEntitled = (): boolean =>
+  hasEntitlement("integrations.vcs.git") || hasEntitlement("integrations.vcs.github");
+export const aiEntitled = (): boolean => hasAnyAiEntitlement();
+export const grammarEntitled = (): boolean =>
+  hasEntitlement("integrations.grammar.harper");
 
 /**
  * One card per integration category. The Settings nav exposes each as its
@@ -90,18 +113,22 @@ export const IntegrationsPanel: Component<{ section?: IntegrationsSection }> = (
 
 const ReferencesCard: Component = () => {
   return (
-    <Card
-      title="References"
-      subtitle="Connect a reference manager to autocomplete \\cite{…} keys and append the aggregated library to the project's .bib."
-    >
-      <BetterBibTexRow />
-      <FeatureGate feature="integrations.references.zotero.web">
-        <ZoteroWebRow />
-      </FeatureGate>
-      <FeatureGate feature="integrations.references.mendeley">
-        <MendeleyRow />
-      </FeatureGate>
-    </Card>
+    <Show when={referencesEntitled()}>
+      <Card
+        title="References"
+        subtitle="Connect a reference manager to autocomplete \\cite{…} keys and append the aggregated library to the project's .bib."
+      >
+        <FeatureGate feature="integrations.references.zotero.local">
+          <BetterBibTexRow />
+        </FeatureGate>
+        <FeatureGate feature="integrations.references.zotero.web">
+          <ZoteroWebRow />
+        </FeatureGate>
+        <FeatureGate feature="integrations.references.mendeley">
+          <MendeleyRow />
+        </FeatureGate>
+      </Card>
+    </Show>
   );
 };
 
@@ -473,21 +500,23 @@ const CLOUD_PROVIDERS = [
 
 const CloudStorageCard: Component = () => {
   return (
-    <Card
-      title="Cloud storage"
-      subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave."
-    >
-      <For each={CLOUD_PROVIDERS}>
-        {(provider) => (
-          <FeatureGate feature={provider.feature}>
-            <CloudProviderRow provider={provider} />
-          </FeatureGate>
-        )}
-      </For>
-      <FeatureGate feature="integrations.cloud.webdav">
-        <WebdavRow />
-      </FeatureGate>
-    </Card>
+    <Show when={cloudEntitled()}>
+      <Card
+        title="Cloud storage"
+        subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave."
+      >
+        <For each={CLOUD_PROVIDERS}>
+          {(provider) => (
+            <FeatureGate feature={provider.feature}>
+              <CloudProviderRow provider={provider} />
+            </FeatureGate>
+          )}
+        </For>
+        <FeatureGate feature="integrations.cloud.webdav">
+          <WebdavRow />
+        </FeatureGate>
+      </Card>
+    </Show>
   );
 };
 
@@ -752,13 +781,19 @@ const WebdavRow: Component = () => {
 
 const VcsCard: Component = () => {
   return (
-    <Card
-      title="Git & GitHub"
-      subtitle="Commit / push / pull from inside the editor. Clone repos as new projects. Set your author identity here so commits go through with the right name and email."
-    >
-      <AuthorIdentityRow />
-      <GithubAccountRow />
-    </Card>
+    <Show when={vcsEntitled()}>
+      <Card
+        title="Git & GitHub"
+        subtitle="Commit / push / pull from inside the editor. Clone repos as new projects. Set your author identity here so commits go through with the right name and email."
+      >
+        <FeatureGate feature="integrations.vcs.git">
+          <AuthorIdentityRow />
+        </FeatureGate>
+        <FeatureGate feature="integrations.vcs.github">
+          <GithubAccountRow />
+        </FeatureGate>
+      </Card>
+    </Show>
   );
 };
 
@@ -965,26 +1000,28 @@ const AiCard: Component = () => {
   };
 
   return (
-    <Card
-      title="AI"
-      subtitle="Optional assistant chat in the editor, routed through the provider you pick. Turn it off to hide every AI surface — no provider runs, nothing leaves the machine."
-    >
-      <ProviderRow
-        name="AI assistant"
-        hint="Master switch. Off removes the chat panel and its toolbar button from the editor and deactivates the provider below."
-        status={ai().enabled ? "ready" : "unconfigured"}
-        controls={<Switch checked={ai().enabled} onChange={setEnabled} />}
-      />
-      <Show when={ai().enabled}>
-        <For each={AI_PROVIDER_LIST}>
-          {(p) => (
-            <FeatureGate feature={p.feature}>
-              <AiProviderRow provider={p} onActivate={setActive} />
-            </FeatureGate>
-          )}
-        </For>
-      </Show>
-    </Card>
+    <Show when={aiEntitled()}>
+      <Card
+        title="AI"
+        subtitle="Optional assistant chat in the editor, routed through the provider you pick. Turn it off to hide every AI surface — no provider runs, nothing leaves the machine."
+      >
+        <ProviderRow
+          name="AI assistant"
+          hint="Master switch. Off removes the chat panel and its toolbar button from the editor and deactivates the provider below."
+          status={ai().enabled ? "ready" : "unconfigured"}
+          controls={<Switch checked={ai().enabled} onChange={setEnabled} />}
+        />
+        <Show when={ai().enabled}>
+          <For each={AI_PROVIDER_LIST}>
+            {(p) => (
+              <FeatureGate feature={p.feature}>
+                <AiProviderRow provider={p} onActivate={setActive} />
+              </FeatureGate>
+            )}
+          </For>
+        </Show>
+      </Card>
+    </Show>
   );
 };
 
@@ -1303,6 +1340,7 @@ const GrammarCard: Component = () => {
   };
 
   return (
+    <FeatureGate feature="integrations.grammar.harper">
     <Card
       title="Grammar"
       subtitle="Local Harper grammar + spell check. Runs in-process via the Rust crate — zero network, all on-device. LaTeX commands and Typst code are skipped automatically; diagnostics surface as squiggles with one-click fixes."
@@ -1409,6 +1447,7 @@ const GrammarCard: Component = () => {
         </Show>
       </ProviderRow>
     </Card>
+    </FeatureGate>
   );
 };
 

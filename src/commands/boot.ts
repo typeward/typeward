@@ -8,6 +8,7 @@ import {
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
 import { notifyError, notifySuccess } from "~/lib/toast";
+import { hasEntitlement } from "~/integrations/entitlements";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import { paletteOpen_, setRequestSaveTemplate } from "./palette-store";
@@ -62,7 +63,8 @@ const CORE_COMMANDS: EditorCommand[] = [
     subtitle: "Capture the current project as a reusable custom template",
     group: "Project",
     scope: "global",
-    when: () => project() !== null,
+    // Custom templates are Pro (templates.custom.max is '0' on free).
+    when: () => project() !== null && hasEntitlement("templates.custom.max"),
     run: () => {
       setRequestSaveTemplate(true);
     },
@@ -95,7 +97,12 @@ const CORE_COMMANDS: EditorCommand[] = [
     subtitle: "Re-pull every reference provider and rewrite .typeward/citations/library.bib",
     group: "References",
     scope: "global",
-    when: () => project() !== null,
+    // All reference integrations are Pro; the local DOI store (local.bib)
+    // only ever gains entries through the Pro-gated lookup dialog.
+    when: () =>
+      project() !== null &&
+      (hasEntitlement("integrations.references.zotero.local") ||
+        hasEntitlement("integrations.references.doi_lookup")),
     run: async () => {
       const proj = project();
       if (!proj) return;
