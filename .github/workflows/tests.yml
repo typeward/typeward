@@ -32,7 +32,6 @@ jobs:
         with:
           repository: typeward/texlive-wasm
           path: texlive-wasm
-          token: ${{ secrets.SIBLING_REPO_TOKEN || github.token }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
