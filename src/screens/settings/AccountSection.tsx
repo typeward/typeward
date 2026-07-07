@@ -11,12 +11,10 @@
  * themselves read from `src/integrations/entitlements.ts`.
  *
  * Billing is NOT handled in the app — plans are purchased and managed on
- * the Typeward website. Signed-in users get a link out to it; the app only
- * reads the resulting subscription tier.
+ * the Typeward website (`ACCOUNT_BILLING_URL` in src/config/pro.ts).
+ * Signed-in users get a link out to it; the app only reads the resulting
+ * subscription tier.
  */
-
-/** Account + billing page on the Typeward website (allowlisted in capabilities). */
-const ACCOUNT_BILLING_URL = "https://account.typeward.com";
 
 import {
   AlertTriangle,
@@ -33,6 +31,7 @@ import { Show, createResource, createSignal } from "solid-js";
 
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
+import { ACCOUNT_BILLING_URL } from "~/config/pro";
 import { describeIpcError } from "~/integrations/auth/chunked";
 import {
   getSupabaseClient,
