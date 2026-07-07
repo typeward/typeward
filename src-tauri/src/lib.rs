@@ -8,6 +8,7 @@ mod compile;
 // subprocess IPC surface off the mobile webview entirely.
 #[cfg(desktop)]
 mod detect;
+mod diagnostics;
 #[cfg(desktop)]
 mod export_annotated;
 #[cfg(desktop)]
@@ -137,6 +138,11 @@ pub fn run() {
             commands::list_orphan_snapshots,
             telemetry::record_event,
             telemetry::list_recent_events,
+            telemetry::read_telemetry_log,
+            diagnostics::preview_error_report,
+            diagnostics::submit_error_report,
+            diagnostics::scan_and_submit_crashes,
+            diagnostics::collect_system_info,
             integrations::credentials::credential_set,
             integrations::credentials::credential_get,
             integrations::credentials::supabase_session_read,

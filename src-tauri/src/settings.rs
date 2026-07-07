@@ -41,6 +41,11 @@ pub struct Settings {
 pub struct PrivacySettings {
     #[serde(rename = "shareCrashReports", default)]
     pub share_crash_reports: bool,
+    /// Random UUIDv4 attached to crash reports so Sentry can group per-install
+    /// without identifying anyone — never the Supabase account id. Minted by
+    /// Rust on the FIRST submission only (diagnostics.rs); absent until then.
+    #[serde(rename = "installId", default, skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

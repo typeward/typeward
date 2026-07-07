@@ -387,6 +387,9 @@ export interface AppSettings {
 /** Egress opt-ins — everything defaults to OFF (zero reporting unless enabled). */
 export interface PrivacySettings {
   shareCrashReports: boolean;
+  /** Random UUIDv4 attached to crash reports. Rust mints it on the first
+   *  submission; the frontend only preserves it across settings roundtrips. */
+  installId?: string;
 }
 
 export interface UiSettings {
@@ -809,3 +812,72 @@ export const recordTelemetry = (
 
 export const listRecentTelemetry = (limit?: number): Promise<TelemetryEvent[]> =>
   invoke("list_recent_events", { limit });
+
+/** Raw telemetry.log contents (bounded file) for the Export-log save-as flow. */
+export const readTelemetryLog = (): Promise<string> =>
+  invoke("read_telemetry_log");
+
+// ----- Crash reports (Diagnostics) ------------------------------------------
+
+/**
+ * The exact scrubbed payload `submitErrorReport` would send, plus attached
+ * metadata. Computed WITHOUT sending — the confirm dialog renders it verbatim.
+ */
+export interface ReportPreview {
+  kind: string;
+  at: string;
+  summary: string;
+  detail: string | null;
+  appVersion: string;
+  os: string;
+  osVersion: string;
+  arch: string;
+  /** Null until the first submission mints one. */
+  installId: string | null;
+}
+
+export const previewErrorReport = (
+  event: TelemetryEvent,
+): Promise<ReportPreview> => invoke("preview_error_report", { event });
+
+export interface SubmitReportResult {
+  installId: string;
+}
+
+/** Send ONE user-confirmed event to Sentry (scrubbed in Rust before egress). */
+export const submitErrorReport = (
+  event: TelemetryEvent,
+): Promise<SubmitReportResult> => invoke("submit_error_report", { event });
+
+export interface CrashScanResult {
+  submitted: number;
+  installId: string | null;
+}
+
+/**
+ * Crash-on-previous-run scan: submits watermark-new `panic` events (max 5).
+ * No-ops unless `privacy.shareCrashReports` is on (re-checked in Rust) and
+ * runs at most once per process.
+ */
+export const scanAndSubmitCrashes = (): Promise<CrashScanResult> =>
+  invoke("scan_and_submit_crashes");
+
+// ----- System info (Diagnostics header / bug reports) ------------------------
+
+export interface SystemToolProbe {
+  name: string;
+  /** PATH probe result only — never the resolved path. */
+  found: boolean;
+}
+
+export interface SystemInfo {
+  appVersion: string;
+  os: string;
+  osVersion: string;
+  arch: string;
+  compileEngine: string;
+  tools: SystemToolProbe[];
+}
+
+export const collectSystemInfo = (): Promise<SystemInfo> =>
+  invoke("collect_system_info");

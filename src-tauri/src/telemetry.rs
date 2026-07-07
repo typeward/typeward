@@ -1,7 +1,8 @@
 //! Local-only structured event log. Captures crashes (Rust panics + frontend
 //! error boundary forwarded events), compile failures, and LSP startup errors.
-//! No network — events stay on disk in `<app_data_dir>/telemetry.log` until a
-//! later phase wires submission UI.
+//! Capture itself never touches the network — events stay on disk in
+//! `<app_data_dir>/telemetry.log`; submission is a separate, explicit path
+//! (see `diagnostics.rs`).
 //!
 //! Format: one JSON object per line (JSONL) for easy tailing. Bounded to the
 //! last 1000 entries so the log doesn't grow without limit.
@@ -89,6 +90,18 @@ fn truncate_on_char_boundary(mut s: String, max: usize) -> String {
     s
 }
 
+// Field caps re-exposed for the submission path (diagnostics.rs), which accepts
+// event payloads over IPC and must bound them the same way capture does.
+pub fn cap_kind(s: String) -> String {
+    truncate_on_char_boundary(s, MAX_KIND_LEN)
+}
+pub fn cap_summary(s: String) -> String {
+    truncate_on_char_boundary(s, MAX_SUMMARY_LEN)
+}
+pub fn cap_detail(s: String) -> String {
+    truncate_on_char_boundary(s, MAX_DETAIL_LEN)
+}
+
 #[tauri::command]
 pub async fn record_event(
     kind: String,
@@ -109,28 +122,59 @@ pub async fn record_event(
         .map_err(|e| e.to_string())
 }
 
+/// Cached location of telemetry.log (None before `install` runs).
+pub fn log_path() -> Option<PathBuf> {
+    LOG_PATH.lock().expect("telemetry lock poisoned").clone()
+}
+
+/// Every parseable event in log order (oldest first). Shared by the recent-events
+/// listing and the crash-scan submission path in `diagnostics.rs`.
+pub fn read_all_events() -> Result<Vec<Event>, String> {
+    let path = match log_path() {
+        Some(p) => p,
+        None => return Ok(vec![]),
+    };
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let f = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(f);
+    Ok(reader
+        .lines()
+        .map_while(Result::ok)
+        .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
+        .collect())
+}
+
 #[tauri::command]
 pub async fn list_recent_events(limit: Option<usize>) -> Result<Vec<Event>, String> {
     // Reads (and JSON-parses) the whole JSONL log; keep it off the event loop.
     tokio::task::spawn_blocking(move || -> Result<Vec<Event>, String> {
-        let path = match LOG_PATH.lock().expect("telemetry lock poisoned").clone() {
-            Some(p) => p,
-            None => return Ok(vec![]),
-        };
-        if !path.exists() {
-            return Ok(vec![]);
-        }
-        let f = fs::File::open(&path).map_err(|e| e.to_string())?;
-        let reader = BufReader::new(f);
-        let mut events: Vec<Event> = reader
-            .lines()
-            .map_while(Result::ok)
-            .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
-            .collect();
+        let mut events = read_all_events()?;
         let limit = limit.unwrap_or(100).min(MAX_ENTRIES);
         let start = events.len().saturating_sub(limit);
         events.drain(0..start);
         Ok(events)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Raw telemetry.log contents for the Diagnostics "Export log" save-as flow.
+/// The file is trim-bounded (MAX_ENTRIES lines with per-field caps), so whole-
+/// file reads stay small; no path argument — this only ever reads the app-owned
+/// log, never an arbitrary file.
+#[tauri::command]
+pub async fn read_telemetry_log() -> Result<String, String> {
+    tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let path = match log_path() {
+            Some(p) => p,
+            None => return Ok(String::new()),
+        };
+        if !path.exists() {
+            return Ok(String::new());
+        }
+        fs::read_to_string(&path).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
