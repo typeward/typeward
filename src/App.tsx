@@ -20,7 +20,11 @@ import {
   installGlobalShortcuts,
   uninstallGlobalShortcuts,
 } from "~/commands/keyboard";
-import { requestSaveTemplate_, setNavigator } from "~/commands/palette-store";
+import {
+  requestProDialog_,
+  requestSaveTemplate_,
+  setNavigator,
+} from "~/commands/palette-store";
 import { CommandPalette } from "~/components/CommandPalette";
 import { Toaster } from "~/components/feedback/Toaster";
 import "@fontsource-variable/inter/index.css";
@@ -37,6 +41,13 @@ const SettingsScreen = lazy(() => import("~/screens/settings/SettingsScreen"));
 const SaveTemplateDialog = lazy(() =>
   import("~/components/templates/SaveTemplateDialog").then((m) => ({
     default: m.SaveTemplateDialog,
+  })),
+);
+// Same treatment as SaveTemplateDialog — the ProDialog chunk also pulls the
+// supabase session module, which must stay off the boot path.
+const ProDialog = lazy(() =>
+  import("~/components/entitlement/ProDialog").then((m) => ({
+    default: m.ProDialog,
   })),
 );
 
@@ -192,6 +203,10 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestSaveTemplate_()) setSaveTemplateTouched(true);
   });
+  const [proDialogTouched, setProDialogTouched] = createSignal(false);
+  createEffect(() => {
+    if (requestProDialog_()) setProDialogTouched(true);
+  });
 
   onMount(() => {
     installGlobalShortcuts();
@@ -213,6 +228,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={saveTemplateTouched()}>
         <Suspense>
           <SaveTemplateDialog />
+        </Suspense>
+      </Show>
+      <Show when={proDialogTouched()}>
+        <Suspense>
+          <ProDialog />
         </Suspense>
       </Show>
       <Toaster />

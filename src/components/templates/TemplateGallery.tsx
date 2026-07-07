@@ -16,6 +16,8 @@ import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
+import { ProChip } from "~/components/entitlement/ProChip";
+import { proGate } from "~/components/entitlement/pro-gate";
 import { useEntitlement } from "~/integrations/entitlements";
 import * as ipc from "~/ipc";
 import type { Project } from "~/adapters/types";
@@ -44,17 +46,18 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
     { initialValue: [] },
   );
 
-  // Typst templates and the custom-template source are Pro — locked entries
-  // are filtered out entirely rather than shown disabled.
+  // Built-in Typst templates stay visible on free with a quiet Pro chip
+  // (discovery amendment 2026-07-08) — selecting one opens the ProDialog.
+  // The custom-template source stays hidden below the Pro tier.
   const typstEntitled = useEntitlement("formats.typst");
   const customEntitled = useEntitlement("templates.custom.max");
+  const templateLocked = (t: ipc.TemplateManifest) =>
+    t.format === "typst" && !typstEntitled();
   const available = createMemo(() => {
     // Reading templates() while the resource is errored would rethrow here.
     if (templates.error) return [];
     return (templates() ?? []).filter(
-      (t) =>
-        (t.format !== "typst" || typstEntitled()) &&
-        (t.source !== "custom" || customEntitled()),
+      (t) => t.source !== "custom" || customEntitled(),
     );
   });
 
@@ -77,6 +80,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
   };
 
   const handleSelect = (template: ipc.TemplateManifest) => {
+    if (templateLocked(template) && !proGate("formats.typst")) return;
     setSelected(template);
     setName(template.name);
     setVars(
@@ -161,6 +165,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
               search={search()}
               onSearchChange={setSearch}
               onSelect={handleSelect}
+              locked={templateLocked}
             />
           </Show>
         }
@@ -187,6 +192,7 @@ const GalleryGrid: Component<{
   search: string;
   onSearchChange: (q: string) => void;
   onSelect: (t: ipc.TemplateManifest) => void;
+  locked: (t: ipc.TemplateManifest) => boolean;
 }> = (props) => (
   <div class="flex flex-col gap-3">
     <div class="glass-inset flex h-9 items-center gap-2 rounded-md px-3 focus-within:ring-1 focus-within:ring-[var(--color-accent-1)]">
@@ -221,14 +227,19 @@ const GalleryGrid: Component<{
                 <span class="text-sm font-medium text-fg-1">
                   {t.name}
                 </span>
-                <span
-                  class="mono ml-auto rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
-                  style={{
-                    background: "var(--color-control-fill)",
-                    color: "var(--color-fg-3)",
-                  }}
-                >
-                  {t.format}
+                <span class="ml-auto flex items-center gap-1">
+                  <Show when={props.locked(t)}>
+                    <ProChip />
+                  </Show>
+                  <span
+                    class="mono rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
+                    style={{
+                      background: "var(--color-control-fill)",
+                      color: "var(--color-fg-3)",
+                    }}
+                  >
+                    {t.format}
+                  </span>
                 </span>
               </div>
               <Show when={t.description}>

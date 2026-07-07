@@ -19,8 +19,10 @@ import {
   Type,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
+import { ProChip, ProLockedPanel } from "~/components/entitlement/ProChip";
+import { setRequestProDialog } from "~/commands/palette-store";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
@@ -56,7 +58,12 @@ import {
   setShareCrashReports,
   shareCrashReports,
 } from "~/stores/settings-store";
-import { previousRoute, setPreviousRoute } from "~/stores/nav-store";
+import {
+  previousRoute,
+  setPreviousRoute,
+  setSettingsSectionIntent,
+  settingsSectionIntent,
+} from "~/stores/nav-store";
 import {
   ACCENTS,
   type Accent,
@@ -121,9 +128,10 @@ interface NavItem {
   label: string;
   icon: Component<{ size?: number; class?: string }>;
   badge?: string;
-  /** Hides the nav row (and its section) when false — locked integrations
-   *  render nothing, including their Settings entry. */
-  when?: () => boolean;
+  /** Row stays visible when locked (discovery amendment 2026-07-08) but
+   *  carries a quiet Pro chip; its panel renders a locked state instead of
+   *  the cards. */
+  locked?: () => boolean;
 }
 
 interface NavGroup {
@@ -153,34 +161,30 @@ const NAV: NavGroup[] = [
   {
     label: "Integrations",
     items: [
-      { id: "int-references", label: "References", icon: BookMarked, when: referencesEntitled },
-      { id: "int-cloud", label: "Cloud storage", icon: Cloud, when: cloudEntitled },
-      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch, when: vcsEntitled },
-      { id: "int-ai", label: "AI providers", icon: Sparkles, when: aiEntitled },
-      { id: "int-grammar", label: "Grammar", icon: SpellCheck, when: grammarEntitled },
+      { id: "int-references", label: "References", icon: BookMarked, locked: () => !referencesEntitled() },
+      { id: "int-cloud", label: "Cloud storage", icon: Cloud, locked: () => !cloudEntitled() },
+      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch, locked: () => !vcsEntitled() },
+      { id: "int-ai", label: "AI providers", icon: Sparkles, locked: () => !aiEntitled() },
+      { id: "int-grammar", label: "Grammar", icon: SpellCheck, locked: () => !grammarEntitled() },
     ],
   },
 ];
+
+const SECTION_IDS: ReadonlySet<string> = new Set(
+  NAV.flatMap((g) => g.items.map((i) => i.id)),
+);
 
 const SettingsScreen: Component = () => {
   const navigate = useNavigate();
   const [active, setActive] = createSignal<SectionId>("appearance");
 
-  const visibleNav = createMemo(() =>
-    NAV.map((g) => ({
-      ...g,
-      items: g.items.filter((i) => i.when?.() !== false),
-    })).filter((g) => g.items.length > 0),
-  );
-
-  // An entitlement flip (e.g. sign-out) can hide the active section from the
-  // nav — bounce to one that always exists rather than showing a blank pane.
-  createEffect(() => {
-    const stillVisible = visibleNav().some((g) =>
-      g.items.some((i) => i.id === active()),
-    );
-    if (!stillVisible) setActive("appearance");
-  });
+  // One-shot deep link (e.g. onboarding's "Sign in" → Account). Locked
+  // integration rows no longer hide, so no visibility bounce is needed.
+  const intent = settingsSectionIntent();
+  if (intent) {
+    setSettingsSectionIntent(null);
+    if (SECTION_IDS.has(intent)) setActive(intent as SectionId);
+  }
 
   // Back-button label + target derived from `nav-store.previousRoute`. Falls
   // back to /projects when the user opened Settings via a fresh boot or deep
@@ -237,7 +241,7 @@ const SettingsScreen: Component = () => {
             style={{ width: "240px", height: "100%" }}
           >
             <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
-              <For each={visibleNav()}>
+              <For each={NAV}>
                 {(g) => (
                   <div>
                     <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
@@ -262,6 +266,11 @@ const SettingsScreen: Component = () => {
                             <Show when={item.badge}>
                               <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
                                 {item.badge}
+                              </span>
+                            </Show>
+                            <Show when={item.locked?.()}>
+                              <span class="ml-auto">
+                                <ProChip />
                               </span>
                             </Show>
                             <Show when={item.id === "account"}>
@@ -307,20 +316,32 @@ const SettingsScreen: Component = () => {
               <Show when={active() === "security"}>
                 <SecurityPanel />
               </Show>
+              {/* Locked integration sections render a quiet Pro state instead
+                  of their cards; entitled users see everything as before. */}
               <Show when={active() === "int-references"}>
-                <IntegrationsPanel section="references" />
+                <Show when={referencesEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+                  <IntegrationsPanel section="references" />
+                </Show>
               </Show>
               <Show when={active() === "int-cloud"}>
-                <IntegrationsPanel section="cloud" />
+                <Show when={cloudEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+                  <IntegrationsPanel section="cloud" />
+                </Show>
               </Show>
               <Show when={active() === "int-vcs"}>
-                <IntegrationsPanel section="vcs" />
+                <Show when={vcsEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+                  <IntegrationsPanel section="vcs" />
+                </Show>
               </Show>
               <Show when={active() === "int-ai"}>
-                <IntegrationsPanel section="ai" />
+                <Show when={aiEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+                  <IntegrationsPanel section="ai" />
+                </Show>
               </Show>
               <Show when={active() === "int-grammar"}>
-                <IntegrationsPanel section="grammar" />
+                <Show when={grammarEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+                  <IntegrationsPanel section="grammar" />
+                </Show>
               </Show>
               <Show when={active() === "account"}>
                 <AccountSection />
@@ -1040,7 +1061,17 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("vimMode", v)}
           />
         </Row>
-        <FeatureGate feature="integrations.grammar.harper">
+        <FeatureGate
+          feature="integrations.grammar.harper"
+          fallback={
+            <Row
+              label="Spell & grammar check"
+              hint="On-device grammar and spelling via Harper. Part of Typeward Pro."
+            >
+              <ProChip onClick={() => setRequestProDialog(true)} />
+            </Row>
+          }
+        >
           <Row
             label="Spell & grammar check"
             hint="Powered by Harper — configure it under Settings → Integrations → Grammar."

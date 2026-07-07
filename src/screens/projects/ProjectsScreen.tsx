@@ -35,6 +35,8 @@ import {
 import type { RemoteFolder } from "~/integrations/types";
 import { CloneDialog } from "~/components/vcs/CloneDialog";
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
+import { ProChip } from "~/components/entitlement/ProChip";
+import { proGate } from "~/components/entitlement/pro-gate";
 import { TemplateGallery } from "~/components/templates/TemplateGallery";
 import { assertEntitlement, useEntitlement } from "~/integrations/entitlements";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -1349,13 +1351,12 @@ const NewProjectDialog: Component<{
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [galleryOpen, setGalleryOpen] = createSignal(false);
 
-  // Typst is Pro — free tiers see a LaTeX-only format picker.
+  // Typst is Pro — the option stays visible with a quiet Pro chip on free
+  // tiers (discovery amendment 2026-07-08); picking it opens the ProDialog
+  // instead of selecting, so free users always stay on LaTeX.
   const typstEntitled = useEntitlement("formats.typst");
-  const formats = createMemo(() =>
-    FORMATS.filter((f) => f.id !== "typst" || typstEntitled()),
-  );
-  // An entitlement flip (sign-out) while the dialog is open removes the Typst
-  // option; drop a now-invisible selection back to LaTeX.
+  // An entitlement flip (sign-out) while the dialog is open can strand a
+  // Typst selection the tier no longer allows; drop it back to LaTeX.
   createEffect(() => {
     if (!typstEntitled() && format() === "typst") setFormat("latex");
   });
@@ -1662,29 +1663,45 @@ const NewProjectDialog: Component<{
         <fieldset class="flex flex-col gap-2">
           <legend class="text-sm font-medium text-fg-2">Format</legend>
           <div class="grid grid-cols-2 gap-2">
-            <For each={formats()}>
-              {(f) => (
-                <label
-                  class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
-                    format() === f.id
-                      ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
-                      : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="format"
-                    value={f.id}
-                    checked={format() === f.id}
-                    onChange={() => setFormat(f.id)}
-                    class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
-                  />
-                  <div class="flex min-w-0 flex-1 flex-col">
-                    <span class="text-sm font-medium text-fg-1">{f.label}</span>
-                    <span class="text-xs text-fg-3">{f.sub}</span>
-                  </div>
-                </label>
-              )}
+            <For each={FORMATS}>
+              {(f) => {
+                const locked = () => f.id === "typst" && !typstEntitled();
+                return (
+                  <label
+                    onClick={(e) => {
+                      // proGate opens the ProDialog when locked; the radio is
+                      // also disabled so the selection can't stick either way.
+                      if (f.id === "typst" && !proGate("formats.typst")) {
+                        e.preventDefault();
+                      }
+                    }}
+                    class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
+                      format() === f.id
+                        ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
+                        : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="format"
+                      value={f.id}
+                      checked={format() === f.id}
+                      disabled={locked()}
+                      onChange={() => setFormat(f.id)}
+                      class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
+                    />
+                    <div class="flex min-w-0 flex-1 flex-col">
+                      <span class="flex items-center gap-1.5 text-sm font-medium text-fg-1">
+                        {f.label}
+                        <Show when={locked()}>
+                          <ProChip />
+                        </Show>
+                      </span>
+                      <span class="text-xs text-fg-3">{f.sub}</span>
+                    </div>
+                  </label>
+                );
+              }}
             </For>
           </div>
         </fieldset>

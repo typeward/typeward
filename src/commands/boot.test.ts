@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { bootCoreCommands, registerAdapterCommands, unregisterAdapterCommands } from "./boot";
+import { requestProDialog_, setRequestProDialog } from "./palette-store";
 import { _resetForTests, commands, getCommand } from "./registry";
 import type { EditorAdapter, Project } from "~/adapters/types";
 import {
@@ -66,6 +67,19 @@ describe("bootCoreCommands", () => {
 
     resetTabs();
     setProject(null);
+  });
+
+  it("core.whatsInPro is visible on every tier and raises the ProDialog request", () => {
+    bootCoreCommands();
+    const cmd = getCommand("core.whatsInPro");
+    expect(cmd).toBeDefined();
+    // No `when` gate — the discovery entry must not vanish per tier.
+    expect(cmd?.when).toBeUndefined();
+
+    setRequestProDialog(false);
+    void cmd?.run();
+    expect(requestProDialog_()).toBe(true);
+    setRequestProDialog(false);
   });
 
   it("core.saveTemplate hides on the free tier (custom templates are Pro)", () => {

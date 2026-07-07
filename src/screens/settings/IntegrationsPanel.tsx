@@ -61,9 +61,10 @@ export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "gramm
 
 /**
  * Category-level entitlement checks. Every integration is Pro (repricing
- * 2026-07-08), so a category with no entitled provider hides entirely —
- * card shell AND its Settings nav row (SettingsScreen imports these) —
- * per the locked-renders-nothing rule. Reactive inside tracking scopes.
+ * 2026-07-08). SettingsScreen imports these to decide per category whether
+ * to render the cards or the quiet locked state (nav row + Pro chip +
+ * ProLockedPanel — discovery amendment 2026-07-08; the cards themselves
+ * never render on a locked tier). Reactive inside tracking scopes.
  */
 export const referencesEntitled = (): boolean =>
   hasEntitlement("integrations.references.zotero.local") ||

@@ -11,3 +11,14 @@ import { createSignal } from "solid-js";
 const [previousRoute, setPreviousRoute] = createSignal<string | null>(null);
 
 export { previousRoute, setPreviousRoute };
+
+/**
+ * One-shot deep-link target for the Settings screen (a SectionId string,
+ * e.g. "account"). Set before navigating to /settings; SettingsScreen
+ * consumes and clears it on mount, ignoring unknown ids.
+ */
+const [settingsSectionIntent, setSettingsSectionIntent] = createSignal<
+  string | null
+>(null);
+
+export { settingsSectionIntent, setSettingsSectionIntent };

@@ -5,6 +5,7 @@ import {
   ChevronUp,
   ListTodo,
   Loader2,
+  Lock,
   MessageSquare,
   Play,
   Sparkles,
@@ -27,6 +28,7 @@ import {
 } from "solid-js";
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
+import { setRequestProDialog } from "~/commands/palette-store";
 import { hasAnyAiEntitlement } from "~/integrations/ai/registry";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { KbdHint } from "~/components/primitives/KbdHint";
@@ -879,6 +881,19 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             label="AI"
           />
         </Show>
+        {/* Below Pro the AI toggle stays visible with a lock marker and opens
+            the ProDialog — the pane itself never opens (discovery amendment
+            2026-07-08). Not gated on the master switch: that switch lives in
+            a Pro-locked settings section. */}
+        <Show when={!hasAnyAiEntitlement() && !props.embedded}>
+          <ToolbarIconToggle
+            active={false}
+            onClick={() => setRequestProDialog(true)}
+            icon={<Sparkles size={16} />}
+            label="AI — part of Typeward Pro"
+            lockMarker
+          />
+        </Show>
 
         <Show when={loading() && previewMode() === "pdf"}>
           <Loader2 size={12} class="ml-2 animate-spin text-fg-3" />
@@ -1252,6 +1267,8 @@ const ToolbarIconToggle: Component<{
   onClick: () => void;
   icon: any;
   label: string;
+  /** Tiny corner lock for Pro-locked affordances (quiet, no color shift). */
+  lockMarker?: boolean;
 }> = (props) => (
   <button
     type="button"
@@ -1259,7 +1276,7 @@ const ToolbarIconToggle: Component<{
     title={props.label}
     aria-label={props.label}
     aria-pressed={props.active}
-    class={`lift flex h-9 w-9 items-center justify-center rounded-md ${
+    class={`lift relative flex h-9 w-9 items-center justify-center rounded-md ${
       props.active
         ? "text-fg-1"
         : "glass-soft text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
@@ -1274,6 +1291,9 @@ const ToolbarIconToggle: Component<{
     }
   >
     {props.icon}
+    <Show when={props.lockMarker}>
+      <Lock size={8} class="absolute bottom-1 right-1 text-fg-3" />
+    </Show>
   </button>
 );
 

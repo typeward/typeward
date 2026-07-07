@@ -11,6 +11,7 @@ import {
   FolderPlus,
   GitBranch,
   ListTodo,
+  Lock,
   MessageSquare,
   Pencil,
   Settings2,
@@ -44,10 +45,11 @@ import {
 } from "~/components/primitives/ContextMenu";
 import { Dialog } from "~/components/primitives/Dialog";
 import { Button } from "~/components/primitives/Button";
+import { ProLockedPanel } from "~/components/entitlement/ProChip";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
 import { notifyError } from "~/lib/toast";
-import { useEntitlement } from "~/integrations/entitlements";
+import { hasEntitlement, useEntitlement } from "~/integrations/entitlements";
 import { refsAvailability } from "~/integrations/references/availability";
 import { citationProviders } from "~/integrations/references/registry";
 import {
@@ -91,6 +93,9 @@ interface SidebarTab {
   label: string;
   icon: Component<{ size?: number }>;
   count?: number;
+  /** Pro-locked on the current tier: the tab shows a tiny lock marker and
+   *  activating it renders a slim locked panel instead of the feature. */
+  locked?: boolean;
 }
 
 interface EditorSidebarProps {
@@ -133,6 +138,14 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
 
   // Git is Pro — the SCM tab needs the entitlement on top of a repo present.
   const gitEntitled = useEntitlement("integrations.vcs.git");
+  // Any reference entitlement lights the real Refs tab; below Pro the tab
+  // stays visible as a quiet locked affordance (discovery amendment
+  // 2026-07-08) since no provider can register without an entitlement.
+  const refsEntitled = () =>
+    hasEntitlement("integrations.references.zotero.local") ||
+    hasEntitlement("integrations.references.zotero.web") ||
+    hasEntitlement("integrations.references.mendeley") ||
+    hasEntitlement("integrations.references.doi_lookup");
 
   // The SCM tab is meaningless outside a git repo — `.git` can be a dir or
   // (worktrees) a file; `exists` covers both. Non-Tauri contexts resolve
@@ -150,10 +163,14 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     { initialValue: false },
   );
 
-  const showScm = () => isGitRepo() && gitEntitled();
+  const scmLocked = () => !gitEntitled();
+  // Entitled: only inside a git repo (as before). Locked: always visible so
+  // the feature stays discoverable — activating shows the locked panel.
+  const showScm = () => (scmLocked() ? true : isGitRepo());
 
-  // If SCM was active and the project switched to a non-repo (or the
-  // entitlement lapsed), the tab strip no longer shows it — bounce to Files.
+  // If SCM was active and the project switched to a non-repo, the tab strip
+  // no longer shows it — bounce to Files. (A lapsed entitlement keeps the
+  // tab, now locked.)
   createEffect(() => {
     if (!showScm() && props.tab === "scm") props.setTab("files");
   });
@@ -162,10 +179,12 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   // (configured) AND the reachability probe hasn't proven every provider
   // unreachable. Configured-but-unknown still shows the tab; it only drops out
   // after a definitive all-unreachable result (e.g. Zotero enabled but closed).
+  const refsLocked = () => !refsEntitled();
   const hasReferences = () =>
     citationProviders().length > 0 && refsAvailability() !== "none-ready";
+  const showRefs = () => (refsLocked() ? true : hasReferences());
   createEffect(() => {
-    if (!hasReferences() && props.tab === "references") props.setTab("files");
+    if (!showRefs() && props.tab === "references") props.setTab("files");
   });
 
   // Re-anchor an orphaned thread to the current editor selection. The store
@@ -343,11 +362,11 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   // live counters. The label + icon serve the full and compact renderings.
   const tabDefs = createMemo<SidebarTab[]>(() => [
     { id: "files", label: "Files", icon: Files },
-    ...(hasReferences()
-      ? [{ id: "references" as LeftTab, label: "Refs", icon: BookMarked }]
+    ...(showRefs()
+      ? [{ id: "references" as LeftTab, label: "Refs", icon: BookMarked, locked: refsLocked() }]
       : []),
     ...(showScm()
-      ? [{ id: "scm" as LeftTab, label: "SCM", icon: GitBranch }]
+      ? [{ id: "scm" as LeftTab, label: "SCM", icon: GitBranch, locked: scmLocked() }]
       : []),
     { id: "review", label: "Review", icon: MessageSquare, count: openCommentThreadCount() },
     { id: "todo", label: "TODO", icon: ListTodo, count: todoCount() },
@@ -382,7 +401,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   };
   createEffect(() => {
     // Track the reactive bits that add/remove tabs or change a counter width.
-    hasReferences();
+    showRefs();
     showScm();
     openCommentThreadCount();
     todoCount();
@@ -432,8 +451,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
 
   return (
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
-      {/* Tab row — Files / Review / TODO. SCM only inside git repos; Refs
-          only when a citation provider is configured. */}
+      {/* Tab row — Files / Review / TODO. When entitled, SCM shows only
+          inside git repos and Refs only with a configured citation provider;
+          below Pro both stay visible with a lock marker and open a slim
+          locked panel instead. */}
       <div
         ref={tabStripRef}
         role="tablist"
@@ -458,6 +479,9 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               >
                 <Show when={compact() && t.id !== "files"} fallback={t.label}>
                   <Dynamic component={t.icon} size={14} />
+                </Show>
+                <Show when={t.locked}>
+                  <Lock size={9} class="text-fg-3" style={{ opacity: 0.8 }} />
                 </Show>
                 <Show when={t.count != null}>
                   <span
@@ -507,6 +531,9 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               style={{ height: "var(--ui-row)" }}
             >
               {t.label}
+              <Show when={t.locked}>
+                <Lock size={9} />
+              </Show>
               <Show when={t.count != null}>
                 <span class="mono rounded-full px-1.5 py-0.5 text-xs">{t.count}</span>
               </Show>
@@ -557,10 +584,14 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           />
         </Show>
         <Show when={props.tab === "references"}>
-          <ReferencesPanel />
+          <Show when={!refsLocked()} fallback={<ProLockedPanel />}>
+            <ReferencesPanel />
+          </Show>
         </Show>
         <Show when={props.tab === "scm"}>
-          <CommitPanel />
+          <Show when={!scmLocked()} fallback={<ProLockedPanel />}>
+            <CommitPanel />
+          </Show>
         </Show>
         <Show when={props.tab === "review"}>
           <ReviewPanel onRequestReanchor={handleReanchor} />

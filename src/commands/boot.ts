@@ -11,7 +11,11 @@ import { notifyError, notifySuccess } from "~/lib/toast";
 import { hasEntitlement } from "~/integrations/entitlements";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
-import { paletteOpen_, setRequestSaveTemplate } from "./palette-store";
+import {
+  paletteOpen_,
+  setRequestProDialog,
+  setRequestSaveTemplate,
+} from "./palette-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
 import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
@@ -77,6 +81,19 @@ const CORE_COMMANDS: EditorCommand[] = [
     scope: "global",
     run: () => {
       openSettings();
+    },
+  },
+  {
+    id: "core.whatsInPro",
+    title: "What's in Pro",
+    subtitle: "Plans, pricing, and what Typeward Pro unlocks",
+    group: "Navigation",
+    scope: "global",
+    // Deliberately visible on every tier — Pro users get the "you're on
+    // Pro" state. This is the one allowed palette entry about plans; the
+    // locked features' own commands stay hidden (palette noise rule).
+    run: () => {
+      setRequestProDialog(true);
     },
   },
   {
