@@ -289,24 +289,28 @@ export type Tier = "free" | "pro";
  * Naming rule: dot-separated, lowercase, never repurposed once shipped.
  */
 export const KNOWN_ENTITLEMENT_KEYS = [
-  // Free tier
+  // Free tier — the core LaTeX editor (repriced 2026-07-08). Everything
+  // below this group is Pro.
+  "templates.builtin.free",
+  // Pro — format extensions
+  "formats.typst",
+  // Pro — integrations
   "integrations.references.zotero.local",
+  "integrations.references.zotero.web",
+  "integrations.references.mendeley",
   "integrations.references.doi_lookup",
   "integrations.vcs.git",
   "integrations.vcs.github",
   "integrations.vcs.overleaf_import",
-  "integrations.ai.ollama",
-  "integrations.grammar.harper",
-  "templates.builtin.free",
-  "templates.custom.max",
-  // Paid tier
-  "integrations.references.zotero.web",
-  "integrations.references.mendeley",
   "integrations.cloud.dropbox",
   "integrations.cloud.webdav",
   "integrations.ai.anthropic",
   "integrations.ai.openai",
   "integrations.ai.gemini",
+  "integrations.ai.ollama",
+  "integrations.grammar.harper",
+  // Pro — capped limits ('0' on Free, 'unlimited' on Pro)
+  "templates.custom.max",
 ] as const;
 
 /**

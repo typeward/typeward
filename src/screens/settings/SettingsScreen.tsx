@@ -19,7 +19,8 @@ import {
   Type,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
@@ -34,7 +35,14 @@ import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { currentTier } from "~/integrations/entitlements";
 import { signOut, supabaseUser } from "~/integrations/supabase/session";
 import { AccountSection } from "./AccountSection";
-import { IntegrationsPanel } from "./IntegrationsPanel";
+import {
+  IntegrationsPanel,
+  aiEntitled,
+  cloudEntitled,
+  grammarEntitled,
+  referencesEntitled,
+  vcsEntitled,
+} from "./IntegrationsPanel";
 import {
   type CompileEngine,
   type EditorSettings,
@@ -113,6 +121,9 @@ interface NavItem {
   label: string;
   icon: Component<{ size?: number; class?: string }>;
   badge?: string;
+  /** Hides the nav row (and its section) when false — locked integrations
+   *  render nothing, including their Settings entry. */
+  when?: () => boolean;
 }
 
 interface NavGroup {
@@ -142,11 +153,11 @@ const NAV: NavGroup[] = [
   {
     label: "Integrations",
     items: [
-      { id: "int-references", label: "References", icon: BookMarked },
-      { id: "int-cloud", label: "Cloud storage", icon: Cloud },
-      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch },
-      { id: "int-ai", label: "AI providers", icon: Sparkles },
-      { id: "int-grammar", label: "Grammar", icon: SpellCheck },
+      { id: "int-references", label: "References", icon: BookMarked, when: referencesEntitled },
+      { id: "int-cloud", label: "Cloud storage", icon: Cloud, when: cloudEntitled },
+      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch, when: vcsEntitled },
+      { id: "int-ai", label: "AI providers", icon: Sparkles, when: aiEntitled },
+      { id: "int-grammar", label: "Grammar", icon: SpellCheck, when: grammarEntitled },
     ],
   },
 ];
@@ -154,6 +165,22 @@ const NAV: NavGroup[] = [
 const SettingsScreen: Component = () => {
   const navigate = useNavigate();
   const [active, setActive] = createSignal<SectionId>("appearance");
+
+  const visibleNav = createMemo(() =>
+    NAV.map((g) => ({
+      ...g,
+      items: g.items.filter((i) => i.when?.() !== false),
+    })).filter((g) => g.items.length > 0),
+  );
+
+  // An entitlement flip (e.g. sign-out) can hide the active section from the
+  // nav — bounce to one that always exists rather than showing a blank pane.
+  createEffect(() => {
+    const stillVisible = visibleNav().some((g) =>
+      g.items.some((i) => i.id === active()),
+    );
+    if (!stillVisible) setActive("appearance");
+  });
 
   // Back-button label + target derived from `nav-store.previousRoute`. Falls
   // back to /projects when the user opened Settings via a fresh boot or deep
@@ -210,7 +237,7 @@ const SettingsScreen: Component = () => {
             style={{ width: "240px", height: "100%" }}
           >
             <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
-              <For each={NAV}>
+              <For each={visibleNav()}>
                 {(g) => (
                   <div>
                     <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
@@ -1013,20 +1040,22 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("vimMode", v)}
           />
         </Row>
-        <Row
-          label="Spell & grammar check"
-          hint="Powered by Harper — configure it under Settings → Integrations → Grammar."
-        >
-          <Switch
-            checked={integrationsSettings().grammar.enabled}
-            onChange={(v) =>
-              setIntegrationsSettings((prev) => ({
-                ...prev,
-                grammar: { ...prev.grammar, enabled: v },
-              }))
-            }
-          />
-        </Row>
+        <FeatureGate feature="integrations.grammar.harper">
+          <Row
+            label="Spell & grammar check"
+            hint="Powered by Harper — configure it under Settings → Integrations → Grammar."
+          >
+            <Switch
+              checked={integrationsSettings().grammar.enabled}
+              onChange={(v) =>
+                setIntegrationsSettings((prev) => ({
+                  ...prev,
+                  grammar: { ...prev.grammar, enabled: v },
+                }))
+              }
+            />
+          </Row>
+        </FeatureGate>
       </Card>
 
       <Card title="PDF preview" subtitle="How the compiled output is displayed.">

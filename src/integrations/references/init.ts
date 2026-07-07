@@ -54,7 +54,9 @@ export function initReferenceProviders(): void {
       (): RefsPlan => {
         const refs = integrationsSettings().references;
         return {
-          betterBibTex: refs.betterBibTex.enabled,
+          betterBibTex:
+            refs.betterBibTex.enabled &&
+            hasEntitlement("integrations.references.zotero.local"),
           zoteroWebUserId:
             refs.zoteroWeb.userId &&
             hasEntitlement("integrations.references.zotero.web")

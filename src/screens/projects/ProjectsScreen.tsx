@@ -34,7 +34,9 @@ import {
 } from "~/integrations/cloud/registry";
 import type { RemoteFolder } from "~/integrations/types";
 import { CloneDialog } from "~/components/vcs/CloneDialog";
+import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { TemplateGallery } from "~/components/templates/TemplateGallery";
+import { assertEntitlement, useEntitlement } from "~/integrations/entitlements";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import * as ipc from "~/ipc";
 import type { SpaceDef } from "~/ipc";
@@ -1347,6 +1349,17 @@ const NewProjectDialog: Component<{
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [galleryOpen, setGalleryOpen] = createSignal(false);
 
+  // Typst is Pro — free tiers see a LaTeX-only format picker.
+  const typstEntitled = useEntitlement("formats.typst");
+  const formats = createMemo(() =>
+    FORMATS.filter((f) => f.id !== "typst" || typstEntitled()),
+  );
+  // An entitlement flip (sign-out) while the dialog is open removes the Typst
+  // option; drop a now-invisible selection back to LaTeX.
+  createEffect(() => {
+    if (!typstEntitled() && format() === "typst") setFormat("latex");
+  });
+
   const importOverleafZip = async () => {
     const picked = await openFileDialog({
       title: "Pick an Overleaf-exported .zip",
@@ -1362,6 +1375,7 @@ const NewProjectDialog: Component<{
     setErr(null);
     setSubmitting(true);
     try {
+      assertEntitlement("integrations.vcs.overleaf_import");
       const projectName = inferNameFromPath(picked);
       const project = await ipc.overleafImportZip(picked, root, projectName);
       reset();
@@ -1488,13 +1502,17 @@ const NewProjectDialog: Component<{
           <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
             Template
           </Button>
-          <span class="text-xs text-fg-3">·</span>
-          <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
-            Clone repository
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
-            Overleaf zip
-          </Button>
+          <FeatureGate feature="integrations.vcs.git">
+            <span class="text-xs text-fg-3">·</span>
+            <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
+              Clone repository
+            </Button>
+          </FeatureGate>
+          <FeatureGate feature="integrations.vcs.overleaf_import">
+            <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
+              Overleaf zip
+            </Button>
+          </FeatureGate>
         </div>
 
         <Show when={cloudAccounts().length > 0}>
@@ -1644,7 +1662,7 @@ const NewProjectDialog: Component<{
         <fieldset class="flex flex-col gap-2">
           <legend class="text-sm font-medium text-fg-2">Format</legend>
           <div class="grid grid-cols-2 gap-2">
-            <For each={FORMATS}>
+            <For each={formats()}>
               {(f) => (
                 <label
                   class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${

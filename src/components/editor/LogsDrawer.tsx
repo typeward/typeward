@@ -20,6 +20,7 @@ import {
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on } from "solid-js";
+import { hasEntitlement } from "~/integrations/entitlements";
 import { compileState, lastResult, requestGotoSource } from "~/stores/editor-store";
 import { grammarTotalCount } from "~/stores/grammar-store";
 import { logsTabIntent } from "~/stores/ui-store";
@@ -48,6 +49,13 @@ const TABS: LogsTabDef[] = [
   { id: "grammar", label: "Grammar", icon: SpellCheck },
 ];
 
+// Harper is Pro — no Grammar tab (or its empty-state hint) when unentitled.
+// Shared by the drawer and the in-preview LogsView; reactive in tracking scopes.
+const visibleTabDefs = (): LogsTabDef[] =>
+  TABS.filter(
+    (t) => t.id !== "grammar" || hasEntitlement("integrations.grammar.harper"),
+  );
+
 function diagCount(severity: DiagSeverity): number {
   return lastResult()?.diagnostics.filter((d) => d.severity === severity).length ?? 0;
 }
@@ -71,6 +79,11 @@ function tabCounts(): Record<LogsTabId, number> {
 export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
   const [tab, setTab] = createSignal<LogsTabId>("errors");
   const [minimized, setMinimized] = createSignal(!props.embedded);
+
+  const visibleTabs = createMemo(visibleTabDefs);
+  createEffect(() => {
+    if (!visibleTabs().some((t) => t.id === tab())) setTab("errors");
+  });
 
   const errs = createMemo(() => diagCount("error"));
   const warns = createMemo(() => diagCount("warning"));
@@ -118,7 +131,7 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
       {/* Header */}
       <div class="flex h-9 flex-shrink-0 items-center gap-0.5 border-b border-glass-stroke px-2">
         <div role="tablist" aria-label="Log panels" class="flex items-center gap-0.5 overflow-x-auto scroll">
-          <For each={TABS}>
+          <For each={visibleTabs()}>
             {(t) => {
               const active = () => tab() === t.id && !minimized();
               const count = () => counts()[t.id];
@@ -437,6 +450,11 @@ export const LogsView: Component = () => {
   const [tab, setTab] = createSignal<LogsTabId>("all");
   const counts = createMemo(tabCounts);
 
+  const visibleTabs = createMemo(visibleTabDefs);
+  createEffect(() => {
+    if (!visibleTabs().some((t) => t.id === tab())) setTab("all");
+  });
+
   // The preview switch into console mode is owned by the caller (status bar);
   // this only picks the requested tab once the view is mounted.
   createEffect(
@@ -453,8 +471,13 @@ export const LogsView: Component = () => {
 
   return (
     <div class="flex h-full flex-col gap-2 p-2" style={{ background: "var(--color-overlay-dim)" }}>
-      <div class="grid flex-shrink-0 grid-cols-5 gap-1.5">
-        <For each={TABS}>
+      <div
+        class="grid flex-shrink-0 gap-1.5"
+        style={{
+          "grid-template-columns": `repeat(${visibleTabs().length}, minmax(0, 1fr))`,
+        }}
+      >
+        <For each={visibleTabs()}>
           {(t) => (
             <CompactSelector
               active={tab() === t.id}
