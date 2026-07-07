@@ -216,6 +216,17 @@ const CORE_COMMANDS: EditorCommand[] = [
       toggleFocusMode();
     },
   },
+  {
+    id: "core.reportBug",
+    title: "Report a bug",
+    subtitle: "Open a GitHub issue prefilled with your app and system info",
+    group: "Help",
+    scope: "global",
+    run: async () => {
+      const { openBugReport } = await import("~/lib/bug-report");
+      await openBugReport();
+    },
+  },
 ];
 
 // Dev builds only: exercises the full unhandled-error -> Sentry transport ->
