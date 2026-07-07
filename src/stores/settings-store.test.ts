@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validEnum } from "./settings-store";
+import { buildSettings, noteInstallId, setShareCrashReports, validEnum } from "./settings-store";
 import { THEMES, type Theme } from "~/themes/theme-store";
 
 // settings.json is an external boundary: values written by older builds
@@ -20,5 +20,38 @@ describe("settings-store validEnum", () => {
     expect(
       validEnum("nonsense", ["cards", "list"] as const, "cards"),
     ).toBe("cards");
+  });
+});
+
+// privacy.installId is Rust-owned (minted on first crash-report submission);
+// the TS serializer must carry it through buildSettings() or every settings
+// save after a submission would clobber the persisted id.
+describe("settings-store privacy roundtrip", () => {
+  it("omits installId until one exists, then preserves it across saves", () => {
+    // Order matters within this test: module state is shared, so assert the
+    // absent case before minting.
+    expect(buildSettings().privacy?.installId).toBeUndefined();
+    expect(buildSettings().privacy?.shareCrashReports).toBe(false);
+
+    noteInstallId("11111111-2222-4333-8444-555555555555");
+    setShareCrashReports(true);
+    const out = buildSettings();
+    expect(out.privacy?.installId).toBe("11111111-2222-4333-8444-555555555555");
+    expect(out.privacy?.shareCrashReports).toBe(true);
+
+    // A later toggle-only change keeps carrying the id.
+    setShareCrashReports(false);
+    expect(buildSettings().privacy?.installId).toBe(
+      "11111111-2222-4333-8444-555555555555",
+    );
+  });
+
+  it("ignores empty/null ids from failed scans", () => {
+    noteInstallId(null);
+    noteInstallId(undefined);
+    noteInstallId("");
+    expect(buildSettings().privacy?.installId).toBe(
+      "11111111-2222-4333-8444-555555555555",
+    );
   });
 });

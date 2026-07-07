@@ -170,6 +170,14 @@ const [integrationsSettings, setIntegrationsSettings] =
 // Egress opt-in: OFF by default — the Sentry SDK is never even fetched unless
 // the user enables this (see src/lib/sentry-gate.ts).
 const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
+// Read-only mirror of privacy.installId: Rust mints it on the first crash
+// report; the TS side only carries it through buildSettings() so a settings
+// save can't clobber it. `noteInstallId` records an id minted mid-session
+// (returned by the submit/scan IPCs after Rust persisted it).
+const [installId, setInstallId] = createSignal<string | undefined>(undefined);
+export function noteInstallId(id: string | null | undefined): void {
+  if (id) setInstallId(id);
+}
 const [settingsLoaded, setSettingsLoaded] = createSignal<boolean>(false);
 
 /**
@@ -454,14 +462,21 @@ const FIELDS: FieldSpec[] = [
     },
   },
   // --- privacy ---
-  field<boolean>({
-    read: (s) => s.privacy?.shareCrashReports ?? false,
-    value: shareCrashReports,
-    apply: setShareCrashReports,
-    write: (out, v) => {
-      out.privacy = { shareCrashReports: v };
+  // Not the generic field() shape: privacy serializes as one object and must
+  // preserve the Rust-owned installId alongside the user-facing toggle.
+  {
+    hydrate: (s) => {
+      setShareCrashReports(s.privacy?.shareCrashReports ?? false);
+      setInstallId(s.privacy?.installId ?? undefined);
     },
-  }),
+    serialize: (out) => {
+      const id = installId();
+      out.privacy = {
+        shareCrashReports: shareCrashReports(),
+        ...(id ? { installId: id } : {}),
+      };
+    },
+  },
 ];
 
 /**

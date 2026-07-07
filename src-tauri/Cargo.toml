@@ -64,6 +64,9 @@ harper-typst = "2.5"
 # PROPFIND multistatus bodies safely; percent-encoding builds WebDAV hrefs.
 quick-xml = "0.37"
 percent-encoding = "2"
+sentry = { version = "0.46.2", default-features = false, features = ["reqwest", "rustls"] }
+uuid = { version = "1.23.4", features = ["v4"] }
+os_info = { version = "3.15.0", default-features = false }
 
 # Desktop-only single-instance guard: a second launch focuses the running
 # window rather than starting a rival process over the same project data.
