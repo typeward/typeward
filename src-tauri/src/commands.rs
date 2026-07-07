@@ -1,15 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
-
-use serde::Serialize;
-use tauri_plugin_shell::ShellExt;
 
 use crate::autosave::{self, Snapshot};
 #[cfg(desktop)]
 use crate::detect::{self, EngineProbe};
 use crate::fs_ops;
-use crate::project::{self, Project, ProjectFormat};
+use crate::project::{self, Project, ProjectBuild, ProjectFormat};
 use crate::settings::{self, Settings};
 
 /// Convert any error into a String at the command boundary so Tauri's bridge
@@ -57,7 +52,7 @@ fn ensure_registered_or_under_projects_root(path: &Path) -> CmdResult<()> {
     }
 }
 
-fn checked_project_root_and_file(project: &Project) -> CmdResult<(PathBuf, String)> {
+pub(crate) fn checked_project_root_and_file(project: &Project) -> CmdResult<(PathBuf, String)> {
     ensure_registered(&project.root_path)?;
     let root = PathBuf::from(&project.root_path)
         .canonicalize()
@@ -115,7 +110,7 @@ pub async fn list_projects(root: Option<String>) -> CmdResult<Vec<project::Proje
 }
 
 #[tauri::command]
-pub fn create_project(
+pub async fn create_project(
     name: String,
     format: ProjectFormat,
     parent: Option<String>,
@@ -123,33 +118,45 @@ pub fn create_project(
     let parent = parent
         .map(PathBuf::from)
         .unwrap_or_else(settings::default_projects_root);
-    ensure_under_projects_root(&parent)?;
-    if !parent.exists() {
-        std::fs::create_dir_all(&parent).map_err(err)?;
-    }
-    let project = project::create_project(&parent, &name, format).map_err(err)?;
-    project::register_root(Path::new(&project.root_path));
-    Ok(project)
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_under_projects_root(&parent)?;
+        if !parent.exists() {
+            std::fs::create_dir_all(&parent).map_err(err)?;
+        }
+        let project = project::create_project(&parent, &name, format).map_err(err)?;
+        project::register_root(Path::new(&project.root_path));
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
-pub fn open_project(path: String) -> CmdResult<Project> {
-    ensure_registered_or_under_projects_root(Path::new(&path))?;
-    let project = project::read_project(Path::new(&path)).map_err(err)?;
-    project::register_root(Path::new(&project.root_path));
-    Ok(project)
+pub async fn open_project(path: String) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered_or_under_projects_root(Path::new(&path))?;
+        let project = project::read_project(Path::new(&path)).map_err(err)?;
+        project::register_root(Path::new(&project.root_path));
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Write `.typeward/project.json` for an existing folder (e.g. a just-cloned
 /// repo) so it shows up in the library and can be opened. Gated to the projects
 /// area like `git_clone`. Returns the detected project.
 #[tauri::command]
-pub fn import_project_folder(path: String) -> CmdResult<Project> {
-    let root = PathBuf::from(&path);
-    ensure_registered_or_under_projects_root(&root)?;
-    let project = project::import_folder_as_project(&root, None).map_err(err)?;
-    project::register_root(Path::new(&project.root_path));
-    Ok(project)
+pub async fn import_project_folder(path: String) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        let root = PathBuf::from(&path);
+        ensure_registered_or_under_projects_root(&root)?;
+        let project = project::import_folder_as_project(&root, None).map_err(err)?;
+        project::register_root(Path::new(&project.root_path));
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Replace the project's `integrations` block. Caller passes the
@@ -157,26 +164,394 @@ pub fn import_project_folder(path: String) -> CmdResult<Project> {
 /// the file is rewritten atomically. No partial mutation API — keeping
 /// the seam narrow makes it harder to land a half-updated project.json.
 #[tauri::command]
-pub fn set_project_integrations(
+pub async fn set_project_integrations(
     project_root: String,
     integrations: project::ProjectIntegrations,
 ) -> CmdResult<Project> {
-    ensure_registered(&project_root)?;
-    project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
+    // Reads + atomically rewrites project.json (fs_ops::atomic_write fsyncs);
+    // on the cloud-project bind path, so keep the fsync off the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::update_project_integrations(Path::new(&project_root), integrations).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Set or clear a project's deadline. `deadline` is a plain ISO date
 /// (`YYYY-MM-DD`); `None` clears it. Shape is validated here so a malformed
 /// value never lands in project.json.
 #[tauri::command]
-pub fn set_project_deadline(project_root: String, deadline: Option<String>) -> CmdResult<Project> {
-    ensure_registered(&project_root)?;
+pub async fn set_project_deadline(
+    project_root: String,
+    deadline: Option<String>,
+) -> CmdResult<Project> {
     let deadline = match deadline {
         Some(d) if is_iso_date(&d) => Some(d),
         Some(_) => return Err("deadline must be an ISO date (YYYY-MM-DD)".into()),
         None => None,
     };
-    project::set_deadline(Path::new(&project_root), deadline).map_err(err)
+    // Atomically rewrites project.json (fsync); keep it off the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_deadline(Path::new(&project_root), deadline).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Set a project's tags. Normalization (trim, dedupe, caps) is enforced in
+/// `project::set_tags` so the invariant holds regardless of caller.
+#[tauri::command]
+pub async fn set_project_tags(project_root: String, tags: Vec<String>) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_tags(Path::new(&project_root), tags).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Assign the project to a space (`None` clears it). The space id references the
+/// workspace spaces catalog in settings.json; it is not cross-checked here.
+#[tauri::command]
+pub async fn set_project_space(
+    project_root: String,
+    space: Option<String>,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_space(Path::new(&project_root), space).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Move a project to (or out of) the in-app soft-trash. `trashed = true` stamps
+/// the current time (epoch ms); `false` clears it. The folder on disk is left
+/// untouched — permanent removal goes through `delete_project`.
+#[tauri::command]
+pub async fn set_project_trashed(project_root: String, trashed: bool) -> CmdResult<Project> {
+    let trashed_at = trashed.then(|| chrono::Utc::now().timestamp_millis());
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_trashed(Path::new(&project_root), trashed_at).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn set_project_archived(project_root: String, archived: bool) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_archived(Path::new(&project_root), archived).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Stamp the project's last-opened time (server-side clock). Fire-and-forget
+/// from the frontend on every project open.
+#[tauri::command]
+pub async fn touch_project_opened(project_root: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        project::touch_opened(Path::new(&project_root), now).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Rename a project's display name (folder path unchanged; see `project::rename`).
+#[tauri::command]
+pub async fn rename_project(project_root: String, name: String) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::rename(Path::new(&project_root), name).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Move a project to the OS trash. Recoverable, so the UI confirms with a plain
+/// dialog. No registry unregister is needed — a trashed folder fails to
+/// canonicalize and drops out of `is_registered_root` naturally.
+#[tauri::command]
+pub async fn delete_project(project_root: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        project::delete_project(Path::new(&project_root)).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Duplicate a project into a fresh sibling folder under the projects root.
+#[tauri::command]
+pub async fn duplicate_project(
+    project_root: String,
+    new_name: Option<String>,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        let source = Path::new(&project_root);
+        // The copy lands as a child of the source's parent; validate that
+        // parent is under the projects root *before* copying so the new folder
+        // can't escape the projects area.
+        let parent = source
+            .parent()
+            .ok_or_else(|| "project has no parent directory".to_string())?;
+        ensure_under_projects_root(parent)?;
+        let (dest, project) = project::duplicate_project(source, new_name).map_err(err)?;
+        project::register_root(&dest);
+        Ok(project)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Set (or clear) the per-project LaTeX build config. Engine validation lives
+/// in `project::set_build`.
+#[tauri::command]
+pub async fn set_project_build(
+    project_root: String,
+    build: Option<ProjectBuild>,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_build(Path::new(&project_root), build).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Repoint the project's entry file (root-file picker / rename-the-root-file
+/// flow). Existence + extension-match + `write_project` revalidation live in
+/// `project::set_root_file`.
+#[tauri::command]
+pub async fn set_project_root_file(
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<Project> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Project> {
+        ensure_registered(&project_root)?;
+        project::set_root_file(Path::new(&project_root), &rel_path).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+// ---------- File-tree operations (context menus) --------------------------
+//
+// Renderer-driven file ops (rename / delete / new dir / duplicate). Each gates
+// on the opened-project registry, validates the project-relative path (the
+// leading-dash guard included), and refuses the `.typeward` sidecar and `.git`
+// repo as a first component so the renderer can't rewrite snapshots, the sync
+// cursor, review comments, or VCS internals. The watcher picks the changes up
+// automatically (fsVersion bump → FileTree + TODO scan refresh).
+
+/// Reject a rel path whose first component is a protected sidecar/VCS dir.
+/// Case-insensitive (Windows/macOS fold case) at the first segment — matching
+/// the cloud engine's `.typeward` guard.
+fn reject_protected_first_component(rel_path: &str) -> CmdResult<()> {
+    let first = Path::new(rel_path).components().find_map(|c| match c {
+        std::path::Component::Normal(p) => Some(p.to_string_lossy().to_ascii_lowercase()),
+        _ => None,
+    });
+    if let Some(first) = first {
+        if first == ".typeward" || first == ".git" {
+            return Err(format!("cannot modify protected path: {rel_path}"));
+        }
+    }
+    Ok(())
+}
+
+/// Move `from_rel` to `to_rel` within the project. The source must exist and NOT
+/// be a symlink (never follow a planted link); the destination must not already
+/// exist (no silent overwrite). Pure/testable: the command wrapper adds the
+/// registry gate.
+fn rename_project_file_op(root: &Path, from_rel: &str, to_rel: &str) -> CmdResult<()> {
+    reject_protected_first_component(from_rel)?;
+    reject_protected_first_component(to_rel)?;
+    // resolve_project_write_path canonicalizes only the parent, leaving the leaf
+    // un-canonicalized so symlink_metadata below sees the link itself.
+    let from = project::resolve_project_write_path(root, from_rel).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&from)
+        .map_err(|_| format!("source does not exist: {from_rel}"))?;
+    if meta.file_type().is_symlink() {
+        return Err("refusing to rename a symlink".to_string());
+    }
+    let to = project::resolve_project_write_path(root, to_rel).map_err(err)?;
+    if to.symlink_metadata().is_ok() {
+        return Err(format!("destination already exists: {to_rel}"));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(err)?;
+    }
+    std::fs::rename(&from, &to).map_err(err)
+}
+
+#[tauri::command]
+pub async fn rename_project_file(
+    project_root: String,
+    from_rel: String,
+    to_rel: String,
+) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        rename_project_file_op(Path::new(&project_root), &from_rel, &to_rel)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Delete a project-relative file or directory. Uses the OS trash on desktop
+/// (recoverable, so the UI confirms with a plain dialog) and a hard remove on
+/// mobile — mirroring `project::delete_project`'s cfg split. A symlink leaf is
+/// deleted as the link, never followed to its target.
+fn delete_project_path_op(root: &Path, rel_path: &str) -> CmdResult<()> {
+    reject_protected_first_component(rel_path)?;
+    let target = project::resolve_project_write_path(root, rel_path).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&target)
+        .map_err(|_| format!("path does not exist: {rel_path}"))?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = meta;
+        trash::delete(&target).map_err(|e| e.to_string())
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        if meta.file_type().is_dir() {
+            std::fs::remove_dir_all(&target).map_err(err)
+        } else {
+            std::fs::remove_file(&target).map_err(err)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn delete_project_path(project_root: String, rel_path: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        delete_project_path_op(Path::new(&project_root), &rel_path)
+    })
+    .await
+    .map_err(err)?
+}
+
+fn create_project_dir_op(root: &Path, rel_path: &str) -> CmdResult<()> {
+    reject_protected_first_component(rel_path)?;
+    let dir = project::resolve_project_write_path(root, rel_path).map_err(err)?;
+    std::fs::create_dir_all(&dir).map_err(err)
+}
+
+#[tauri::command]
+pub async fn create_project_dir(project_root: String, rel_path: String) -> CmdResult<()> {
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        create_project_dir_op(Path::new(&project_root), &rel_path)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Compute a "<stem> copy[.ext]" sibling rel path that doesn't yet exist,
+/// escalating to "<stem> copy 2", "<stem> copy 3"… on collision. The existence
+/// probe uses `symlink_metadata` so a planted symlink at the candidate name
+/// still counts as taken.
+fn duplicate_rel_name(root: &Path, rel_path: &str) -> CmdResult<String> {
+    let rel = Path::new(rel_path);
+    let stem = rel
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .ok_or_else(|| format!("cannot duplicate: {rel_path}"))?;
+    let ext = rel.extension().map(|s| s.to_string_lossy().into_owned());
+    let parent = rel.parent();
+
+    let make = |suffix: &str| -> String {
+        let name = match &ext {
+            Some(e) => format!("{stem}{suffix}.{e}"),
+            None => format!("{stem}{suffix}"),
+        };
+        match parent {
+            Some(p) if !p.as_os_str().is_empty() => {
+                p.join(name).to_string_lossy().replace('\\', "/")
+            }
+            _ => name,
+        }
+    };
+
+    let taken = |candidate: &str| root.join(candidate).symlink_metadata().is_ok();
+
+    let first = make(" copy");
+    if !taken(&first) {
+        return Ok(first);
+    }
+    let mut n = 2;
+    loop {
+        let candidate = make(&format!(" copy {n}"));
+        if !taken(&candidate) {
+            return Ok(candidate);
+        }
+        n += 1;
+    }
+}
+
+/// Duplicate a project-relative FILE (directories rejected in v1). Copies disk
+/// content to a fresh "<name> copy.ext" sibling and returns the new rel path.
+fn duplicate_project_file_op(root: &Path, rel_path: &str) -> CmdResult<String> {
+    reject_protected_first_component(rel_path)?;
+    let source = project::resolve_project_write_path(root, rel_path).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&source)
+        .map_err(|_| format!("source does not exist: {rel_path}"))?;
+    if meta.file_type().is_symlink() {
+        return Err("refusing to duplicate a symlink".to_string());
+    }
+    if !meta.file_type().is_file() {
+        return Err("only files can be duplicated".to_string());
+    }
+    let dest_rel = duplicate_rel_name(root, rel_path)?;
+    let dest = project::resolve_project_write_path(root, &dest_rel).map_err(err)?;
+    std::fs::copy(&source, &dest).map_err(err)?;
+    Ok(dest_rel)
+}
+
+#[tauri::command]
+pub async fn duplicate_project_file(
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<String> {
+    tokio::task::spawn_blocking(move || -> CmdResult<String> {
+        ensure_registered(&project_root)?;
+        duplicate_project_file_op(Path::new(&project_root), &rel_path)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Reveal a project-relative file in the OS file manager (Finder/Explorer).
+/// Unlike the raw `opener` plugin's reveal command — which took an unscoped
+/// absolute path straight from the renderer — this gates on the opened-project
+/// registry and resolves the path under the canonical root, so webview XSS
+/// can't reveal `~/.ssh` or any path outside an opened project.
+#[tauri::command]
+pub async fn reveal_project_path(
+    app: tauri::AppHandle,
+    project_root: String,
+    rel_path: String,
+) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        reject_protected_first_component(&rel_path)?;
+        let abs = project::resolve_existing_project_path(Path::new(&project_root), &rel_path)
+            .map_err(err)?;
+        app.opener().reveal_item_in_dir(abs).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Cheap `YYYY-MM-DD` shape check (digits + dashes, plausible ranges). Not a
@@ -250,28 +625,6 @@ pub async fn write_project_text_file(
     .map_err(err)?
 }
 
-/// Decode a percent-encoded request header into an owned `String`. The binary
-/// upload commands carry their path metadata as headers (the JSON arg slot is
-/// taken by the raw byte body); the renderer percent-encodes via
-/// `encodeURIComponent` so arbitrary Unicode paths survive the ASCII-only
-/// header channel.
-fn percent_decode_header(name: &str, raw: &str) -> CmdResult<String> {
-    percent_encoding::percent_decode_str(raw)
-        .decode_utf8()
-        .map(|cow| cow.into_owned())
-        .map_err(|_| format!("invalid UTF-8 in `{name}` header"))
-}
-
-fn decode_path_header(request: &tauri::ipc::Request<'_>, name: &str) -> CmdResult<String> {
-    let raw = request
-        .headers()
-        .get(name)
-        .ok_or_else(|| format!("missing `{name}` header"))?
-        .to_str()
-        .map_err(|_| format!("invalid `{name}` header"))?;
-    percent_decode_header(name, raw)
-}
-
 /// Persist binary bytes (e.g. a PDF emitted by the WASM engine)
 /// to the given absolute path. Bypasses the fs plugin scope like the
 /// rest of our project-internal IO. Parent directories are created on
@@ -282,12 +635,10 @@ fn decode_path_header(request: &tauri::ipc::Request<'_>, name: &str) -> CmdResul
 /// root and relative path ride along as percent-encoded headers.
 #[tauri::command]
 pub async fn write_project_binary_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
-    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
-        return Err("expected a raw request body".to_string());
-    };
-    let bytes = bytes.clone();
-    let project_root = decode_path_header(&request, "x-project-root")?;
-    let rel_path = decode_path_header(&request, "x-rel-path")?;
+    use crate::integrations::ipc;
+    let bytes = ipc::raw_body_required(&request)?;
+    let project_root = ipc::decode_header(&request, "x-project-root")?;
+    let rel_path = ipc::decode_header(&request, "x-rel-path")?;
     tokio::task::spawn_blocking(move || -> CmdResult<()> {
         ensure_registered(&project_root)?;
         let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
@@ -313,428 +664,44 @@ pub async fn write_project_binary_file(request: tauri::ipc::Request<'_>) -> CmdR
     .map_err(err)?
 }
 
-/// Exposes the existing `parse_latex_log` diagnostic extractor over IPC
-/// so the WASM CompileProvider can produce diagnostics in the same
-/// shape as the desktop path without duplicating the parser in TS.
 #[tauri::command]
-pub fn parse_latex_log_cmd(log: String, entry: String) -> Vec<Diagnostic> {
-    parse_latex_log(&log, &entry)
+pub async fn load_settings(app: tauri::AppHandle) -> CmdResult<Settings> {
+    tokio::task::spawn_blocking(move || settings::load(&app).map_err(err))
+        .await
+        .map_err(err)?
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct CompileResult {
-    pub ok: bool,
-    #[serde(rename = "outputPath")]
-    pub output_path: Option<String>,
-    pub diagnostics: Vec<Diagnostic>,
-    pub log: String,
-    #[serde(rename = "durationMs")]
-    pub duration_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Diagnostic {
-    pub severity: String,
-    pub message: String,
-    pub file: String,
-    pub line: u32,
-    pub source: String,
-}
-
-/// Phase 1 baseline LaTeX compile.
-///
-/// `system-tex` path: invokes the user's `latexmk` (preferred) or `pdflatex`
-/// from PATH.
-/// `tectonic` path: tries the bundled sidecar binary first
-/// (`binaries/tectonic-<target-triple>`, declared in tauri.conf.json's
-/// externalBin). Falls back to `tectonic` from PATH if the sidecar isn't
-/// shipped — useful during development before running `npm run fetch:tectonic`.
-///
-/// Diagnostic parsing is intentionally minimal; a richer `.log` parser lands
-/// later. Same for incremental builds.
 #[tauri::command]
-pub async fn compile_latex(
-    app: tauri::AppHandle,
-    project: Project,
-    engine: Option<String>,
-    halt_on_error: Option<bool>,
-) -> CmdResult<CompileResult> {
-    let started = Instant::now();
-    let (root, root_file) = checked_project_root_and_file(&project)?;
-
-    let engine = engine.unwrap_or_else(|| "system-tex".into());
-    // Halting was historically hardcoded — keep it the default. Turning it
-    // off lets the engine push past errors and collect every diagnostic in
-    // one pass (often with a partial PDF). Tectonic always halts; the flag
-    // only applies to the system-tex path.
-    let halt = halt_on_error.unwrap_or(true);
-    let (log, success) = match engine.as_str() {
-        "tectonic" => run_tectonic(&app, &root_file, &root).await?,
-        _ => {
-            let root_for_cmd = root.clone();
-            let root_file_for_cmd = root_file.clone();
-            tokio::task::spawn_blocking(move || {
-                run_system_tex(&root_file_for_cmd, &root_for_cmd, halt)
-            })
-            .await
-            .map_err(err)??
-        }
-    };
-
-    let pdf_path = root.join(replace_ext(&root_file, "pdf"));
-    let ok = success && pdf_path.exists();
-    let diagnostics = parse_latex_log(&log, &root_file);
-
-    Ok(CompileResult {
-        ok,
-        output_path: if ok {
-            Some(pdf_path.to_string_lossy().into())
-        } else {
-            None
-        },
-        diagnostics,
-        log,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-fn run_system_tex(
-    root_file: &str,
-    root: &Path,
-    halt_on_error: bool,
-) -> Result<(String, bool), String> {
-    let mut accumulated_log = String::new();
-
-    // Prefer latexmk (handles multiple passes, bibliography). If it isn't on
-    // PATH, or it spawns but exits non-zero with no useful diagnostics, fall
-    // back to a direct pdflatex invocation. MiKTeX on Windows sometimes ships
-    // latexmk without a usable Perl, so the fallback is important.
-    // Spawn the absolute path resolved against PATH, never the bare name:
-    // `current_dir(root)` would otherwise let Windows' CreateProcess execute a
-    // `latexmk`/`pdflatex` planted in a malicious project directory.
-    if let Ok(latexmk) = which::which("latexmk") {
-        let mut latexmk_args = vec!["-pdf", "-synctex=1", "-interaction=nonstopmode"];
-        if halt_on_error {
-            latexmk_args.push("-halt-on-error");
-        }
-        latexmk_args.push(root_file);
-        accumulated_log.push_str(&format!("$ latexmk {}\n", latexmk_args.join(" ")));
-        match Command::new(&latexmk)
-            .args(&latexmk_args)
-            .current_dir(root)
-            .output()
-        {
-            Ok(out) => {
-                accumulated_log.push_str(&merge_io(&out.stdout, &out.stderr));
-                if out.status.success() {
-                    return Ok((accumulated_log, true));
-                }
-                accumulated_log.push_str(&format!(
-                    "\n[latexmk exit: {}]\n\n--- falling back to pdflatex ---\n",
-                    out.status,
-                ));
-            }
-            Err(e) => {
-                accumulated_log.push_str(&format!(
-                    "[latexmk spawn failed: {}]\n\n--- falling back to pdflatex ---\n",
-                    e,
-                ));
-            }
-        }
-    }
-
-    let pdflatex = match which::which("pdflatex") {
-        Ok(path) => path,
-        Err(_) => {
-            accumulated_log
-                .push_str("\nNo LaTeX engine on PATH. Install MiKTeX/TeX Live or pick the Tectonic engine in Settings.");
-            return Ok((accumulated_log, false));
-        }
-    };
-
-    let mut pdflatex_args = vec!["-synctex=1", "-interaction=nonstopmode"];
-    if halt_on_error {
-        pdflatex_args.push("-halt-on-error");
-    }
-    pdflatex_args.push(root_file);
-    accumulated_log.push_str(&format!("\n$ pdflatex {}\n", pdflatex_args.join(" ")));
-    let output = Command::new(&pdflatex)
-        .args(&pdflatex_args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| {
-            accumulated_log.push_str(&format!("[pdflatex spawn failed: {}]\n", e));
-            // Return the accumulated log so the user can see what we tried.
-            format!("compile failed:\n{}", accumulated_log)
-        })?;
-    accumulated_log.push_str(&merge_io(&output.stdout, &output.stderr));
-    Ok((accumulated_log, output.status.success()))
-}
-
-async fn run_tectonic(
-    app: &tauri::AppHandle,
-    root_file: &str,
-    root: &Path,
-) -> Result<(String, bool), String> {
-    // --synctex emits the .synctex.gz alongside the PDF; harmless when the
-    // user doesn't have the synctex CLI installed (forward/inverse just
-    // return None then).
-    let tectonic_args = ["-X", "compile", root_file, "--keep-logs", "--synctex"];
-    // Try the bundled sidecar first.
-    let sidecar_result = app.shell().sidecar("binaries/tectonic");
-    if let Ok(cmd) = sidecar_result {
-        let output = cmd
-            .args(tectonic_args)
-            .current_dir(root)
-            .output()
-            .await
-            .map_err(|e| format!("sidecar tectonic failed: {}", e))?;
-        let ok = output.status.success();
-        return Ok((merge_io(&output.stdout, &output.stderr), ok));
-    }
-    // Fall back to PATH — resolve the absolute path and spawn that, not the
-    // bare name, so `current_dir(root)` can't redirect to a planted binary.
-    let tectonic = match which::which("tectonic") {
-        Ok(path) => path,
-        Err(_) => {
-            return Err(
-                "tectonic is not bundled (run `npm run fetch:tectonic`) and not on PATH".into(),
-            )
-        }
-    };
-    let root_for_cmd = root.to_path_buf();
-    let root_file_for_cmd = root_file.to_string();
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new(&tectonic)
-            .args([
-                "-X",
-                "compile",
-                root_file_for_cmd.as_str(),
-                "--keep-logs",
-                "--synctex",
-            ])
-            .current_dir(root_for_cmd)
-            .output()
-            .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
-        Ok((
-            merge_io(&output.stdout, &output.stderr),
-            output.status.success(),
-        ))
+pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()> {
+    // Runs on a debounce while the user drags sliders/toggles — the write plus
+    // create_dir_all must not hitch the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        settings::save(&app, &settings).map_err(err)?;
+        // Keep the clone-destination boundary in sync when the user moves their
+        // projects root. (File IO is gated by the opened-project registry, which
+        // this does not affect.)
+        let root = PathBuf::from(&settings.projects_root);
+        let _ = std::fs::create_dir_all(&root);
+        project::set_projects_root(&root);
+        Ok(())
     })
     .await
     .map_err(err)?
-}
-
-fn merge_io(stdout: &[u8], stderr: &[u8]) -> String {
-    let out = String::from_utf8_lossy(stdout);
-    let err = String::from_utf8_lossy(stderr);
-    if err.is_empty() {
-        out.into_owned()
-    } else {
-        format!("{out}\n{err}")
-    }
-}
-
-/// Minimal LaTeX log scanner: flags lines starting with `! ` (TeX errors) and
-/// `Warning:` patterns. A real implementation would track file pushes/pops to
-/// resolve the source file; this v0 just attributes everything to the entry.
-fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("! ") {
-            out.push(Diagnostic {
-                severity: "error".into(),
-                message: trimmed.trim_start_matches("! ").to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "compile".into(),
-            });
-        } else if trimmed.contains("Warning:") {
-            out.push(Diagnostic {
-                severity: "warning".into(),
-                message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: (i + 1) as u32,
-                source: "compile".into(),
-            });
-        }
-    }
-    out
-}
-
-// ---------- Typst compile -------------------------------------------------
-
-/// Compile a Typst project by invoking `typst compile <root_file>`. Output
-/// defaults to `<base>.pdf` alongside the entry; we don't pass an explicit
-/// output path so the user's filesystem layout stays in their control.
-///
-/// Diagnostics are parsed out of stderr — Typst prints `error:` and
-/// `warning:` lines with optional file:line:col context. The parser is
-/// intentionally minimal for now; a real impl would walk the structured
-/// `--diagnostic-format=json` output once it stabilizes.
-#[tauri::command]
-pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
-    let started = Instant::now();
-    let (root, root_file) = checked_project_root_and_file(&project)?;
-    let root_for_cmd = root.clone();
-    let root_file_for_cmd = root_file.clone();
-    let (log, success) = tokio::task::spawn_blocking(move || -> CmdResult<(String, bool)> {
-        // Resolve the absolute path on PATH and spawn THAT, not the bare name.
-        // Bare `Command::new("typst")` + `current_dir(project)` lets Windows'
-        // CreateProcess search the project dir first, so a planted `typst.exe`
-        // in a malicious project would run (argument/binary planting). `which`
-        // resolves against the app's CWD/PATH, never the project.
-        let typst = which::which("typst").map_err(|_| {
-            "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
-                .to_string()
-        })?;
-
-        let mut log = String::new();
-        log.push_str(&format!("$ typst compile {}\n", root_file_for_cmd));
-        let output = Command::new(&typst)
-            .args(["compile", root_file_for_cmd.as_str()])
-            .current_dir(&root_for_cmd)
-            .output()
-            .map_err(|e| format!("failed to spawn typst: {}", e))?;
-        log.push_str(&merge_io(&output.stdout, &output.stderr));
-        Ok((log, output.status.success()))
-    })
-    .await
-    .map_err(err)??;
-
-    let pdf_path = root.join(replace_ext(&root_file, "pdf"));
-    let ok = success && pdf_path.exists();
-    let diagnostics = parse_typst_log(&log, &root_file);
-
-    Ok(CompileResult {
-        ok,
-        output_path: if ok {
-            Some(pdf_path.to_string_lossy().into())
-        } else {
-            None
-        },
-        diagnostics,
-        log,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
-}
-
-/// Lines like `error: ...` and `warning: ...` are surfaced as Diagnostics.
-/// Typst also prints follow-up location hints; we attach them to the
-/// previous diagnostic via message concatenation.
-fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
-    let mut out: Vec<Diagnostic> = Vec::new();
-    for (i, line) in log.lines().enumerate() {
-        let trimmed = line.trim();
-        let (severity, rest) = if let Some(rest) = trimmed.strip_prefix("error:") {
-            ("error", rest.trim())
-        } else if let Some(rest) = trimmed.strip_prefix("warning:") {
-            ("warning", rest.trim())
-        } else {
-            continue;
-        };
-        out.push(Diagnostic {
-            severity: severity.into(),
-            message: rest.to_string(),
-            file: entry.to_string(),
-            line: (i + 1) as u32,
-            source: "typst".into(),
-        });
-    }
-    out
-}
-
-/// Strip the trailing extension and append `new_ext`. Idempotent for files
-/// that already end in `.<new_ext>`. Falls back to appending when the
-/// source has no extension.
-fn replace_ext(rel_path: &str, new_ext: &str) -> String {
-    match rel_path.rfind('.') {
-        Some(idx) => format!("{}.{}", &rel_path[..idx], new_ext),
-        None => format!("{}.{}", rel_path, new_ext),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn replace_ext_swaps_trailing_extension() {
-        assert_eq!(replace_ext("main.typ", "pdf"), "main.pdf");
-        assert_eq!(replace_ext("paper.md", "pdf"), "paper.pdf");
-        assert_eq!(replace_ext("notes", "pdf"), "notes.pdf");
-        assert_eq!(replace_ext("a.b.tex", "pdf"), "a.b.pdf");
-    }
-
-    #[test]
-    fn percent_decode_header_round_trips_encodeuricomponent() {
-        // The renderer percent-encodes path metadata via `encodeURIComponent`
-        // before stuffing it into the ASCII-only header channel of the binary
-        // write IPC. Confirm Unicode, spaces, and separators decode faithfully.
-        // Values below are exactly what JS `encodeURIComponent` emits.
-        assert_eq!(
-            percent_decode_header("x-rel-path", "r%C3%A9sum%C3%A9%2Fmain.tex").unwrap(),
-            "résumé/main.tex"
-        );
-        assert_eq!(
-            percent_decode_header("x-rel-path", "my%20project%2Ffig%201.png").unwrap(),
-            "my project/fig 1.png"
-        );
-        assert_eq!(
-            percent_decode_header("x-project-root", "C%3A%5CUsers%5Cme%5CDocs").unwrap(),
-            "C:\\Users\\me\\Docs"
-        );
-        // Unencoded ASCII (encodeURIComponent leaves these untouched) passes through.
-        assert_eq!(
-            percent_decode_header("x-rel-path", "build/out.pdf").unwrap(),
-            "build/out.pdf"
-        );
-    }
-
-    #[test]
-    fn percent_decode_header_rejects_invalid_utf8() {
-        // `%FF` is not a valid UTF-8 lead byte — must error, not lossily decode.
-        assert!(percent_decode_header("x-rel-path", "%FF%FE").is_err());
-    }
-
-    #[test]
-    fn parse_typst_log_picks_up_error_and_warning_lines() {
-        let log = "  error: undefined variable `x`\nnote: at main.typ:3:1\nwarning: unused parameter\nrandom line\n";
-        let diags = parse_typst_log(log, "main.typ");
-        assert_eq!(diags.len(), 2);
-        assert_eq!(diags[0].severity, "error");
-        assert!(diags[0].message.contains("undefined variable"));
-        assert_eq!(diags[1].severity, "warning");
-        assert_eq!(diags[0].source, "typst");
-    }
-}
-
-#[tauri::command]
-pub fn load_settings(app: tauri::AppHandle) -> CmdResult<Settings> {
-    settings::load(&app).map_err(err)
-}
-
-#[tauri::command]
-pub fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResult<()> {
-    settings::save(&app, &settings).map_err(err)?;
-    // Keep the clone-destination boundary in sync when the user moves their
-    // projects root. (File IO is gated by the opened-project registry, which
-    // this does not affect.)
-    let root = PathBuf::from(&settings.projects_root);
-    let _ = std::fs::create_dir_all(&root);
-    project::set_projects_root(&root);
-    Ok(())
 }
 
 /// Settings → Security → "Reset local app data". Overwrites settings.json
 /// with the defaults; the frontend clears localStorage and reloads. Project
 /// files on disk are untouched.
 #[tauri::command]
-pub fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
-    settings::save(&app, &Settings::default()).map_err(err)?;
-    project::set_projects_root(&settings::default_projects_root());
-    Ok(())
+pub async fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
+    // Writes settings.json (fsync); keep it off the event-loop thread like save_settings.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        settings::save(&app, &Settings::default()).map_err(err)?;
+        project::set_projects_root(&settings::default_projects_root());
+        Ok(())
+    })
+    .await
+    .map_err(err)?
 }
 
 /// Zip the project sources for sharing. Reuses the template-capture walk
@@ -791,13 +758,158 @@ pub async fn write_snapshot(
 }
 
 #[tauri::command]
-pub fn clear_snapshot(project_root: String, rel_path: String) -> CmdResult<()> {
-    ensure_registered(&project_root)?;
-    autosave::clear(Path::new(&project_root), &rel_path).map_err(err)
+pub async fn clear_snapshot(project_root: String, rel_path: String) -> CmdResult<()> {
+    // Fires on every save; the unlink must not run on the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        ensure_registered(&project_root)?;
+        autosave::clear(Path::new(&project_root), &rel_path).map_err(err)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
-pub fn list_orphan_snapshots(project_root: String) -> CmdResult<Vec<Snapshot>> {
-    ensure_registered(&project_root)?;
-    autosave::list_orphans(Path::new(&project_root)).map_err(err)
+pub async fn list_orphan_snapshots(project_root: String) -> CmdResult<Vec<Snapshot>> {
+    // Walks the snapshots dir and reads every .snap on project open.
+    tokio::task::spawn_blocking(move || -> CmdResult<Vec<Snapshot>> {
+        ensure_registered(&project_root)?;
+        autosave::list_orphans(Path::new(&project_root)).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("typeward-cmd-test-{}-{}", std::process::id(), id));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn reject_protected_first_component_matrix() {
+        // First-component sidecar/VCS dirs are rejected, case-insensitively.
+        for bad in [
+            ".typeward/project.json",
+            ".git/config",
+            ".Typeward/x",
+            ".GIT/hooks/pre-commit",
+        ] {
+            assert!(
+                reject_protected_first_component(bad).is_err(),
+                "{bad} should be rejected"
+            );
+        }
+        // A nested `.typeward` beyond the first segment is not this guard's job
+        // (validate_project_relative_path handles traversal); ordinary paths pass.
+        for ok in ["sections/intro.tex", "figures/plot.png", "notes.md"] {
+            assert!(reject_protected_first_component(ok).is_ok(), "{ok} should pass");
+        }
+    }
+
+    #[test]
+    fn file_ops_reject_traversal_absolute_and_dash_paths() {
+        let root = temp_dir();
+        for bad in ["../outside.tex", "sections/../../evil.tex", "-shell-escape.tex"] {
+            assert!(create_project_dir_op(&root, bad).is_err(), "{bad} rejected by mkdir");
+            assert!(
+                rename_project_file_op(&root, "main.tex", bad).is_err(),
+                "{bad} rejected as rename dest"
+            );
+        }
+    }
+
+    #[test]
+    fn rename_rejects_missing_source_and_existing_dest() {
+        let root = temp_dir();
+        std::fs::write(root.join("a.tex"), "A").unwrap();
+        std::fs::write(root.join("b.tex"), "B").unwrap();
+
+        // Missing source.
+        assert!(rename_project_file_op(&root, "ghost.tex", "c.tex").is_err());
+        // Dest already exists — no silent overwrite.
+        assert!(rename_project_file_op(&root, "a.tex", "b.tex").is_err());
+        // Clean rename into a fresh nested dir works (parent created).
+        rename_project_file_op(&root, "a.tex", "chapters/a.tex").unwrap();
+        assert!(root.join("chapters").join("a.tex").exists());
+        assert!(!root.join("a.tex").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rename_and_duplicate_reject_symlink_source() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir();
+        std::fs::write(root.join("real.tex"), "R").unwrap();
+        symlink(root.join("real.tex"), root.join("link.tex")).unwrap();
+
+        assert!(
+            rename_project_file_op(&root, "link.tex", "moved.tex")
+                .unwrap_err()
+                .contains("symlink")
+        );
+        assert!(
+            duplicate_project_file_op(&root, "link.tex")
+                .unwrap_err()
+                .contains("symlink")
+        );
+        // The real file behind the link is untouched.
+        assert!(root.join("real.tex").exists());
+        assert!(root.join("link.tex").exists());
+    }
+
+    #[test]
+    fn duplicate_naming_escalates_on_collision() {
+        let root = temp_dir();
+        std::fs::write(root.join("note.tex"), "N").unwrap();
+        assert_eq!(duplicate_rel_name(&root, "note.tex").unwrap(), "note copy.tex");
+
+        // End-to-end duplicate, then a second duplicate escalates the suffix.
+        let first = duplicate_project_file_op(&root, "note.tex").unwrap();
+        assert_eq!(first, "note copy.tex");
+        assert!(root.join("note copy.tex").exists());
+        let second = duplicate_project_file_op(&root, "note.tex").unwrap();
+        assert_eq!(second, "note copy 2.tex");
+
+        // Nested path keeps its directory and handles an extension-less file.
+        std::fs::create_dir_all(root.join("d")).unwrap();
+        std::fs::write(root.join("d").join("README"), "x").unwrap();
+        assert_eq!(duplicate_rel_name(&root, "d/README").unwrap(), "d/README copy");
+    }
+
+    #[test]
+    fn duplicate_rejects_directories() {
+        let root = temp_dir();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        assert!(
+            duplicate_project_file_op(&root, "sub")
+                .unwrap_err()
+                .contains("only files")
+        );
+    }
+
+    #[test]
+    fn delete_rejects_protected_and_missing_before_trashing() {
+        let root = temp_dir();
+        // Protected first component is refused before any filesystem action.
+        assert!(delete_project_path_op(&root, ".typeward/snapshots/x.snap").is_err());
+        // A non-existent leaf errors rather than reaching the trash call.
+        assert!(delete_project_path_op(&root, "ghost.tex").is_err());
+    }
+
+    #[test]
+    fn create_project_dir_op_makes_nested_dirs() {
+        let root = temp_dir();
+        create_project_dir_op(&root, "chapters/appendix").unwrap();
+        assert!(root.join("chapters").join("appendix").is_dir());
+    }
 }

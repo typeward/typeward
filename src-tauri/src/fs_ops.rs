@@ -67,6 +67,69 @@ pub fn write_text(path: &Path, content: &str) -> io::Result<()> {
     atomic_write(path, content.as_bytes())
 }
 
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "typeward-fs-portable-test-{}-{}",
+            std::process::id(),
+            id
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn atomic_write_produces_intact_content() {
+        let dir = temp_dir();
+        let dest = dir.join("project.json");
+        atomic_write(&dest, b"{\"ok\":true}").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "{\"ok\":true}");
+    }
+
+    #[test]
+    fn atomic_write_overwrites_existing_file() {
+        let dir = temp_dir();
+        let dest = dir.join("settings.json");
+        atomic_write(&dest, b"first").unwrap();
+        atomic_write(&dest, b"second-longer").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "second-longer");
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_temp_files_behind() {
+        // The temp-then-rename primitive must clean up after itself so a
+        // directory listing never shows the transient `.<name>.<pid>.<n>.tmp`.
+        let dir = temp_dir();
+        let dest = dir.join("main.tex.snap");
+        atomic_write(&dest, b"content").unwrap();
+        let leftover: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftover.is_empty(), "unexpected temp files: {leftover:?}");
+    }
+
+    #[test]
+    fn write_text_creates_parent_directories() {
+        let dir = temp_dir();
+        let dest = dir.join("nested").join("deep").join("file.txt");
+        write_text(&dest, "hello").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "hello");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

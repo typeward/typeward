@@ -31,7 +31,7 @@ export const KbdHint: Component<{
             <kbd
               class={`mono inline-flex items-center justify-center rounded ${
                 size() === "md"
-                  ? "h-[18px] min-w-[18px] px-1 text-[11px]"
+                  ? "h-[18px] min-w-[18px] px-1 text-xs"
                   : "h-[14px] min-w-[14px] px-1 text-[10px]"
               }`}
               style={

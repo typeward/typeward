@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "preview",
+  "description": "Scoped permissions for the detached PDF preview window (E11). Read-only: it renders a compiled PDF mirrored from the main window over the event bridge and never writes, opens dialogs, or spawns processes. Custom project IPC stays gated by the registered-root registry in project.rs.",
+  "windows": ["preview"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$DOCUMENT/**" }
+      ]
+    }
+  ]
+}

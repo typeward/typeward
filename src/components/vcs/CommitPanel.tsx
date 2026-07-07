@@ -8,6 +8,7 @@
  * expectation that the panel reflects the working tree promptly.
  */
 
+import { describeIpcError } from "~/lib/errors";
 import {
   ArrowDown,
   Check,
@@ -42,7 +43,7 @@ export const CommitPanel: Component = () => {
       try {
         return await ipc.gitStatus(rootPath);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = describeIpcError(err);
         if (/could not be opened|repository|not.+repo|not\s+found/i.test(msg)) {
           return { kind: "not-a-repo" };
         }
@@ -52,9 +53,12 @@ export const CommitPanel: Component = () => {
     },
   );
 
-  // Heartbeat. setInterval is enough — no need for visibility tracking
-  // since the panel is unmounted when the tab is hidden.
-  const handle = setInterval(() => setRefreshTick((t) => t + 1), POLL_INTERVAL_MS);
+  // Heartbeat. Unmounting covers sidebar-tab hiding; the document.hidden
+  // guard covers a minimized window, where the panel stays mounted and
+  // would otherwise keep walking the worktree every 2s.
+  const handle = setInterval(() => {
+    if (!document.hidden) setRefreshTick((t) => t + 1);
+  }, POLL_INTERVAL_MS);
   onCleanup(() => clearInterval(handle));
 
   const summary = createMemo<ipc.GitStatusSummary | null>(() => {
@@ -91,7 +95,7 @@ export const CommitPanel: Component = () => {
       await fn();
       await refetch();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy("");
     }
@@ -186,7 +190,7 @@ export const CommitPanel: Component = () => {
             />
           </Show>
           <Show when={(summary()?.files.length ?? 0) === 0}>
-            <div class="px-4 py-6 text-center text-[length:var(--ui-font-sm)] text-fg-3">
+            <div class="px-4 py-6 text-center text-sm text-fg-3">
               Working tree clean.
             </div>
           </Show>
@@ -198,7 +202,7 @@ export const CommitPanel: Component = () => {
             value={message()}
             onInput={(e) => setMessage(e.currentTarget.value)}
             rows={2}
-            class="glass-inset w-full resize-none rounded-md px-2.5 py-1.5 text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+            class="glass-inset w-full resize-none rounded-md px-2.5 py-1.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <div class="mt-2 flex items-center gap-1.5">
             <Button
@@ -215,7 +219,7 @@ export const CommitPanel: Component = () => {
             </Button>
           </div>
           <Show when={error()}>
-            <div class="mt-2 text-[11px] text-[var(--color-err)]">{error()}</div>
+            <div class="mt-2 select-text text-xs text-[var(--color-err)]">{error()}</div>
           </Show>
         </div>
       </Show>
@@ -232,7 +236,7 @@ const BranchHeader: Component<{
 }> = (props) => (
   <div class="flex flex-shrink-0 items-center gap-2 border-b border-glass-stroke px-2.5 py-2">
     <GitBranch class="ui-icon-sm text-fg-3" />
-    <span class="mono text-[length:var(--ui-font-sm)] text-fg-1">
+    <span class="mono text-sm text-fg-1">
       {props.summary?.branch ?? "(detached)"}
     </span>
     <Show when={props.summary?.upstream}>
@@ -287,7 +291,7 @@ const FileSection: Component<{
   onAction: (path: string) => void;
 }> = (props) => (
   <div class="border-b border-glass-stroke">
-    <div class="flex items-center gap-2 bg-[var(--color-control-fill)]/50 px-3 py-1.5 text-[length:var(--ui-font-xs)] uppercase tracking-[0.08em] text-fg-3">
+    <div class="label-xs flex items-center gap-2 bg-[var(--color-control-fill)]/50 px-3 py-1.5 text-fg-3">
       <span>{props.title}</span>
       <span class="mono ml-auto text-fg-3">{props.files.length}</span>
     </div>
@@ -304,7 +308,7 @@ const FileSection: Component<{
             }
             untracked={file.untracked}
           />
-          <span class="mono truncate text-[length:var(--ui-font-sm)] text-fg-1">{file.path}</span>
+          <span class="mono select-text truncate text-sm text-fg-1">{file.path}</span>
           <button
             type="button"
             class="lift ml-auto rounded p-1 text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"

@@ -19,6 +19,8 @@
 
 import * as ipc from "~/ipc";
 import type { Project } from "~/adapters/types";
+import { describeIpcError } from "~/lib/errors";
+import { recordError } from "~/lib/telemetry";
 
 import { dedupeBibTex } from "./bibtex";
 import { readLocalAdditions } from "./doi-lookup/cache";
@@ -31,6 +33,8 @@ export interface RefreshResult {
   providersOk: number;
   /** Number of providers that errored — those are skipped, not fatal. */
   providersFailed: number;
+  /** Per-provider failure detail, for surfacing to the user. */
+  failures: Array<{ providerId: string; message: string }>;
   /** Citation keys present in the final library. */
   totalKeys: number;
   /** Duplicate keys that were skipped (later occurrence dropped). */
@@ -46,8 +50,8 @@ export interface RefreshResult {
  */
 export async function refreshLibraryBib(project: Project): Promise<RefreshResult> {
   const sources: Array<{ providerId: string; bibtex: string }> = [];
+  const failures: RefreshResult["failures"] = [];
   let providersOk = 0;
-  let providersFailed = 0;
 
   for (const provider of citationProviders()) {
     try {
@@ -56,8 +60,9 @@ export async function refreshLibraryBib(project: Project): Promise<RefreshResult
         sources.push({ providerId: provider.id, bibtex });
       }
       providersOk++;
-    } catch {
-      providersFailed++;
+    } catch (e) {
+      failures.push({ providerId: provider.id, message: describeIpcError(e) });
+      recordError("references-refresh", `provider ${provider.id} export failed`, e);
     }
   }
 
@@ -74,7 +79,8 @@ export async function refreshLibraryBib(project: Project): Promise<RefreshResult
 
   return {
     providersOk,
-    providersFailed,
+    providersFailed: failures.length,
+    failures,
     totalKeys: countKeys(bibtex),
     duplicates,
   };

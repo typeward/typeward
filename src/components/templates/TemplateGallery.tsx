@@ -9,6 +9,7 @@
  *      created Project.
  */
 
+import { describeIpcError } from "~/lib/errors";
 import { ChevronLeft, FileText, Search } from "lucide-solid";
 import type { Component } from "solid-js";
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
@@ -43,6 +44,8 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
   );
 
   const filtered = createMemo(() => {
+    // Reading templates() while the resource is errored would rethrow here.
+    if (templates.error) return [];
     const q = search().trim().toLowerCase();
     if (!q) return templates() ?? [];
     return (templates() ?? []).filter((t) => {
@@ -84,7 +87,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
       props.onCreated(project);
       props.onOpenChange(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeIpcError(err));
     } finally {
       setBusy(false);
     }
@@ -131,12 +134,22 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
       <Show
         when={selected()}
         fallback={
-          <GalleryGrid
-            templates={filtered() ?? []}
-            search={search()}
-            onSearchChange={setSearch}
-            onSelect={handleSelect}
-          />
+          <Show
+            when={!templates.error}
+            fallback={
+              <div class="py-8 text-center text-sm text-[var(--color-err)]">
+                {describeIpcError(templates.error)}
+              </div>
+            }
+          >
+            <GalleryGrid
+              templates={filtered() ?? []}
+              loading={templates.loading}
+              search={search()}
+              onSearchChange={setSearch}
+              onSelect={handleSelect}
+            />
+          </Show>
         }
       >
         <VariableForm
@@ -145,6 +158,9 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
           onNameChange={setName}
           vars={vars()}
           onVarChange={(key, value) => setVars({ ...vars(), [key]: value })}
+          onSubmit={() => {
+            if (!busy()) void handleInstantiate();
+          }}
           error={error()}
         />
       </Show>
@@ -154,6 +170,7 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
 
 const GalleryGrid: Component<{
   templates: ipc.TemplateManifest[];
+  loading: boolean;
   search: string;
   onSearchChange: (q: string) => void;
   onSelect: (t: ipc.TemplateManifest) => void;
@@ -166,15 +183,15 @@ const GalleryGrid: Component<{
         placeholder="Filter by name, format, or tag…"
         value={props.search}
         onInput={(e) => props.onSearchChange(e.currentTarget.value)}
-        class="h-full flex-1 bg-transparent text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none"
+        class="h-full flex-1 bg-transparent text-sm text-fg-1 placeholder:text-fg-2 outline-none"
         autofocus
       />
     </div>
     <Show
       when={props.templates.length > 0}
       fallback={
-        <div class="py-8 text-center text-[length:var(--ui-font-sm)] text-fg-3">
-          No matching templates.
+        <div class="py-8 text-center text-sm text-fg-3">
+          {props.loading ? "Loading templates…" : "No matching templates."}
         </div>
       }
     >
@@ -188,7 +205,7 @@ const GalleryGrid: Component<{
             >
               <div class="flex w-full items-center gap-2">
                 <FileText class="ui-icon-sm text-fg-3" />
-                <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-1">
+                <span class="text-sm font-medium text-fg-1">
                   {t.name}
                 </span>
                 <span
@@ -202,7 +219,7 @@ const GalleryGrid: Component<{
                 </span>
               </div>
               <Show when={t.description}>
-                <p class="line-clamp-2 text-[11px] leading-relaxed text-fg-3">
+                <p class="line-clamp-2 text-xs leading-relaxed text-fg-3">
                   {t.description}
                 </p>
               </Show>
@@ -231,25 +248,29 @@ const VariableForm: Component<{
   onNameChange: (v: string) => void;
   vars: Record<string, string>;
   onVarChange: (key: string, value: string) => void;
+  onSubmit: () => void;
   error: string | null;
 }> = (props) => (
   <div class="flex flex-col gap-3">
     <label class="flex flex-col gap-1">
-      <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+      <span class="text-sm font-medium text-fg-2">
         Project name
       </span>
       <input
         type="text"
         value={props.name}
         onInput={(e) => props.onNameChange(e.currentTarget.value)}
-        class="glass-inset h-9 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.isComposing) props.onSubmit();
+        }}
+        class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
       />
     </label>
 
     <For each={props.template.variables}>
       {(variable) => (
         <label class="flex flex-col gap-1">
-          <span class="text-[length:var(--ui-font-sm)] font-medium text-fg-2">
+          <span class="text-sm font-medium text-fg-2">
             {variable.label}
           </span>
           <Show
@@ -259,7 +280,10 @@ const VariableForm: Component<{
                 type="text"
                 value={props.vars[variable.key] ?? ""}
                 onInput={(e) => props.onVarChange(variable.key, e.currentTarget.value)}
-                class="glass-inset h-9 rounded-md px-2.5 text-[length:var(--ui-font-sm)] text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.isComposing) props.onSubmit();
+                }}
+                class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
               />
             }
           >
@@ -267,7 +291,7 @@ const VariableForm: Component<{
               value={props.vars[variable.key] ?? ""}
               onInput={(e) => props.onVarChange(variable.key, e.currentTarget.value)}
               rows={3}
-              class="glass-inset resize-none rounded-md px-2.5 py-2 text-[length:var(--ui-font-sm)] text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+              class="glass-inset resize-none rounded-md px-2.5 py-2 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
           </Show>
         </label>
@@ -275,7 +299,7 @@ const VariableForm: Component<{
     </For>
 
     <Show when={props.error}>
-      <div class="text-[length:var(--ui-font-sm)] text-[var(--color-err)]">
+      <div class="select-text text-sm text-[var(--color-err)]">
         {props.error}
       </div>
     </Show>

@@ -13,7 +13,7 @@ interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
 
 const VARIANT: Record<ButtonVariant, string> = {
   primary:
-    "accent-grad shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_4px_14px_rgba(0,0,0,0.22)] hover:brightness-110",
+    "accent-grad shadow-[var(--shadow-accent-btn)] hover:brightness-110",
   secondary:
     "glass-soft text-fg-1 hover:bg-[var(--color-control-fill-hover)]",
   ghost: "text-fg-2 hover:bg-[var(--color-control-fill)] hover:text-fg-1",
@@ -22,9 +22,9 @@ const VARIANT: Record<ButtonVariant, string> = {
 };
 
 const SIZE: Record<ButtonSize, string> = {
-  sm: "h-7 px-2.5 text-[12px] gap-1.5 rounded-md",
-  md: "h-9 px-3 text-[13px] gap-2 rounded-md",
-  lg: "h-10 px-4 text-[13px] gap-2 rounded-lg",
+  sm: "h-7 px-2.5 text-sm gap-1.5 rounded-md",
+  md: "h-9 px-3 text-base gap-2 rounded-md",
+  lg: "h-10 px-4 text-base gap-2 rounded-lg",
 };
 
 export const Button: Component<ButtonProps> = (props) => {

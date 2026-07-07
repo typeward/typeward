@@ -1,11 +1,30 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriMobile } from "~/lib/platform";
 import type {
   CompileResult,
   Diagnostic,
   Project,
+  ProjectBuild,
   ProjectFormat,
   ProjectIntegrations,
 } from "~/adapters/types";
+
+/** True on desktop builds (Win/Mac/Linux); false on Android/iOS. */
+export function isDesktop(): boolean {
+  return !isTauriMobile();
+}
+
+/**
+ * Guard for wrappers whose Rust command is cfg-gated off mobile builds
+ * (TeX detection, SyncTeX, LSP — see `src-tauri/src/lib.rs`). Calling one on
+ * mobile would otherwise reject with Tauri's opaque unknown-command error;
+ * fail fast with an actionable message at the single wrapper chokepoint.
+ */
+export function assertDesktopCommand(command: string): void {
+  if (isTauriMobile()) {
+    throw new Error(`"${command}" is a desktop-only feature, unavailable on this device.`);
+  }
+}
 
 // ----- TeX engine detection ------------------------------------------------
 
@@ -21,7 +40,10 @@ export interface EngineProbe {
   anyLatexAvailable: boolean;
 }
 
-export const detectTex = (): Promise<EngineProbe> => invoke("detect_tex");
+export const detectTex = (): Promise<EngineProbe> => {
+  assertDesktopCommand("detect_tex");
+  return invoke("detect_tex");
+};
 
 // ----- Projects ------------------------------------------------------------
 
@@ -52,6 +74,62 @@ export const setProjectDeadline = (
   deadline: string | null,
 ): Promise<Project> =>
   invoke("set_project_deadline", { projectRoot, deadline });
+
+/** Replace a project's tag list (normalized + capped in Rust). */
+export const setProjectTags = (
+  projectRoot: string,
+  tags: string[],
+): Promise<Project> => invoke("set_project_tags", { projectRoot, tags });
+
+/** Assign the project to a space (`null` clears membership). */
+export const setProjectSpace = (
+  projectRoot: string,
+  space: string | null,
+): Promise<Project> => invoke("set_project_space", { projectRoot, space });
+
+/** Move a project to the in-app trash (`true`) or restore it (`false`). */
+export const setProjectTrashed = (
+  projectRoot: string,
+  trashed: boolean,
+): Promise<Project> => invoke("set_project_trashed", { projectRoot, trashed });
+
+export const setProjectArchived = (
+  projectRoot: string,
+  archived: boolean,
+): Promise<Project> =>
+  invoke("set_project_archived", { projectRoot, archived });
+
+/** Stamp the project's last-opened time. Fire-and-forget on open. */
+export const touchProjectOpened = (projectRoot: string): Promise<void> =>
+  invoke("touch_project_opened", { projectRoot });
+
+/** Rename a project's display name (folder path unchanged). */
+export const renameProject = (
+  projectRoot: string,
+  name: string,
+): Promise<Project> => invoke("rename_project", { projectRoot, name });
+
+/** Move a project to the OS trash (recoverable). */
+export const deleteProject = (projectRoot: string): Promise<void> =>
+  invoke("delete_project", { projectRoot });
+
+/** Duplicate a project into a fresh sibling folder; returns the new project. */
+export const duplicateProject = (
+  projectRoot: string,
+  newName?: string,
+): Promise<Project> =>
+  invoke("duplicate_project", { projectRoot, newName: newName ?? null });
+
+export interface TodoItem {
+  file: string;
+  line: number;
+  kind: "todo" | "fixme" | "note";
+  text: string;
+}
+
+/** Scan the project's source files for TODO/FIXME/NOTE markers. */
+export const scanProjectTodos = (projectRoot: string): Promise<TodoItem[]> =>
+  invoke("scan_project_todos", { projectRoot });
 
 // ----- File I/O ------------------------------------------------------------
 
@@ -108,6 +186,55 @@ export const writeProjectBinaryFile = (
     },
   });
 
+// ----- File-tree operations (context menus) --------------------------------
+//
+// Renderer-driven file ops backing the FileTree context menus. Each Rust
+// command gates on the opened-project registry, validates the project-relative
+// path (leading-dash guard included), and rejects `.typeward`/`.git` first
+// components. The watcher picks the changes up automatically (fsVersion bump).
+
+/** Repoint the project's entry (`rootFile`) — root-file picker / rename-the-root. */
+export const setProjectRootFile = (
+  projectRoot: string,
+  relPath: string,
+): Promise<Project> =>
+  invoke("set_project_root_file", { projectRoot, relPath });
+
+/** Move a project-relative file. Source must exist and not be a symlink; dest must be free. */
+export const renameProjectFile = (
+  projectRoot: string,
+  fromRel: string,
+  toRel: string,
+): Promise<void> =>
+  invoke("rename_project_file", { projectRoot, fromRel, toRel });
+
+/** Trash (desktop) or hard-remove (mobile) a project-relative file or directory. */
+export const deleteProjectPath = (
+  projectRoot: string,
+  relPath: string,
+): Promise<void> =>
+  invoke("delete_project_path", { projectRoot, relPath });
+
+/** Create a project-relative directory (parents included). */
+export const createProjectDir = (
+  projectRoot: string,
+  relPath: string,
+): Promise<void> =>
+  invoke("create_project_dir", { projectRoot, relPath });
+
+/** Copy a project-relative file to a fresh "<name> copy.ext" sibling; returns the new rel path. */
+export const duplicateProjectFile = (
+  projectRoot: string,
+  relPath: string,
+): Promise<string> =>
+  invoke("duplicate_project_file", { projectRoot, relPath });
+
+/** Reveal a project-relative file in the OS file manager (registry-gated). */
+export const revealProjectPath = (
+  projectRoot: string,
+  relPath: string,
+): Promise<void> => invoke("reveal_project_path", { projectRoot, relPath });
+
 /**
  * Reuse the Rust LaTeX log parser from frontend compile paths (WASM engine).
  * Keeps diagnostic shape identical across engines without a TS duplicate.
@@ -133,15 +260,22 @@ interface BackendCompileResult {
   durationMs: number;
 }
 
+/** Structured, resolved build options passed to `compile_latex`. */
+export interface BuildOptionsWire {
+  engine: "pdflatex" | "xelatex" | "lualatex" | "tectonic";
+  recipe: "latexmk" | "engine-only" | "engine-bibtex" | "engine-biber";
+  shellEscape: boolean;
+  synctex: boolean;
+  haltOnError: boolean;
+}
+
 export const compileLatex = async (
   project: Project,
-  engine?: "system-tex" | "tectonic",
-  haltOnError?: boolean,
+  options: BuildOptionsWire,
 ): Promise<CompileResult> => {
   const result = await invoke<BackendCompileResult>("compile_latex", {
     project,
-    engine,
-    haltOnError,
+    options,
   });
   return {
     ok: result.ok,
@@ -151,6 +285,22 @@ export const compileLatex = async (
     durationMs: result.durationMs,
   };
 };
+
+/** Set (or clear with `null`) the per-project LaTeX build config. */
+export const setProjectBuild = (
+  projectRoot: string,
+  build: ProjectBuild | null,
+): Promise<Project> => invoke("set_project_build", { projectRoot, build });
+
+/** Read the per-machine shell-escape trust for a project (`null` = unset). */
+export const shellEscapeTrustGet = (
+  projectRoot: string,
+): Promise<string | null> => invoke("shell_escape_trust_get", { projectRoot });
+
+export const shellEscapeTrustSet = (
+  projectRoot: string,
+  grant: "granted" | "denied",
+): Promise<void> => invoke("shell_escape_trust_set", { projectRoot, grant });
 
 export const compileTypst = async (project: Project): Promise<CompileResult> => {
   const result = await invoke<BackendCompileResult>("compile_typst", { project });
@@ -186,8 +336,10 @@ export const synctexForward = (args: {
   /** Source file relative to projectRoot. */
   sourceFile: string;
   line: number;
-}): Promise<SyncTexForwardLocation | null> =>
-  invoke("synctex_forward", { args });
+}): Promise<SyncTexForwardLocation | null> => {
+  assertDesktopCommand("synctex_forward");
+  return invoke("synctex_forward", { args });
+};
 
 export const synctexInverse = (args: {
   projectRoot: string;
@@ -195,8 +347,10 @@ export const synctexInverse = (args: {
   page: number;
   x: number;
   y: number;
-}): Promise<SyncTexInverseLocation | null> =>
-  invoke("synctex_inverse", { args });
+}): Promise<SyncTexInverseLocation | null> => {
+  assertDesktopCommand("synctex_inverse");
+  return invoke("synctex_inverse", { args });
+};
 
 // ----- Settings ------------------------------------------------------------
 
@@ -206,10 +360,19 @@ export interface AppSettings {
   editor: {
     autoCompile: boolean;
     vimMode: boolean;
-    spellCheck: boolean;
     lineWrap: boolean;
     fontSize: number;
     stopOnFirstError: boolean;
+    lineNumbers: boolean;
+    highlightActiveLine: boolean;
+    autocomplete: boolean;
+    bracketMatching: boolean;
+    autoCloseBrackets: boolean;
+    tabSize: number;
+    lineHeight: string;
+    autosaveDelayMs: number;
+    pdfDefaultZoom: number;
+    pdfInvertDark: boolean;
   };
   projectsRoot: string;
   compileEngine: string;
@@ -217,12 +380,21 @@ export interface AppSettings {
   ui: UiSettings;
   workspace: WorkspaceSettings;
   integrations: IntegrationsSettings;
+  // Optional: settings.json files predating the privacy section lack it.
+  privacy?: PrivacySettings;
+}
+
+/** Egress opt-ins — everything defaults to OFF (zero reporting unless enabled). */
+export interface PrivacySettings {
+  shareCrashReports: boolean;
 }
 
 export interface UiSettings {
   density: string; // "compact" | "cozy" | "comfortable"
   animations: boolean;
   ambientLights: boolean;
+  accentGradient: boolean;
+  glowEffects: boolean;
   customThemesEnabled: boolean;
   activeCustomTheme: string | null;
 }
@@ -241,6 +413,15 @@ export interface WorkspaceSettings {
   projectCardWords: boolean;
   /** Stat ids shown on the dashboard Statistics card (frontend coerces). */
   statsCards: string[];
+  /** User-defined library spaces catalog (order = display order). */
+  spaces: SpaceDef[];
+}
+
+/** A library "space" — a named, tinted grouping. `tint` is a palette id. */
+export interface SpaceDef {
+  id: string;
+  name: string;
+  tint: string;
 }
 
 /**
@@ -294,6 +475,53 @@ export const resetSettings = (): Promise<void> => invoke("reset_settings");
  */
 export const exportProjectZip = (project: Project): Promise<string> =>
   invoke("export_project_zip", { project });
+
+/**
+ * Convert the project's root document to Word (`.docx`) or standalone HTML via
+ * pandoc. The artifact lands in the project's `.typeward/build/` sidecar and
+ * its absolute path is returned; the frontend copies the bytes to the user's
+ * chosen destination through the dialog (same tail as {@link exportProjectZip}).
+ */
+export const exportPandoc = (
+  project: Project,
+  format: "docx" | "html",
+): Promise<string> => invoke("export_pandoc", { project, format });
+
+/** One review comment flattened into a PDF sticky note (source anchor + text). */
+export interface AnnotationInput {
+  /** Source file relative to the project root. */
+  file: string;
+  /** 1-based source line. */
+  line: number;
+  title: string;
+  body: string;
+}
+
+/** An annotation that couldn't be placed (no SyncTeX mapping, missing file…). */
+export interface SkippedAnnotation {
+  file: string;
+  line: number;
+  reason: string;
+}
+
+export interface AnnotatedExportResult {
+  /** Absolute path of the annotated PDF in `.typeward/build/`. */
+  path: string;
+  /** Count of successfully placed annotations. */
+  annotated: number;
+  skipped: SkippedAnnotation[];
+}
+
+/**
+ * Place review comments into the compiled PDF as `/Text` sticky notes, mapped
+ * to page coordinates via SyncTeX forward search. LaTeX-only (needs SyncTeX).
+ */
+export const exportPdfAnnotated = (
+  project: Project,
+  pdfPath: string,
+  annotations: AnnotationInput[],
+): Promise<AnnotatedExportResult> =>
+  invoke("export_pdf_annotated", { project, pdfPath, annotations });
 
 export const saveSettings = (settings: AppSettings): Promise<void> =>
   invoke("save_settings", { settings });
@@ -432,7 +660,27 @@ export const overleafImportZip = (
 
 // ----- Grammar -----------------------------------------------------------
 
-export type GrammarSyntax = "plain" | "latex" | "typst";
+export type GrammarSyntax = "plain" | "markdown" | "latex" | "typst";
+
+/** BCP-47 tags Harper's five English dialects map from. */
+export type GrammarDialect = "en-US" | "en-GB" | "en-CA" | "en-AU" | "en-IN";
+
+export const GRAMMAR_DIALECTS: readonly GrammarDialect[] = [
+  "en-US",
+  "en-GB",
+  "en-CA",
+  "en-AU",
+  "en-IN",
+];
+
+/** Narrow a persisted `grammar.language` string to a known dialect, or undefined. */
+export function asGrammarDialect(
+  raw: string | undefined | null,
+): GrammarDialect | undefined {
+  return raw && (GRAMMAR_DIALECTS as readonly string[]).includes(raw)
+    ? (raw as GrammarDialect)
+    : undefined;
+}
 
 export interface GrammarDiagnostic {
   severity: "warning" | "info";
@@ -444,14 +692,36 @@ export interface GrammarDiagnostic {
   endCol: number;
   source: string;
   replacements: string[];
+  /** Harper `LintKind` key, e.g. "Spelling", "WordChoice". */
+  kind: string;
+  /** Position-agnostic lint hash (decimal string) for `grammarIgnoreLint`. */
+  contextHash: string;
 }
 
 export const grammarCheck = (
   text: string,
   file: string,
   syntax: GrammarSyntax = "plain",
+  dialect?: GrammarDialect,
 ): Promise<GrammarDiagnostic[]> =>
-  invoke("grammar_check", { text, file, syntax });
+  invoke("grammar_check", { text, file, syntax, dialect: dialect ?? null });
+
+/** Add a word to the app-global personal dictionary (Harper stops flagging it). */
+export const grammarAddWord = (word: string): Promise<void> =>
+  invoke("grammar_add_word", { word });
+
+export const grammarRemoveWord = (word: string): Promise<void> =>
+  invoke("grammar_remove_word", { word });
+
+export const grammarListWords = (): Promise<string[]> =>
+  invoke("grammar_list_words");
+
+/** Suppress a specific lint everywhere it recurs, by its `contextHash`. */
+export const grammarIgnoreLint = (contextHash: string): Promise<void> =>
+  invoke("grammar_ignore_lint", { contextHash });
+
+export const grammarClearIgnored = (): Promise<void> =>
+  invoke("grammar_clear_ignored");
 
 // ----- Templates --------------------------------------------------------
 

@@ -2,6 +2,8 @@
 @import "./themes/tokens.css";
 @import "./themes/density.css";
 @import "./themes/motion.css";
+@import "./themes/themes/light.css";
+@import "./themes/themes/dark.css";
 @import "./themes/themes/daylight.css";
 @import "./themes/themes/lamplight.css";
 @import "./themes/themes/paper.css";
@@ -12,4 +14,28 @@
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+/*
+ * Desktop shell conventions. Chrome text is not drag-selectable (native-app
+ * behavior); content surfaces opt back in — form fields, the CodeMirror
+ * document, and rendered previews. Copyable one-offs (log output, error
+ * details) opt in per-element with Tailwind's select-text.
+ */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+input,
+textarea,
+[contenteditable="true"],
+.md-preview {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* The window is an app shell, not a page — never rubber-band it. */
+html,
+body {
+  overscroll-behavior: none;
 }

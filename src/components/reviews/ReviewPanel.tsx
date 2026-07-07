@@ -1,6 +1,6 @@
 import { Inbox } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 
 import { ThreadCard } from "./ThreadCard";
 import { activeFile } from "~/stores/editor-store";
@@ -12,8 +12,12 @@ import {
   resolveThreadById,
   reopenThreadById,
   removeThread,
+  focusedThreadId,
+  clearFocusedThread,
 } from "~/stores/review-store";
 import { recoverThreads } from "~/lib/reviews/recovery";
+import { offsetToLine } from "~/lib/reviews/lines";
+import { formatShortcutForDisplay } from "~/lib/shortcuts";
 import { setCursorLine } from "~/stores/editor-view-store";
 
 export type ReviewScope = "file" | "all";
@@ -29,7 +33,8 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
   const file = activeFile;
 
   const threads = createMemo(() => {
-    const all = allThreads();
+    // TODO-kind threads live in the TODO panel now; this panel is comments only.
+    const all = allThreads().filter((t) => (t.kind ?? "comment") !== "todo");
     const show = showResolved();
     let filtered =
       scope() === "file" && file()
@@ -55,8 +60,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
     if (!f) return null;
     const offset = thread.fromOffset;
     if (offset < 0 || offset > f.content.length) return null;
-    const before = f.content.slice(0, offset);
-    return before.split("\n").length;
+    return offsetToLine(f.content, offset);
   };
 
   const handleClickAnchor = (thread: { fromOffset: number }) => {
@@ -70,6 +74,30 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
+  let listRef: HTMLDivElement | undefined;
+  // Gutter-click / palette targeting: make the thread visible (widen scope,
+  // reveal resolved), expand it, and scroll it into view.
+  createEffect(() => {
+    const id = focusedThreadId();
+    if (!id) return;
+    const thread = allThreads().find((t) => t.id === id);
+    if (!thread) {
+      clearFocusedThread();
+      return;
+    }
+    // TODO-kind threads are owned by the TodoPanel; leave the id for it.
+    if ((thread.kind ?? "comment") === "todo") return;
+    if (thread.fileRelPath !== file()?.relPath) setScope("all");
+    if (thread.status === "resolved" && !showResolved()) setShowResolved(true);
+    setExpandedId(id);
+    requestAnimationFrame(() => {
+      listRef
+        ?.querySelector(`[data-thread-id="${id}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+    clearFocusedThread();
+  });
+
   return (
     <div class="flex h-full flex-col">
       <div class="flex flex-shrink-0 items-center justify-between border-b border-glass-stroke px-3 py-2">
@@ -77,7 +105,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setScope("file")}
-            class={`rounded px-2 py-0.5 text-[11px] font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
+            class={`rounded px-2 py-0.5 text-xs font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
             style={scope() === "file" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             This file
@@ -85,13 +113,13 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setScope("all")}
-            class={`rounded px-2 py-0.5 text-[11px] font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
+            class={`rounded px-2 py-0.5 text-xs font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
             style={scope() === "all" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             All files
           </button>
         </div>
-        <label class="flex items-center gap-1.5 text-[10px] text-fg-3 cursor-pointer select-none">
+        <label class="flex items-center gap-1.5 text-[10px] text-fg-3 select-none">
           <input
             type="checkbox"
             checked={showResolved()}
@@ -102,7 +130,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
         </label>
       </div>
 
-      <div class="min-h-0 flex-1 overflow-auto scroll py-1.5">
+      <div ref={listRef} class="min-h-0 flex-1 overflow-auto scroll py-1.5">
         <Show
           when={threads().length > 0}
           fallback={
@@ -113,28 +141,30 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
               >
                 <Inbox size={20} />
               </div>
-              <div class="text-[13px] font-semibold text-fg-1">No review threads</div>
-              <div class="text-[11px] leading-relaxed text-fg-3">
-                Select text and press Ctrl+Shift+M to start a review thread.
+              <div class="text-base font-semibold text-fg-1">No review threads</div>
+              <div class="text-xs leading-relaxed text-fg-3">
+                Select text and press {formatShortcutForDisplay("Mod+Shift+M")} to start a review thread.
               </div>
             </div>
           }
         >
           <For each={threads()}>
             {(thread) => (
-              <ThreadCard
-                thread={thread}
-                expanded={expandedId() === thread.id}
-                orphaned={orphanedIds().has(thread.id)}
-                lineNumber={lineNumberFor(thread)}
-                onToggle={() => toggleExpanded(thread.id)}
-                onClickAnchor={() => handleClickAnchor(thread)}
-                onReply={(body) => addReplyToThread(thread.id, "You", body)}
-                onResolve={() => resolveThreadById(thread.id)}
-                onReopen={() => reopenThreadById(thread.id)}
-                onDelete={() => removeThread(thread.id)}
-                onReanchor={() => props.onRequestReanchor?.(thread.id)}
-              />
+              <div data-thread-id={thread.id}>
+                <ThreadCard
+                  thread={thread}
+                  expanded={expandedId() === thread.id}
+                  orphaned={orphanedIds().has(thread.id)}
+                  lineNumber={lineNumberFor(thread)}
+                  onToggle={() => toggleExpanded(thread.id)}
+                  onClickAnchor={() => handleClickAnchor(thread)}
+                  onReply={(body) => addReplyToThread(thread.id, "You", body)}
+                  onResolve={() => resolveThreadById(thread.id)}
+                  onReopen={() => reopenThreadById(thread.id)}
+                  onDelete={() => removeThread(thread.id)}
+                  onReanchor={() => props.onRequestReanchor?.(thread.id)}
+                />
+              </div>
             )}
           </For>
         </Show>

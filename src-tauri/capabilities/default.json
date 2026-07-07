@@ -5,6 +5,10 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-destroy",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
+    "core:webview:allow-create-webview-window",
     "fs:default",
     {
       "identifier": "fs:allow-read-file",
@@ -70,7 +74,6 @@
     "dialog:allow-message",
     "dialog:allow-confirm",
     "dialog:allow-ask",
-    "os:default",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -78,8 +81,14 @@
         { "url": "https://api.mendeley.com/oauth/authorize*" },
         { "url": "https://github.com/login/device*" },
         { "url": "https://tug.org/*" },
-        { "url": "https://typeward.app/*" }
+        { "url": "https://account.typeward.com/*" },
+        { "url": "https://www.zotero.org/*" },
+        { "url": "https://console.anthropic.com/*" },
+        { "url": "https://platform.openai.com/*" },
+        { "url": "https://aistudio.google.com/*" }
       ]
-    }
+    },
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
   ]
 }

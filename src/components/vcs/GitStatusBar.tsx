@@ -2,8 +2,10 @@
  * TopBar git status indicator: branch + ahead/behind counters.
  *
  * Hidden when the active project isn't a git repo so users not using
- * VCS see no chrome. Polls every 4 seconds (slower cadence than the
- * CommitPanel since this is just a glance affordance).
+ * VCS see no chrome. Refreshes on window focus / visibility plus a slow
+ * background interval that skips hidden windows — this bar can outlive
+ * the editor (project() stays set after leaving it), so a fast perpetual
+ * poll would walk the worktree for the rest of the session.
  */
 
 import { ChevronDown, ChevronUp, GitBranch } from "lucide-solid";
@@ -20,7 +22,7 @@ import {
 import * as ipc from "~/ipc";
 import { project } from "~/stores/editor-store";
 
-const POLL_INTERVAL_MS = 4_000;
+const POLL_INTERVAL_MS = 30_000;
 
 export const GitStatusBar: Component = () => {
   const [tick, setTick] = createSignal(0);
@@ -31,19 +33,39 @@ export const GitStatusBar: Component = () => {
       handle = undefined;
     }
   };
+  // Gated on the interval handle so a halted bar (non-repo / error) stays
+  // halted on focus too, until the active project changes and re-arms it.
+  const refresh = () => {
+    if (handle !== undefined) setTick((t) => t + 1);
+  };
   // Re-arm polling whenever the active project changes; a non-repo result
-  // halts it (see the fetcher) so we don't run a libgit2 status walk every
-  // 4s forever on plain folders for the whole session.
+  // halts it (see the fetcher) so we don't run libgit2 status walks
+  // forever on plain folders for the whole session.
   createEffect(
     on(
       () => project()?.rootPath,
       () => {
         stopPolling();
-        handle = setInterval(() => setTick((t) => t + 1), POLL_INTERVAL_MS);
+        // Slow background cadence only catches external git activity while
+        // the user sits on this screen; skipped while hidden/minimized —
+        // the focus/visibility listeners refresh promptly on return.
+        handle = setInterval(() => {
+          if (!document.hidden) setTick((t) => t + 1);
+        }, POLL_INTERVAL_MS);
       },
     ),
   );
-  onCleanup(stopPolling);
+  const onFocus = () => refresh();
+  const onVisibilityChange = () => {
+    if (!document.hidden) refresh();
+  };
+  window.addEventListener("focus", onFocus);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  onCleanup(() => {
+    stopPolling();
+    window.removeEventListener("focus", onFocus);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+  });
 
   const [summary] = createResource(
     () => [project()?.rootPath, tick()] as const,
@@ -56,8 +78,8 @@ export const GitStatusBar: Component = () => {
         return await ipc.gitStatus(rootPath);
       } catch {
         // Not a git repo, or some transient error. Stop polling and collapse
-        // the bar — quieter than a "not a repo" pill, and avoids a pointless
-        // status walk every 4s on non-repo projects.
+        // the bar — quieter than a "not a repo" pill, and avoids pointless
+        // status walks on non-repo projects.
         stopPolling();
         return null;
       }
@@ -67,7 +89,7 @@ export const GitStatusBar: Component = () => {
   return (
     <Show when={summary()?.branch}>
       <div
-        class="flex items-center gap-1.5 rounded-md px-2 py-1 text-[length:var(--ui-font-xs)]"
+        class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs"
         style={{
           background: "var(--color-control-fill)",
           color: "var(--color-fg-2)",

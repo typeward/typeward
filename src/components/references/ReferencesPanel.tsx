@@ -8,12 +8,26 @@ import {
   Search,
 } from "lucide-solid";
 import type { Component } from "solid-js";
-import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  onCleanup,
+  Show,
+} from "solid-js";
 import { Dynamic } from "solid-js/web";
 
+import { citationSnippet } from "~/adapters/format-tables";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
+import {
+  readyProviders,
+  refreshAvailability,
+  refsAvailabilityLoading,
+} from "~/integrations/references/availability";
 import { citationProviders } from "~/integrations/references/registry";
 import type { Citation, LibraryNode } from "~/integrations/types";
 import { installDismiss } from "~/lib/dismiss";
@@ -40,6 +54,9 @@ import { DoiLookupDialog } from "./DoiLookupDialog";
 
 const PROVIDER_KEY = "typeward.refs-provider";
 const SELECTION_KEY = "typeward.refs-library";
+
+const QUERY_DEBOUNCE_MS = 200;
+const MAX_RENDERED_RESULTS = 200;
 
 const readMap = (key: string): Record<string, string> => {
   try {
@@ -110,31 +127,33 @@ function nodePath(nodeId: string | null, nodes: LibraryNode[]): string | undefin
 
 export const ReferencesPanel: Component = () => {
   const [query, setQuery] = createSignal("");
+  // Debounced copy feeds the results resource key — a keystroke after the
+  // provider's 60s BibTeX cache expires would otherwise refire a full network
+  // re-export mid-typing. Node/provider/refresh changes still refire instantly.
+  const [debouncedQuery, setDebouncedQuery] = createSignal("");
+  let queryTimer: ReturnType<typeof setTimeout> | undefined;
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    clearTimeout(queryTimer);
+    queryTimer = setTimeout(() => setDebouncedQuery(value), QUERY_DEBOUNCE_MS);
+  };
+  onCleanup(() => clearTimeout(queryTimer));
   const [doiOpen, setDoiOpen] = createSignal(false);
   const [refreshTick, setRefreshTick] = createSignal(0);
+  const [searchError, setSearchError] = createSignal(false);
 
   const providers = () => citationProviders();
   const findProvider = (id: string | null) =>
     citationProviders().find((p) => p.id === id) ?? null;
 
-  // ----- Reachability: only offer managers whose status() is ready -----
-  const [availableRes] = createResource(
-    () => [citationProviders(), refreshTick()] as const,
-    async ([provs]) => {
-      const ready = await Promise.all(
-        provs.map((p) =>
-          p
-            .status()
-            .then((s) => (s === "ready" ? p.id : null))
-            .catch(() => null),
-        ),
-      );
-      const readyIds = new Set(ready.filter((id): id is string => id !== null));
-      return provs.filter((p) => readyIds.has(p.id)).map((p) => ({ id: p.id, name: p.displayName }));
-    },
-    { initialValue: [] },
-  );
-  const sources = () => availableRes() ?? [];
+  // ----- Reachability: only offer managers whose status() is ready. The probe
+  // is shared with the sidebar's Refs-tab gate (references/availability.ts). ---
+  const sources = () => {
+    const readyIds = new Set(readyProviders());
+    return citationProviders()
+      .filter((p) => readyIds.has(p.id))
+      .map((p) => ({ id: p.id, name: p.displayName }));
+  };
 
   // ----- Manager (provider) -----
   const selectedProviderId = createMemo(() => {
@@ -246,33 +265,55 @@ export const ReferencesPanel: Component = () => {
   });
 
   // ----- Results: query the selected manager's chosen node only -----
+  // Solid discards a stale fetch's return value but not its side effects —
+  // the seq token keeps a superseded search's late rejection from setting
+  // the error flag over a newer successful search.
+  let searchSeq = 0;
   const [results] = createResource(
-    () => [query(), selectedNodeId(), selectedProviderId(), refreshTick()] as const,
+    () => [debouncedQuery(), selectedNodeId(), selectedProviderId(), refreshTick()] as const,
     async ([q, nodeId, pid]) => {
+      const seq = ++searchSeq;
       const provider = findProvider(pid);
-      if (!nodeId || !provider) return [];
+      if (!nodeId || !provider) {
+        if (seq === searchSeq) setSearchError(false);
+        return [];
+      }
       try {
-        return dedupe(await provider.searchLibrary(q, nodeId));
+        const items = dedupe(await provider.searchLibrary(q, nodeId));
+        if (seq === searchSeq) setSearchError(false);
+        return items;
       } catch {
+        // Distinguish "the provider errored" from a genuinely empty library.
+        if (seq === searchSeq) setSearchError(true);
         return [];
       }
     },
     { initialValue: [] },
   );
 
+  // Render cap: a 2k-entry library would otherwise mount thousands of rows.
+  const visibleResults = createMemo(() => results().slice(0, MAX_RENDERED_RESULTS));
+  const hiddenCount = () => results().length - visibleResults().length;
+
   const handleInsert = (citation: Citation) => {
     const proj = project();
     if (!proj) return;
-    const snippet = proj.format === "typst" ? `@${citation.key}` : `\\cite{${citation.key}}`;
-    insertAtCursor(snippet);
+    insertAtCursor(citationSnippet(proj.format, citation.key));
   };
 
   const handleRefresh = async () => {
     const proj = project();
     if (!proj) return;
     for (const p of citationProviders()) p.invalidate?.();
+    refreshAvailability();
     try {
-      await refreshLibraryBib(proj);
+      const result = await refreshLibraryBib(proj);
+      if (result.providersFailed > 0) {
+        notifyError(
+          `${result.providersFailed} reference source${result.providersFailed === 1 ? "" : "s"} failed`,
+          result.failures.map((f) => `${f.providerId}: ${f.message}`).join("\n"),
+        );
+      }
     } catch (e) {
       notifyError("Couldn't refresh references", errorText(e));
       return;
@@ -289,7 +330,7 @@ export const ReferencesPanel: Component = () => {
       <Show
         when={hasProviders()}
         fallback={
-          <div class="px-4 py-6 text-center text-[length:var(--ui-font-sm)] text-fg-3">
+          <div class="px-4 py-6 text-center text-sm text-fg-3">
             <BookMarked class="mx-auto mb-2 ui-icon-menu text-fg-3/60" />
             <div class="text-fg-2">No reference providers configured.</div>
             <div class="mt-1">
@@ -305,7 +346,7 @@ export const ReferencesPanel: Component = () => {
               items={sources()}
               selectedId={null}
               icon={BookMarked}
-              loading={availableRes.loading}
+              loading={refsAvailabilityLoading()}
               placeholder="Select a reference manager…"
               onSelect={selectProvider}
             />
@@ -345,14 +386,14 @@ export const ReferencesPanel: Component = () => {
 
         <Show when={selectedNodeId()}>
           <div class="flex flex-shrink-0 items-center gap-2 border-b border-glass-stroke px-2.5 py-2">
-            <div class="glass-inset flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5">
+            <div class="glass-inset flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-2.5 focus-within:ring-1 focus-within:ring-[var(--color-accent-1)]">
               <Search class="ui-icon-sm flex-shrink-0 text-fg-3" />
               <input
                 type="search"
                 placeholder="Search references…"
                 value={query()}
-                onInput={(e) => setQuery(e.currentTarget.value)}
-                class="h-full min-w-0 flex-1 bg-transparent text-[length:var(--ui-font-sm)] text-fg-1 placeholder:text-fg-3 outline-none"
+                onInput={(e) => updateQuery(e.currentTarget.value)}
+                class="h-full min-w-0 flex-1 bg-transparent text-sm text-fg-1 placeholder:text-fg-2 outline-none"
               />
             </div>
           </div>
@@ -362,13 +403,13 @@ export const ReferencesPanel: Component = () => {
           <Show
             when={selectedNodeId()}
             fallback={
-              <div class="px-4 py-6 text-center text-[length:var(--ui-font-sm)] text-fg-3">
+              <div class="px-4 py-6 text-center text-sm text-fg-3">
                 <Folder class="mx-auto mb-2 ui-icon-menu text-fg-3/60" />
                 <Show
                   when={selectedProviderId()}
                   fallback={
                     <Show
-                      when={!availableRes.loading}
+                      when={!refsAvailabilityLoading()}
                       fallback={<div class="text-fg-2">Checking reference managers…</div>}
                     >
                       <Show
@@ -407,16 +448,18 @@ export const ReferencesPanel: Component = () => {
             <Show
               when={results().length}
               fallback={
-                <div class="px-4 py-6 text-center text-[length:var(--ui-font-sm)] text-fg-3">
+                <div class="px-4 py-6 text-center text-sm text-fg-3">
                   {results.loading
                     ? "Loading references…"
-                    : query().trim()
-                      ? "No matches."
-                      : "This library is empty."}
+                    : searchError()
+                      ? "Couldn't load references — check the reference manager is running, then Refresh."
+                      : query().trim()
+                        ? "No matches."
+                        : "This library is empty."}
                 </div>
               }
             >
-              <For each={results()}>
+              <For each={visibleResults()}>
                 {(citation) => (
                   <button
                     type="button"
@@ -424,20 +467,20 @@ export const ReferencesPanel: Component = () => {
                     class="lift flex w-full min-w-0 flex-col items-start gap-0.5 border-b border-glass-stroke px-3 py-2 text-left hover:bg-[var(--color-control-fill)]"
                   >
                     <div class="flex w-full min-w-0 items-center gap-2">
-                      <span class="mono truncate text-[length:var(--ui-font-xs)] text-[var(--color-accent-1)]">
+                      <span class="mono truncate text-xs text-[var(--color-accent-1)]">
                         {citation.key}
                       </span>
                       <Show when={citation.year}>
-                        <span class="ml-auto flex-shrink-0 text-[length:var(--ui-font-xs)] text-fg-3">
+                        <span class="ml-auto flex-shrink-0 text-xs text-fg-3">
                           {citation.year}
                         </span>
                       </Show>
                     </div>
-                    <div class="line-clamp-2 text-[length:var(--ui-font-sm)] text-fg-1">
+                    <div class="line-clamp-2 text-sm text-fg-1">
                       {citation.title}
                     </div>
                     <Show when={citation.authors.length > 0}>
-                      <div class="w-full truncate text-[length:var(--ui-font-xs)] text-fg-3">
+                      <div class="w-full truncate text-xs text-fg-3">
                         {citation.authors.slice(0, 3).join(", ")}
                         {citation.authors.length > 3 ? ` +${citation.authors.length - 3}` : ""}
                       </div>
@@ -445,6 +488,11 @@ export const ReferencesPanel: Component = () => {
                   </button>
                 )}
               </For>
+              <Show when={hiddenCount() > 0}>
+                <div class="px-4 py-3 text-center text-sm text-fg-3">
+                  {hiddenCount()} more — refine your search
+                </div>
+              </Show>
             </Show>
           </Show>
         </div>
@@ -510,7 +558,7 @@ const FlatSelect: Component<{
           >
             <Dynamic component={props.icon} class="ui-icon-sm flex-shrink-0 text-fg-3" />
             <span
-              class="min-w-0 flex-1 truncate text-[length:var(--ui-font-sm)]"
+              class="min-w-0 flex-1 truncate text-sm"
               classList={{ "text-fg-1": !!props.selectedId, "text-fg-3": !props.selectedId }}
             >
               {label()}
@@ -558,7 +606,7 @@ const FlatSelect: Component<{
                     props.onSelect(item.id);
                     setOpen(false);
                   }}
-                  class={`lift flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[length:var(--ui-font-sm)] ${
+                  class={`lift flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm ${
                     active()
                       ? "bg-[var(--color-control-fill-hover)] text-fg-1"
                       : "text-fg-2 hover:bg-[var(--color-control-fill)]"
@@ -610,7 +658,7 @@ const TreeSelect: Component<{
       >
         <Folder class="ui-icon-sm flex-shrink-0 text-fg-3" />
         <span
-          class="min-w-0 flex-1 truncate text-[length:var(--ui-font-sm)]"
+          class="min-w-0 flex-1 truncate text-sm"
           classList={{ "text-fg-1": !!props.selected, "text-fg-3": !props.selected }}
         >
           {label()}
@@ -638,7 +686,7 @@ const TreeSelect: Component<{
                     props.onSelect(row.node.id);
                     setOpen(false);
                   }}
-                  class={`lift flex w-full items-center gap-2 rounded-md py-1.5 pr-2.5 text-left text-[length:var(--ui-font-sm)] ${
+                  class={`lift flex w-full items-center gap-2 rounded-md py-1.5 pr-2.5 text-left text-sm ${
                     active()
                       ? "bg-[var(--color-control-fill-hover)] text-fg-1"
                       : "text-fg-2 hover:bg-[var(--color-control-fill)]"

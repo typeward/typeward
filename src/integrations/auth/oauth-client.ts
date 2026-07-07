@@ -90,7 +90,20 @@ export async function runOauthFlow(opts: OauthFlowOptions): Promise<OauthTokens>
     // begin.url is provider-built and always valid; ignore parse hiccups.
   }
 
-  await openUrl(begin.url);
-
-  return invoke<OauthTokens>("oauth_wait", { state: begin.state });
+  // `oauth_begin` has parked the loopback callback server; only a successful
+  // `oauth_wait` (or its own timeout/error cleanup) tears it down. If we throw
+  // before/at `oauth_wait` — opener failure, a rejected wait, caller abort — the
+  // flow entry and its listener would otherwise leak until process exit (fatal
+  // for Mendeley's fixed port). Release it explicitly on any non-success exit.
+  let succeeded = false;
+  try {
+    await openUrl(begin.url);
+    const tokens = await invoke<OauthTokens>("oauth_wait", { state: begin.state });
+    succeeded = true;
+    return tokens;
+  } finally {
+    if (!succeeded) {
+      await invoke("oauth_cancel", { state: begin.state }).catch(() => {});
+    }
+  }
 }

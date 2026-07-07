@@ -7,6 +7,7 @@
  * (longpoll cadence for Dropbox) arrive with each provider.
  */
 
+import { describeIpcError } from "~/lib/errors";
 import {
   exists,
   mkdir,
@@ -28,6 +29,7 @@ import {
   normalizeRemoteRelPath,
   projectCacheRoot,
   syncStatePathForCacheRoot,
+  type NormalizedRelPath,
 } from "./paths";
 import {
   getSyncStatus,
@@ -58,10 +60,11 @@ const DEFAULT_POLL_MS = 60_000;
 // Coalesce a burst of saves into one upload pass; retry a failed push later.
 const PUSH_DEBOUNCE_MS = 1_500;
 const PUSH_RETRY_MS = 15_000;
+const PUSH_RETRY_MAX_MS = 5 * 60_000;
 
 interface SyncedFileState {
   id: string;
-  relPath: string;
+  relPath: NormalizedRelPath;
   rev?: string;
   hash: string;
   size: number;
@@ -86,13 +89,27 @@ export class SyncEngine {
    */
   private chain: Promise<unknown> = Promise.resolve();
   /** Project-relative paths awaiting upload (normalized remote form). */
-  private pendingPush = new Set<string>();
+  private pendingPush = new Set<NormalizedRelPath>();
   /**
    * rev of files we just uploaded, keyed by normalized relPath. When the next
    * delta echoes our own write back, its rev matches and we skip it instead of
    * minting a spurious conflict sidecar (the file is byte-identical to local).
    */
-  private pushedRevs = new Map<string, string>();
+  private pushedRevs = new Map<NormalizedRelPath, string>();
+  /**
+   * Flipped by `stop()`; a late pass that was already in flight when teardown
+   * ran checks this before writing status or persisting state so it can't
+   * resurrect a cleared badge or clobber a replacement engine's manifest.
+   */
+  private dead = false;
+  /**
+   * Consecutive drainPush failures — grows the retry delay exponentially so a
+   * permanently failing upload (offline laptop, revoked token) doesn't fire a
+   * network attempt and flip the badge to error every 15s forever. No terminal
+   * give-up on auth-looking errors: error shapes are stringly through the
+   * IPC/provider layers and a false positive would silently stop sync.
+   */
+  private pushFailures = 0;
 
   constructor(
     private readonly provider: CloudFsProvider,
@@ -109,10 +126,21 @@ export class SyncEngine {
     this.running = true;
     await this.ensureCursorLoaded();
     await this.ensureSyncStateLoaded();
+    // Re-queue any local edits that diverged from sync-state while no engine
+    // was running (a push dropped by a project switch, an offline save, or an
+    // app quit mid-debounce). Fire-and-forget so it doesn't gate the first poll.
+    void this.reconcileLocalChanges();
     void this.tick();
   }
 
-  stop(): void {
+  /**
+   * Stop the engine and wait for any in-flight pull/push pass to drain, so a
+   * late pass can't write status or persist cache/manifest state after teardown
+   * (which would resurrect a cleared badge or race a replacement engine sharing
+   * the same cache). Idempotent.
+   */
+  async stop(): Promise<void> {
+    this.dead = true;
     this.running = false;
     if (this.timer) {
       clearTimeout(this.timer);
@@ -122,7 +150,43 @@ export class SyncEngine {
       clearTimeout(this.pushTimer);
       this.pushTimer = null;
     }
+    // Drain the in-flight pass; the chain resolves even on a rejected pass.
+    try {
+      await this.chain;
+    } catch {
+      // A failing pass doesn't block teardown.
+    }
     setSyncPhase(this.opts.providerId, this.opts.projectId, "idle");
+  }
+
+  /**
+   * Compare each file tracked in sync-state against its recorded content hash
+   * and re-queue those that diverged (or push a deletion for tracked files now
+   * missing). This is the recovery path for pushes that were dropped while the
+   * engine wasn't running — without it a locally-saved file whose push was lost
+   * stays silently divergent until the user happens to re-save that exact file.
+   */
+  private async reconcileLocalChanges(): Promise<void> {
+    if (!this.running) return;
+    try {
+      await this.ensureSyncStateLoaded();
+      const diverged: NormalizedRelPath[] = [];
+      for (const state of Object.values(this.syncState!.files)) {
+        const abs = cachePathForRemoteRel(this.cacheRoot(), state.relPath);
+        if (!(await safeExists(abs))) {
+          diverged.push(state.relPath); // tracked-but-missing → deletion push
+          continue;
+        }
+        if (!(await localMatchesState(abs, state))) diverged.push(state.relPath);
+      }
+      if (diverged.length > 0) this.queuePush(diverged);
+    } catch (err) {
+      recordError(
+        "cloud-sync",
+        `startup reconcile failed for ${this.opts.projectId}`,
+        err,
+      );
+    }
   }
 
   async pullNow(): Promise<PullPassResult> {
@@ -170,7 +234,7 @@ export class SyncEngine {
     if (!this.running) return;
     let added = false;
     for (const rel of relPaths) {
-      let norm: string;
+      let norm: NormalizedRelPath;
       try {
         norm = normalizeRemoteRelPath(rel);
       } catch {
@@ -207,7 +271,7 @@ export class SyncEngine {
         this.opts.providerId,
         this.opts.projectId,
         "error",
-        err instanceof Error ? err.message : String(err),
+        describeIpcError(err),
       );
     }
     if (!this.running) return;
@@ -222,14 +286,17 @@ export class SyncEngine {
         this.opts.providerId,
         this.opts.projectId,
         "error",
-        err instanceof Error ? err.message : String(err),
+        describeIpcError(err),
       );
-      // Leave the failed paths queued and retry on a backoff.
+      // Leave the failed paths queued and retry on an exponential backoff
+      // (base 15s, doubling to a 5-minute cap).
+      const delay = Math.min(PUSH_RETRY_MS * 2 ** this.pushFailures, PUSH_RETRY_MAX_MS);
+      this.pushFailures++;
       if (this.running && this.pendingPush.size > 0 && !this.pushTimer) {
         this.pushTimer = setTimeout(() => {
           this.pushTimer = null;
           void this.drainPush();
-        }, PUSH_RETRY_MS);
+        }, delay);
       }
     }
   }
@@ -260,6 +327,7 @@ export class SyncEngine {
         throw err;
       }
     }
+    this.pushFailures = 0;
     if (this.running) {
       const conflicts = getSyncStatus(this.opts.providerId, this.opts.projectId).conflicts;
       setSyncPhase(
@@ -301,7 +369,15 @@ export class SyncEngine {
       if (!result.hasMore) break;
     }
 
-    recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+    // A completed pull proves the connection works — restore the fast push retry.
+    this.pushFailures = 0;
+
+    // Skip once torn down: recordConflicts would otherwise re-insert a status
+    // entry that teardown's clearSyncStatus just deleted, stranding a phantom
+    // conflict badge on a closed project.
+    if (!this.dead) {
+      recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+    }
     if (this.running) {
       setSyncPhase(
         this.opts.providerId,
@@ -356,7 +432,7 @@ export class SyncEngine {
       return undefined;
     }
 
-    const abs = cachePathForRemoteRel(this.cacheRoot(), change.file.relPath);
+    const abs = cachePathForRemoteRel(this.cacheRoot(), normRel);
     const localExists = await safeExists(abs);
 
     if (localExists) {
@@ -369,14 +445,14 @@ export class SyncEngine {
           ? Date.parse(change.file.modifiedAt)
           : 0;
         const localMtime = local.mtime ? local.mtime.getTime() : 0;
-        const decision = decideConflict(change.file.relPath, localMtime, remoteMtime);
+        const decision = decideConflict(normRel, localMtime, remoteMtime);
         if (decision.winner === "local") {
           // Local wins → write the remote copy to the conflict path so
           // the user can compare. Don't overwrite local.
           const conflictAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
           await mkdirParents(conflictAbs);
           await this.provider.downloadFile(change.file, conflictAbs);
-          return change.file.relPath;
+          return normRel;
         }
         // Remote wins → save the local copy aside, then overwrite local.
         const sidecarAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
@@ -390,12 +466,12 @@ export class SyncEngine {
           : 0;
         const localMtime = local.mtime ? local.mtime.getTime() : 0;
         if (remoteMtime && localMtime && Math.abs(remoteMtime - localMtime) > 1000) {
-          const decision = decideConflict(change.file.relPath, localMtime, remoteMtime);
+          const decision = decideConflict(normRel, localMtime, remoteMtime);
           if (decision.winner === "local") {
             const conflictAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
             await mkdirParents(conflictAbs);
             await this.provider.downloadFile(change.file, conflictAbs);
-            return change.file.relPath;
+            return normRel;
           }
           const sidecarAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
           await mkdirParents(sidecarAbs);

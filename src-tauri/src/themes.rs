@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-const BUILTIN_BASES: [&str; 4] = ["daylight", "lamplight", "aurora", "paper"];
+const BUILTIN_BASES: [&str; 6] = ["light", "dark", "daylight", "lamplight", "aurora", "paper"];
 const MAX_THEME_FILE_BYTES: u64 = 64 * 1024;
 const MAX_TOKENS: usize = 200;
 const MAX_TOKEN_VALUE_CHARS: usize = 256;
@@ -119,90 +119,106 @@ fn id_from_stem(stem: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn custom_themes_list(app: tauri::AppHandle) -> CmdResult<CustomThemesResult> {
-    let dir = themes_dir(&app)?;
-    let mut themes = Vec::new();
-    let mut warnings = Vec::new();
+pub async fn custom_themes_list(app: tauri::AppHandle) -> CmdResult<CustomThemesResult> {
+    // Runs on boot; the dir scan + per-file JSON reads stay off the event loop.
+    tokio::task::spawn_blocking(move || -> CmdResult<CustomThemesResult> {
+        let dir = themes_dir(&app)?;
+        let mut themes = Vec::new();
+        let mut warnings = Vec::new();
 
-    let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let file_name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        // Symlinked theme files are skipped like every other user-content
-        // reader in the app (snapshots, templates).
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                warnings.push(format!("{file_name}: symlinks are not loaded"));
+        let entries = fs::read_dir(&dir).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            Ok(meta) if meta.len() > MAX_THEME_FILE_BYTES => {
-                warnings.push(format!("{file_name}: file too large (max 64 KB)"));
-                continue;
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // Symlinked theme files are skipped like every other user-content
+            // reader in the app (snapshots, templates).
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    warnings.push(format!("{file_name}: symlinks are not loaded"));
+                    continue;
+                }
+                Ok(meta) if meta.len() > MAX_THEME_FILE_BYTES => {
+                    warnings.push(format!("{file_name}: file too large (max 64 KB)"));
+                    continue;
+                }
+                Err(e) => {
+                    warnings.push(format!("{file_name}: {e}"));
+                    continue;
+                }
+                _ => {}
             }
-            Err(e) => {
-                warnings.push(format!("{file_name}: {e}"));
+            let Some(id) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(id_from_stem)
+            else {
+                warnings.push(format!(
+                    "{file_name}: file name must use only letters, digits, `-`, `_`"
+                ));
                 continue;
-            }
-            _ => {}
-        }
-        let Some(id) = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(id_from_stem)
-        else {
-            warnings.push(format!(
-                "{file_name}: file name must use only letters, digits, `-`, `_`"
-            ));
-            continue;
-        };
-        let parsed: Result<ThemeFile, _> = fs::read_to_string(&path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
-        match parsed {
-            Ok(file) => match validate(&file) {
-                Ok(()) => themes.push(CustomTheme {
-                    id,
-                    name: file.name.trim().to_string(),
-                    base: file.base,
-                    tokens: file.tokens,
-                }),
+            };
+            let parsed: Result<ThemeFile, _> = fs::read_to_string(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|text| serde_json::from_str(&text).map_err(|e| e.to_string()));
+            match parsed {
+                Ok(file) => match validate(&file) {
+                    Ok(()) => themes.push(CustomTheme {
+                        id,
+                        name: file.name.trim().to_string(),
+                        base: file.base,
+                        tokens: file.tokens,
+                    }),
+                    Err(reason) => warnings.push(format!("{file_name}: {reason}")),
+                },
                 Err(reason) => warnings.push(format!("{file_name}: {reason}")),
-            },
-            Err(reason) => warnings.push(format!("{file_name}: {reason}")),
+            }
         }
-    }
 
-    themes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    Ok(CustomThemesResult { themes, warnings })
+        themes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(CustomThemesResult { themes, warnings })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Drop a working example into the themes folder so users have something to
 /// copy from instead of reverse-engineering the token vocabulary. Returns the
 /// file path; refuses to overwrite an edited copy.
 #[tauri::command]
-pub fn custom_theme_write_sample(app: tauri::AppHandle) -> CmdResult<String> {
-    let dir = themes_dir(&app)?;
-    let path = dir.join("harbor.json");
-    if !path.exists() {
-        fs::write(&path, SAMPLE_THEME_JSON).map_err(|e| e.to_string())?;
-    }
-    Ok(path.to_string_lossy().into_owned())
+pub async fn custom_theme_write_sample(app: tauri::AppHandle) -> CmdResult<String> {
+    // create_dir_all + fs::write; keep the disk IO off the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<String> {
+        let dir = themes_dir(&app)?;
+        let path = dir.join("harbor.json");
+        if !path.exists() {
+            fs::write(&path, SAMPLE_THEME_JSON).map_err(|e| e.to_string())?;
+        }
+        Ok(path.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Open the themes folder in the OS file manager.
 #[tauri::command]
-pub fn custom_themes_open_dir(app: tauri::AppHandle) -> CmdResult<()> {
-    use tauri_plugin_opener::OpenerExt;
-    let dir = themes_dir(&app)?;
-    app.opener()
-        .open_path(dir.to_string_lossy(), None::<&str>)
-        .map_err(|e| e.to_string())
+pub async fn custom_themes_open_dir(app: tauri::AppHandle) -> CmdResult<()> {
+    // create_dir_all + launching the OS file manager can block; keep it off
+    // the event-loop thread.
+    tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        use tauri_plugin_opener::OpenerExt;
+        let dir = themes_dir(&app)?;
+        app.opener()
+            .open_path(dir.to_string_lossy(), None::<&str>)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Working example: a deep-sea dark theme on the Lamplight base. Every token

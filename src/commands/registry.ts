@@ -1,5 +1,6 @@
 import { createSignal } from "solid-js";
 import type { EditorCommand } from "~/adapters/types";
+import { recordError } from "~/lib/telemetry";
 
 /**
  * Single source of truth for runnable commands — toolbar buttons, command
@@ -22,6 +23,20 @@ export const getCommand = (id: string): EditorCommand | undefined =>
 
 export function registerCommand(cmd: EditorCommand): void {
   setCommandMap((prev) => {
+    // Two commands sharing a shortcut is a silent bug: the keyboard router
+    // dispatches whichever the registration order happens to surface first.
+    // Surface it instead of letting one clobber the other unnoticed.
+    if (cmd.shortcut) {
+      for (const other of prev.values()) {
+        if (other.id !== cmd.id && other.shortcut === cmd.shortcut) {
+          recordError(
+            "shortcut-collision",
+            `"${cmd.shortcut}" is bound by both "${other.id}" and "${cmd.id}"`,
+          );
+          break;
+        }
+      }
+    }
     const next = new Map(prev);
     next.set(cmd.id, cmd);
     return next;

@@ -47,11 +47,6 @@
   --ui-gap-section: 12px;
   --ui-gap-inline: 8px;
 
-  /* Radius */
-  --ui-radius-sm: 6px;
-  --ui-radius: 10px;
-  --ui-radius-lg: 14px;
-
   /* Icon sizes */
   --ui-icon-chrome: 20px;   /* top-bar chrome icons */
   --ui-icon-menu: 14px;     /* inline icons next to menu/list items */

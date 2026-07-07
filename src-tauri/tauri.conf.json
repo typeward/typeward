@@ -15,7 +15,7 @@
         "title": "Typeward",
         "width": 1440,
         "height": 900,
-        "minWidth": 960,
+        "minWidth": 1024,
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
@@ -24,8 +24,8 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' file: data: blob:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://*.supabase.co",
-      "devCsp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' file: data: blob: https:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://api.zotero.org https://doi.org https://export.arxiv.org https://api.mendeley.com https://api.dropboxapi.com https://content.dropboxapi.com https://notify.dropboxapi.com https://generativelanguage.googleapis.com https://github.com https://api.github.com https://api.openai.com https://api.anthropic.com https://*.supabase.co"
+      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' file: data: blob:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost https://*.supabase.co https://*.ingest.de.sentry.io",
+      "devCsp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' file: data: blob: https:; worker-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://*.supabase.co https://*.ingest.de.sentry.io"
     }
   },
   "bundle": {

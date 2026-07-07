@@ -16,6 +16,9 @@ import { createGeminiProvider } from "./gemini";
 import { createOllamaProvider } from "./ollama";
 import { createOpenAIProvider } from "./openai";
 
+// Single source of truth for the AI provider id space. The settings panel
+// imports this (its AI_PROVIDERS card map is keyed by it) so adding an id here
+// forces a matching settings card at compile time instead of a silent gap.
 export type AiProviderId = "anthropic" | "openai" | "gemini" | "ollama";
 
 const ALL_IDS: AiProviderId[] = ["anthropic", "openai", "gemini", "ollama"];

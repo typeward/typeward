@@ -1,6 +1,16 @@
-import { autocompletion } from "@codemirror/autocomplete";
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+} from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { StreamLanguage, syntaxHighlighting, HighlightStyle } from "@codemirror/language";
+import {
+  StreamLanguage,
+  syntaxHighlighting,
+  HighlightStyle,
+  bracketMatching,
+  indentUnit,
+} from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
 import { markdown } from "@codemirror/lang-markdown";
 import { search, searchKeymap } from "@codemirror/search";
@@ -10,16 +20,29 @@ import { tags as t } from "@lezer/highlight";
 import type { Component } from "solid-js";
 import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { typst } from "~/adapters/typst/typst-language";
+import type { EditorLanguage } from "~/adapters/languages";
 import { getActiveEditorView, pushCursor, setActiveEditorView } from "~/stores/editor-view-store";
 
-export type CodeMirrorLanguage = "latex" | "markdown" | "typst" | "plain";
+// The editor's per-file language is owned by adapters/languages; the CM
+// component maps each value to a CodeMirror language extension (langExtension).
+export type CodeMirrorLanguage = EditorLanguage;
 
 interface CodeMirrorProps {
   value: string;
   onChange: (value: string) => void;
   language?: CodeMirrorLanguage;
   fontSize?: number;
+  /** Content line-height (a unitless multiplier string, e.g. "1.65"). */
+  lineHeight?: string;
   lineWrap?: boolean;
+  lineNumbers?: boolean;
+  highlightActiveLine?: boolean;
+  /** Base (non-LSP) autocompletion. Suppressed when `lspActive`. */
+  autocomplete?: boolean;
+  bracketMatching?: boolean;
+  autoCloseBrackets?: boolean;
+  /** Indent width in spaces (also the Tab display width). */
+  tabSize?: number;
   /** Modal Vim bindings via @replit/codemirror-vim. */
   vimMode?: boolean;
   /**
@@ -73,7 +96,37 @@ const baseTheme = EditorView.theme({
   ".cm-lineNumbers .cm-gutterElement": {
     padding: "0 14px 0 10px",
     minWidth: "32px",
-    fontSize: "11px",
+    // em, not px — tracks the user-configured editor font size.
+    fontSize: "0.85em",
+  },
+  // The library's `&light` base theme paints tooltips/panels stock
+  // white-on-light regardless of the app theme; token-driven rules here win
+  // over package base themes and re-skin with the rest of the chrome.
+  ".cm-tooltip": {
+    background: "var(--color-popover-bg)",
+    border: "1px solid var(--color-glass-stroke)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-tooltip-autocomplete ul li[aria-selected]": {
+    background: "var(--color-selection-bg)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-panels": {
+    background: "var(--color-popover-bg)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-panels.cm-panels-bottom": { borderTop: "1px solid var(--color-glass-stroke)" },
+  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--color-glass-stroke)" },
+  ".cm-textfield": {
+    background: "var(--color-control-fill)",
+    border: "1px solid var(--color-control-stroke)",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-button": {
+    background: "var(--color-control-fill)",
+    backgroundImage: "none",
+    border: "1px solid var(--color-control-stroke)",
+    color: "var(--color-fg-1)",
   },
   ".cm-scroller": {
     overflow: "auto",
@@ -114,8 +167,14 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
 
   const langCompartment = new Compartment();
   const lineWrapCompartment = new Compartment();
-  const fontSizeCompartment = new Compartment();
+  const metricsCompartment = new Compartment();
   const vimCompartment = new Compartment();
+  const lineNumbersCompartment = new Compartment();
+  const activeLineCompartment = new Compartment();
+  const completionCompartment = new Compartment();
+  const bracketMatchCompartment = new Compartment();
+  const closeBracketsCompartment = new Compartment();
+  const indentCompartment = new Compartment();
 
   // Vim is dynamically imported so the engine stays out of the editor's
   // critical chunk for the default (vim-off) config; it loads only when the
@@ -144,8 +203,23 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   const lineWrapExtension = (wrap: boolean) =>
     wrap ? EditorView.lineWrapping : [];
 
-  const fontSizeExtension = (size: number) =>
-    EditorView.theme({ "&": { fontSize: `${size}px` } });
+  const metricsExtension = (size: number, lineHeight: string): Extension =>
+    EditorView.theme({
+      "&": { fontSize: `${size}px` },
+      ".cm-content": { lineHeight },
+    });
+
+  // Base completion is suppressed when an LSP session supplies its own override.
+  const completionExtension = (lspActive: boolean, on: boolean): Extension =>
+    lspActive || !on ? [] : autocompletion();
+
+  const indentExtension = (size: number): Extension => [
+    EditorState.tabSize.of(size),
+    indentUnit.of(" ".repeat(size)),
+  ];
+
+  const toggle = (on: boolean, ext: () => Extension): Extension =>
+    on ? ext() : [];
 
   onMount(() => {
     const state = EditorState.create({
@@ -154,14 +228,27 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         // Vim must precede the other keymaps so its handlers win in
         // normal/visual mode. Loaded on demand once vim is enabled.
         vimCompartment.of([]),
-        lineNumbers(),
+        lineNumbersCompartment.of(toggle(props.lineNumbers ?? true, lineNumbers)),
         history(),
         drawSelection(),
-        highlightActiveLine(),
+        activeLineCompartment.of(
+          toggle(props.highlightActiveLine ?? true, highlightActiveLine),
+        ),
+        indentCompartment.of(indentExtension(props.tabSize ?? 2)),
+        bracketMatchCompartment.of(
+          toggle(props.bracketMatching ?? true, bracketMatching),
+        ),
+        closeBracketsCompartment.of(
+          (props.autoCloseBrackets ?? true)
+            ? [closeBrackets(), keymap.of(closeBracketsKeymap)]
+            : [],
+        ),
         // Suppress the base completion when an LSP session injects its own
         // `autocompletion({ override })` via extraExtensions — otherwise both
         // configs merge and the default source surfaces alongside LSP results.
-        ...(props.lspActive ? [] : [autocompletion()]),
+        completionCompartment.of(
+          completionExtension(props.lspActive ?? false, props.autocomplete ?? true),
+        ),
         search(),
         // Mod+S and Mod+Enter intentionally aren't bound here — they go
         // through the global keyboard router (src/commands/keyboard.ts)
@@ -179,7 +266,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         syntaxHighlighting(latexHighlight),
         langCompartment.of(langExtension(props.language ?? "latex")),
         lineWrapCompartment.of(lineWrapExtension(props.lineWrap ?? true)),
-        fontSizeCompartment.of(fontSizeExtension(props.fontSize ?? 13)),
+        metricsCompartment.of(
+          metricsExtension(props.fontSize ?? 13, props.lineHeight ?? "1.65"),
+        ),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const text = update.state.doc.toString();
@@ -254,9 +343,63 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   createEffect(() => {
     if (!view) return;
     view.dispatch({
-      effects: fontSizeCompartment.reconfigure(
-        fontSizeExtension(props.fontSize ?? 13),
+      effects: metricsCompartment.reconfigure(
+        metricsExtension(props.fontSize ?? 13, props.lineHeight ?? "1.65"),
       ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: lineNumbersCompartment.reconfigure(
+        toggle(props.lineNumbers ?? true, lineNumbers),
+      ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: activeLineCompartment.reconfigure(
+        toggle(props.highlightActiveLine ?? true, highlightActiveLine),
+      ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: completionCompartment.reconfigure(
+        completionExtension(props.lspActive ?? false, props.autocomplete ?? true),
+      ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: bracketMatchCompartment.reconfigure(
+        toggle(props.bracketMatching ?? true, bracketMatching),
+      ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: closeBracketsCompartment.reconfigure(
+        (props.autoCloseBrackets ?? true)
+          ? [closeBrackets(), keymap.of(closeBracketsKeymap)]
+          : [],
+      ),
+    });
+  });
+
+  createEffect(() => {
+    if (!view) return;
+    view.dispatch({
+      effects: indentCompartment.reconfigure(indentExtension(props.tabSize ?? 2)),
     });
   });
 

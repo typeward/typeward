@@ -18,13 +18,29 @@ const URL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpeg|gif|webp);base64,[a-z0-9+/]+=*$/i;
 
+// KaTeX dominates the render pipeline cost, and every debounced pass re-renders
+// all math tokens even when only prose changed — memoize per formula. Cached
+// values still flow through DOMPurify.sanitize in renderContent like fresh ones.
+// throwOnError: false means error-fallback HTML is cached the same as success.
+const mathCache = new Map<string, string>();
+const MATH_CACHE_MAX = 500;
+
 function renderMath(source: string, displayMode: boolean): string {
-  return katex.renderToString(source, {
+  const key = (displayMode ? "D:" : "I:") + source;
+  const cached = mathCache.get(key);
+  if (cached !== undefined) return cached;
+
+  const html = katex.renderToString(source, {
     displayMode,
     output: "html",
     strict: "ignore",
     throwOnError: false,
   });
+  if (mathCache.size >= MATH_CACHE_MAX) {
+    mathCache.delete(mathCache.keys().next().value!);
+  }
+  mathCache.set(key, html);
+  return html;
 }
 
 function mathPlugin(md: MarkdownIt): void {
@@ -143,9 +159,10 @@ function buildMd(baseDir: string): MarkdownIt {
       if (rewritten) {
         token.attrs![srcAttr]![1] = rewritten;
       } else {
-        // Unresolvable / remote image: drop the element entirely rather than
-        // emit a src-less <img> (broken icon) or load a remote beacon.
-        return "";
+        // Unresolvable / remote image: swap in a text placeholder rather than
+        // emit a src-less <img> (broken icon) or load a remote beacon. The
+        // rejected URL itself is never echoed back into the document.
+        return `<span class="md-img-blocked">[image not shown: ${md.utils.escapeHtml(token.content || "")}]</span>`;
       }
     }
     return origImage
@@ -200,7 +217,7 @@ export const MarkdownPreview: Component<Props> = (props) => {
 
   return (
     <div
-      class="md-preview h-full w-full overflow-auto px-8 py-6 text-fg-1"
+      class="md-preview scroll h-full w-full overflow-auto px-8 py-6 text-fg-1"
       classList={{
         "md-preview-dark": props.theme() === "dark",
         "md-preview-light": props.theme() === "light",

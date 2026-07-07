@@ -43,7 +43,7 @@ pub fn forward(
     source_file: &Path,
     line: u32,
 ) -> Result<Option<ForwardLocation>, String> {
-    let Ok(synctex) = which::which("synctex") else {
+    let Ok(synctex) = crate::detect::resolve_program("synctex") else {
         return Ok(None);
     };
     if !pdf_path.exists() {
@@ -74,7 +74,7 @@ pub fn inverse(
     x: f64,
     y: f64,
 ) -> Result<Option<InverseLocation>, String> {
-    let Ok(synctex) = which::which("synctex") else {
+    let Ok(synctex) = crate::detect::resolve_program("synctex") else {
         return Ok(None);
     };
     if !pdf_path.exists() {
@@ -200,19 +200,25 @@ pub struct ForwardArgs {
 }
 
 #[tauri::command]
-pub fn synctex_forward(args: ForwardArgs) -> Result<Option<ForwardLocation>, String> {
-    if !project::is_registered_root(Path::new(&args.project_root)) {
-        return Err(format!("not an opened project root: {}", args.project_root));
-    }
-    let root = PathBuf::from(&args.project_root)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let source = project::resolve_existing_project_path(&root, &args.source_file)
-        .map_err(|e| e.to_string())?;
-    let Some(pdf) = resolve_pdf_under_root(&root, &args.pdf_path)? else {
-        return Ok(None);
-    };
-    forward(&pdf, &source, args.line)
+pub async fn synctex_forward(args: ForwardArgs) -> Result<Option<ForwardLocation>, String> {
+    // Off the event-loop thread: `which` PATH-scans and the synctex CLI
+    // blocks while gunzipping/parsing a potentially multi-MB .synctex.gz.
+    tokio::task::spawn_blocking(move || -> Result<Option<ForwardLocation>, String> {
+        if !project::is_registered_root(Path::new(&args.project_root)) {
+            return Err(format!("not an opened project root: {}", args.project_root));
+        }
+        let root = PathBuf::from(&args.project_root)
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
+        let source = project::resolve_existing_project_path(&root, &args.source_file)
+            .map_err(|e| e.to_string())?;
+        let Some(pdf) = resolve_pdf_under_root(&root, &args.pdf_path)? else {
+            return Ok(None);
+        };
+        forward(&pdf, &source, args.line)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -227,20 +233,24 @@ pub struct InverseArgs {
 }
 
 #[tauri::command]
-pub fn synctex_inverse(args: InverseArgs) -> Result<Option<InverseLocation>, String> {
-    if !project::is_registered_root(Path::new(&args.project_root)) {
-        return Err(format!("not an opened project root: {}", args.project_root));
-    }
-    let root = PathBuf::from(&args.project_root)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let Some(pdf) = resolve_pdf_under_root(&root, &args.pdf_path)? else {
-        return Ok(None);
-    };
-    inverse(&pdf, args.page, args.x, args.y)
+pub async fn synctex_inverse(args: InverseArgs) -> Result<Option<InverseLocation>, String> {
+    tokio::task::spawn_blocking(move || -> Result<Option<InverseLocation>, String> {
+        if !project::is_registered_root(Path::new(&args.project_root)) {
+            return Err(format!("not an opened project root: {}", args.project_root));
+        }
+        let root = PathBuf::from(&args.project_root)
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
+        let Some(pdf) = resolve_pdf_under_root(&root, &args.pdf_path)? else {
+            return Ok(None);
+        };
+        inverse(&pdf, args.page, args.x, args.y)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn resolve_pdf_under_root(root: &Path, pdf_path: &str) -> Result<Option<PathBuf>, String> {
+pub(crate) fn resolve_pdf_under_root(root: &Path, pdf_path: &str) -> Result<Option<PathBuf>, String> {
     let pdf = PathBuf::from(pdf_path);
     if !pdf.exists() {
         return Ok(None);
