@@ -7,9 +7,10 @@
 # Layout note: package.json depends on `texlive-wasm: file:../texlive-wasm`,
 # so this repo is checked out into `app/` and the sibling repo into
 # `texlive-wasm/` (built before `npm ci` — without its dist/, both Vite and
-# tsc fail to resolve the package). If typeward/texlive-wasm is private, add
-# a `SIBLING_REPO_TOKEN` repo secret (PAT with repo read) — the default
-# GITHUB_TOKEN can't read other private repos.
+# tsc fail to resolve the package). typeward/texlive-wasm is public, so the
+# default GITHUB_TOKEN checks it out with no extra secret. (A stale
+# SIBLING_REPO_TOKEN secret used to override this and broke CI when it
+# expired — the workflows no longer reference it; delete the secret.)
 #
 # Per platform we install the right dev deps, fetch the Tectonic
 # sidecar binary (gitignored; `npm run fetch:tectonic` resolves it for
@@ -108,7 +109,6 @@ jobs:
         with:
           repository: typeward/texlive-wasm
           path: texlive-wasm
-          token: ${{ secrets.SIBLING_REPO_TOKEN || github.token }}
 
       - name: Set up Node
         if: steps.gate.outputs.build == 'true'
