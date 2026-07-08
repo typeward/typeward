@@ -1,0 +1,319 @@
+# Release pipeline. Builds signed (or, until keys land, plain) installers for
+# every desktop OS and publishes a DRAFT GitHub Release on the PUBLIC
+# typeward/releases repo — assets on the private app repo aren't anonymously
+# downloadable, which would break both the updater feed and the download page.
+#
+# Flow: `npm run release -- x.y.z` bumps + tags -> push the tag -> this runs ->
+# a human smoke-tests one installer per OS on the draft -> Publish. Publishing
+# the draft materializes the git tag on typeward/releases, so
+# `releases/latest/download/...` (updater endpoint + download links) goes live
+# with no site redeploy.
+#
+# DORMANCY. Everything signing/updater-related is optional and absent-by-default:
+#   - No TAURI_SIGNING_PRIVATE_KEY -> plain installers, NO updater artifacts, NO
+#     latest.json (the checked-in tauri.conf keeps createUpdaterArtifacts:false).
+#   - No APPLE_* / AZURE_* -> unsigned for that OS (a ::warning, not a failure).
+#   - No RELEASES_REPO_TOKEN -> assets upload as a workflow artifact + a loud
+#     ::error naming the manual step; the build jobs still succeed.
+# See _plans/40-distribution-signing-updates.md and CLAUDE.md > Release & updates.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (e.g. v0.2.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            runner: macos-latest
+            os: macos
+            target: aarch64-apple-darwin
+          - label: Windows (x64)
+            runner: windows-latest
+            os: windows
+            target: x86_64-pc-windows-msvc
+          - label: Linux (x64)
+            runner: ubuntu-24.04
+            os: linux
+            target: x86_64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout app (at the release tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          path: app
+
+      # typeward/texlive-wasm is public, so the default GITHUB_TOKEN checks it
+      # out with no extra secret (same tokenless sibling layout as build.yml).
+      - name: Checkout texlive-wasm sibling
+        uses: actions/checkout@v4
+        with:
+          repository: typeward/texlive-wasm
+          path: texlive-wasm
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install Linux system deps
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Build texlive-wasm sibling
+        working-directory: texlive-wasm
+        run: |
+          npm ci
+          npm run build
+
+      # Builtin-only script — no app node_modules needed yet; tauri-action runs
+      # the app's `npm ci` itself before the build.
+      - name: Fetch Tectonic sidecar
+        shell: bash
+        working-directory: app
+        run: node scripts/fetch-tectonic.mjs
+
+      - name: Symlink Tectonic for the gnu triple (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          cd app/src-tauri/binaries
+          ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
+      # Warn per absent signing group; decide whether updater artifacts are
+      # even possible (needs the updater private key). Secrets can't be read in
+      # `if:` so route them through env here and expose a plain output.
+      - name: Signing availability check
+        id: sign
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY absent — building plain installers with NO updater artifacts. The auto-updater stays dormant until the keypair lands (see _plans/40)."
+            echo "updater=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "updater=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "${{ matrix.os }}" = "macos" ] && [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_* secrets absent — macOS build is unsigned/unnotarized (Gatekeeper will warn). Fine for a draft smoke test."
+          fi
+          if [ "${{ matrix.os }}" = "windows" ] && [ -z "$AZURE_CLIENT_ID" ]; then
+            echo "::warning::AZURE_* secrets absent — Windows build is unsigned (SmartScreen will warn). Fine for a draft smoke test."
+          fi
+
+      # Overlay JSON deep-merged over tauri.conf via `--config`, flipping ONLY
+      # createUpdaterArtifacts on — the checked-in config stays dormant so a
+      # keyless local `npm run tauri build` never touches the signing path.
+      - name: Write updater overlay (signed builds only)
+        if: steps.sign.outputs.updater == 'true'
+        shell: bash
+        run: echo '{"bundle":{"createUpdaterArtifacts":true}}' > "${{ runner.temp }}/updater.overlay.json"
+
+      - name: Build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Frontend secrets (empty is fine — the app degrades to free tier).
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
+          VITE_DROPBOX_CLIENT_ID: ${{ secrets.VITE_DROPBOX_CLIENT_ID }}
+          VITE_GITHUB_CLIENT_ID: ${{ secrets.VITE_GITHUB_CLIENT_ID }}
+          # Updater signing (absent -> no updater artifacts, no key needed).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS signing + notarization (all absent -> unsigned).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows signing (future — signCommand not wired yet; passed through
+          # so it activates the moment tauri.conf gains a signCommand).
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          # No tagName: tauri-action only BUILDS. Cross-repo publishing to
+          # typeward/releases happens in the publish job via action-gh-release.
+          projectPath: app
+          args: ${{ steps.sign.outputs.updater == 'true' && format('--config {0}/updater.overlay.json', runner.temp) || '' }}
+
+      # Installers + updater bundles + their .sig signatures. Per-OS globs that
+      # don't match (a leg only builds its own OS's targets) are ignored. The
+      # raw .app directory is intentionally excluded — only the .app.tar.gz
+      # updater bundle is needed.
+      - name: Collect artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-bundle-${{ matrix.os }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/nsis/*.sig
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+            app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            app/src-tauri/target/release/bundle/macos/*.sig
+            app/src-tauri/target/release/bundle/deb/*.deb
+            app/src-tauri/target/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/release/bundle/appimage/*.sig
+            app/src-tauri/target/release/bundle/rpm/*.rpm
+
+  publish:
+    name: Assemble + draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout (full history for the changelog)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-bundle-*
+          path: collected
+
+      - name: Changelog (git-cliff)
+        id: cliff
+        continue-on-error: true
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Flatten assets + stable-named copies
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          mkdir -p dist
+          # Flatten the per-OS artifact trees into one dir.
+          for f in collected/**/*; do
+            [ -f "$f" ] && cp -f "$f" dist/
+          done
+          cd dist
+          # Stable filenames for the download page (doc 30); versioned
+          # originals are kept alongside so the updater URLs still resolve.
+          copy_one() { # <glob> <stable-name>
+            local matches=( $1 )
+            if [ ${#matches[@]} -gt 0 ]; then
+              cp -f "${matches[0]}" "$2"
+              echo "  ${matches[0]} -> $2"
+            fi
+          }
+          copy_one 'Typeward_*_x64-setup.exe' 'Typeward-windows-x64-setup.exe'
+          copy_one 'Typeward_*_aarch64.dmg'   'Typeward-macos-aarch64.dmg'
+          copy_one 'Typeward_*_amd64.AppImage' 'Typeward-linux-x86_64.AppImage'
+          copy_one 'Typeward_*_amd64.deb'      'Typeward-linux-amd64.deb'
+          echo "Assets:"; ls -1
+
+      - name: Assemble latest.json (only when signed artifacts exist)
+        shell: bash
+        run: |
+          node scripts/build-latest-json.mjs \
+            --dir dist \
+            --version "${{ steps.ver.outputs.version }}" \
+            --base-url "https://github.com/typeward/releases/releases/download/${TAG}" \
+            --notes-file RELEASE_NOTES.md \
+            --out dist/latest.json
+
+      - name: Detect cross-repo release token
+        id: token
+        shell: bash
+        env:
+          RELEASES_REPO_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+        run: |
+          if [ -n "$RELEASES_REPO_TOKEN" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish draft on typeward/releases
+        if: steps.token.outputs.has_token == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: typeward/releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ env.TAG }}
+          name: Typeward ${{ env.TAG }}
+          draft: true
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: false
+          files: dist/*
+
+      # No token: don't fail — hand the assets back as an artifact and shout the
+      # exact manual step so the release can be finished by hand.
+      - name: Fallback — upload assets as a workflow artifact
+        if: steps.token.outputs.has_token != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: typeward-release-${{ env.TAG }}
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Fallback — announce the manual step
+        if: steps.token.outputs.has_token != 'true'
+        shell: bash
+        run: |
+          echo "::error::RELEASES_REPO_TOKEN is missing, so nothing was published. Manual step: (1) create the PUBLIC typeward/releases repo if it doesn't exist; (2) add a RELEASES_REPO_TOKEN secret here — a PAT with write access to typeward/releases; (3) download the 'typeward-release-${TAG}' workflow artifact from this run and attach its files to a new DRAFT release tagged ${TAG} on typeward/releases. See CLAUDE.md > Release & updates."
