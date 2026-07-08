@@ -50,7 +50,17 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
+
+    // Auto-updater (desktop only): the plugin parses the pubkey lazily at check
+    // time, so registering it with the "" placeholder pubkey doesn't touch the
+    // signing path at startup. Mobile ships through app stores, not the updater.
+    #[cfg(desktop)]
+    let builder = builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
+
+    let builder = builder
         .setup(|app| {
             telemetry::install(app.handle());
             // Seed the project trust boundary (project.rs) from the configured

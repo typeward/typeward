@@ -30,7 +30,8 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis", "app", "dmg", "deb", "appimage", "rpm"],
+    "createUpdaterArtifacts": false,
     "externalBin": ["binaries/tectonic"],
     "resources": ["resources/templates/**/*", "resources/texlive-wasm/**/*"],
     "icon": [
@@ -40,5 +41,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/typeward/releases/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
   }
 }

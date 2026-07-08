@@ -29,6 +29,23 @@ const [requestSaveTemplate, setRequestSaveTemplateInternal] = createSignal(false
  */
 const [requestProDialog, setRequestProDialogInternal] = createSignal(false);
 
+/** Metadata for the non-modal "update available" dialog. The pending plugin
+ *  `Update` handle stays in updater.ts; only display data crosses here. */
+export interface UpdatePromptInfo {
+  version: string;
+  currentVersion: string;
+  notes: string;
+  date?: string;
+}
+
+/**
+ * "An update is available" intent. Raised by src/lib/updater.ts when a check
+ * finds a newer version; the dialog is lazy-mounted once at the App root
+ * (same request-signal pattern as ProDialog). `null` = closed.
+ */
+const [requestUpdateDialog, setRequestUpdateDialogInternal] =
+  createSignal<UpdatePromptInfo | null>(null);
+
 /**
  * The navigate fn from @solidjs/router can only be obtained inside a Router
  * context. We capture it once on App mount (NavBootstrap) so module-level
@@ -40,6 +57,7 @@ export const paletteOpen_ = paletteOpen;
 export const requestNewProject_ = requestNewProject;
 export const requestSaveTemplate_ = requestSaveTemplate;
 export const requestProDialog_ = requestProDialog;
+export const requestUpdateDialog_ = requestUpdateDialog;
 
 export const togglePalette = () =>
   setPaletteOpenInternal((v) => !v);
@@ -54,6 +72,9 @@ export const setRequestSaveTemplate = (v: boolean) =>
 
 export const setRequestProDialog = (v: boolean) =>
   setRequestProDialogInternal(v);
+
+export const setRequestUpdateDialog = (v: UpdatePromptInfo | null) =>
+  setRequestUpdateDialogInternal(v);
 
 export const setNavigator = (fn: (path: string) => void) => {
   navigator = fn;

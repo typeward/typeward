@@ -3,9 +3,30 @@ import { defaultClientConditions, defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 
 const host = process.env.TAURI_DEV_HOST;
+
+// Build-time updater dormancy signal. The auto-updater stays fully dormant
+// until an updater keypair exists and its pubkey is pasted into
+// tauri.conf.json (root-credential class — see _plans/40). Reading the checked-in
+// config's pubkey here lets src/lib/updater.ts skip the plugin entirely while
+// dormant (no boot import, no runtime error). The CI --config overlay only
+// flips `createUpdaterArtifacts`, never the pubkey, so this read is the truth.
+function updaterConfigured(): boolean {
+  try {
+    const conf = JSON.parse(
+      readFileSync(
+        fileURLToPath(new URL("./src-tauri/tauri.conf.json", import.meta.url)),
+        "utf8",
+      ),
+    );
+    return Boolean(conf?.plugins?.updater?.pubkey);
+  } catch {
+    return false;
+  }
+}
 
 // Sentry source-map upload. The auth token lives in .env.sentry-build-plugin
 // (gitignored; see .env.example) — Vite doesn't load env files into
@@ -107,6 +128,9 @@ export default defineConfig({
 
   // Env vars prefixed with VITE_ are exposed to the client; TAURI_ENV_* come from Tauri
   envPrefix: ["VITE_", "TAURI_ENV_*"],
+  define: {
+    __UPDATER_CONFIGURED__: JSON.stringify(updaterConfigured()),
+  },
   build: {
     target:
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",

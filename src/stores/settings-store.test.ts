@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSettings, noteInstallId, setShareCrashReports, validEnum } from "./settings-store";
+import {
+  buildSettings,
+  noteInstallId,
+  setShareCrashReports,
+  setUpdatesCheckAutomatically,
+  validEnum,
+} from "./settings-store";
 import { THEMES, type Theme } from "~/themes/theme-store";
 
 // settings.json is an external boundary: values written by older builds
@@ -53,5 +59,17 @@ describe("settings-store privacy roundtrip", () => {
     expect(buildSettings().privacy?.installId).toBe(
       "11111111-2222-4333-8444-555555555555",
     );
+  });
+});
+
+// The updater's auto-check toggle is a persisted field like any other; assert
+// the FieldSpec carries it through buildSettings() (default ON).
+describe("settings-store updates roundtrip", () => {
+  it("defaults checkAutomatically on and persists changes", () => {
+    expect(buildSettings().updates?.checkAutomatically).toBe(true);
+    setUpdatesCheckAutomatically(false);
+    expect(buildSettings().updates?.checkAutomatically).toBe(false);
+    // Restore for other suites sharing module state.
+    setUpdatesCheckAutomatically(true);
   });
 });

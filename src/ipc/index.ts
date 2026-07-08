@@ -382,6 +382,13 @@ export interface AppSettings {
   integrations: IntegrationsSettings;
   // Optional: settings.json files predating the privacy section lack it.
   privacy?: PrivacySettings;
+  // Optional: settings.json files predating the updates section lack it.
+  updates?: UpdatesSettings;
+}
+
+/** Auto-update preferences. The launch check is a plain HTTPS GET to GitHub. */
+export interface UpdatesSettings {
+  checkAutomatically: boolean;
 }
 
 /** Egress opt-ins — everything defaults to OFF (zero reporting unless enabled). */
