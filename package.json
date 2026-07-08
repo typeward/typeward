@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "check:bundle": "node scripts/check-bundle-shape.mjs",
-    "fetch:tectonic": "node scripts/fetch-tectonic.mjs"
+    "fetch:tectonic": "node scripts/fetch-tectonic.mjs",
+    "release": "node scripts/bump-version.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
@@ -36,6 +37,8 @@
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2.5.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "corvu": "^0.7.2",
     "dompurify": "^3.4.11",
     "katex": "^0.17.0",

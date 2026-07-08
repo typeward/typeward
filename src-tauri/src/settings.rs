@@ -33,6 +33,24 @@ pub struct Settings {
     pub integrations: IntegrationsSettings,
     #[serde(default)]
     pub privacy: PrivacySettings,
+    #[serde(default)]
+    pub updates: UpdatesSettings,
+}
+
+/// Auto-update preferences. The check is a plain HTTPS GET to the GitHub
+/// releases manifest — no identifiers, no telemetry — so this defaults ON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatesSettings {
+    #[serde(rename = "checkAutomatically", default = "default_true")]
+    pub check_automatically: bool,
+}
+
+impl Default for UpdatesSettings {
+    fn default() -> Self {
+        Self {
+            check_automatically: true,
+        }
+    }
 }
 
 /// Egress opt-ins. Everything here defaults to OFF — the app promises zero
@@ -369,6 +387,7 @@ impl Default for Settings {
             workspace: WorkspaceSettings::default(),
             integrations: IntegrationsSettings::default(),
             privacy: PrivacySettings::default(),
+            updates: UpdatesSettings::default(),
         }
     }
 }

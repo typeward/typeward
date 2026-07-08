@@ -1,7 +1,12 @@
 import type { Component } from "solid-js";
 import { ErrorBoundary, Show, Suspense, createEffect, createSignal, lazy, onCleanup, onMount } from "solid-js";
 import { Router, Route, useNavigate } from "@solidjs/router";
-import { onboarded, settingsLoaded, shareCrashReports } from "~/stores/settings-store";
+import {
+  onboarded,
+  settingsLoaded,
+  shareCrashReports,
+  updatesCheckAutomatically,
+} from "~/stores/settings-store";
 import { refresh as refreshProjects } from "~/stores/projects-store";
 import { describeIpcError } from "~/lib/errors";
 // Side-effect imports: instantiate the settings store + theme store on boot
@@ -23,8 +28,10 @@ import {
 import {
   requestProDialog_,
   requestSaveTemplate_,
+  requestUpdateDialog_,
   setNavigator,
 } from "~/commands/palette-store";
+import { scheduleBootUpdateCheck } from "~/lib/updater";
 import { CommandPalette } from "~/components/CommandPalette";
 import { Toaster } from "~/components/feedback/Toaster";
 import "@fontsource-variable/inter/index.css";
@@ -48,6 +55,13 @@ const SaveTemplateDialog = lazy(() =>
 const ProDialog = lazy(() =>
   import("~/components/entitlement/ProDialog").then((m) => ({
     default: m.ProDialog,
+  })),
+);
+// Lazy like the others — the updater plugin JS and this dialog's chunk stay
+// off the boot path until an update is actually found.
+const UpdateDialog = lazy(() =>
+  import("~/components/updates/UpdateDialog").then((m) => ({
+    default: m.UpdateDialog,
   })),
 );
 
@@ -207,16 +221,25 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestProDialog_()) setProDialogTouched(true);
   });
+  const [updateDialogTouched, setUpdateDialogTouched] = createSignal(false);
+  createEffect(() => {
+    if (requestUpdateDialog_()) setUpdateDialogTouched(true);
+  });
 
+  let cancelBootUpdateCheck: (() => void) | undefined;
   onMount(() => {
     installGlobalShortcuts();
     document.addEventListener("contextmenu", onContextMenu);
     bootSupabaseDeferred();
+    // Delayed post-paint update check — dormant until a pubkey is configured
+    // AND the user leaves auto-checking on; never blocks startup.
+    cancelBootUpdateCheck = scheduleBootUpdateCheck(updatesCheckAutomatically);
   });
 
   onCleanup(() => {
     uninstallGlobalShortcuts();
     document.removeEventListener("contextmenu", onContextMenu);
+    cancelBootUpdateCheck?.();
   });
 
   return (
@@ -233,6 +256,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={proDialogTouched()}>
         <Suspense>
           <ProDialog />
+        </Suspense>
+      </Show>
+      <Show when={updateDialogTouched()}>
+        <Suspense>
+          <UpdateDialog />
         </Suspense>
       </Show>
       <Toaster />

@@ -9,6 +9,7 @@ import {
   ChevronDown,
   Cloud,
   GitBranch,
+  Info,
   Keyboard,
   Key,
   LogOut,
@@ -20,7 +21,7 @@ import {
   Type,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createResource, createSignal } from "solid-js";
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { ProChip, ProLockedPanel } from "~/components/entitlement/ProChip";
 import { setRequestProDialog } from "~/commands/palette-store";
@@ -58,8 +59,11 @@ import {
   setEditorSettings,
   setIntegrationsSettings,
   setShareCrashReports,
+  setUpdatesCheckAutomatically,
   shareCrashReports,
+  updatesCheckAutomatically,
 } from "~/stores/settings-store";
+import { checkForUpdates } from "~/lib/updater";
 import {
   previousRoute,
   setPreviousRoute,
@@ -117,6 +121,7 @@ type SectionId =
   | "notifications"
   | "security"
   | "diagnostics"
+  | "about"
   | "editor"
   | "appearance"
   | "shortcuts"
@@ -152,6 +157,7 @@ const NAV: NavGroup[] = [
       { id: "notifications", label: "Notifications", icon: Bell },
       { id: "security", label: "Security", icon: Shield },
       { id: "diagnostics", label: "Diagnostics", icon: Activity },
+      { id: "about", label: "About", icon: Info },
     ],
   },
   {
@@ -322,6 +328,9 @@ const SettingsScreen: Component = () => {
               </Show>
               <Show when={active() === "diagnostics"}>
                 <DiagnosticsPanel />
+              </Show>
+              <Show when={active() === "about"}>
+                <AboutPanel />
               </Show>
               {/* Locked integration sections render a quiet Pro state instead
                   of their cards; entitled users see everything as before. */}
@@ -1379,6 +1388,65 @@ const SecurityPanel: Component = () => {
             Reset
           </Button>
         </div>
+      </Card>
+    </div>
+  );
+};
+
+// =================================================================
+// About — version + updates
+// =================================================================
+
+const AboutPanel: Component = () => {
+  const [info] = createResource(() => ipc.collectSystemInfo().catch(() => null));
+  const [checking, setChecking] = createSignal(false);
+
+  const check = async () => {
+    if (checking()) return;
+    setChecking(true);
+    try {
+      await checkForUpdates({ silent: false });
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div class="space-y-3">
+      <Card
+        title="About Typeward"
+        subtitle="The installed build and how updates are handled."
+      >
+        <Row label="Version" hint="The version of Typeward you're running.">
+          <span class="mono select-text text-sm text-fg-1">
+            {info()?.appVersion ?? "…"}
+          </span>
+        </Row>
+        <Show when={!isTauriMobile()}>
+          <Row
+            label="Check for updates"
+            hint="Look for a newer release right now. This is a plain HTTPS request to GitHub — no identifiers are sent."
+          >
+            <Button
+              variant="secondary"
+              size="sm"
+              class="h-8"
+              disabled={checking()}
+              onClick={() => void check()}
+            >
+              {checking() ? "Checking…" : "Check now"}
+            </Button>
+          </Row>
+          <Row
+            label="Check automatically"
+            hint="Shortly after launch, look for a newer release and prompt you to install it. The check is a plain HTTPS GET to GitHub with no identifiers, and updates never install without your confirmation."
+          >
+            <Switch
+              checked={updatesCheckAutomatically()}
+              onChange={setUpdatesCheckAutomatically}
+            />
+          </Row>
+        </Show>
       </Card>
     </div>
   );

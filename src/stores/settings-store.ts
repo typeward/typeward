@@ -170,6 +170,11 @@ const [integrationsSettings, setIntegrationsSettings] =
 // Egress opt-in: OFF by default — the Sentry SDK is never even fetched unless
 // the user enables this (see src/lib/sentry-gate.ts).
 const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
+// Auto-update check on launch. ON by default — the check is a plain HTTPS GET
+// to GitHub with no identifiers (see src/lib/updater.ts). Dormant regardless
+// until an updater pubkey is configured.
+const [updatesCheckAutomatically, setUpdatesCheckAutomatically] =
+  createSignal<boolean>(true);
 // Read-only mirror of privacy.installId: Rust mints it on the first crash
 // report; the TS side only carries it through buildSettings() so a settings
 // save can't clobber it. `noteInstallId` records an id minted mid-session
@@ -477,6 +482,15 @@ const FIELDS: FieldSpec[] = [
       };
     },
   },
+  // --- updates ---
+  field<boolean>({
+    read: (s) => s.updates?.checkAutomatically ?? true,
+    value: updatesCheckAutomatically,
+    apply: setUpdatesCheckAutomatically,
+    write: (out, v) => {
+      out.updates = { checkAutomatically: v };
+    },
+  }),
 ];
 
 /**
@@ -496,6 +510,7 @@ export function buildSettings(): ipc.AppSettings {
     workspace: {},
     integrations: undefined,
     privacy: undefined,
+    updates: undefined,
   } as unknown as ipc.AppSettings;
   for (const f of FIELDS) f.serialize(out);
   return out;
@@ -550,10 +565,12 @@ export {
   projectsRoot,
   settingsLoaded,
   shareCrashReports,
+  updatesCheckAutomatically,
   setCompileEngine,
   setEditorSettings,
   setIntegrationsSettings,
   setOnboarded,
   setProjectsRoot,
   setShareCrashReports,
+  setUpdatesCheckAutomatically,
 };

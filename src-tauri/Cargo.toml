@@ -20,6 +20,15 @@ tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-clipboard-manager = "2"
+# Auto-updater. Dormant until an updater keypair exists: the pubkey in
+# tauri.conf.json is a "" placeholder and `bundle.createUpdaterArtifacts`
+# stays false in the checked-in config, so a keyless `tauri build` never signs
+# anything and the runtime check is a no-op (see src/lib/updater.ts). The
+# plugin only reads/parses the pubkey at check time, not at init, so an empty
+# pubkey doesn't break app startup or a local build. tauri-plugin-process backs
+# the post-install relaunch.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 notify = "8"
