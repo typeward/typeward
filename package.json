@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "config": {
+    "texliveWasm": "v0.2.2-alpha"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
