@@ -69,10 +69,27 @@ jobs:
 
       # typeward/texlive-wasm is public, so the default GITHUB_TOKEN checks it
       # out with no extra secret (same tokenless sibling layout as build.yml).
+      # The sibling ref comes from package.json `config.texliveWasm` — the ONE
+      # place the engine pin is recorded (_plans/41-texlive-wasm-release-ops.md
+      # §2) — so rebuilding this tag always gets the same engine release
+      # instead of whatever the sibling's main has moved to.
+      - name: Read texlive-wasm pin
+        id: texlive
+        shell: bash
+        working-directory: app
+        run: |
+          ref="$(node -p "require('./package.json').config?.texliveWasm")"
+          if [ -z "$ref" ] || [ "$ref" = "undefined" ]; then
+            echo "::error::package.json is missing config.texliveWasm — the texlive-wasm sibling checkout has no pinned ref."
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout texlive-wasm sibling
         uses: actions/checkout@v4
         with:
           repository: typeward/texlive-wasm
+          ref: ${{ steps.texlive.outputs.ref }}
           path: texlive-wasm
 
       - name: Set up Node

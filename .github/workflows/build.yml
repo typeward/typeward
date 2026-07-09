@@ -7,8 +7,12 @@
 # Layout note: package.json depends on `texlive-wasm: file:../texlive-wasm`,
 # so this repo is checked out into `app/` and the sibling repo into
 # `texlive-wasm/` (built before `npm ci` — without its dist/, both Vite and
-# tsc fail to resolve the package). typeward/texlive-wasm is public, so the
-# default GITHUB_TOKEN checks it out with no extra secret. (A stale
+# tsc fail to resolve the package). The sibling checks out at the release tag
+# pinned in package.json `config.texliveWasm` — the ONE place the engine
+# version is recorded (_plans/41-texlive-wasm-release-ops.md §2) — so CI
+# builds a known engine release instead of tracking the sibling's main; local
+# dev keeps the file: link and is unaffected. typeward/texlive-wasm is public,
+# so the default GITHUB_TOKEN checks it out with no extra secret. (A stale
 # SIBLING_REPO_TOKEN secret used to override this and broke CI when it
 # expired — the workflows no longer reference it; delete the secret.)
 #
@@ -103,11 +107,26 @@ jobs:
         with:
           path: app
 
+      # Runner-preinstalled Node is enough here; setup-node runs later.
+      - name: Read texlive-wasm pin
+        if: steps.gate.outputs.build == 'true'
+        id: texlive
+        shell: bash
+        working-directory: app
+        run: |
+          ref="$(node -p "require('./package.json').config?.texliveWasm")"
+          if [ -z "$ref" ] || [ "$ref" = "undefined" ]; then
+            echo "::error::package.json is missing config.texliveWasm — the texlive-wasm sibling checkout has no pinned ref."
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout texlive-wasm sibling
         if: steps.gate.outputs.build == 'true'
         uses: actions/checkout@v4
         with:
           repository: typeward/texlive-wasm
+          ref: ${{ steps.texlive.outputs.ref }}
           path: texlive-wasm
 
       - name: Set up Node
