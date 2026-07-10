@@ -203,11 +203,33 @@ export interface ModelInfo {
   displayName: string;
   contextWindow?: number;
   supportsStreaming: boolean;
+  /**
+   * Whether the model accepts image input. Absent = no. Derived from the
+   * capability matrix in `ai/capabilities.ts` (config, not provider data —
+   * the live /models endpoints don't expose this uniformly).
+   */
+  supportsImages?: boolean;
+}
+
+/**
+ * An image attached to a chat message. `base64` is the raw payload (no data:
+ * prefix); persisted conversation records store a stub with `base64: ""` so
+ * the JSONL sidecar never carries megabytes of image data.
+ */
+export interface ChatAttachment {
+  kind: "image";
+  mime: string;
+  base64: string;
+  name?: string;
+  /** Decoded size in bytes (for caps + "image — 1.2 MB" placeholders). */
+  bytes: number;
 }
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
   content: string;
+  /** Image attachments (user turns only). Mapped per provider wire format. */
+  attachments?: ChatAttachment[];
 }
 
 export interface ChatChunk {

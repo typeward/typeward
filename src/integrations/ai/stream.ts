@@ -85,7 +85,17 @@ export async function* aiStream(
 
   const abortHandler = () => {
     void invoke("ai_stream_abort", { streamId }).catch(() => undefined);
+    // The Rust side stays silent on abort (StreamEnd::Aborted emits no
+    // terminal event by design), so the iterator must resolve itself —
+    // without this local pump the consumer dead-awaits forever and the
+    // chat pane stays stuck in its streaming state.
+    done = true;
+    pump();
   };
+  if (signal?.aborted) {
+    unlisten();
+    return;
+  }
   signal?.addEventListener("abort", abortHandler, { once: true });
 
   try {

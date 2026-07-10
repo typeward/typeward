@@ -78,17 +78,36 @@ export function createAnthropicProvider(): AiProvider {
   };
 }
 
-async function* chatStream(
+/**
+ * Pure body builder, exported for wire-shape tests. Messages with image
+ * attachments become content-block arrays (images first, then text, per
+ * Anthropic's guidance); text-only messages keep the plain-string shape.
+ * Attachment stubs (persisted turns whose payload didn't survive a reload)
+ * carry an empty base64 and are skipped.
+ */
+export function buildAnthropicChatBody(
   messages: ChatMessage[],
   opts: ChatOptions,
-  authRef: { service: string; account: string; header: string; prefix: string },
-): AsyncIterable<ChatChunk> {
+): string {
   const system = messages.find((m) => m.role === "system")?.content;
   const turns = messages
     .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => {
+      const images = (m.attachments ?? []).filter((a) => a.base64.length > 0);
+      if (images.length === 0) return { role: m.role, content: m.content };
+      return {
+        role: m.role,
+        content: [
+          ...images.map((a) => ({
+            type: "image" as const,
+            source: { type: "base64" as const, media_type: a.mime, data: a.base64 },
+          })),
+          { type: "text" as const, text: m.content },
+        ],
+      };
+    });
 
-  const body = JSON.stringify({
+  return JSON.stringify({
     model: opts.model,
     max_tokens: opts.maxTokens ?? 4096,
     temperature: opts.temperature,
@@ -96,6 +115,14 @@ async function* chatStream(
     messages: turns,
     stream: true,
   });
+}
+
+async function* chatStream(
+  messages: ChatMessage[],
+  opts: ChatOptions,
+  authRef: { service: string; account: string; header: string; prefix: string },
+): AsyncIterable<ChatChunk> {
+  const body = buildAnthropicChatBody(messages, opts);
 
   const stream = aiStream(
     {

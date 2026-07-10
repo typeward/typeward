@@ -73,18 +73,47 @@ export function createOpenAIProvider(): AiProvider {
   };
 }
 
+/**
+ * Pure body builder, exported for wire-shape tests. Messages with image
+ * attachments use the content-array shape with `image_url` data URLs;
+ * text-only messages keep the plain-string content (and never leak the
+ * internal `attachments` field onto the wire). Attachment stubs (empty
+ * base64 after a reload) are skipped.
+ */
+export function buildOpenAIChatBody(
+  messages: ChatMessage[],
+  opts: ChatOptions,
+): string {
+  const wireMessages = messages.map((m) => {
+    const images = (m.attachments ?? []).filter((a) => a.base64.length > 0);
+    if (images.length === 0) return { role: m.role, content: m.content };
+    return {
+      role: m.role,
+      content: [
+        { type: "text" as const, text: m.content },
+        ...images.map((a) => ({
+          type: "image_url" as const,
+          image_url: { url: `data:${a.mime};base64,${a.base64}` },
+        })),
+      ],
+    };
+  });
+
+  return JSON.stringify({
+    model: opts.model,
+    messages: wireMessages,
+    temperature: opts.temperature,
+    max_tokens: opts.maxTokens,
+    stream: true,
+  });
+}
+
 async function* chatStream(
   messages: ChatMessage[],
   opts: ChatOptions,
   authRef: { service: string; account: string; header: string; prefix: string },
 ): AsyncIterable<ChatChunk> {
-  const body = JSON.stringify({
-    model: opts.model,
-    messages,
-    temperature: opts.temperature,
-    max_tokens: opts.maxTokens,
-    stream: true,
-  });
+  const body = buildOpenAIChatBody(messages, opts);
 
   const stream = aiStream(
     {

@@ -1,10 +1,11 @@
 /**
  * Active AI provider tracking.
  *
- * Only one provider is "active" at a time — the AiView header picker
- * sets it, and selection-driven commands (Explain, Rewrite) target it.
- * The registry also keeps a map of all instantiated providers keyed by
- * id so consumers can look one up without re-creating it.
+ * Only one provider is "active" at a time — the settings card sets it, the
+ * chat pane (ai-chat-store) and the selection-driven editor actions
+ * (integrations/ai/actions.ts: Rewrite, Explain, …) all target it. The
+ * registry also keeps a map of all instantiated providers keyed by id so
+ * consumers can look one up without re-creating it.
  */
 
 import { createSignal } from "solid-js";
