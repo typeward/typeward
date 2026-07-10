@@ -30,6 +30,7 @@ import type { Component } from "solid-js";
 import { Show, createResource, createSignal } from "solid-js";
 
 import { errorText, notifyError } from "~/components/feedback/Toaster";
+import { Switch } from "~/components/forms/Switch";
 import { Button } from "~/components/primitives/Button";
 import { ACCOUNT_BILLING_URL, PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { describeIpcError } from "~/integrations/auth/chunked";
@@ -44,6 +45,10 @@ import {
   supabaseSessionReady,
   supabaseUser,
 } from "~/integrations/supabase/session";
+import {
+  setSyncSettingsEnabled,
+  syncSettingsEnabled,
+} from "~/stores/settings-store";
 
 export const AccountSection: Component = () => {
   return (
@@ -270,6 +275,17 @@ const SignedInCard: Component = () => {
             <span class="mono text-fg-2">{planSummary()?.status}</span>
           </div>
         </Show>
+        {/* Device-local toggle (never synced itself): governs whether THIS
+            machine pushes/pulls the synced preference keys. Only rendered
+            signed-in — sync is meaningless without an account. */}
+        <div class="border-t border-glass-stroke pt-3">
+          <Switch
+            checked={syncSettingsEnabled()}
+            onChange={setSyncSettingsEnabled}
+            label="Sync settings across devices"
+            description="Syncs your preferences (theme, editor, workspace). Never syncs accounts, keys, or file paths — and this toggle stays on this device."
+          />
+        </div>
         <div class="flex items-center gap-2">
           {/* No purchasable Pro during the free-only beta — the billing CTA
               hides; the plan badge and "Refresh plan" stay. */}

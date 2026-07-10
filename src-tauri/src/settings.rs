@@ -35,6 +35,25 @@ pub struct Settings {
     pub privacy: PrivacySettings,
     #[serde(default)]
     pub updates: UpdatesSettings,
+    #[serde(default)]
+    pub sync: SyncSettings,
+}
+
+/// Settings-sync preferences. Device-local by design: the toggle governs
+/// whether THIS machine participates, so it is itself excluded from sync
+/// (see the frontend denylist in settings-sync.ts).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncSettings {
+    #[serde(rename = "syncSettings", default = "default_true")]
+    pub sync_settings: bool,
+}
+
+impl Default for SyncSettings {
+    fn default() -> Self {
+        Self {
+            sync_settings: true,
+        }
+    }
 }
 
 /// Auto-update preferences. The check is a plain HTTPS GET to the GitHub
@@ -388,6 +407,7 @@ impl Default for Settings {
             integrations: IntegrationsSettings::default(),
             privacy: PrivacySettings::default(),
             updates: UpdatesSettings::default(),
+            sync: SyncSettings::default(),
         }
     }
 }
@@ -525,6 +545,53 @@ pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), Se
     validate_projects_root(Path::new(&settings.projects_root))?;
     let path = settings_path(app_handle)?;
     let json = serde_json::to_vec_pretty(settings)?;
+    fs_ops::atomic_write(&path, &json)?;
+    Ok(())
+}
+
+/// Per-key settings-sync bookkeeping: the last server `updated_at` seen for a
+/// key and the hash of the value last synced in either direction. The outer
+/// map is keyed by Supabase user id so account switching can't cross-apply.
+/// Persisted to its own `settings-sync.json` next to settings.json —
+/// deliberately NOT inside it, so a settings roundtrip or Reset can't clobber
+/// sync metadata. The schema is owned by the frontend engine (settings-sync.ts).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncKeyState {
+    #[serde(rename = "seenUpdatedAt")]
+    pub seen_updated_at: String,
+    pub hash: String,
+}
+
+pub type SyncStateFile = HashMap<String, HashMap<String, SyncKeyState>>;
+
+fn sync_state_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, SettingsError> {
+    let dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|_| SettingsError::NoAppDataDir)?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join("settings-sync.json"))
+}
+
+pub fn load_sync_state(app_handle: &tauri::AppHandle) -> Result<SyncStateFile, SettingsError> {
+    let path = sync_state_path(app_handle)?;
+    if !path.exists() {
+        return Ok(SyncStateFile::default());
+    }
+    let bytes = fs::read(path)?;
+    // Corrupt bookkeeping degrades to empty rather than erroring: an error here
+    // would wedge sync behind an unreadable file forever, while an empty state
+    // just re-converges on the next pass (server-newer rows re-apply, local-only
+    // keys re-seed).
+    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+pub fn save_sync_state(
+    app_handle: &tauri::AppHandle,
+    state: &SyncStateFile,
+) -> Result<(), SettingsError> {
+    let path = sync_state_path(app_handle)?;
+    let json = serde_json::to_vec_pretty(state)?;
     fs_ops::atomic_write(&path, &json)?;
     Ok(())
 }

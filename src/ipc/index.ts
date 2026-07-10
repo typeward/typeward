@@ -384,6 +384,13 @@ export interface AppSettings {
   privacy?: PrivacySettings;
   // Optional: settings.json files predating the updates section lack it.
   updates?: UpdatesSettings;
+  // Optional: settings.json files predating the sync section lack it.
+  sync?: SyncSettings;
+}
+
+/** Settings-sync preferences — device-local (the toggle itself never syncs). */
+export interface SyncSettings {
+  syncSettings: boolean;
 }
 
 /** Auto-update preferences. The launch check is a plain HTTPS GET to GitHub. */
@@ -535,6 +542,24 @@ export const exportPdfAnnotated = (
 
 export const saveSettings = (settings: AppSettings): Promise<void> =>
   invoke("save_settings", { settings });
+
+/** Last server `updated_at` + value hash for one synced settings key. */
+export interface SyncKeyState {
+  seenUpdatedAt: string;
+  hash: string;
+}
+
+/**
+ * `<app_data>/settings-sync.json`: per-key sync bookkeeping keyed by Supabase
+ * user id (account switching must not cross-apply). Lives outside settings.json
+ * so a settings roundtrip or Reset can't clobber it.
+ */
+export type SettingsSyncState = Record<string, Record<string, SyncKeyState>>;
+
+export const loadSyncState = (): Promise<SettingsSyncState> => invoke("load_sync_state");
+
+export const saveSyncState = (state: SettingsSyncState): Promise<void> =>
+  invoke("save_sync_state", { state });
 
 // ----- Custom themes -------------------------------------------------------
 
