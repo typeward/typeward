@@ -17,6 +17,14 @@ export interface OpenFile {
    * is unknown (conflict-inspection tabs), which skip the guard.
    */
   baseHash?: string;
+  /**
+   * Bumped whenever `adoptDiskContent` replaces this buffer's content outside
+   * CodeMirror (history restore, sync conflict resolution). `text-shell` folds
+   * it into the editor key, so the mounted editor for the active tab remounts
+   * on the adopted content instead of keeping its stale doc — which one
+   * keystroke plus autosave would otherwise write back over the new state.
+   */
+  adoptGeneration?: number;
 }
 
 /**
@@ -157,19 +165,26 @@ function setFileBaseHash(path: string, baseHash: string): void {
 
 /**
  * Adopt fresh on-disk content into an already-open tab and mark it clean —
- * used after a sync conflict is resolved on disk (e.g. "keep theirs") so the
- * buffer matches the canonical file and a follow-up save can't resurrect the
- * discarded version. No-op if the file isn't open. (For the active tab the
- * mounted CodeMirror instance keeps rendering its own doc until it remounts on
- * the next tab switch — the store is corrected either way, so the save path
- * never writes stale content.)
+ * used after a history restore or a sync conflict resolved on disk (e.g.
+ * "keep theirs") so the buffer matches the canonical file and a follow-up
+ * save can't resurrect the discarded version. No-op if the file isn't open.
+ * When the content actually changed, `adoptGeneration` bumps so the active
+ * tab's keyed editor remounts on the new content (a matching buffer only
+ * needs its clean flag / base hash corrected — no remount, cursor kept).
  */
 function adoptDiskContent(path: string, content: string, baseHash: string): void {
   setOpenFiles((prev) => {
     const i = prev.findIndex((f) => f.path === path);
     if (i < 0) return prev;
     const next = prev.slice();
-    next[i] = { ...next[i], content, dirty: false, baseHash };
+    const gen = prev[i].adoptGeneration ?? 0;
+    next[i] = {
+      ...next[i],
+      content,
+      dirty: false,
+      baseHash,
+      adoptGeneration: prev[i].content === content ? gen : gen + 1,
+    };
     return next;
   });
 }

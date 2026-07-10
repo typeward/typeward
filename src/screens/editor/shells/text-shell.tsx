@@ -79,6 +79,10 @@ import {
 } from "~/stores/editor-view-store";
 import { getCommand } from "~/commands/registry";
 import {
+  requestHistoryPanel_,
+  setRequestHistoryPanel,
+} from "~/commands/palette-store";
+import {
   editorSettings,
   integrationsSettings,
   LINE_HEIGHT_VALUES,
@@ -183,6 +187,14 @@ export const TextShell: Component<{
     if (isTabletViewport()) setActivePane("sidebar");
     setFocusedThreadId(intent.threadId ?? null);
     setReviewPanelIntent(null);
+  });
+
+  // `core.fileHistory` (command palette) opens the History sidebar tab.
+  createEffect(() => {
+    if (!requestHistoryPanel_()) return;
+    setLeftTab("history");
+    if (isTabletViewport()) setActivePane("sidebar");
+    setRequestHistoryPanel(false);
   });
 
   // The grammar linter mirrors its results into a cross-file store (read by
@@ -621,7 +633,9 @@ const CenterPane: Component<{
   // and the grammar setting untracked, so an LSP handshake that completes after
   // CodeMirror mounts — or a grammar toggle — would otherwise never attach to
   // the open file. Folding session-readiness + grammar state into the key makes
-  // the editor remount (and re-run didOpen) exactly when they change.
+  // the editor remount (and re-run didOpen) exactly when they change. The adopt
+  // generation remounts on out-of-editor content replaces (history restore,
+  // conflict resolution) — the mounted CM doc is stale by definition then.
   const editorKey = createMemo<string | null>(() => {
     const f = activeFile();
     if (!f?.path) return null;
@@ -629,7 +643,7 @@ const CenterPane: Component<{
     const lspReady = lspLang ? !!findSession(lspLang) : false;
     const grammarOn = grammarActive();
     const grammarLang = integrationsSettings().grammar.language ?? "";
-    return `${f.path}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}::${grammarLang}`;
+    return `${f.path}::a${f.adoptGeneration ?? 0}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}::${grammarLang}`;
   });
 
   // Closing a dirty buffer silently discards it (the autosave snapshot only

@@ -9,6 +9,7 @@ import type { CompileResult, Project } from "~/adapters/types";
 const h = vi.hoisted(() => ({
   writeProjectTextFile: vi.fn(),
   readProjectTextFile: vi.fn(),
+  historyRecord: vi.fn(),
   synctexForward: vi.fn(),
   synctexInverse: vi.fn(),
   notifyInfo: vi.fn(),
@@ -25,6 +26,7 @@ const h = vi.hoisted(() => ({
 vi.mock("~/ipc", () => ({
   writeProjectTextFile: h.writeProjectTextFile,
   readProjectTextFile: h.readProjectTextFile,
+  historyRecord: h.historyRecord,
   synctexForward: h.synctexForward,
   synctexInverse: h.synctexInverse,
 }));
@@ -94,6 +96,7 @@ beforeEach(() => {
   );
   h.readProjectTextFile.mockResolvedValue("");
   h.writeProjectTextFile.mockResolvedValue(undefined);
+  h.historyRecord.mockResolvedValue(true);
   h.notifyLocalSave.mockReturnValue(undefined);
   h.latexCompile.mockResolvedValue(okResult());
   h.autoCompile = false;
@@ -145,6 +148,58 @@ describe("saveActiveFile", () => {
     await saveActiveFile();
     expect(h.writeProjectTextFile).not.toHaveBeenCalled();
     expect(h.notifyLocalSave).not.toHaveBeenCalled();
+  });
+});
+
+describe("history snapshot hook", () => {
+  it("fires a history record for the saved file after the write lands", async () => {
+    setProject(projectA);
+    openBuffer({ content: "hello", dirty: true });
+
+    await saveActiveFile();
+
+    expect(h.historyRecord).toHaveBeenCalledTimes(1);
+    expect(h.historyRecord).toHaveBeenCalledWith("/A", "main.tex");
+    // History observes saves, it never precedes them.
+    expect(h.writeProjectTextFile.mock.invocationCallOrder[0]).toBeLessThan(
+      h.historyRecord.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("never blocks or fails the save when the history IPC rejects", async () => {
+    setProject(projectA);
+    openBuffer({ content: "hello", dirty: true });
+    h.historyRecord.mockRejectedValue(new Error("history store offline"));
+
+    await expect(saveActiveFile()).resolves.toBeUndefined();
+
+    // The save completed normally — buffer clean, cloud push queued.
+    expect(activeFile()?.dirty).toBe(false);
+    expect(h.notifyLocalSave).toHaveBeenCalledWith("/A", ["main.tex"]);
+    // The failure lands in telemetry only (fire-and-forget catch).
+    await vi.waitFor(() => {
+      expect(h.recordError).toHaveBeenCalledWith(
+        "history-record",
+        expect.stringContaining("main.tex"),
+        expect.any(Error),
+      );
+    });
+  });
+
+  it("even a synchronous throw from the history wrapper cannot break the save", async () => {
+    setProject(projectA);
+    openBuffer({ content: "hello", dirty: true });
+    h.historyRecord.mockImplementation(() => {
+      throw new Error("sync explosion");
+    });
+
+    await expect(saveActiveFile()).resolves.toBeUndefined();
+    expect(activeFile()?.dirty).toBe(false);
+    expect(h.recordError).toHaveBeenCalledWith(
+      "history-record",
+      expect.stringContaining("main.tex"),
+      expect.any(Error),
+    );
   });
 });
 

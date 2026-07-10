@@ -14,6 +14,7 @@ mod export_annotated;
 #[cfg(desktop)]
 mod export_pandoc;
 mod fs_ops;
+mod history;
 mod integrations;
 #[cfg(desktop)]
 mod lsp;
@@ -148,6 +149,11 @@ pub fn run() {
             commands::write_snapshot,
             commands::clear_snapshot,
             commands::list_orphan_snapshots,
+            history::history_record,
+            history::history_list,
+            history::history_read_version,
+            history::history_restore,
+            history::history_clear,
             telemetry::record_event,
             telemetry::list_recent_events,
             telemetry::read_telemetry_log,

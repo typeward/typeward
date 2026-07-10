@@ -37,6 +37,36 @@ pub struct Settings {
     pub updates: UpdatesSettings,
     #[serde(default)]
     pub sync: SyncSettings,
+    #[serde(default)]
+    pub history: HistorySettings,
+}
+
+/// Local per-file version-history retention (history.rs). Clamped to
+/// 10–200 at the load boundary — the TS store applies the same clamp
+/// (settings-store.ts), so an out-of-range value from a hand-edited
+/// settings.json can't balloon the store or truncate it to nothing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistorySettings {
+    #[serde(
+        rename = "maxVersionsPerFile",
+        default = "default_history_max_versions"
+    )]
+    pub max_versions_per_file: u32,
+}
+
+pub const HISTORY_MIN_VERSIONS_PER_FILE: u32 = 10;
+pub const HISTORY_MAX_VERSIONS_PER_FILE: u32 = 200;
+
+fn default_history_max_versions() -> u32 {
+    50
+}
+
+impl Default for HistorySettings {
+    fn default() -> Self {
+        Self {
+            max_versions_per_file: default_history_max_versions(),
+        }
+    }
 }
 
 /// Settings-sync preferences. Device-local by design: the toggle governs
@@ -408,6 +438,7 @@ impl Default for Settings {
             privacy: PrivacySettings::default(),
             updates: UpdatesSettings::default(),
             sync: SyncSettings::default(),
+            history: HistorySettings::default(),
         }
     }
 }
@@ -519,6 +550,10 @@ fn sanitize_loaded_settings(mut settings: Settings) -> Settings {
     if validate_projects_root(Path::new(&settings.projects_root)).is_err() {
         settings.projects_root = default_projects_root().to_string_lossy().into_owned();
     }
+    settings.history.max_versions_per_file = settings
+        .history
+        .max_versions_per_file
+        .clamp(HISTORY_MIN_VERSIONS_PER_FILE, HISTORY_MAX_VERSIONS_PER_FILE);
     settings
 }
 
@@ -640,6 +675,30 @@ mod tests {
         assert_eq!(
             sanitized.projects_root,
             default_projects_root().to_string_lossy().into_owned()
+        );
+    }
+
+    #[test]
+    fn sanitize_clamps_history_retention_to_bounds() {
+        let mut s = Settings::default();
+        assert_eq!(s.history.max_versions_per_file, 50);
+
+        s.history.max_versions_per_file = 3;
+        assert_eq!(
+            sanitize_loaded_settings(s.clone()).history.max_versions_per_file,
+            HISTORY_MIN_VERSIONS_PER_FILE
+        );
+
+        s.history.max_versions_per_file = 10_000;
+        assert_eq!(
+            sanitize_loaded_settings(s.clone()).history.max_versions_per_file,
+            HISTORY_MAX_VERSIONS_PER_FILE
+        );
+
+        s.history.max_versions_per_file = 75;
+        assert_eq!(
+            sanitize_loaded_settings(s).history.max_versions_per_file,
+            75
         );
     }
 

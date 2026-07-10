@@ -10,6 +10,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  History,
   ListTodo,
   Lock,
   MessageSquare,
@@ -32,6 +33,7 @@ import {
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { FileTree, type FileNode } from "~/components/editor/FileTree";
+import { HistoryPanel } from "~/components/editor/HistoryPanel";
 import { OutlinePanel } from "~/components/editor/OutlinePanel";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
 import { TodoPanel } from "~/components/editor/TodoPanel";
@@ -87,7 +89,7 @@ import { getActiveEditorView } from "~/stores/editor-view-store";
  * and lets future shells decide what tabs they support.
  */
 
-export type LeftTab = "files" | "references" | "scm" | "review" | "todo";
+export type LeftTab = "files" | "references" | "scm" | "review" | "todo" | "history";
 
 interface SidebarTab {
   id: LeftTab;
@@ -372,6 +374,8 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       : []),
     { id: "review", label: "Review", icon: MessageSquare, count: openCommentThreadCount() },
     { id: "todo", label: "TODO", icon: ListTodo, count: todoCount() },
+    // FREE, always shown — per-file version history with restore.
+    { id: "history", label: "History", icon: History },
   ]);
 
   // Natural width is measured off the hidden full-label clone, not the visible
@@ -601,6 +605,9 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         </Show>
         <Show when={props.tab === "todo"}>
           <TodoPanel />
+        </Show>
+        <Show when={props.tab === "history"}>
+          <HistoryPanel />
         </Show>
       </div>
 
