@@ -14,6 +14,7 @@ import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import {
   paletteOpen_,
+  setRequestHistoryPanel,
   setRequestProDialog,
   setRequestSaveTemplate,
 } from "./palette-store";
@@ -109,6 +110,17 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => activeFile() !== null,
     run: async () => {
       await saveAndCompileActiveProject();
+    },
+  },
+  {
+    id: "core.fileHistory",
+    title: "File history",
+    subtitle: "Browse and restore earlier versions of the active file",
+    group: "File",
+    scope: "global",
+    when: () => activeFile() !== null,
+    run: () => {
+      setRequestHistoryPanel(true);
     },
   },
   {

@@ -55,6 +55,11 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 git2 = { version = "0.20", default-features = false, features = ["https"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# Project history (history.rs): gzip for the content-addressed version blobs.
+# Already compiled transitively through zip's `deflate` feature, so promoting
+# it to a direct dep adds zero compile weight.
+flate2 = "1"
+
 # PDF annotation export (E7). `lopdf` edits existing PDFs (appends `/Annot`
 # objects to a page's `/Annots`); `pdf-writer` is create-only and can't reopen a
 # compiled PDF. Trimmed to just the parser — the date/rayon default features

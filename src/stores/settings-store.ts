@@ -180,6 +180,10 @@ const [updatesCheckAutomatically, setUpdatesCheckAutomatically] =
 // denylisted from sync itself (settings-sync.ts). Default ON — signed-out
 // users are unaffected because the engine only runs with a session.
 const [syncSettingsEnabled, setSyncSettingsEnabled] = createSignal<boolean>(true);
+// Local file-history retention (versions kept per file). Clamped 10–200 at the
+// load boundary — mirrored by the Rust clamp in settings.rs, so the store and
+// the recorder always agree on the bound.
+const [historyMaxVersions, setHistoryMaxVersions] = createSignal<number>(50);
 // Read-only mirror of privacy.installId: Rust mints it on the first crash
 // report; the TS side only carries it through buildSettings() so a settings
 // save can't clobber it. `noteInstallId` records an id minted mid-session
@@ -542,6 +546,17 @@ const FIELDS: FieldSpec[] = [
       out.sync = { syncSettings: v };
     },
   }),
+  // --- history ---
+  field<number>({
+    key: "history.maxVersionsPerFile",
+    read: (s) => s.history?.maxVersionsPerFile ?? 50,
+    value: historyMaxVersions,
+    apply: setHistoryMaxVersions,
+    write: (out, v) => {
+      out.history = { maxVersionsPerFile: v };
+    },
+    validate: (raw) => clampNumber(raw, 10, 200, 50),
+  }),
 ];
 
 /**
@@ -563,6 +578,7 @@ export function buildSettings(): ipc.AppSettings {
     privacy: undefined,
     updates: undefined,
     sync: undefined,
+    history: undefined,
   } as unknown as ipc.AppSettings;
   for (const f of FIELDS) f.serialize(out);
   return out;
@@ -647,6 +663,7 @@ createRoot(() => {
 export {
   compileEngine,
   editorSettings,
+  historyMaxVersions,
   integrationsSettings,
   onboarded,
   projectsRoot,
@@ -656,6 +673,7 @@ export {
   updatesCheckAutomatically,
   setCompileEngine,
   setEditorSettings,
+  setHistoryMaxVersions,
   setIntegrationsSettings,
   setOnboarded,
   setProjectsRoot,

@@ -107,9 +107,30 @@ export function saveOpenFile(p: Project, file: OpenFile): Promise<void> {
   return chainOnPath(file.path, () => performSave(p, file));
 }
 
+/**
+ * Fire-and-forget version-history snapshots after a successful save. History
+ * must never block or fail a save — the Rust side owns every policy gate
+ * (dedupe, 5-minute throttle, extension/size limits), so this is a plain
+ * notification; failures land in telemetry only. Bulletproof like
+ * `recordError`: even a synchronous throw from the IPC layer can't reach the
+ * save path.
+ */
+function recordHistorySnapshots(rootPath: string, relPaths: string[]): void {
+  for (const rel of relPaths) {
+    try {
+      void ipc.historyRecord(rootPath, rel).catch((e) => {
+        recordError("history-record", `history snapshot failed for ${rel}`, e);
+      });
+    } catch (e) {
+      recordError("history-record", `history snapshot failed for ${rel}`, e);
+    }
+  }
+}
+
 async function performSave(p: Project, file: OpenFile): Promise<void> {
   await writeBufferWithConflictGuard(p, file);
   notifyLocalSave(p.rootPath, [file.relPath]);
+  recordHistorySnapshots(p.rootPath, [file.relPath]);
   // Auto-compile rides the save path only — compileActiveProject saves via
   // saveAllDirtyFiles, so this can't recurse, and its "already compiling" guard
   // absorbs rapid save bursts. LaTeX honors the per-project override; Typst uses
@@ -135,6 +156,7 @@ export async function saveAllDirtyFiles(): Promise<void> {
     saved.push(file.relPath);
   }
   notifyLocalSave(p.rootPath, saved);
+  recordHistorySnapshots(p.rootPath, saved);
 }
 
 /**

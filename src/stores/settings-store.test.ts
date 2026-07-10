@@ -3,6 +3,7 @@ import {
   applyRemoteSettingValue,
   buildSettings,
   noteInstallId,
+  setHistoryMaxVersions,
   setShareCrashReports,
   setSyncSettingsEnabled,
   setUpdatesCheckAutomatically,
@@ -84,6 +85,29 @@ describe("settings-store sync roundtrip", () => {
     setSyncSettingsEnabled(false);
     expect(buildSettings().sync?.syncSettings).toBe(false);
     setSyncSettingsEnabled(true);
+  });
+});
+
+// File-history retention persists like any other field; the 10–200 clamp
+// (mirroring the Rust load-boundary clamp in settings.rs) runs on every
+// hydrate path, settings sync included. Default 50.
+describe("settings-store history retention", () => {
+  it("defaults to 50 and persists changes", () => {
+    expect(buildSettings().history?.maxVersionsPerFile).toBe(50);
+    setHistoryMaxVersions(120);
+    expect(buildSettings().history?.maxVersionsPerFile).toBe(120);
+    setHistoryMaxVersions(50);
+  });
+
+  it("clamps out-of-range and non-numeric persisted values", () => {
+    expect(applyRemoteSettingValue("history.maxVersionsPerFile", 3)).toBe(true);
+    expect(buildSettings().history?.maxVersionsPerFile).toBe(10);
+
+    expect(applyRemoteSettingValue("history.maxVersionsPerFile", 5000)).toBe(true);
+    expect(buildSettings().history?.maxVersionsPerFile).toBe(200);
+
+    expect(applyRemoteSettingValue("history.maxVersionsPerFile", "plenty")).toBe(true);
+    expect(buildSettings().history?.maxVersionsPerFile).toBe(50);
   });
 });
 

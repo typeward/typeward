@@ -29,6 +29,13 @@ const [requestSaveTemplate, setRequestSaveTemplateInternal] = createSignal(false
  */
 const [requestProDialog, setRequestProDialogInternal] = createSignal(false);
 
+/**
+ * "Please open the History sidebar tab" intent. Raised by the
+ * `core.fileHistory` command; the editor shell owns the sidebar tab state and
+ * observes this (same shape as the review-panel intent).
+ */
+const [requestHistoryPanel, setRequestHistoryPanelInternal] = createSignal(false);
+
 /** Metadata for the non-modal "update available" dialog. The pending plugin
  *  `Update` handle stays in updater.ts; only display data crosses here. */
 export interface UpdatePromptInfo {
@@ -57,6 +64,7 @@ export const paletteOpen_ = paletteOpen;
 export const requestNewProject_ = requestNewProject;
 export const requestSaveTemplate_ = requestSaveTemplate;
 export const requestProDialog_ = requestProDialog;
+export const requestHistoryPanel_ = requestHistoryPanel;
 export const requestUpdateDialog_ = requestUpdateDialog;
 
 export const togglePalette = () =>
@@ -72,6 +80,9 @@ export const setRequestSaveTemplate = (v: boolean) =>
 
 export const setRequestProDialog = (v: boolean) =>
   setRequestProDialogInternal(v);
+
+export const setRequestHistoryPanel = (v: boolean) =>
+  setRequestHistoryPanelInternal(v);
 
 export const setRequestUpdateDialog = (v: UpdatePromptInfo | null) =>
   setRequestUpdateDialogInternal(v);

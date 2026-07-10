@@ -386,6 +386,13 @@ export interface AppSettings {
   updates?: UpdatesSettings;
   // Optional: settings.json files predating the sync section lack it.
   sync?: SyncSettings;
+  // Optional: settings.json files predating the history section lack it.
+  history?: HistorySettings;
+}
+
+/** Local file-history retention (versions kept per file, clamped 10–200). */
+export interface HistorySettings {
+  maxVersionsPerFile: number;
 }
 
 /** Settings-sync preferences — device-local (the toggle itself never syncs). */
@@ -826,6 +833,56 @@ export const clearSnapshot = (
 
 export const listOrphanSnapshots = (projectRoot: string): Promise<Snapshot[]> =>
   invoke("list_orphan_snapshots", { projectRoot });
+
+// ----- Project history -------------------------------------------------------
+
+/** One recorded version of one file. `ts` epoch ms, `size` uncompressed bytes. */
+export interface HistoryVersion {
+  /** SHA-256 of the uncompressed content (the blob's content address). */
+  hash: string;
+  ts: number;
+  size: number;
+}
+
+/**
+ * Record the file's current on-disk state into the local version history.
+ * Resolves `false` on the normal skips (unchanged content, inside the
+ * 5-minute throttle window, untracked extension, oversize) — callers on the
+ * save path fire-and-forget this; it must never block or fail a save.
+ */
+export const historyRecord = (
+  projectRoot: string,
+  relPath: string,
+  forced = false,
+): Promise<boolean> => invoke("history_record", { projectRoot, relPath, forced });
+
+/** One file's recorded versions, newest first. */
+export const historyList = (
+  projectRoot: string,
+  relPath: string,
+): Promise<HistoryVersion[]> => invoke("history_list", { projectRoot, relPath });
+
+/** Decompress one recorded version. The hash must belong to this file's history. */
+export const historyReadVersion = (
+  projectRoot: string,
+  relPath: string,
+  hash: string,
+): Promise<string> => invoke("history_read_version", { projectRoot, relPath, hash });
+
+/**
+ * Overwrite the working file with a recorded version. Rust force-records the
+ * current on-disk state first, so the overwritten state is always one entry
+ * up in the same list. Returns the restored content for the buffer refresh.
+ */
+export const historyRestore = (
+  projectRoot: string,
+  relPath: string,
+  hash: string,
+): Promise<string> => invoke("history_restore", { projectRoot, relPath, hash });
+
+/** Delete one project's entire version history (blobs + index). */
+export const historyClear = (projectRoot: string): Promise<void> =>
+  invoke("history_clear", { projectRoot });
 
 // ----- Telemetry -----------------------------------------------------------
 

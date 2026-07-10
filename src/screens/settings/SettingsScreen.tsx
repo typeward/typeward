@@ -29,6 +29,7 @@ import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
+import { Slider } from "~/components/forms/Slider";
 import { Switch } from "~/components/forms/Switch";
 import { Button } from "~/components/primitives/Button";
 import { KbdHint } from "~/components/primitives/KbdHint";
@@ -55,9 +56,11 @@ import {
   type LineHeightMode,
   compileEngine,
   editorSettings,
+  historyMaxVersions,
   integrationsSettings,
   setCompileEngine,
   setEditorSettings,
+  setHistoryMaxVersions,
   setIntegrationsSettings,
   setShareCrashReports,
   setUpdatesCheckAutomatically,
@@ -1021,6 +1024,22 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("autosaveDelayMs", Number(v))}
           />
         </Row>
+      </Card>
+
+      <Card
+        title="File history"
+        subtitle="Every save keeps a local version of the file (at most one per five minutes), restorable from the editor's History tab. Free, on this device only."
+      >
+        <div class="px-5 py-4">
+          <Slider
+            label="Versions kept per file"
+            value={historyMaxVersions()}
+            onChange={setHistoryMaxVersions}
+            min={10}
+            max={200}
+            step={5}
+          />
+        </div>
       </Card>
 
       <Card title="Editing" subtitle="Behaviour of the source pane.">
