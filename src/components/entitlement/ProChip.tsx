@@ -3,6 +3,7 @@ import type { Component } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
 import { setRequestProDialog } from "~/commands/palette-store";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 
 /**
  * Quiet locked-feature marker: a small lock + "Pro" pill in the SoonBadge
@@ -11,10 +12,12 @@ import { setRequestProDialog } from "~/commands/palette-store";
  * amendment (2026-07-08) to the locked-renders-nothing rule. It never
  * pulses, never gates on its own; with `onClick` it becomes a button that
  * opens the ProDialog, otherwise the enclosing surface handles the click.
+ * Renders nothing while Pro discovery is off (free-only beta, 2026-07-09).
  */
 export const ProChip: Component<{ onClick?: () => void; title?: string }> = (
   props,
 ) => {
+  if (!PRO_DISCOVERY_ENABLED) return null;
   const body = (
     <>
       <Lock size={9} style={{ opacity: 0.8 }} />
@@ -48,14 +51,19 @@ export const ProChip: Component<{ onClick?: () => void; title?: string }> = (
  * Slim locked-state body for a panel whose feature is Pro-gated: one calm
  * line plus a "See what's in Pro" button that opens the ProDialog. Used by
  * the Settings integration sections and the editor sidebar Refs/SCM tabs.
+ * Renders nothing while Pro discovery is off — its hosting surfaces hide
+ * themselves too, so this is only reached on entitlement flips mid-view.
  */
-export const ProLockedPanel: Component<{ class?: string }> = (props) => (
-  <div
-    class={`flex flex-col items-center justify-center gap-2.5 px-4 py-10 text-center ${props.class ?? ""}`}
-  >
-    <div class="text-sm text-fg-3">Part of Typeward Pro.</div>
-    <Button variant="secondary" size="sm" onClick={() => setRequestProDialog(true)}>
-      See what's in Pro
-    </Button>
-  </div>
-);
+export const ProLockedPanel: Component<{ class?: string }> = (props) => {
+  if (!PRO_DISCOVERY_ENABLED) return null;
+  return (
+    <div
+      class={`flex flex-col items-center justify-center gap-2.5 px-4 py-10 text-center ${props.class ?? ""}`}
+    >
+      <div class="text-sm text-fg-3">Part of Typeward Pro.</div>
+      <Button variant="secondary" size="sm" onClick={() => setRequestProDialog(true)}>
+        See what's in Pro
+      </Button>
+    </div>
+  );
+};

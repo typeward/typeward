@@ -18,7 +18,11 @@ import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { setRequestProDialog } from "~/commands/palette-store";
-import { PRO_FEATURES, PRO_PRICING_LINE } from "~/config/pro";
+import {
+  PRO_DISCOVERY_ENABLED,
+  PRO_FEATURES,
+  PRO_PRICING_LINE,
+} from "~/config/pro";
 import { dismissBootSplash } from "~/lib/boot-splash";
 import * as ipc from "~/ipc";
 import { setCompileEngine, setOnboarded } from "~/stores/settings-store";
@@ -31,7 +35,11 @@ const RELEVANT_ENGINES = (engines: ipc.EngineProbe["engines"]) =>
   engines.filter((e) => e.name !== "pandoc" && e.name !== "typst");
 
 type StepId = "welcome" | "engines" | "plan";
-const STEP_ORDER: StepId[] = ["welcome", "engines", "plan"];
+// The closing plan-awareness step ships with the rest of the Pro discovery
+// layer — skipped entirely during the free-only beta.
+const STEP_ORDER: StepId[] = PRO_DISCOVERY_ENABLED
+  ? ["welcome", "engines", "plan"]
+  : ["welcome", "engines"];
 
 const OnboardingScreen: Component = () => {
   const navigate = useNavigate();
@@ -368,7 +376,9 @@ const WelcomePane: Component = () => (
     </p>
 
     <div class="mt-7 flex justify-center gap-2.5">
-      <For each={FORMAT_PILLS}>
+      {/* Pro-format pills are discovery surfaces — free-only beta shows
+          only what the free tier can actually use. */}
+      <For each={FORMAT_PILLS.filter((b) => PRO_DISCOVERY_ENABLED || !b.pro)}>
         {(b) => (
           <div
             class="flex h-7 items-center gap-1.5 rounded-[14px] px-2.5 text-sm text-fg-2"

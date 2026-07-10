@@ -37,6 +37,7 @@ import { CloneDialog } from "~/components/vcs/CloneDialog";
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { ProChip } from "~/components/entitlement/ProChip";
 import { proGate } from "~/components/entitlement/pro-gate";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { TemplateGallery } from "~/components/templates/TemplateGallery";
 import { assertEntitlement, useEntitlement } from "~/integrations/entitlements";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -1351,10 +1352,15 @@ const NewProjectDialog: Component<{
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [galleryOpen, setGalleryOpen] = createSignal(false);
 
-  // Typst is Pro — the option stays visible with a quiet Pro chip on free
-  // tiers (discovery amendment 2026-07-08); picking it opens the ProDialog
-  // instead of selecting, so free users always stay on LaTeX.
+  // Typst is Pro — with discovery on, the option stays visible with a quiet
+  // Pro chip on free tiers (discovery amendment 2026-07-08) and picking it
+  // opens the ProDialog instead of selecting, so free users always stay on
+  // LaTeX. With discovery off (free-only beta) the locked option hides.
   const typstEntitled = useEntitlement("formats.typst");
+  const visibleFormats = () =>
+    FORMATS.filter(
+      (f) => f.id !== "typst" || typstEntitled() || PRO_DISCOVERY_ENABLED,
+    );
   // An entitlement flip (sign-out) while the dialog is open can strand a
   // Typst selection the tier no longer allows; drop it back to LaTeX.
   createEffect(() => {
@@ -1663,7 +1669,7 @@ const NewProjectDialog: Component<{
         <fieldset class="flex flex-col gap-2">
           <legend class="text-sm font-medium text-fg-2">Format</legend>
           <div class="grid grid-cols-2 gap-2">
-            <For each={FORMATS}>
+            <For each={visibleFormats()}>
               {(f) => {
                 const locked = () => f.id === "typst" && !typstEntitled();
                 return (

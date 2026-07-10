@@ -1,5 +1,5 @@
 import { render, waitFor } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   requestProDialog_,
@@ -12,6 +12,15 @@ import {
 import type { EntitlementSource } from "~/integrations/types";
 import { proGate } from "./pro-gate";
 import { ProDialog } from "./ProDialog";
+
+// This suite pins the discovery-ON behavior (chips gate through to the
+// dialog) so the layer that returns at Pro launch stays guarded while the
+// shipped default is off. The free-only-beta defaults are covered by
+// pro-discovery-off.test.tsx.
+vi.mock("~/config/pro", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/config/pro")>()),
+  PRO_DISCOVERY_ENABLED: true,
+}));
 
 const proSource: EntitlementSource = {
   current: () => "pro",
