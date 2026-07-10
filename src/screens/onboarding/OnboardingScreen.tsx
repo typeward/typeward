@@ -6,8 +6,10 @@ import {
   ArrowLeft,
   BadgeCheck,
   Check,
+  Cloud,
   Cpu,
   Loader2,
+  Mail,
   Package,
   RefreshCw,
   Shield,
@@ -16,6 +18,7 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
+import { SignInForm } from "~/components/account/SignInForm";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { setRequestProDialog } from "~/commands/palette-store";
 import {
@@ -23,10 +26,19 @@ import {
   PRO_FEATURES,
   PRO_PRICING_LINE,
 } from "~/config/pro";
+import { supabaseEnabled } from "~/integrations/supabase/client";
+import {
+  supabaseSession,
+  supabaseSessionReady,
+  supabaseUser,
+} from "~/integrations/supabase/session";
 import { dismissBootSplash } from "~/lib/boot-splash";
 import * as ipc from "~/ipc";
-import { setCompileEngine, setOnboarded } from "~/stores/settings-store";
-import { setSettingsSectionIntent } from "~/stores/nav-store";
+import {
+  setCompileEngine,
+  setOnboarded,
+  syncSettingsEnabled,
+} from "~/stores/settings-store";
 
 // The Rust detector also probes pandoc (unused since Markdown-as-project was
 // dropped) and typst (Pro — its setup lives behind the gate, not in the free
@@ -34,12 +46,15 @@ import { setSettingsSectionIntent } from "~/stores/nav-store";
 const RELEVANT_ENGINES = (engines: ipc.EngineProbe["engines"]) =>
   engines.filter((e) => e.name !== "pandoc" && e.name !== "typst");
 
-type StepId = "welcome" | "engines" | "plan";
-// The closing plan-awareness step ships with the rest of the Pro discovery
-// layer — skipped entirely during the free-only beta.
-const STEP_ORDER: StepId[] = PRO_DISCOVERY_ENABLED
-  ? ["welcome", "engines", "plan"]
-  : ["welcome", "engines"];
+type StepId = "welcome" | "engines" | "account" | "plan";
+// The account step ships in both flag states — it pitches the FREE account
+// behind settings sync, not Pro. The closing plan-awareness step ships with
+// the rest of the Pro discovery layer (skipped during the free-only beta)
+// and returns AFTER the account step when the flag flips. Exported so the
+// flag-state tests can pin both compositions.
+export const STEP_ORDER: StepId[] = PRO_DISCOVERY_ENABLED
+  ? ["welcome", "engines", "account", "plan"]
+  : ["welcome", "engines", "account"];
 
 const OnboardingScreen: Component = () => {
   const navigate = useNavigate();
@@ -95,11 +110,6 @@ const OnboardingScreen: Component = () => {
     })();
   };
 
-  const finishToSignIn = () => {
-    setSettingsSectionIntent("account");
-    finish("/settings");
-  };
-
   return (
     <div class="no-emoji relative h-full w-full overflow-hidden bg-bg-base">
       <AmbientBackdrop />
@@ -131,6 +141,9 @@ const OnboardingScreen: Component = () => {
                   }}
                 />
               </Match>
+              <Match when={step() === "account"}>
+                <AccountPane />
+              </Match>
               <Match when={step() === "plan"}>
                 <PlanPane />
               </Match>
@@ -143,7 +156,6 @@ const OnboardingScreen: Component = () => {
             onBack={goBack}
             onNext={goNext}
             onFinish={() => finish()}
-            onSignIn={finishToSignIn}
           />
         </div>
       </div>
@@ -211,6 +223,8 @@ const StepBar: Component<{ step: number }> = (props) => (
 
 // The plan step's two actions are deliberately equal-weight: finishing on
 // Free and reading about Pro are both fine outcomes — no preselected upsell.
+// The account step's "Skip for now" shares the same quiet weight so skipping
+// never feels like the wrong choice.
 const EQUAL_BTN =
   "flex h-[38px] items-center gap-2 rounded-[10px] border border-glass-stroke px-[18px] text-base font-medium text-fg-1 hover:bg-[var(--color-control-fill)]";
 
@@ -221,7 +235,6 @@ const Footer: Component<{
   onBack: () => void;
   onNext: () => void;
   onFinish: () => void;
-  onSignIn: () => void;
 }> = (props) => {
   const leftText = createMemo<JSX.Element>(() => {
     switch (props.step) {
@@ -239,16 +252,12 @@ const Footer: Component<{
         const ready = engines.filter((e) => e.installed).length;
         return <span>{ready} ready · {engines.length - ready} missing</span>;
       }
+      case "account":
+        return <span>Optional — you can sign in any time in Settings → Account</span>;
       case "plan":
-        return (
-          <button
-            type="button"
-            onClick={props.onSignIn}
-            class="rounded-md px-1.5 py-1 text-sm text-fg-3 underline-offset-2 hover:text-fg-1 hover:underline"
-          >
-            Already have an account? Sign in
-          </button>
-        );
+        // The "Already have an account? Sign in" escape hatch that lived here
+        // is superseded by the account step one step back.
+        return undefined;
     }
   });
 
@@ -278,8 +287,7 @@ const Footer: Component<{
             Skip setup
           </button>
         </Show>
-        <Show
-          when={props.step === "plan"}
+        <SolidSwitch
           fallback={
             <button
               type="button"
@@ -291,18 +299,29 @@ const Footer: Component<{
             </button>
           }
         >
-          <button
-            type="button"
-            onClick={() => setRequestProDialog(true)}
-            class={EQUAL_BTN}
-          >
-            See what's in Pro
-          </button>
-          <button type="button" onClick={props.onFinish} class={EQUAL_BTN}>
-            Get started
-            <ArrowRight size={12} stroke-width={2.2} />
-          </button>
-        </Show>
+          {/* Signed out, the pane's Sign in button is the primary action —
+              the footer only offers the skip, which advances all the same.
+              Signing in swaps this for the regular Continue. */}
+          <Match when={props.step === "account" && !supabaseSession()}>
+            <button type="button" onClick={props.onNext} class={EQUAL_BTN}>
+              Skip for now
+              <ArrowRight size={12} stroke-width={2.2} />
+            </button>
+          </Match>
+          <Match when={props.step === "plan"}>
+            <button
+              type="button"
+              onClick={() => setRequestProDialog(true)}
+              class={EQUAL_BTN}
+            >
+              See what's in Pro
+            </button>
+            <button type="button" onClick={props.onFinish} class={EQUAL_BTN}>
+              Get started
+              <ArrowRight size={12} stroke-width={2.2} />
+            </button>
+          </Match>
+        </SolidSwitch>
       </div>
     </div>
   );
@@ -578,7 +597,131 @@ const EnginesPane: Component<{
 };
 
 // =================================================================
-// Step 3 — Plan awareness
+// Step 3 — Account (free settings sync)
+// =================================================================
+
+const AccountPane: Component = () => (
+  <div class="px-[22px] py-6">
+    <div class="mb-[18px] flex items-start gap-3.5">
+      <div
+        class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
+        style={{
+          background:
+            "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
+          border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
+        }}
+      >
+        <Cloud size={16} style={{ color: "var(--color-accent-1)" }} />
+      </div>
+      <div>
+        <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
+          Take your settings anywhere
+        </h2>
+        <p class="m-0 text-sm text-fg-2">
+          A free account syncs your preferences — theme, editor, workspace —
+          across devices. The editor works fully without one.
+        </p>
+      </div>
+    </div>
+
+    <Show
+      when={supabaseEnabled()}
+      fallback={
+        <div
+          class="rounded-[11px] px-3.5 py-3 text-sm text-fg-2"
+          style={{
+            background: "var(--color-glass-soft-fill)",
+            border: "1px solid var(--color-glass-stroke)",
+          }}
+        >
+          Sign-in isn't configured for this build — skip ahead; everything
+          else works without it.
+        </div>
+      }
+    >
+      <Show
+        when={supabaseSessionReady()}
+        fallback={
+          <div class="flex h-24 items-center justify-center gap-2 text-sm text-fg-2">
+            <Loader2 size={14} class="animate-spin" />
+            Restoring session…
+          </div>
+        }
+      >
+        <Show when={supabaseSession()} fallback={<AccountSignedOut />}>
+          <AccountSignedIn />
+        </Show>
+      </Show>
+    </Show>
+  </div>
+);
+
+const AccountSignedOut: Component = () => (
+  <div
+    class="rounded-[11px] px-3.5 py-3"
+    style={{
+      background: "var(--color-glass-soft-fill)",
+      border: "1px solid var(--color-glass-stroke)",
+    }}
+  >
+    <SignInForm />
+  </div>
+);
+
+const AccountSignedIn: Component = () => (
+  <div class="flex flex-col gap-2">
+    <div
+      class="rounded-[11px] px-3.5 py-3"
+      style={{
+        background: "var(--color-glass-soft-fill)",
+        border: "1px solid var(--color-glass-stroke)",
+      }}
+    >
+      <div class="flex items-center gap-2.5">
+        <Mail size={14} class="flex-shrink-0 text-fg-3" />
+        <span class="min-w-0 flex-1 truncate text-base font-semibold text-fg-1">
+          {supabaseUser()?.email}
+        </span>
+        <div
+          class="flex items-center gap-1.5 rounded-[14px] px-2.5 py-1 text-xs font-medium"
+          style={{
+            background: "color-mix(in srgb, var(--color-ok) 12%, transparent)",
+            color: "var(--color-ok)",
+          }}
+        >
+          <Check size={12} stroke-width={2.5} />
+          Signed in
+        </div>
+      </div>
+    </div>
+    <Show
+      when={syncSettingsEnabled()}
+      fallback={
+        <div class="text-xs text-fg-3">
+          Settings sync is off for this device — turn it on any time in
+          Settings → Account.
+        </div>
+      }
+    >
+      <div
+        class="flex items-start gap-2.5 rounded-[9px] px-3 py-2.5"
+        style={{
+          background: "color-mix(in srgb, var(--color-ok) 8%, transparent)",
+          border: "1px solid color-mix(in srgb, var(--color-ok) 25%, transparent)",
+        }}
+      >
+        <RefreshCw size={14} class="mt-0.5" style={{ color: "var(--color-ok)" }} />
+        <div class="text-sm text-fg-2">
+          <span class="font-semibold text-fg-1">Settings sync is on — </span>
+          your preferences follow this account to any device you sign in on.
+        </div>
+      </div>
+    </Show>
+  </div>
+);
+
+// =================================================================
+// Step 4 — Plan awareness (Pro discovery layer only)
 // =================================================================
 
 const PlanPane: Component = () => (
