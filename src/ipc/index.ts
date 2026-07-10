@@ -389,6 +389,14 @@ export interface AppSettings {
   sync?: SyncSettings;
   // Optional: settings.json files predating the history section lack it.
   history?: HistorySettings;
+  // Optional: settings.json files predating the feedback section lack it.
+  feedback?: FeedbackSettings;
+}
+
+/** Occasional in-app "give us feedback" card — nothing is sent without an
+ *  explicit Send, so the prompt itself defaults ON. */
+export interface FeedbackSettings {
+  promptsEnabled: boolean;
 }
 
 /** Local file-history retention (versions kept per file, clamped 10–200). */

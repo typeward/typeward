@@ -39,6 +39,26 @@ pub struct Settings {
     pub sync: SyncSettings,
     #[serde(default)]
     pub history: HistorySettings,
+    #[serde(default)]
+    pub feedback: FeedbackSettings,
+}
+
+/// Occasional in-app "give us feedback" card. ON by default because the card
+/// is local UI — nothing leaves the machine unless the user presses Send.
+/// Synced across devices (a preference, not device state); the prompt's
+/// device-local pacing state lives in localStorage (feedback-prompt.ts).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedbackSettings {
+    #[serde(rename = "promptsEnabled", default = "default_true")]
+    pub prompts_enabled: bool,
+}
+
+impl Default for FeedbackSettings {
+    fn default() -> Self {
+        Self {
+            prompts_enabled: true,
+        }
+    }
 }
 
 /// Local per-file version-history retention (history.rs). Clamped to
@@ -441,6 +461,7 @@ impl Default for Settings {
             updates: UpdatesSettings::default(),
             sync: SyncSettings::default(),
             history: HistorySettings::default(),
+            feedback: FeedbackSettings::default(),
         }
     }
 }

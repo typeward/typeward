@@ -77,6 +77,7 @@ describe("settings-sync key classification", () => {
       "workspace.defaultView",
       "workspace.spaces",
       "updates.checkAutomatically",
+      "feedback.promptsEnabled",
     ]) {
       expect(synced.has(key), `"${key}" should sync`).toBe(true);
     }

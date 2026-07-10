@@ -56,10 +56,12 @@ import {
   type LineHeightMode,
   compileEngine,
   editorSettings,
+  feedbackPromptsEnabled,
   historyMaxVersions,
   integrationsSettings,
   setCompileEngine,
   setEditorSettings,
+  setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setIntegrationsSettings,
   setShareCrashReports,
@@ -1393,6 +1395,21 @@ const SecurityPanel: Component = () => {
           hint="Send crash and error reports to Sentry to help fix bugs: enables in-app error reporting and an automatic scan for crashes from previous runs at launch. Off keeps diagnostics in the local log only (browse and report individual events under Diagnostics). Takes effect immediately."
         >
           <Switch checked={shareCrashReports()} onChange={setShareCrashReports} />
+        </Row>
+      </Card>
+
+      <Card
+        title="Feedback"
+        subtitle="Nothing is sent unless you press Send on the feedback card."
+      >
+        <Row
+          label="Occasionally ask for feedback"
+          hint="Every once in a while (at most once a month), show a small card asking how Typeward is working for you. You can always send feedback yourself via the command palette."
+        >
+          <Switch
+            checked={feedbackPromptsEnabled()}
+            onChange={setFeedbackPromptsEnabled}
+          />
         </Row>
       </Card>
 

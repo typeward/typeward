@@ -29,11 +29,13 @@ import {
 } from "~/commands/keyboard";
 import {
   requestAiAction_,
+  requestFeedbackCard_,
   requestProDialog_,
   requestSaveTemplate_,
   requestUpdateDialog_,
   setNavigator,
 } from "~/commands/palette-store";
+import { scheduleFeedbackPrompt } from "~/lib/feedback-prompt";
 import { scheduleBootUpdateCheck } from "~/lib/updater";
 import { CommandPalette } from "~/components/CommandPalette";
 import { Toaster } from "~/components/feedback/Toaster";
@@ -73,6 +75,13 @@ const UpdateDialog = lazy(() =>
 const AiActionDialog = lazy(() =>
   import("~/components/editor/AiActionDialog").then((m) => ({
     default: m.AiActionDialog,
+  })),
+);
+// Lazy like the dialogs — most sessions never open the feedback card, so its
+// chunk (submission + card UI) stays off the boot path until one does.
+const FeedbackCard = lazy(() =>
+  import("~/components/feedback/FeedbackCard").then((m) => ({
+    default: m.FeedbackCard,
   })),
 );
 
@@ -245,8 +254,13 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestAiAction_()) setAiActionTouched(true);
   });
+  const [feedbackTouched, setFeedbackTouched] = createSignal(false);
+  createEffect(() => {
+    if (requestFeedbackCard_()) setFeedbackTouched(true);
+  });
 
   let cancelBootUpdateCheck: (() => void) | undefined;
+  let cancelFeedbackPrompt: (() => void) | undefined;
   onMount(() => {
     installGlobalShortcuts();
     document.addEventListener("contextmenu", onContextMenu);
@@ -254,12 +268,16 @@ const AppShell: Component<{ children?: any }> = (props) => {
     // Delayed post-paint update check — dormant until a pubkey is configured
     // AND the user leaves auto-checking on; never blocks startup.
     cancelBootUpdateCheck = scheduleBootUpdateCheck(updatesCheckAutomatically);
+    // Occasional feedback prompt — records the session, then maybe raises the
+    // card after the same post-paint deferral shape as the update check.
+    cancelFeedbackPrompt = scheduleFeedbackPrompt();
   });
 
   onCleanup(() => {
     uninstallGlobalShortcuts();
     document.removeEventListener("contextmenu", onContextMenu);
     cancelBootUpdateCheck?.();
+    cancelFeedbackPrompt?.();
   });
 
   return (
@@ -286,6 +304,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={aiActionTouched()}>
         <Suspense>
           <AiActionDialog />
+        </Suspense>
+      </Show>
+      <Show when={feedbackTouched()}>
+        <Suspense>
+          <FeedbackCard />
         </Suspense>
       </Show>
       <Toaster />

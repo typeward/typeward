@@ -83,6 +83,16 @@ const [requestAiAction, setRequestAiActionInternal] =
   createSignal<AiActionRequestInfo | null>(null);
 
 /**
+ * "Open the feedback card" intent (lazy-mounted once at the App root).
+ * "prompted" = raised by the occasional trigger engine (feedback-prompt.ts;
+ * dismissals count toward its cap); "manual" = the core.sendFeedback command,
+ * which ignores and never consumes trigger state. `null` = closed.
+ */
+export type FeedbackCardMode = "prompted" | "manual";
+const [requestFeedbackCard, setRequestFeedbackCardInternal] =
+  createSignal<FeedbackCardMode | null>(null);
+
+/**
  * The navigate fn from @solidjs/router can only be obtained inside a Router
  * context. We capture it once on App mount (NavBootstrap) so module-level
  * actions can route the user without re-creating a hand-rolled router.
@@ -96,6 +106,7 @@ export const requestProDialog_ = requestProDialog;
 export const requestHistoryPanel_ = requestHistoryPanel;
 export const requestUpdateDialog_ = requestUpdateDialog;
 export const requestAiAction_ = requestAiAction;
+export const requestFeedbackCard_ = requestFeedbackCard;
 
 export const togglePalette = () =>
   setPaletteOpenInternal((v) => !v);
@@ -119,6 +130,9 @@ export const setRequestUpdateDialog = (v: UpdatePromptInfo | null) =>
 
 export const setRequestAiAction = (v: AiActionRequestInfo | null) =>
   setRequestAiActionInternal(v);
+
+export const setRequestFeedbackCard = (v: FeedbackCardMode | null) =>
+  setRequestFeedbackCardInternal(v);
 
 export const setNavigator = (fn: (path: string) => void) => {
   navigator = fn;

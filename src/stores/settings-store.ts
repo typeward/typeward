@@ -187,6 +187,11 @@ const [syncSettingsEnabled, setSyncSettingsEnabled] = createSignal<boolean>(true
 // load boundary — mirrored by the Rust clamp in settings.rs, so the store and
 // the recorder always agree on the bound.
 const [historyMaxVersions, setHistoryMaxVersions] = createSignal<number>(50);
+// Occasional in-app "give us feedback" card (feedback-prompt.ts). ON by
+// default — the card is local UI and nothing leaves the machine unless the
+// user presses Send, so it isn't an egress opt-in. Synced (a preference);
+// the prompt's device-local pacing state lives in localStorage instead.
+const [feedbackPromptsEnabled, setFeedbackPromptsEnabled] = createSignal<boolean>(true);
 // Read-only mirror of privacy.installId: Rust mints it on the first crash
 // report; the TS side only carries it through buildSettings() so a settings
 // save can't clobber it. `noteInstallId` records an id minted mid-session
@@ -560,6 +565,16 @@ const FIELDS: FieldSpec[] = [
     },
     validate: (raw) => clampNumber(raw, 10, 200, 50),
   }),
+  // --- feedback ---
+  field<boolean>({
+    key: "feedback.promptsEnabled",
+    read: (s) => s.feedback?.promptsEnabled ?? true,
+    value: feedbackPromptsEnabled,
+    apply: setFeedbackPromptsEnabled,
+    write: (out, v) => {
+      out.feedback = { promptsEnabled: v };
+    },
+  }),
 ];
 
 /**
@@ -582,6 +597,7 @@ export function buildSettings(): ipc.AppSettings {
     updates: undefined,
     sync: undefined,
     history: undefined,
+    feedback: undefined,
   } as unknown as ipc.AppSettings;
   for (const f of FIELDS) f.serialize(out);
   return out;
@@ -666,6 +682,7 @@ createRoot(() => {
 export {
   compileEngine,
   editorSettings,
+  feedbackPromptsEnabled,
   historyMaxVersions,
   integrationsSettings,
   onboarded,
@@ -676,6 +693,7 @@ export {
   updatesCheckAutomatically,
   setCompileEngine,
   setEditorSettings,
+  setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setIntegrationsSettings,
   setOnboarded,
