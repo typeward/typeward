@@ -203,12 +203,6 @@ export interface ModelInfo {
   displayName: string;
   contextWindow?: number;
   supportsStreaming: boolean;
-  /**
-   * Whether the model accepts image input. Absent = no. Derived from the
-   * capability matrix in `ai/capabilities.ts` (config, not provider data —
-   * the live /models endpoints don't expose this uniformly).
-   */
-  supportsImages?: boolean;
 }
 
 /**

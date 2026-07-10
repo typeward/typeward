@@ -46,6 +46,11 @@ interface HeaderRecord {
 
 const TITLE_MAX = 60;
 
+// A conversation id round-trips into fs paths (`<id>.jsonl` delete/save), so
+// a hostile sidecar header must never smuggle traversal segments through it.
+// Exactly the makeChatId alphabet, bounded.
+const VALID_CHAT_ID = /^[a-z0-9-]{1,80}$/;
+
 export function makeChatId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -126,9 +131,10 @@ function parseTurn(raw: unknown): ChatTurn | null {
 }
 
 /**
- * Parse one sidecar file. Returns null when the header line is unusable;
- * malformed turn lines are skipped, not fatal — a partially-corrupt file
- * still loads the turns that survived.
+ * Parse one sidecar file. Returns null when the header line is unusable —
+ * including an id outside the makeChatId alphabet, which would otherwise
+ * reach fs paths; malformed turn lines are skipped, not fatal — a
+ * partially-corrupt file still loads the turns that survived.
  */
 export function parseConversation(raw: string): Conversation | null {
   const lines = raw.split("\n").filter((l) => l.trim().length > 0);
@@ -136,7 +142,7 @@ export function parseConversation(raw: string): Conversation | null {
   let header: HeaderRecord;
   try {
     const parsed = JSON.parse(lines[0]) as Record<string, unknown>;
-    if (typeof parsed.id !== "string" || parsed.id.length === 0) return null;
+    if (typeof parsed.id !== "string" || !VALID_CHAT_ID.test(parsed.id)) return null;
     header = {
       v: 1,
       id: parsed.id,
