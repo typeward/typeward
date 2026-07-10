@@ -21,7 +21,9 @@ import {
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { createThread } from "~/lib/reviews/types";
 import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
+import { editorSettings, setEditorSettings } from "~/stores/settings-store";
 import { toggleFocusMode } from "~/stores/ui-store";
+import { isVisualEligibleFile } from "~/adapters/languages";
 
 /**
  * Commands available regardless of which screen is mounted. The keyboard
@@ -229,6 +231,27 @@ const CORE_COMMANDS: EditorCommand[] = [
     when: () => project() !== null,
     run: () => {
       toggleFocusMode();
+    },
+  },
+  {
+    id: "core.toggleVisualMode",
+    title: "Toggle Visual Editing",
+    subtitle: "Render LaTeX constructs visually over the source",
+    shortcut: "Mod+Shift+V",
+    group: "View",
+    scope: "global",
+    // Visual mode is LaTeX-only (.tex); the toggle writes the persisted
+    // editor.visualModeLatex setting — the FormatToolbar control is the
+    // same setting, so focus mode hiding the toolbar doesn't strand it.
+    when: () => {
+      const f = activeFile();
+      return f !== null && isVisualEligibleFile(f.relPath);
+    },
+    run: () => {
+      setEditorSettings({
+        ...editorSettings(),
+        visualModeLatex: !editorSettings().visualModeLatex,
+      });
     },
   },
   {

@@ -373,6 +373,7 @@ export interface AppSettings {
     autosaveDelayMs: number;
     pdfDefaultZoom: number;
     pdfInvertDark: boolean;
+    visualModeLatex: boolean;
   };
   projectsRoot: string;
   compileEngine: string;

@@ -151,6 +151,8 @@ pub struct EditorSettings {
     pub pdf_default_zoom: u16,
     #[serde(rename = "pdfInvertDark", default)]
     pub pdf_invert_dark: bool,
+    #[serde(rename = "visualModeLatex", default)]
+    pub visual_mode_latex: bool,
 }
 
 fn default_tab_size() -> u8 {
@@ -461,6 +463,7 @@ impl Default for EditorSettings {
             autosave_delay_ms: 500,
             pdf_default_zoom: 110,
             pdf_invert_dark: false,
+            visual_mode_latex: false,
         }
     }
 }

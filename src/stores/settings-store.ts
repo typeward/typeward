@@ -111,6 +111,8 @@ export interface EditorSettings {
   pdfDefaultZoom: number;
   /** Invert the PDF (dark-mode reading) when a dark theme is active. */
   pdfInvertDark: boolean;
+  /** Visual editing mode for LaTeX (.tex) — decorations over the source. */
+  visualModeLatex: boolean;
 }
 
 const DEFAULT_EDITOR: EditorSettings = {
@@ -130,6 +132,7 @@ const DEFAULT_EDITOR: EditorSettings = {
   autosaveDelayMs: 500,
   pdfDefaultZoom: 110,
   pdfInvertDark: false,
+  visualModeLatex: false,
 };
 
 /** Line-height multipliers for the three modes (consumed by CodeMirror). */

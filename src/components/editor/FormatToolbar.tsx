@@ -14,10 +14,13 @@ import {
   Table2,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
+import { isVisualEligibleFile } from "~/adapters/languages";
 import type { ProjectFormat } from "~/adapters/types";
-import { project } from "~/stores/editor-store";
+import { activeFile, project } from "~/stores/editor-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
+import { editorSettings, setEditorSettings } from "~/stores/settings-store";
+import { VISUAL_PAUSED_TOOLTIP, visualPaused } from "~/stores/visual-store";
 import { isTabletViewport } from "~/stores/viewport-store";
 
 // Each snippet uses `$|` to mark where the caret should land after insert.
@@ -126,7 +129,8 @@ const INSERT_GROUP: ToolBtn[] = [
  * Format toolbar mounted below the file-tabs strip in the editor pane.
  * Three groups separated by vertical dividers: text style, document
  * structure, insert. Each button inserts a format-aware snippet at the
- * caret (LaTeX / Typst).
+ * caret (LaTeX / Typst). Visual-eligible files (.tex) additionally get the
+ * Source | Visual mode toggle, right-aligned.
  */
 export const FormatToolbar: Component = () => {
   return (
@@ -136,7 +140,77 @@ export const FormatToolbar: Component = () => {
       <ToolGroup buttons={STRUCTURE_GROUP} />
       <Divider />
       <ToolGroup buttons={INSERT_GROUP} />
+      <VisualModeToggle />
     </div>
+  );
+};
+
+/**
+ * Source | Visual segmented control. The control IS the persisted setting
+ * (`editor.visualModeLatex`, synced with the rest of the editor block); a
+ * visual-paused file falls back to Source with the paused tooltip and a
+ * disabled Visual segment — the setting itself is untouched, so other files
+ * stay visual.
+ */
+const VisualModeToggle: Component = () => {
+  const relPath = () => activeFile()?.relPath ?? null;
+  const eligible = () => {
+    const p = relPath();
+    return p !== null && isVisualEligibleFile(p);
+  };
+  const paused = () => {
+    const p = relPath();
+    return p !== null && visualPaused(p);
+  };
+  const visualOn = () => editorSettings().visualModeLatex && !paused();
+  const setMode = (visual: boolean) =>
+    setEditorSettings({ ...editorSettings(), visualModeLatex: visual });
+
+  const segClass = (active: boolean) =>
+    `lift flex flex-shrink-0 items-center rounded px-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+      isTabletViewport() ? "h-9" : "h-5"
+    } ${active ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`;
+  const segStyle = (active: boolean) =>
+    active
+      ? {
+          background: "var(--color-control-fill-hover)",
+          border: "1px solid var(--color-control-stroke)",
+        }
+      : undefined;
+
+  return (
+    <Show when={eligible()}>
+      <div
+        class={`ml-auto flex flex-shrink-0 items-center gap-0.5 rounded-md p-0.5 ${
+          isTabletViewport() ? "h-11" : ""
+        }`}
+        style={{ background: "var(--color-control-fill)" }}
+        role="group"
+        aria-label="Editing mode"
+        title={paused() ? VISUAL_PAUSED_TOOLTIP : undefined}
+      >
+        <button
+          type="button"
+          aria-pressed={!visualOn()}
+          onClick={() => setMode(false)}
+          class={segClass(!visualOn())}
+          style={segStyle(!visualOn())}
+        >
+          Source
+        </button>
+        <button
+          type="button"
+          aria-pressed={visualOn()}
+          disabled={paused()}
+          title={paused() ? VISUAL_PAUSED_TOOLTIP : "Render LaTeX visually (Mod+Shift+V)"}
+          onClick={() => setMode(true)}
+          class={segClass(visualOn())}
+          style={segStyle(visualOn())}
+        >
+          Visual
+        </button>
+      </div>
+    </Show>
   );
 };
 

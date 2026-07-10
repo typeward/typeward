@@ -101,10 +101,12 @@ import { createPdfAnnotations } from "~/lib/pdf-annotations/mapper";
 import type { EditorView } from "@codemirror/view";
 import {
   grammarSyntaxForLanguage,
+  isVisualEligibleFile,
   languageForFile,
   lspLanguageForFile,
   previewKindForFile,
 } from "~/adapters/languages";
+import { markVisualPaused, visualPaused } from "~/stores/visual-store";
 import {
   consolePosition,
   editorLayout,
@@ -893,6 +895,12 @@ const CenterPane: Component<{
                 autoCloseBrackets={editorSettings().autoCloseBrackets}
                 tabSize={editorSettings().tabSize}
                 vimMode={editorSettings().vimMode}
+                visualMode={
+                  editorSettings().visualModeLatex &&
+                  isVisualEligibleFile(f.relPath) &&
+                  !visualPaused(f.relPath)
+                }
+                onVisualPause={() => markVisualPaused(f.relPath)}
                 lspActive={!!lspSession}
                 onReady={setReviewView}
                 extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}

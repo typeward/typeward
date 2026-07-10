@@ -1,0 +1,43 @@
+import { createSignal } from "solid-js";
+
+import { recordError } from "~/lib/telemetry";
+import { notifyInfo } from "~/lib/toast";
+
+/**
+ * Session-scoped visual-mode pause state (plan 63 §4). A file whose scan
+ * blows the budget is rendered as pure source for the rest of the session;
+ * the `editor.visualModeLatex` setting itself is untouched and every other
+ * file stays visual. Not persisted — a restart retries.
+ *
+ * Kept out of lib/visual/ so the editor shell can read it without pulling
+ * the (dynamic-imported) scanner + decoration layer into its chunk.
+ */
+
+const [pausedPaths, setPausedPaths] = createSignal<ReadonlySet<string>>(
+  new Set<string>(),
+);
+
+let toastShown = false;
+
+export const visualPaused = (relPath: string): boolean =>
+  pausedPaths().has(relPath);
+
+export const VISUAL_PAUSED_TOOLTIP =
+  "Visual mode paused for this file — it's too large or unusual to render live";
+
+export function markVisualPaused(relPath: string): void {
+  if (pausedPaths().has(relPath)) return;
+  setPausedPaths((prev) => {
+    const next = new Set(prev);
+    next.add(relPath);
+    return next;
+  });
+  recordError("visual", "visual mode paused (scan budget exceeded)", relPath);
+  if (!toastShown) {
+    toastShown = true;
+    notifyInfo(
+      "Visual mode paused",
+      `"${relPath}" is too large or unusual to render live — it stays in source mode for this session.`,
+    );
+  }
+}

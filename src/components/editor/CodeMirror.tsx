@@ -46,6 +46,17 @@ interface CodeMirrorProps {
   /** Modal Vim bindings via @replit/codemirror-vim. */
   vimMode?: boolean;
   /**
+   * Visual editing mode (LaTeX): a decoration layer that renders common
+   * constructs over the real source. Edits always hit the source; the layer
+   * never dispatches document changes.
+   */
+  visualMode?: boolean;
+  /**
+   * Raised when the visual layer's scan budget aborts — the host marks the
+   * file visual-paused for the session and flips `visualMode` off.
+   */
+  onVisualPause?: () => void;
+  /**
    * True when an LSP session supplies its own `autocompletion({ override })`
    * via `extraExtensions`. The base `autocompletion()` is then suppressed so
    * the two configs don't both surface completions for the same buffer.
@@ -167,6 +178,7 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
 
   const langCompartment = new Compartment();
   const lineWrapCompartment = new Compartment();
+  const visualCompartment = new Compartment();
   const metricsCompartment = new Compartment();
   const vimCompartment = new Compartment();
   const lineNumbersCompartment = new Compartment();
@@ -191,6 +203,30 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
     // A toggle-off may have landed while the chunk was loading.
     if (!(props.vimMode ?? false)) return;
     view?.dispatch({ effects: vimCompartment.reconfigure(vimFactory()) });
+  };
+
+  // Visual mode follows the vim pattern: dynamic-imported on first enable so
+  // the scanner + decoration layer stay off the boot path, swapped through a
+  // compartment so toggling preserves undo history, cursor, scroll, and the
+  // LSP didOpen session (an editorKey remount would throw all four away).
+  let visualFactory:
+    | ((cfg: { onPause?: () => void }) => Extension)
+    | null = null;
+  const applyVisual = async (on: boolean) => {
+    if (!on) {
+      view?.dispatch({ effects: visualCompartment.reconfigure([]) });
+      return;
+    }
+    if (!visualFactory) {
+      visualFactory = (await import("~/lib/visual/cm6")).visualExtension;
+    }
+    // A toggle-off may have landed while the chunk was loading.
+    if (!(props.visualMode ?? false)) return;
+    view?.dispatch({
+      effects: visualCompartment.reconfigure(
+        visualFactory({ onPause: () => props.onVisualPause?.() }),
+      ),
+    });
   };
 
   const langExtension = (lang: CodeMirrorProps["language"]) => {
@@ -266,6 +302,7 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         syntaxHighlighting(latexHighlight),
         langCompartment.of(langExtension(props.language ?? "latex")),
         lineWrapCompartment.of(lineWrapExtension(props.lineWrap ?? true)),
+        visualCompartment.of([]),
         metricsCompartment.of(
           metricsExtension(props.fontSize ?? 13, props.lineHeight ?? "1.65"),
         ),
@@ -338,6 +375,10 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
 
   createEffect(() => {
     void applyVim(props.vimMode ?? false);
+  });
+
+  createEffect(() => {
+    void applyVisual(props.visualMode ?? false);
   });
 
   createEffect(() => {
