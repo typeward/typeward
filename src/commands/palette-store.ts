@@ -1,5 +1,7 @@
 import { createSignal } from "solid-js";
 
+import type { ChatMessage } from "~/integrations/types";
+
 /**
  * Command palette open-state lives in module scope so any action can flip it
  * regardless of which screen is mounted. The palette itself is rendered
@@ -54,6 +56,33 @@ const [requestUpdateDialog, setRequestUpdateDialogInternal] =
   createSignal<UpdatePromptInfo | null>(null);
 
 /**
+ * One transform/continue AI editor action to run in the lazy `AiActionDialog`
+ * (mounted at App root). The selection snapshot is captured at invoke time —
+ * Replace re-verifies it against the live document before dispatching.
+ */
+export interface AiActionRequestInfo {
+  actionId: string;
+  kind: "transform" | "continue";
+  label: string;
+  /** The exact outbound message list (assembled + capped in context.ts). */
+  messages: ChatMessage[];
+  snapshot: { from: number; to: number; text: string };
+  /**
+   * Pre-computed result (chat bubble "Apply to selection") — the dialog
+   * skips streaming and goes straight to the diff preview. Nothing is sent.
+   */
+  presetResult?: string;
+  generation: number;
+}
+
+/**
+ * "Run this AI action" intent. Raised by `integrations/ai/actions.ts` from
+ * the palette commands and editor context-menu items. `null` = closed.
+ */
+const [requestAiAction, setRequestAiActionInternal] =
+  createSignal<AiActionRequestInfo | null>(null);
+
+/**
  * The navigate fn from @solidjs/router can only be obtained inside a Router
  * context. We capture it once on App mount (NavBootstrap) so module-level
  * actions can route the user without re-creating a hand-rolled router.
@@ -66,6 +95,7 @@ export const requestSaveTemplate_ = requestSaveTemplate;
 export const requestProDialog_ = requestProDialog;
 export const requestHistoryPanel_ = requestHistoryPanel;
 export const requestUpdateDialog_ = requestUpdateDialog;
+export const requestAiAction_ = requestAiAction;
 
 export const togglePalette = () =>
   setPaletteOpenInternal((v) => !v);
@@ -86,6 +116,9 @@ export const setRequestHistoryPanel = (v: boolean) =>
 
 export const setRequestUpdateDialog = (v: UpdatePromptInfo | null) =>
   setRequestUpdateDialogInternal(v);
+
+export const setRequestAiAction = (v: AiActionRequestInfo | null) =>
+  setRequestAiActionInternal(v);
 
 export const setNavigator = (fn: (path: string) => void) => {
   navigator = fn;

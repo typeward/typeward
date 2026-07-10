@@ -81,21 +81,33 @@ export function createGeminiProvider(): AiProvider {
   };
 }
 
-async function* chatStream(
+/**
+ * Pure body builder, exported for wire-shape tests. Gemini's content shape:
+ * roles are "user" / "model"; system content goes into `systemInstruction`;
+ * image attachments become extra `inlineData` parts after the text part.
+ * Attachment stubs (empty base64 after a reload) are skipped.
+ */
+export function buildGeminiChatBody(
   messages: ChatMessage[],
   opts: ChatOptions,
-): AsyncIterable<ChatChunk> {
-  // Gemini's content shape: roles are "user" / "model"; system content
-  // goes into `systemInstruction`. Map our generic messages onto that.
+): string {
   const system = messages.find((m) => m.role === "system")?.content;
   const contents = messages
     .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
+    .map((m) => {
+      const images = (m.attachments ?? []).filter((a) => a.base64.length > 0);
+      return {
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [
+          { text: m.content },
+          ...images.map((a) => ({
+            inlineData: { mimeType: a.mime, data: a.base64 },
+          })),
+        ],
+      };
+    });
 
-  const body = JSON.stringify({
+  return JSON.stringify({
     systemInstruction: system ? { parts: [{ text: system }] } : undefined,
     contents,
     generationConfig: {
@@ -103,6 +115,13 @@ async function* chatStream(
       maxOutputTokens: opts.maxTokens,
     },
   });
+}
+
+async function* chatStream(
+  messages: ChatMessage[],
+  opts: ChatOptions,
+): AsyncIterable<ChatChunk> {
+  const body = buildGeminiChatBody(messages, opts);
 
   const url = `${API_ROOT}/models/${encodeURIComponent(opts.model)}:streamGenerateContent?alt=sse`;
 

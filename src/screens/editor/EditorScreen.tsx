@@ -37,6 +37,10 @@ import { sha256Hex } from "~/lib/hash";
 import { setCursorLine, setSelectionRange } from "~/stores/editor-view-store";
 import { setPreviousRoute } from "~/stores/nav-store";
 import {
+  abortActiveAiStream,
+  flushPendingAiChatSaves,
+} from "~/stores/ai-chat-store";
+import {
   flushPendingReviewSave,
   loadThreads,
   resetThreads,
@@ -202,10 +206,14 @@ const EditorScreen: Component = () => {
         if (dirty === 0) {
           // No dirty files, but a review-comment save may still be pending on
           // the debounce — flush it before the window goes away, or the last
-          // comment edits are lost (they don't mark any file dirty).
+          // comment edits are lost (they don't mark any file dirty). Same for
+          // a debounced AI-conversation save; an in-flight AI stream is
+          // aborted so the Rust task doesn't outlive the window.
           event.preventDefault();
+          abortActiveAiStream();
           try {
             await flushPendingReviewSave();
+            await flushPendingAiChatSaves();
           } catch {
             /* never block window close on a review-save failure */
           }
@@ -232,8 +240,10 @@ const EditorScreen: Component = () => {
         }
         // destroy(), not close() — close() would re-fire this handler.
         if (discard) {
+          abortActiveAiStream();
           try {
             await flushPendingReviewSave();
+            await flushPendingAiChatSaves();
           } catch {
             /* never block window close on a review-save failure */
           }

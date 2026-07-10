@@ -30,13 +30,15 @@ import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { setRequestProDialog } from "~/commands/palette-store";
 import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
+import { aiAssistantEnabled } from "~/integrations/ai/actions";
 import { hasAnyAiEntitlement } from "~/integrations/ai/registry";
+import { chatStreaming } from "~/stores/ai-chat-store";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { computeFitScale, type ZoomMode } from "~/components/pdf/zoom";
-import { editorSettings, integrationsSettings } from "~/stores/settings-store";
+import { editorSettings } from "~/stores/settings-store";
 import { isTabletViewport } from "~/stores/viewport-store";
 import { isDarkTheme, theme } from "~/themes/theme-store";
 import {
@@ -166,8 +168,8 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
 
   // AI master switch AND entitlement (all AI is Pro) — when either flips off
   // while the chat is showing, fall back to the PDF so the pane never strands
-  // on a hidden mode.
-  const aiEnabled = () => integrationsSettings().ai.enabled && hasAnyAiEntitlement();
+  // on a hidden mode. The one shared predicate every AI surface derives from.
+  const aiEnabled = aiAssistantEnabled;
   createEffect(() => {
     if (!aiEnabled() && previewMode() === "ai") setPreviewMode("pdf");
   });
@@ -880,6 +882,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             onClick={() => setPreviewMode(previewMode() === "ai" ? "pdf" : "ai")}
             icon={<Sparkles size={16} />}
             label="AI"
+            activityDot={chatStreaming()}
           />
         </Show>
         {/* Below Pro the AI toggle stays visible with a lock marker and opens
@@ -1271,6 +1274,8 @@ const ToolbarIconToggle: Component<{
   label: string;
   /** Tiny corner lock for Pro-locked affordances (quiet, no color shift). */
   lockMarker?: boolean;
+  /** Subtle corner dot — e.g. an AI stream running behind another pane. */
+  activityDot?: boolean;
 }> = (props) => (
   <button
     type="button"
@@ -1295,6 +1300,12 @@ const ToolbarIconToggle: Component<{
     {props.icon}
     <Show when={props.lockMarker}>
       <Lock size={8} class="absolute bottom-1 right-1 text-fg-3" />
+    </Show>
+    <Show when={props.activityDot}>
+      <span
+        class="absolute right-1 top-1 h-1.5 w-1.5 animate-pulse rounded-full"
+        style={{ background: "var(--color-accent-1)" }}
+      />
     </Show>
   </button>
 );

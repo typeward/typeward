@@ -17,6 +17,7 @@ import { installSentryGate } from "~/lib/sentry-gate";
 import { installFrontendErrorHook, recordError } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
 import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
+import { registerAiEditorActions } from "~/integrations/ai/editor-actions";
 import { initAiProviders } from "~/integrations/ai/init";
 import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
@@ -27,6 +28,7 @@ import {
   uninstallGlobalShortcuts,
 } from "~/commands/keyboard";
 import {
+  requestAiAction_,
   requestProDialog_,
   requestSaveTemplate_,
   requestUpdateDialog_,
@@ -65,6 +67,14 @@ const UpdateDialog = lazy(() =>
     default: m.UpdateDialog,
   })),
 );
+// Lazy like ProDialog — the diff stack (@codemirror/merge) inside stays a
+// dynamic import of its own, so nothing heavy loads until an AI editor
+// action actually runs.
+const AiActionDialog = lazy(() =>
+  import("~/components/editor/AiActionDialog").then((m) => ({
+    default: m.AiActionDialog,
+  })),
+);
 
 // Overlap the boot waterfall: fetch/parse the ProjectsScreen chunk while the
 // load_settings IPC is still in flight (the RootRoute render gate only needs
@@ -78,6 +88,7 @@ bootCoreCommands();
 initReferenceProviders();
 initCloudSync();
 initAiProviders();
+registerAiEditorActions();
 initCustomThemes();
 
 /**
@@ -230,6 +241,10 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestUpdateDialog_()) setUpdateDialogTouched(true);
   });
+  const [aiActionTouched, setAiActionTouched] = createSignal(false);
+  createEffect(() => {
+    if (requestAiAction_()) setAiActionTouched(true);
+  });
 
   let cancelBootUpdateCheck: (() => void) | undefined;
   onMount(() => {
@@ -266,6 +281,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={updateDialogTouched()}>
         <Suspense>
           <UpdateDialog />
+        </Suspense>
+      </Show>
+      <Show when={aiActionTouched()}>
+        <Suspense>
+          <AiActionDialog />
         </Suspense>
       </Show>
       <Toaster />

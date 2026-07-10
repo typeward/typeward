@@ -87,6 +87,25 @@ export const setSelectionRange = (from: number, to: number): void => {
 };
 
 /**
+ * Replace the document range `[from, to)` with `text`, select the inserted
+ * text's end, and scroll it into view. Offsets are clamped to the document.
+ * The AI action dialog's Replace goes through here after its stale-selection
+ * guard verified the range still holds the snapshotted text.
+ */
+export const replaceRange = (from: number, to: number, text: string): void => {
+  if (!_view) return;
+  const len = _view.state.doc.length;
+  const a = Math.max(0, Math.min(len, from));
+  const b = Math.max(a, Math.min(len, to));
+  _view.focus();
+  _view.dispatch({
+    changes: { from: a, to: b, insert: text },
+    selection: { anchor: a + text.length },
+    scrollIntoView: true,
+  });
+};
+
+/**
  * Insert `text` at the primary cursor, replacing any active selection.
  * Focuses the editor first so the user sees the cursor land on the
  * inserted text. No-op when no view is mounted (e.g. before the editor

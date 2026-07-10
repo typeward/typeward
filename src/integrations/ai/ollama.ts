@@ -14,6 +14,8 @@ import { aiStream, type AiStreamChunk } from "~/integrations/ai/stream";
 import type {
   AiProvider,
   ChatChunk,
+  ChatMessage,
+  ChatOptions,
   ModelInfo,
   ProviderStatus,
 } from "~/integrations/types";
@@ -62,15 +64,7 @@ export function createOllamaProvider(baseUrl?: string): AiProvider {
     },
 
     async *chat(messages, opts): AsyncIterable<ChatChunk> {
-      const body = JSON.stringify({
-        model: opts.model,
-        messages,
-        options: {
-          temperature: opts.temperature,
-          num_predict: opts.maxTokens,
-        },
-        stream: true,
-      });
+      const body = buildOllamaChatBody(messages, opts);
 
       const stream = aiStream(
         {
@@ -89,4 +83,32 @@ export function createOllamaProvider(baseUrl?: string): AiProvider {
       yield { delta: "", done: true };
     },
   };
+}
+
+/**
+ * Pure body builder, exported for wire-shape tests. Ollama takes images as a
+ * message-level `images` array of bare base64 strings; the internal
+ * `attachments` field never reaches the wire. Attachment stubs (empty base64
+ * after a reload) are skipped.
+ */
+export function buildOllamaChatBody(
+  messages: ChatMessage[],
+  opts: ChatOptions,
+): string {
+  const wireMessages = messages.map((m) => {
+    const images = (m.attachments ?? []).filter((a) => a.base64.length > 0);
+    return images.length === 0
+      ? { role: m.role, content: m.content }
+      : { role: m.role, content: m.content, images: images.map((a) => a.base64) };
+  });
+
+  return JSON.stringify({
+    model: opts.model,
+    messages: wireMessages,
+    options: {
+      temperature: opts.temperature,
+      num_predict: opts.maxTokens,
+    },
+    stream: true,
+  });
 }

@@ -969,7 +969,7 @@ const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
     id: "gemini",
     name: "Gemini (Google)",
     feature: "integrations.ai.gemini",
-    hint: "Paste an API key from aistudio.google.com. The key goes in the URL query, so the IPC briefly holds it before the wire — same compromise as Mendeley/Dropbox during OAuth.",
+    hint: "Paste an API key from aistudio.google.com. The key attaches as a request header inside the Rust layer; it never leaves the keyring on the frontend side.",
     keyringService: "gemini",
     keyUrl: "https://aistudio.google.com/apikey",
   },
