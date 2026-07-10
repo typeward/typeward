@@ -93,13 +93,15 @@ initCustomThemes();
 function bootSupabaseDeferred(): void {
   if (!loadSupabaseConfig()) return;
   void (async () => {
-    const [{ startSupabaseSession }, { initSupabaseEntitlements }] =
+    const [{ startSupabaseSession }, { initSupabaseEntitlements }, { initSettingsSync }] =
       await Promise.all([
         import("~/integrations/supabase/session"),
         import("~/integrations/supabase/entitlements-source"),
+        import("~/integrations/supabase/settings-sync"),
       ]);
     startSupabaseSession();
     initSupabaseEntitlements();
+    initSettingsSync();
   })();
 }
 

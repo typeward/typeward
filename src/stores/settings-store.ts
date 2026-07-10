@@ -175,6 +175,11 @@ const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
 // until an updater pubkey is configured.
 const [updatesCheckAutomatically, setUpdatesCheckAutomatically] =
   createSignal<boolean>(true);
+// "Sync settings across devices" (Settings → Account, shown only signed-in).
+// Device-local: the toggle governs whether THIS machine participates, so it's
+// denylisted from sync itself (settings-sync.ts). Default ON — signed-out
+// users are unaffected because the engine only runs with a session.
+const [syncSettingsEnabled, setSyncSettingsEnabled] = createSignal<boolean>(true);
 // Read-only mirror of privacy.installId: Rust mints it on the first crash
 // report; the TS side only carries it through buildSettings() so a settings
 // save can't clobber it. `noteInstallId` records an id minted mid-session
@@ -194,11 +199,19 @@ const [settingsLoaded, setSettingsLoaded] = createSignal<boolean>(false);
  * store's signal and the shared `ipc.AppSettings`/serde struct).
  */
 interface FieldSpec {
+  /**
+   * Dotted settings.json path of this unit — also the row key used by
+   * settings sync (settings-sync.ts), whose denylist classifies every key as
+   * synced or device-local. A drift-guard test fails when a new entry is
+   * neither.
+   */
+  key: string;
   hydrate: (s: ipc.AppSettings) => void;
   serialize: (out: ipc.AppSettings) => void;
 }
 
 function field<T>(spec: {
+  key: string;
   read: (s: ipc.AppSettings) => T;
   value: () => T;
   apply: (v: T) => void;
@@ -206,6 +219,7 @@ function field<T>(spec: {
   validate?: (raw: T) => T;
 }): FieldSpec {
   return {
+    key: spec.key,
     hydrate: (s) => {
       const raw = spec.read(s);
       spec.apply(spec.validate ? spec.validate(raw) : raw);
@@ -216,6 +230,7 @@ function field<T>(spec: {
 
 const FIELDS: FieldSpec[] = [
   field<Theme>({
+    key: "theme",
     read: (s) => s.theme as Theme,
     value: theme,
     apply: setTheme,
@@ -225,6 +240,7 @@ const FIELDS: FieldSpec[] = [
     validate: (raw) => validEnum<Theme>(raw, THEMES, "daylight"),
   }),
   field<Accent>({
+    key: "accent",
     read: (s) => s.accent as Accent,
     value: accent,
     apply: setAccent,
@@ -234,6 +250,7 @@ const FIELDS: FieldSpec[] = [
     validate: (raw) => validEnum<Accent>(raw, ACCENTS, "violet-cyan"),
   }),
   field<EditorSettings>({
+    key: "editor",
     // The IPC editor shape types lineHeight as a plain string; the validate
     // below narrows it back to LineHeightMode at the load boundary.
     read: (s) => s.editor as EditorSettings,
@@ -260,6 +277,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<string>({
+    key: "projectsRoot",
     read: (s) => s.projectsRoot,
     value: projectsRoot,
     apply: setProjectsRoot,
@@ -268,6 +286,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<CompileEngine>({
+    key: "compileEngine",
     read: (s) => s.compileEngine as CompileEngine,
     value: compileEngine,
     apply: setCompileEngine,
@@ -277,6 +296,7 @@ const FIELDS: FieldSpec[] = [
     validate: migrateCompileEngine,
   }),
   field<boolean>({
+    key: "onboarded",
     read: (s) => s.onboarded,
     value: onboarded,
     apply: setOnboarded,
@@ -286,6 +306,7 @@ const FIELDS: FieldSpec[] = [
   }),
   // --- ui ---
   field<Density>({
+    key: "ui.density",
     read: (s) => s.ui.density as Density,
     value: density,
     apply: setDensity,
@@ -295,6 +316,7 @@ const FIELDS: FieldSpec[] = [
     validate: (raw) => validEnum<Density>(raw, ["compact", "cozy", "comfortable"], "cozy"),
   }),
   field<boolean>({
+    key: "ui.animations",
     read: (s) => s.ui.animations,
     value: animations,
     apply: setAnimations,
@@ -303,6 +325,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "ui.ambientLights",
     read: (s) => s.ui.ambientLights,
     value: ambientLights,
     apply: setAmbientLights,
@@ -311,6 +334,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "ui.accentGradient",
     read: (s) => s.ui.accentGradient ?? true,
     value: accentGradient,
     apply: setAccentGradient,
@@ -319,6 +343,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "ui.glowEffects",
     read: (s) => s.ui.glowEffects ?? true,
     value: glowEffects,
     apply: setGlowEffects,
@@ -327,6 +352,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "ui.customThemesEnabled",
     read: (s) => s.ui.customThemesEnabled,
     value: customThemesEnabled,
     apply: setCustomThemesEnabled,
@@ -335,6 +361,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<string | null>({
+    key: "ui.activeCustomTheme",
     read: (s) => s.ui.activeCustomTheme,
     value: activeCustomTheme,
     apply: setActiveCustomTheme,
@@ -344,6 +371,7 @@ const FIELDS: FieldSpec[] = [
   }),
   // --- workspace ---
   field<boolean>({
+    key: "workspace.enableSpaces",
     read: (s) => s.workspace.enableSpaces,
     value: enableSpaces,
     apply: setEnableSpaces,
@@ -352,6 +380,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "workspace.enableTags",
     read: (s) => s.workspace.enableTags,
     value: enableTags,
     apply: setEnableTags,
@@ -360,6 +389,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "workspace.notificationsPanelDefault",
     read: (s) => s.workspace.notificationsPanelDefault,
     value: notificationsPanelDefault,
     apply: setNotificationsPanelDefault,
@@ -368,6 +398,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<ProjectsView>({
+    key: "workspace.defaultView",
     read: (s) => s.workspace.defaultView as ProjectsView,
     value: defaultView,
     apply: setDefaultView,
@@ -377,6 +408,7 @@ const FIELDS: FieldSpec[] = [
     validate: (raw) => validEnum<ProjectsView>(raw, ["cards", "list"], "cards"),
   }),
   field<ProjectsSort>({
+    key: "workspace.defaultSort",
     read: (s) => s.workspace.defaultSort as ProjectsSort,
     value: defaultSort,
     apply: setDefaultSort,
@@ -391,6 +423,7 @@ const FIELDS: FieldSpec[] = [
       ),
   }),
   field<Record<string, boolean>>({
+    key: "workspace.widgets",
     read: (s) => s.workspace.widgets,
     value: widgetEnabled,
     apply: setWidgetEnabled,
@@ -399,6 +432,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "workspace.dashboardEnabled",
     read: (s) => s.workspace.dashboardEnabled,
     value: dashboardEnabled,
     apply: setDashboardEnabled,
@@ -407,6 +441,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<string[]>({
+    key: "workspace.dashboardOrder",
     read: (s) => s.workspace.dashboardOrder,
     value: dashboardOrder,
     apply: setDashboardOrder,
@@ -415,6 +450,7 @@ const FIELDS: FieldSpec[] = [
     },
   }),
   field<boolean>({
+    key: "workspace.projectCardWords",
     read: (s) => s.workspace.projectCardWords ?? false,
     value: projectCardWords,
     apply: setProjectCardWords,
@@ -425,6 +461,7 @@ const FIELDS: FieldSpec[] = [
   // statsCards keeps its default when the persisted list is absent/empty, so it
   // can't use the generic setter (which would clobber the default with []).
   {
+    key: "workspace.statsCards",
     hydrate: (s) => {
       if (s.workspace.statsCards?.length) setStatsCards(s.workspace.statsCards);
     },
@@ -436,6 +473,7 @@ const FIELDS: FieldSpec[] = [
   // tint to a known palette id so a hand-edited settings.json can't render an
   // untinted/broken space.
   field<ipc.SpaceDef[]>({
+    key: "workspace.spaces",
     read: (s) => s.workspace.spaces ?? [],
     value: spaces,
     apply: setSpaces,
@@ -457,6 +495,7 @@ const FIELDS: FieldSpec[] = [
   // integrations merges over defaults so a settings.json predating a provider
   // still gets its default block.
   {
+    key: "integrations",
     hydrate: (s) => {
       if (s.integrations) {
         setIntegrationsSettings({ ...DEFAULT_INTEGRATIONS, ...s.integrations });
@@ -470,6 +509,7 @@ const FIELDS: FieldSpec[] = [
   // Not the generic field() shape: privacy serializes as one object and must
   // preserve the Rust-owned installId alongside the user-facing toggle.
   {
+    key: "privacy",
     hydrate: (s) => {
       setShareCrashReports(s.privacy?.shareCrashReports ?? false);
       setInstallId(s.privacy?.installId ?? undefined);
@@ -484,11 +524,22 @@ const FIELDS: FieldSpec[] = [
   },
   // --- updates ---
   field<boolean>({
+    key: "updates.checkAutomatically",
     read: (s) => s.updates?.checkAutomatically ?? true,
     value: updatesCheckAutomatically,
     apply: setUpdatesCheckAutomatically,
     write: (out, v) => {
       out.updates = { checkAutomatically: v };
+    },
+  }),
+  // --- sync ---
+  field<boolean>({
+    key: "sync.syncSettings",
+    read: (s) => s.sync?.syncSettings ?? true,
+    value: syncSettingsEnabled,
+    apply: setSyncSettingsEnabled,
+    write: (out, v) => {
+      out.sync = { syncSettings: v };
     },
   }),
 ];
@@ -511,9 +562,45 @@ export function buildSettings(): ipc.AppSettings {
     integrations: undefined,
     privacy: undefined,
     updates: undefined,
+    sync: undefined,
   } as unknown as ipc.AppSettings;
   for (const f of FIELDS) f.serialize(out);
   return out;
+}
+
+/**
+ * Every persisted key, in FIELDS order — the classification universe for
+ * settings sync (see SETTINGS_SYNC_DENYLIST in settings-sync.ts; a drift-guard
+ * test asserts each key is either synced or denylisted).
+ */
+export const PERSISTED_SETTING_KEYS: readonly string[] = FIELDS.map((f) => f.key);
+
+function setAtPath(obj: Record<string, unknown>, key: string, value: unknown): void {
+  const parts = key.split(".");
+  let cursor = obj;
+  for (const part of parts.slice(0, -1)) {
+    const next = cursor[part];
+    if (typeof next !== "object" || next === null) cursor[part] = {};
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  cursor[parts[parts.length - 1]] = value;
+}
+
+/**
+ * Apply a value pulled by settings sync through the same hydrate/validate
+ * boundary as settings.json — remote values are the user's own data but may
+ * come from a newer/older app version, so enum fallbacks, clamps, and
+ * merge-over-defaults apply verbatim. Unknown keys (a newer build's fields)
+ * are ignored. The value lands in a fresh `buildSettings()` snapshot, so the
+ * field's `read` sees the rest of the settings tree exactly as persisted.
+ */
+export function applyRemoteSettingValue(key: string, value: unknown): boolean {
+  const spec = FIELDS.find((f) => f.key === key);
+  if (!spec) return false;
+  const snapshot = buildSettings();
+  setAtPath(snapshot as unknown as Record<string, unknown>, key, value);
+  spec.hydrate(snapshot);
+  return true;
 }
 
 createRoot(() => {
@@ -565,6 +652,7 @@ export {
   projectsRoot,
   settingsLoaded,
   shareCrashReports,
+  syncSettingsEnabled,
   updatesCheckAutomatically,
   setCompileEngine,
   setEditorSettings,
@@ -572,5 +660,6 @@ export {
   setOnboarded,
   setProjectsRoot,
   setShareCrashReports,
+  setSyncSettingsEnabled,
   setUpdatesCheckAutomatically,
 };

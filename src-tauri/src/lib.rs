@@ -126,6 +126,8 @@ pub fn run() {
             synctex::synctex_inverse,
             commands::load_settings,
             commands::save_settings,
+            commands::load_sync_state,
+            commands::save_sync_state,
             commands::reset_settings,
             commands::export_project_zip,
             #[cfg(desktop)]

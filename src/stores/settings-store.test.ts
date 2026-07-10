@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyRemoteSettingValue,
   buildSettings,
   noteInstallId,
   setShareCrashReports,
+  setSyncSettingsEnabled,
   setUpdatesCheckAutomatically,
   validEnum,
 } from "./settings-store";
@@ -71,5 +73,39 @@ describe("settings-store updates roundtrip", () => {
     expect(buildSettings().updates?.checkAutomatically).toBe(false);
     // Restore for other suites sharing module state.
     setUpdatesCheckAutomatically(true);
+  });
+});
+
+// The settings-sync toggle persists like any other field but is device-local
+// (denylisted from sync itself — see settings-sync.ts). Default ON.
+describe("settings-store sync roundtrip", () => {
+  it("defaults syncSettings on and persists changes", () => {
+    expect(buildSettings().sync?.syncSettings).toBe(true);
+    setSyncSettingsEnabled(false);
+    expect(buildSettings().sync?.syncSettings).toBe(false);
+    setSyncSettingsEnabled(true);
+  });
+});
+
+// Settings sync applies pulled values through the same hydrate/validate
+// boundary as settings.json — a remote value from an older/newer build must
+// hit the enum fallbacks and clamps, not the signals directly.
+describe("settings-store applyRemoteSettingValue", () => {
+  it("applies a valid value through the field's setter", () => {
+    expect(applyRemoteSettingValue("updates.checkAutomatically", false)).toBe(true);
+    expect(buildSettings().updates?.checkAutomatically).toBe(false);
+    setUpdatesCheckAutomatically(true);
+  });
+
+  it("runs remote values through validation", () => {
+    expect(applyRemoteSettingValue("workspace.defaultView", "not-a-view")).toBe(true);
+    expect(buildSettings().workspace.defaultView).toBe("cards");
+    expect(applyRemoteSettingValue("workspace.defaultView", "list")).toBe(true);
+    expect(buildSettings().workspace.defaultView).toBe("list");
+    applyRemoteSettingValue("workspace.defaultView", "cards");
+  });
+
+  it("ignores unknown keys from newer builds", () => {
+    expect(applyRemoteSettingValue("some.future.key", 42)).toBe(false);
   });
 });
