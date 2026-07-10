@@ -1,19 +1,13 @@
 import Resizable from "corvu/resizable";
 import {
   CheckCircle2,
-  ClipboardPaste,
-  Copy,
-  ListTodo,
   ListX,
   Loader2,
-  MessageSquarePlus,
-  Scissors,
   SpellCheck,
   SquareX,
   X as XIcon,
   XCircle,
 } from "lucide-solid";
-import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { Component } from "solid-js";
 import {
   Index,
@@ -35,9 +29,13 @@ import { CodeMirror } from "~/components/editor/CodeMirror";
 import {
   ContextMenu,
   ContextMenuItem,
-  ContextMenuSeparator,
   createContextMenuState,
 } from "~/components/primitives/ContextMenu";
+import { EditorContextMenu } from "~/components/editor/context-menu/EditorContextMenu";
+import {
+  buildEditorMenuContext,
+  type EditorMenuContext,
+} from "~/components/editor/context-menu/registry";
 import {
   EditorSidebar,
   type LeftTab,
@@ -77,7 +75,6 @@ import {
   cursorLine,
   getActiveEditorView,
 } from "~/stores/editor-view-store";
-import { getCommand } from "~/commands/registry";
 import {
   requestHistoryPanel_,
   setRequestHistoryPanel,
@@ -706,66 +703,18 @@ const CenterPane: Component<{
   // Right-click menu over the editor surface. Only opens when the click landed
   // on CodeMirror's `.cm-content` (App.tsx no longer excludes it from native-
   // menu suppression, so a non-`.cm-content` target falls through to that
-  // document-level suppressor rather than the browser menu). Clipboard runs
-  // through the Tauri plugin because `navigator.clipboard.readText()` is
-  // unreliable in the webview.
-  const editorMenu = createContextMenuState<{ hasSelection: boolean }>();
+  // document-level suppressor rather than the browser menu). Items come from
+  // the editor-menu action registry; the payload snapshots the editor context
+  // at open time.
+  const editorMenu = createContextMenuState<EditorMenuContext>();
 
   const onEditorContextMenu = (e: MouseEvent) => {
     const target = e.target instanceof Element ? e.target : null;
     if (!target?.closest(".cm-content")) return;
-    const sel = getActiveEditorView()?.state.selection.main;
-    editorMenu.openAt(e, { hasSelection: !!sel && sel.from !== sel.to });
-  };
-
-  const cmCopy = async () => {
-    const v = getActiveEditorView();
-    if (!v) return;
-    const sel = v.state.selection.main;
-    if (sel.from === sel.to) return;
-    try {
-      await writeText(v.state.doc.sliceString(sel.from, sel.to));
-    } catch (err) {
-      notifyError("Couldn't copy", errorText(err));
-    }
-  };
-
-  const cmCut = async () => {
-    const v = getActiveEditorView();
-    if (!v) return;
-    const sel = v.state.selection.main;
-    if (sel.from === sel.to) return;
-    try {
-      await writeText(v.state.doc.sliceString(sel.from, sel.to));
-    } catch (err) {
-      notifyError("Couldn't cut", errorText(err));
-      return;
-    }
-    v.dispatch({
-      changes: { from: sel.from, to: sel.to, insert: "" },
-      selection: { anchor: sel.from },
-    });
-    v.focus();
-  };
-
-  const cmPaste = async () => {
-    const v = getActiveEditorView();
-    if (!v) return;
-    let text: string | null;
-    try {
-      text = await readText();
-    } catch (err) {
-      notifyError("Couldn't paste", errorText(err));
-      return;
-    }
-    if (!text) return;
-    const sel = v.state.selection.main;
-    v.dispatch({
-      changes: { from: sel.from, to: sel.to, insert: text },
-      selection: { anchor: sel.from + text.length },
-      scrollIntoView: true,
-    });
-    v.focus();
+    const view = getActiveEditorView();
+    const f = activeFile();
+    if (!view || !f) return;
+    editorMenu.openAt(e, buildEditorMenuContext(view, f.path, f.relPath));
   };
 
   return (
@@ -992,53 +941,12 @@ const CenterPane: Component<{
 
       <Show when={editorMenu.menu()}>
         {(m) => (
-          <ContextMenu x={m().x} y={m().y} onClose={editorMenu.close} widthPx={200}>
-            <ContextMenuItem
-              icon={Scissors}
-              label="Cut"
-              disabled={!m().payload.hasSelection}
-              onClick={() => {
-                editorMenu.close();
-                void cmCut();
-              }}
-            />
-            <ContextMenuItem
-              icon={Copy}
-              label="Copy"
-              disabled={!m().payload.hasSelection}
-              onClick={() => {
-                editorMenu.close();
-                void cmCopy();
-              }}
-            />
-            <ContextMenuItem
-              icon={ClipboardPaste}
-              label="Paste"
-              onClick={() => {
-                editorMenu.close();
-                void cmPaste();
-              }}
-            />
-            <ContextMenuSeparator />
-            <ContextMenuItem
-              icon={MessageSquarePlus}
-              label="Add comment"
-              disabled={!m().payload.hasSelection}
-              onClick={() => {
-                editorMenu.close();
-                void getCommand("review.addComment")?.run();
-              }}
-            />
-            <ContextMenuItem
-              icon={ListTodo}
-              label="Add TODO"
-              disabled={!m().payload.hasSelection}
-              onClick={() => {
-                editorMenu.close();
-                void getCommand("review.addTodo")?.run();
-              }}
-            />
-          </ContextMenu>
+          <EditorContextMenu
+            x={m().x}
+            y={m().y}
+            ctx={m().payload}
+            onClose={editorMenu.close}
+          />
         )}
       </Show>
     </div>

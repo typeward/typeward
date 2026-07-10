@@ -2,6 +2,7 @@ import type { Component, JSX } from "solid-js";
 import { createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import { installDismiss } from "~/lib/dismiss";
+import { clampMenuPosition } from "~/lib/menu-position";
 
 /**
  * Hand-rolled fixed-position context menu. App.tsx suppresses the native menu
@@ -31,13 +32,14 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
     const el = menuRef;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const pad = 8;
-    let x = props.x;
-    let y = props.y;
-    if (x + r.width > window.innerWidth - pad)
-      x = Math.max(pad, window.innerWidth - r.width - pad);
-    if (y + r.height > window.innerHeight - pad)
-      y = Math.max(pad, window.innerHeight - r.height - pad);
+    const { x, y } = clampMenuPosition({
+      x: props.x,
+      y: props.y,
+      menuWidth: r.width,
+      menuHeight: r.height,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+    });
     if (x !== props.x || y !== props.y) setPos({ x, y });
     requestAnimationFrame(() =>
       el.querySelector<HTMLElement>('[role="menuitem"]:not([disabled])')?.focus(),
