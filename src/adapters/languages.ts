@@ -36,6 +36,18 @@ export function previewKindForFile(relPath: string): "markdown" | "pdf" {
   return languageForFile(relPath) === "markdown" ? "markdown" : "pdf";
 }
 
+/**
+ * Files the visual editor mode can render: LaTeX, and specifically `.tex` —
+ * `.bib` shares the CM language but none of the visual constructs, so
+ * scanning it buys nothing. Typst is deferred (plan 63 §2).
+ */
+export function isVisualEligibleFile(relPath: string): boolean {
+  return (
+    languageForFile(relPath) === "latex" &&
+    relPath.toLowerCase().endsWith(".tex")
+  );
+}
+
 const LANGUAGE_TO_GRAMMAR: Record<EditorLanguage, GrammarSyntax> = {
   latex: "latex",
   typst: "typst",

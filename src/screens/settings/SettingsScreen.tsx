@@ -1115,6 +1115,15 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("vimMode", v)}
           />
         </Row>
+        <Row
+          label="Visual editing for LaTeX"
+          hint="Render headings, styles, lists, and references visually over the source of .tex files (Mod+Shift+V)."
+        >
+          <Switch
+            checked={editorSettings().visualModeLatex}
+            onChange={(v) => update("visualModeLatex", v)}
+          />
+        </Row>
         <FeatureGate
           feature="integrations.grammar.harper"
           // The locked row is a discovery surface — without the flag the row

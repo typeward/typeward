@@ -111,6 +111,33 @@ describe("settings-store history retention", () => {
   });
 });
 
+// visualModeLatex rides the (synced) `editor` key: default off, roundtrips
+// through buildSettings(), and the merge-over-defaults validate backfills it
+// for settings.json files predating the field.
+describe("settings-store visualModeLatex roundtrip", () => {
+  it("defaults off and persists changes", () => {
+    expect(buildSettings().editor.visualModeLatex).toBe(false);
+    expect(
+      applyRemoteSettingValue("editor", {
+        ...buildSettings().editor,
+        visualModeLatex: true,
+      }),
+    ).toBe(true);
+    expect(buildSettings().editor.visualModeLatex).toBe(true);
+    applyRemoteSettingValue("editor", {
+      ...buildSettings().editor,
+      visualModeLatex: false,
+    });
+    expect(buildSettings().editor.visualModeLatex).toBe(false);
+  });
+
+  it("backfills the default when an older editor blob lacks the field", () => {
+    const { visualModeLatex: _omitted, ...older } = buildSettings().editor;
+    expect(applyRemoteSettingValue("editor", older)).toBe(true);
+    expect(buildSettings().editor.visualModeLatex).toBe(false);
+  });
+});
+
 // Settings sync applies pulled values through the same hydrate/validate
 // boundary as settings.json — a remote value from an older/newer build must
 // hit the enum fallbacks and clamps, not the signals directly.
