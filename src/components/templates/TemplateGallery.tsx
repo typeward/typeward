@@ -18,6 +18,7 @@ import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { ProChip } from "~/components/entitlement/ProChip";
 import { proGate } from "~/components/entitlement/pro-gate";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { useEntitlement } from "~/integrations/entitlements";
 import * as ipc from "~/ipc";
 import type { Project } from "~/adapters/types";
@@ -46,9 +47,10 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
     { initialValue: [] },
   );
 
-  // Built-in Typst templates stay visible on free with a quiet Pro chip
-  // (discovery amendment 2026-07-08) — selecting one opens the ProDialog.
-  // The custom-template source stays hidden below the Pro tier.
+  // With Pro discovery on, built-in Typst templates stay visible on free
+  // with a quiet Pro chip (discovery amendment 2026-07-08) — selecting one
+  // opens the ProDialog. With it off (free-only beta) locked templates hide
+  // like the custom-template source, which stays hidden below Pro either way.
   const typstEntitled = useEntitlement("formats.typst");
   const customEntitled = useEntitlement("templates.custom.max");
   const templateLocked = (t: ipc.TemplateManifest) =>
@@ -57,7 +59,9 @@ export const TemplateGallery: Component<TemplateGalleryProps> = (props) => {
     // Reading templates() while the resource is errored would rethrow here.
     if (templates.error) return [];
     return (templates() ?? []).filter(
-      (t) => t.source !== "custom" || customEntitled(),
+      (t) =>
+        (t.source !== "custom" || customEntitled()) &&
+        (PRO_DISCOVERY_ENABLED || !templateLocked(t)),
     );
   });
 

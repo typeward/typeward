@@ -16,6 +16,7 @@ import { setupAutosave } from "~/lib/autosave";
 import { installSentryGate } from "~/lib/sentry-gate";
 import { installFrontendErrorHook, recordError } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { initAiProviders } from "~/integrations/ai/init";
 import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
@@ -217,9 +218,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestSaveTemplate_()) setSaveTemplateTouched(true);
   });
+  // Never latches while Pro discovery is off (free-only beta) — the dialog
+  // stays unmounted and its chunk unfetched even if a stray request fires.
   const [proDialogTouched, setProDialogTouched] = createSignal(false);
   createEffect(() => {
-    if (requestProDialog_()) setProDialogTouched(true);
+    if (PRO_DISCOVERY_ENABLED && requestProDialog_()) setProDialogTouched(true);
   });
   const [updateDialogTouched, setUpdateDialogTouched] = createSignal(false);
   createEffect(() => {

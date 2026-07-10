@@ -8,6 +8,7 @@ import {
 } from "./actions";
 import { registerCommand, unregisterCommand } from "./registry";
 import { notifyError, notifySuccess } from "~/lib/toast";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { hasEntitlement } from "~/integrations/entitlements";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
@@ -89,9 +90,11 @@ const CORE_COMMANDS: EditorCommand[] = [
     subtitle: "Plans, pricing, and what Typeward Pro unlocks",
     group: "Navigation",
     scope: "global",
-    // Deliberately visible on every tier — Pro users get the "you're on
-    // Pro" state. This is the one allowed palette entry about plans; the
-    // locked features' own commands stay hidden (palette noise rule).
+    // While discovery is on, deliberately visible on every tier — Pro users
+    // get the "you're on Pro" state. This is the one allowed palette entry
+    // about plans; the locked features' own commands stay hidden (palette
+    // noise rule). Hidden entirely during the free-only beta.
+    when: () => PRO_DISCOVERY_ENABLED,
     run: () => {
       setRequestProDialog(true);
     },

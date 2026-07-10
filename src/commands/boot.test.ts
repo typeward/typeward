@@ -3,6 +3,7 @@ import { bootCoreCommands, registerAdapterCommands, unregisterAdapterCommands } 
 import { requestProDialog_, setRequestProDialog } from "./palette-store";
 import { _resetForTests, commands, getCommand } from "./registry";
 import type { EditorAdapter, Project } from "~/adapters/types";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import {
   resetEntitlementSource,
   setEntitlementSource,
@@ -69,12 +70,14 @@ describe("bootCoreCommands", () => {
     setProject(null);
   });
 
-  it("core.whatsInPro is visible on every tier and raises the ProDialog request", () => {
+  it("core.whatsInPro follows the Pro-discovery flag and raises the ProDialog request", () => {
     bootCoreCommands();
     const cmd = getCommand("core.whatsInPro");
     expect(cmd).toBeDefined();
-    // No `when` gate — the discovery entry must not vanish per tier.
-    expect(cmd?.when).toBeUndefined();
+    // The `when` gate rides the free-only-beta flag, never the tier — while
+    // discovery is off the entry hides for everyone, once it's on it must
+    // not vanish per tier.
+    expect(cmd?.when?.()).toBe(PRO_DISCOVERY_ENABLED);
 
     setRequestProDialog(false);
     void cmd?.run();

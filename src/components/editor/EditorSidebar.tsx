@@ -46,6 +46,7 @@ import {
 import { Dialog } from "~/components/primitives/Dialog";
 import { Button } from "~/components/primitives/Button";
 import { ProLockedPanel } from "~/components/entitlement/ProChip";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
 import { notifyError } from "~/lib/toast";
@@ -164,13 +165,14 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   );
 
   const scmLocked = () => !gitEntitled();
-  // Entitled: only inside a git repo (as before). Locked: always visible so
-  // the feature stays discoverable — activating shows the locked panel.
-  const showScm = () => (scmLocked() ? true : isGitRepo());
+  // Entitled: only inside a git repo (as before). Locked: visible as a quiet
+  // discovery affordance — activating shows the locked panel — but only while
+  // Pro discovery is on; during the free-only beta the locked tab hides.
+  const showScm = () => (scmLocked() ? PRO_DISCOVERY_ENABLED : isGitRepo());
 
   // If SCM was active and the project switched to a non-repo, the tab strip
-  // no longer shows it — bounce to Files. (A lapsed entitlement keeps the
-  // tab, now locked.)
+  // no longer shows it — bounce to Files. (With discovery on, a lapsed
+  // entitlement keeps the tab, now locked.)
   createEffect(() => {
     if (!showScm() && props.tab === "scm") props.setTab("files");
   });
@@ -182,7 +184,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   const refsLocked = () => !refsEntitled();
   const hasReferences = () =>
     citationProviders().length > 0 && refsAvailability() !== "none-ready";
-  const showRefs = () => (refsLocked() ? true : hasReferences());
+  const showRefs = () => (refsLocked() ? PRO_DISCOVERY_ENABLED : hasReferences());
   createEffect(() => {
     if (!showRefs() && props.tab === "references") props.setTab("files");
   });
@@ -454,7 +456,8 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       {/* Tab row — Files / Review / TODO. When entitled, SCM shows only
           inside git repos and Refs only with a configured citation provider;
           below Pro both stay visible with a lock marker and open a slim
-          locked panel instead. */}
+          locked panel instead — unless Pro discovery is off, which hides
+          the locked tabs entirely. */}
       <div
         ref={tabStripRef}
         role="tablist"

@@ -29,6 +29,7 @@ import {
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
 import { setRequestProDialog } from "~/commands/palette-store";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { hasAnyAiEntitlement } from "~/integrations/ai/registry";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { KbdHint } from "~/components/primitives/KbdHint";
@@ -884,8 +885,9 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         {/* Below Pro the AI toggle stays visible with a lock marker and opens
             the ProDialog — the pane itself never opens (discovery amendment
             2026-07-08). Not gated on the master switch: that switch lives in
-            a Pro-locked settings section. */}
-        <Show when={!hasAnyAiEntitlement() && !props.embedded}>
+            a Pro-locked settings section. Hidden with the rest of the Pro
+            discovery layer during the free-only beta. */}
+        <Show when={PRO_DISCOVERY_ENABLED && !hasAnyAiEntitlement() && !props.embedded}>
           <ToolbarIconToggle
             active={false}
             onClick={() => setRequestProDialog(true)}

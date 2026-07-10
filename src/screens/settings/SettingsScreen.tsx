@@ -21,10 +21,11 @@ import {
   Type,
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createResource, createSignal } from "solid-js";
+import { For, Show, createEffect, createResource, createSignal } from "solid-js";
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { ProChip, ProLockedPanel } from "~/components/entitlement/ProChip";
 import { setRequestProDialog } from "~/commands/palette-store";
+import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
@@ -136,9 +137,10 @@ interface NavItem {
   label: string;
   icon: Component<{ size?: number; class?: string }>;
   badge?: string;
-  /** Row stays visible when locked (discovery amendment 2026-07-08) but
-   *  carries a quiet Pro chip; its panel renders a locked state instead of
-   *  the cards. */
+  /** While Pro discovery is on, the row stays visible when locked (discovery
+   *  amendment 2026-07-08) with a quiet Pro chip and its panel renders a
+   *  locked state instead of the cards. While it's off (free-only beta),
+   *  locked rows hide entirely — the pre-amendment behavior. */
   locked?: () => boolean;
 }
 
@@ -188,13 +190,28 @@ const SettingsScreen: Component = () => {
   const navigate = useNavigate();
   const [active, setActive] = createSignal<SectionId>("appearance");
 
-  // One-shot deep link (e.g. onboarding's "Sign in" → Account). Locked
-  // integration rows no longer hide, so no visibility bounce is needed.
+  // One-shot deep link (e.g. onboarding's "Sign in" → Account). With Pro
+  // discovery on, locked integration rows don't hide, so no visibility
+  // bounce is needed there.
   const intent = settingsSectionIntent();
   if (intent) {
     setSettingsSectionIntent(null);
     if (SECTION_IDS.has(intent)) setActive(intent as SectionId);
   }
+
+  // While Pro discovery is off, locked integration rows hide from the nav —
+  // and a group they empty out hides with them.
+  const visibleItems = (g: NavGroup) =>
+    g.items.filter((item) => PRO_DISCOVERY_ENABLED || !item.locked?.());
+
+  // A locked section can vanish from the nav underneath the user (e.g.
+  // sign-out while an integrations panel is open); bounce off the now-blank
+  // panel instead of stranding them on it.
+  createEffect(() => {
+    if (PRO_DISCOVERY_ENABLED) return;
+    const item = NAV.flatMap((g) => g.items).find((i) => i.id === active());
+    if (item?.locked?.()) setActive("appearance");
+  });
 
   // Back-button label + target derived from `nav-store.previousRoute`. Falls
   // back to /projects when the user opened Settings via a fresh boot or deep
@@ -253,46 +270,48 @@ const SettingsScreen: Component = () => {
             <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
               <For each={NAV}>
                 {(g) => (
-                  <div>
-                    <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
-                    <For each={g.items}>
-                      {(item) => {
-                        const isActive = () => active() === item.id;
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => setActive(item.id)}
-                            class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-base ${
-                              isActive()
-                                ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
-                                : "text-fg-2 hover:bg-[var(--color-control-fill)]"
-                            }`}
-                            style={{ height: "var(--ui-row)" }}
-                          >
-                            <item.icon class="ui-icon-menu" />
-                            <span class={isActive() ? "font-medium" : ""}>
-                              {item.label}
-                            </span>
-                            <Show when={item.badge}>
-                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
-                                {item.badge}
+                  <Show when={visibleItems(g).length > 0}>
+                    <div>
+                      <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
+                      <For each={visibleItems(g)}>
+                        {(item) => {
+                          const isActive = () => active() === item.id;
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => setActive(item.id)}
+                              class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-base ${
+                                isActive()
+                                  ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
+                                  : "text-fg-2 hover:bg-[var(--color-control-fill)]"
+                              }`}
+                              style={{ height: "var(--ui-row)" }}
+                            >
+                              <item.icon class="ui-icon-menu" />
+                              <span class={isActive() ? "font-medium" : ""}>
+                                {item.label}
                               </span>
-                            </Show>
-                            <Show when={item.locked?.()}>
-                              <span class="ml-auto">
-                                <ProChip />
-                              </span>
-                            </Show>
-                            <Show when={item.id === "account"}>
-                              <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
-                                {currentTier()}
-                              </span>
-                            </Show>
-                          </button>
-                        );
-                      }}
-                    </For>
-                  </div>
+                              <Show when={item.badge}>
+                                <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
+                                  {item.badge}
+                                </span>
+                              </Show>
+                              <Show when={item.locked?.()}>
+                                <span class="ml-auto">
+                                  <ProChip />
+                                </span>
+                              </Show>
+                              <Show when={item.id === "account"}>
+                                <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
+                                  {currentTier()}
+                                </span>
+                              </Show>
+                            </button>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </Show>
                 )}
               </For>
             </div>
@@ -1079,13 +1098,17 @@ const EditorPanel: Component = () => {
         </Row>
         <FeatureGate
           feature="integrations.grammar.harper"
+          // The locked row is a discovery surface — without the flag the row
+          // vanishes entirely (FeatureGate's default locked-renders-nothing).
           fallback={
-            <Row
-              label="Spell & grammar check"
-              hint="On-device grammar and spelling via Harper. Part of Typeward Pro."
-            >
-              <ProChip onClick={() => setRequestProDialog(true)} />
-            </Row>
+            PRO_DISCOVERY_ENABLED ? (
+              <Row
+                label="Spell & grammar check"
+                hint="On-device grammar and spelling via Harper. Part of Typeward Pro."
+              >
+                <ProChip onClick={() => setRequestProDialog(true)} />
+              </Row>
+            ) : undefined
           }
         >
           <Row

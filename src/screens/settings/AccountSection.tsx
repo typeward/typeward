@@ -31,7 +31,7 @@ import { Show, createResource, createSignal } from "solid-js";
 
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
-import { ACCOUNT_BILLING_URL } from "~/config/pro";
+import { ACCOUNT_BILLING_URL, PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { describeIpcError } from "~/integrations/auth/chunked";
 import {
   getSupabaseClient,
@@ -153,9 +153,12 @@ const SignInCard: Component = () => {
           {busy() ? "Signing in…" : "Sign in"}
         </Button>
         <div class="flex flex-col gap-2 text-xs text-fg-3">
+          {/* Plan-choice copy is Pro discovery; the account link itself stays
+              (a free account powers settings sync). */}
           <span>
-            No account yet? Sign up and choose a plan on the Typeward website,
-            then sign in here.
+            {PRO_DISCOVERY_ENABLED
+              ? "No account yet? Sign up and choose a plan on the Typeward website, then sign in here."
+              : "No account yet? Create a free one on the Typeward website, then sign in here."}
           </span>
           <button
             type="button"
@@ -268,13 +271,17 @@ const SignedInCard: Component = () => {
           </div>
         </Show>
         <div class="flex items-center gap-2">
-          <Button
-            variant="primary"
-            leadingIcon={<ExternalLink class="ui-icon-sm" />}
-            onClick={() => void openUrl(ACCOUNT_BILLING_URL)}
-          >
-            Manage plan & billing
-          </Button>
+          {/* No purchasable Pro during the free-only beta — the billing CTA
+              hides; the plan badge and "Refresh plan" stay. */}
+          <Show when={PRO_DISCOVERY_ENABLED}>
+            <Button
+              variant="primary"
+              leadingIcon={<ExternalLink class="ui-icon-sm" />}
+              onClick={() => void openUrl(ACCOUNT_BILLING_URL)}
+            >
+              Manage plan & billing
+            </Button>
+          </Show>
           <Button
             variant="secondary"
             size="sm"
@@ -297,9 +304,9 @@ const SignedInCard: Component = () => {
         <div class="flex items-center gap-1.5 text-xs text-fg-3">
           <ShieldCheck class="ui-icon-sm" />
           <span>
-            Plans are purchased and managed on the Typeward website. Paid
-            integrations unlock from the entitlement tier on your subscription;
-            sign-out returns to the free-tier matrix.
+            {PRO_DISCOVERY_ENABLED
+              ? "Plans are purchased and managed on the Typeward website. Paid integrations unlock from the entitlement tier on your subscription; sign-out returns to the free-tier matrix."
+              : "Your plan is read from your account subscription; sign-out returns to the free-tier matrix."}
           </span>
         </div>
       </div>
