@@ -3,6 +3,7 @@ import {
   applyRemoteSettingValue,
   buildSettings,
   noteInstallId,
+  setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setShareCrashReports,
   setSyncSettingsEnabled,
@@ -74,6 +75,26 @@ describe("settings-store updates roundtrip", () => {
     expect(buildSettings().updates?.checkAutomatically).toBe(false);
     // Restore for other suites sharing module state.
     setUpdatesCheckAutomatically(true);
+  });
+});
+
+// The occasional-feedback-prompt toggle persists like any other field and is
+// synced (a preference, not device state). Default ON — the card itself sends
+// nothing without an explicit user action.
+describe("settings-store feedback roundtrip", () => {
+  it("defaults promptsEnabled on and persists changes", () => {
+    expect(buildSettings().feedback?.promptsEnabled).toBe(true);
+    setFeedbackPromptsEnabled(false);
+    expect(buildSettings().feedback?.promptsEnabled).toBe(false);
+    setFeedbackPromptsEnabled(true);
+  });
+
+  it("backfills the default for settings.json files predating the section", () => {
+    // applyRemoteSettingValue routes through the same hydrate boundary the
+    // loader uses; an absent value must land on the default (ON), not undefined.
+    setFeedbackPromptsEnabled(false);
+    expect(applyRemoteSettingValue("feedback.promptsEnabled", undefined)).toBe(true);
+    expect(buildSettings().feedback?.promptsEnabled).toBe(true);
   });
 });
 

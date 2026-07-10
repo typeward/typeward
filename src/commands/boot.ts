@@ -14,6 +14,7 @@ import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import {
   paletteOpen_,
+  setRequestFeedbackCard,
   setRequestHistoryPanel,
   setRequestProDialog,
   setRequestSaveTemplate,
@@ -263,6 +264,18 @@ const CORE_COMMANDS: EditorCommand[] = [
     run: async () => {
       const { openBugReport } = await import("~/lib/bug-report");
       await openBugReport();
+    },
+  },
+  {
+    id: "core.sendFeedback",
+    title: "Send feedback",
+    subtitle: "Tell us what's working and what could be better",
+    group: "Help",
+    scope: "global",
+    // Manual opens ignore the occasional-prompt trigger state entirely — no
+    // cooldown check, no dismissal/shown bookkeeping (feedback-prompt.ts).
+    run: () => {
+      setRequestFeedbackCard("manual");
     },
   },
 ];
