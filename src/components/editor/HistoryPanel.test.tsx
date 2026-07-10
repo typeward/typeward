@@ -16,6 +16,7 @@ const spies = vi.hoisted(() => ({
   mountHistoryDiff: vi.fn(),
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
+  notifyLocalSave: vi.fn(),
   recordError: vi.fn(),
 }));
 
@@ -36,6 +37,9 @@ vi.mock("~/lib/toast", () => ({
   notifyError: spies.notifyError,
 }));
 vi.mock("~/lib/telemetry", () => ({ recordError: spies.recordError }));
+vi.mock("~/integrations/cloud/init", () => ({
+  notifyLocalSave: spies.notifyLocalSave,
+}));
 
 import { HistoryPanel } from "./HistoryPanel";
 import {
@@ -151,6 +155,12 @@ describe("HistoryPanel", () => {
     // so the mounted CodeMirror remounts on the restored content instead of
     // keeping the pre-restore doc (which autosave would write back to disk).
     expect(activeFile()?.adoptGeneration).toBe(1);
+    // The restored content pushes to cloud sync like any save — after the
+    // disk write completed (the sync contract).
+    expect(spies.notifyLocalSave).toHaveBeenCalledWith("/A", ["main.tex"]);
+    expect(spies.historyRestore.mock.invocationCallOrder[0]).toBeLessThan(
+      spies.notifyLocalSave.mock.invocationCallOrder[0],
+    );
     expect(spies.notifySuccess).toHaveBeenCalled();
     // The list refetches so the just-captured pre-restore version shows up.
     expect(spies.historyList.mock.calls.length).toBeGreaterThan(1);
@@ -196,6 +206,8 @@ describe("HistoryPanel", () => {
       );
     });
     expect(activeFile()?.content).toBe("current buffer");
+    // Nothing landed on disk, so nothing may be queued for push.
+    expect(spies.notifyLocalSave).not.toHaveBeenCalled();
   });
 
   it("shows the empty state for files with no history", async () => {

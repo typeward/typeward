@@ -50,6 +50,7 @@ import {
   _resetAiChatForTests,
   activeConversation,
   chatStreaming,
+  chatStreamingText,
   conversations,
   ensureConversationsLoaded,
   flushPendingAiChatSaves,
@@ -123,7 +124,9 @@ describe("sendChatMessage", () => {
     };
 
     const sending = sendChatMessage("stop me");
-    await until(() => chatStreaming());
+    // Wait for the first delta, not just the streaming flag — the flag now
+    // flips before the model resolves, and this test stops mid-stream.
+    await until(() => chatStreamingText().includes("partial"));
     stopChatStream();
     await sending;
 
@@ -133,6 +136,35 @@ describe("sendChatMessage", () => {
       content: "partial ",
       interrupted: true,
     });
+    expect(chatStreaming()).toBe(false);
+  });
+
+  it("ignores a second Send while the first is still resolving its model", async () => {
+    spies.chatImpl = async function* () {
+      yield { delta: "one", done: true };
+    };
+
+    // The first send is suspended on its model fetch here; a duplicate must
+    // not append a second user turn or start a concurrent stream.
+    const first = sendChatMessage("first");
+    const second = sendChatMessage("duplicate");
+    await Promise.all([first, second]);
+
+    const conv = activeConversation()!;
+    expect(conv.turns.map((t) => t.role)).toEqual(["user", "assistant"]);
+    expect(conv.turns[0].content).toBe("first");
+  });
+
+  it("appends no assistant turn when a stream completes with zero output", async () => {
+    spies.chatImpl = async function* () {
+      yield { delta: "", done: true };
+    };
+
+    await sendChatMessage("silent");
+
+    const conv = activeConversation()!;
+    expect(conv.turns).toHaveLength(1);
+    expect(conv.turns[0].role).toBe("user");
     expect(chatStreaming()).toBe(false);
   });
 

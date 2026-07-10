@@ -86,6 +86,12 @@ export const AiActionDialog: Component = () => {
   }
 
   async function stream(req: AiActionRequestInfo): Promise<void> {
+    // A palette shortcut can fire over the open dialog — abort the superseded
+    // stream before claiming the slot (the signal propagates to
+    // ai_stream_abort), or its Rust task and provider request run to
+    // completion with no consumer.
+    abortController?.abort();
+    abortController = null;
     destroyDiff();
     // Chat-bubble "Apply to selection" arrives final — no request to send.
     if (req.presetResult !== undefined) {

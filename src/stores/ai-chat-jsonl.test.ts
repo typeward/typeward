@@ -80,6 +80,18 @@ describe("serializeConversation / parseConversation", () => {
     expect(parseConversation("not json\n")).toBeNull();
     expect(parseConversation(`${JSON.stringify({ title: "no id" })}\n`)).toBeNull();
   });
+
+  it("rejects header ids outside the makeChatId alphabet", () => {
+    const withId = (id: string) =>
+      `${JSON.stringify({ v: 1, id, title: "t", createdAt: 1, updatedAt: 2 })}\n`;
+    // The id feeds fs delete/save paths — traversal must never load.
+    expect(parseConversation(withId("../../../../target/file"))).toBeNull();
+    expect(parseConversation(withId("..\\evil"))).toBeNull();
+    expect(parseConversation(withId("a/b"))).toBeNull();
+    expect(parseConversation(withId("UPPER"))).toBeNull();
+    expect(parseConversation(withId("a".repeat(81)))).toBeNull();
+    expect(parseConversation(withId("m3x0d1-abc12345"))).not.toBeNull();
+  });
 });
 
 describe("deriveTitle", () => {

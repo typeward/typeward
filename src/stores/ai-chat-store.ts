@@ -294,22 +294,10 @@ async function runStream(conversationId: string): Promise<void> {
     );
     return;
   }
-  const model = await resolveSelectedModel(prov);
-  if (!model) {
-    setChatError(
-      "No model available — the provider may be unreachable. Check Settings → Integrations → AI.",
-    );
-    return;
-  }
-  const messages = outboundMessages(conv);
-  const attachmentBytes = totalAttachmentBase64Bytes(messages);
-  if (attachmentBytes > MAX_REQUEST_BASE64_BYTES) {
-    setChatError(
-      `Attached images total ${formatBytes(attachmentBytes)} — over the ${formatBytes(MAX_REQUEST_BASE64_BYTES)} request limit. Remove an image or start a new conversation.`,
-    );
-    return;
-  }
 
+  // Claim the streaming slot before the first await — resolving the model can
+  // hit the network, and a second Send in that window would otherwise start a
+  // concurrent stream and clobber the abort handle.
   const controller = new AbortController();
   abortController = controller;
   setChatStreaming(true);
@@ -317,9 +305,26 @@ async function runStream(conversationId: string): Promise<void> {
   setStreamingConversationId(conversationId);
   setChatError(null);
 
+  let model = "";
   let acc = "";
   let failed = false;
   try {
+    model = await resolveSelectedModel(prov);
+    if (controller.signal.aborted) return;
+    if (!model) {
+      setChatError(
+        "No model available — the provider may be unreachable. Check Settings → Integrations → AI.",
+      );
+      return;
+    }
+    const messages = outboundMessages(conv);
+    const attachmentBytes = totalAttachmentBase64Bytes(messages);
+    if (attachmentBytes > MAX_REQUEST_BASE64_BYTES) {
+      setChatError(
+        `Attached images total ${formatBytes(attachmentBytes)} — over the ${formatBytes(MAX_REQUEST_BASE64_BYTES)} request limit. Remove an image or start a new conversation.`,
+      );
+      return;
+    }
     for await (const chunk of prov.chat(messages, {
       model,
       signal: controller.signal,
@@ -336,8 +341,9 @@ async function runStream(conversationId: string): Promise<void> {
   } finally {
     const interrupted = controller.signal.aborted || failed;
     // Stop keeps the partial text as an assistant turn (rendered with a
-    // "stopped" marker) instead of discarding it; an empty abort adds nothing.
-    if (acc.length > 0 || !interrupted) {
+    // "stopped" marker) instead of discarding it; an empty stream — aborted,
+    // failed, or a zero-output completion — adds no bubble.
+    if (acc.length > 0) {
       appendTurn(conversationId, {
         id: makeChatId(),
         role: "assistant",

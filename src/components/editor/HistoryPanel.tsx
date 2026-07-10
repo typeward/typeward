@@ -12,6 +12,7 @@ import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import * as ipc from "~/ipc";
 import { saveOpenFile } from "~/commands/actions";
+import { notifyLocalSave } from "~/integrations/cloud/init";
 import { describeIpcError } from "~/lib/errors";
 import { sha256Hex } from "~/lib/hash";
 import { recordError } from "~/lib/telemetry";
@@ -78,6 +79,10 @@ export const HistoryPanel: Component = () => {
       // content — without it the mounted CM doc stays stale and the next
       // keystroke + autosave would write the pre-restore text back to disk.
       adoptDiskContent(f.path, restored, await sha256Hex(restored));
+      // The restore wrote to disk outside the save funnel — queue the cloud
+      // push like every save path, or other devices keep the pre-restore
+      // content and interim remote edits mint spurious conflict sidecars.
+      notifyLocalSave(p.rootPath, [f.relPath]);
       setSelected(null);
       setHistoryGen((n) => n + 1);
       notifySuccess(
