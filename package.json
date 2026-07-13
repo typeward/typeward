@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "config": {
-    "texliveWasm": "v0.2.2-alpha"
+    "texliveWasm": "9f9beda5914e9eb78bba51792647267352cb472d"
   },
   "scripts": {
     "dev": "vite",
