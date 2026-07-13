@@ -37,6 +37,7 @@ import {
   openTodoThreadCount,
   loadThreads,
   flushPendingReviewSave,
+  flushAndResetThreads,
   resetThreads,
   _resetForTests,
 } from "~/stores/review-store";
@@ -232,6 +233,61 @@ describe("review-store persistence", () => {
     addThread(createThread("main.tex", 0, 5, "again", "Alice", "Root"));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(writeProjectTextFile).not.toHaveBeenCalled();
+  });
+
+  it("flushAndResetThreads skips the stale reset when another project loads during the flush", async () => {
+    readProjectTextFile.mockRejectedValue(new Error("os error 2"));
+    await loadThreads();
+    addThread(createThread("main.tex", 0, 5, "hello", "Alice", "Root"));
+
+    // Make the flush's write hang so the reopened editor can load underneath it.
+    let releaseWrite!: () => void;
+    writeProjectTextFile.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        }),
+    );
+    const stale = flushAndResetThreads();
+
+    // The reopened editor's open path: reset, then load project B's threads.
+    resetThreads();
+    h.project.current = { rootPath: "/proj/b" };
+    const threadB = createThread("b.tex", 0, 5, "bee", "Bob", "B");
+    readProjectTextFile.mockResolvedValue(JSON.stringify([threadB]));
+    await loadThreads();
+    expect(allThreads()).toHaveLength(1);
+
+    releaseWrite();
+    await stale;
+
+    // The stale reset must not have wiped B's threads...
+    expect(allThreads().map((t) => t.id)).toEqual([threadB.id]);
+
+    // ...nor re-armed read-only: a mutation in B still persists.
+    addThread(createThread("b.tex", 6, 9, "more", "Bob", "B2"));
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(writeProjectTextFile).toHaveBeenCalledTimes(2);
+    const [root, , data] = writeProjectTextFile.mock.calls[1];
+    expect(root).toBe("/proj/b");
+    expect(JSON.parse(data as string)).toHaveLength(2);
+  });
+
+  it("flushAndResetThreads flushes to the closed project and resets when nothing interleaves", async () => {
+    readProjectTextFile.mockRejectedValue(new Error("os error 2"));
+    await loadThreads();
+    addThread(createThread("main.tex", 0, 5, "hello", "Alice", "Root"));
+
+    await flushAndResetThreads();
+
+    expect(writeProjectTextFile).toHaveBeenCalledTimes(1);
+    expect(writeProjectTextFile.mock.calls[0][0]).toBe("/proj/a");
+    expect(allThreads()).toEqual([]);
+
+    // Read-only re-armed: a mutation without a fresh load must not persist.
+    addThread(createThread("main.tex", 0, 5, "again", "Alice", "Root"));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(writeProjectTextFile).toHaveBeenCalledTimes(1);
   });
 
   it("a write failure surfaces a toast and retries via the debounce", async () => {

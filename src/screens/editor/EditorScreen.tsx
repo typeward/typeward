@@ -41,6 +41,7 @@ import {
   flushPendingAiChatSaves,
 } from "~/stores/ai-chat-store";
 import {
+  flushAndResetThreads,
   flushPendingReviewSave,
   loadThreads,
   resetThreads,
@@ -89,7 +90,7 @@ const EditorScreen: Component = () => {
       void stopAllSessions();
       void stopWatching();
       teardownAdapter();
-      void flushPendingReviewSave().then(resetThreads);
+      void flushAndResetThreads();
       setProject(null);
       resetTabs();
       resetCompileState();
@@ -111,7 +112,7 @@ const EditorScreen: Component = () => {
           void stopAllSessions();
           void stopWatching();
           teardownAdapter();
-          void flushPendingReviewSave().then(resetThreads);
+          void flushAndResetThreads();
           setProject(null);
           resetTabs();
           resetCompileState();
@@ -177,7 +178,7 @@ const EditorScreen: Component = () => {
         void stopAllSessions();
         void stopWatching();
         teardownAdapter();
-        void flushPendingReviewSave().then(resetThreads);
+        void flushAndResetThreads();
         setProject(null);
         resetTabs();
         resetCompileState();
@@ -190,7 +191,7 @@ const EditorScreen: Component = () => {
     void stopAllSessions();
     void stopWatching();
     teardownAdapter();
-    void flushPendingReviewSave().then(resetThreads);
+    void flushAndResetThreads();
   });
 
   // Closing a tab confirms discarding a dirty buffer; closing the window has

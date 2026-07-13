@@ -73,6 +73,10 @@ let _readOnly = true;
 // One save-failure toast per project — a repeatedly failing debounce must not
 // spam the user, but the failure must not be silent either.
 let _writeErrorToastedRoot: string | null = null;
+// Bumped whenever the store starts a new lifecycle (reset, or a load that
+// established a project's threads) — lets a slow flush from a closed editor
+// detect that its trailing reset has gone stale.
+let _lifecycleGen = 0;
 
 function threadsForFile(relPath: string): CommentThread[] {
   return allThreads().filter((t) => t.fileRelPath === relPath);
@@ -213,6 +217,7 @@ async function loadThreads(isCurrent: () => boolean = () => true): Promise<void>
     if (!isCurrent()) return;
     if (isNotFoundError(e)) {
       // No sidecar yet — an empty, writable slate.
+      _lifecycleGen++;
       setAllThreads([]);
       _readOnly = false;
     } else {
@@ -226,6 +231,7 @@ async function loadThreads(isCurrent: () => boolean = () => true): Promise<void>
   try {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
+      _lifecycleGen++;
       setAllThreads(parsed);
       _readOnly = false;
     } else {
@@ -268,8 +274,22 @@ async function flushPendingReviewSave(): Promise<void> {
   if (root) await writeThreads(root);
 }
 
+/**
+ * Flush any pending save, then clear the store — unless another project's
+ * threads loaded meanwhile. A slow flush from a closed editor must not wipe
+ * (and read-only-lock) the reopened project's freshly loaded threads; the
+ * write itself is safe to keep because the flush snapshots its payload and
+ * target root synchronously, before the first await.
+ */
+async function flushAndResetThreads(): Promise<void> {
+  const gen = _lifecycleGen;
+  await flushPendingReviewSave();
+  if (gen === _lifecycleGen) resetThreads();
+}
+
 /** Clear in-memory threads on project switch/close (cancels pending saves). */
 function resetThreads(): void {
+  _lifecycleGen++;
   if (_saveTimer) {
     clearTimeout(_saveTimer);
     _saveTimer = null;
@@ -328,6 +348,7 @@ export {
   updateThreadOffsets,
   loadThreads,
   flushPendingReviewSave,
+  flushAndResetThreads,
   resetThreads,
   _resetForTests,
 };

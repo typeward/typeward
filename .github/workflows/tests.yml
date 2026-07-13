@@ -71,6 +71,34 @@ jobs:
         working-directory: app
         run: npm run check:bundle
 
+  rust-audit:
+    name: RustSec advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: app
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      # The two ignored quick-xml advisories (fixed >=0.41) still match a residual
+      # quick-xml 0.39.4 pinned by wayland-scanner (Linux-only build-time proc-macro
+      # via tauri-plugin-clipboard-manager -> arboard -> wl-clipboard-rs); it parses
+      # trusted protocol XML bundled inside the wayland crates, never runtime input.
+      # Our direct quick-xml (the WebDAV PROPFIND security boundary) is on 0.41+.
+      # Drop the ignores once wayland-scanner moves off ^0.39.
+      - name: Cargo audit
+        working-directory: app/src-tauri
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195
+
   rust:
     name: Cargo tests
     runs-on: ubuntu-24.04

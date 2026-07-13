@@ -12,10 +12,9 @@ let initialized = false;
 
 /**
  * Crash/error reporting via Sentry. This module is loaded ONLY through a
- * dynamic import (see index.tsx): the SDK with tracing + replay is ~250 KB,
- * which would blow the check-bundle-shape boot-path ceiling as a static
- * entry import. The ingest host must stay allowlisted in tauri.conf.json's
- * CSP `connect-src`, and Replay needs the existing `worker-src blob:`.
+ * dynamic import (see sentry-gate.ts): a static entry import would blow the
+ * check-bundle-shape boot-path ceiling. The ingest host must stay
+ * allowlisted in tauri.conf.json's CSP `connect-src`.
  */
 export function initSentry(): void {
   if (initialized || typeof window === "undefined") return;
@@ -24,21 +23,9 @@ export function initSentry(): void {
   Sentry.init({
     dsn: DSN,
     environment: import.meta.env.DEV ? "development" : "production",
-    integrations: [
-      Sentry.browserTracingIntegration(),
-      // Replay masks all text and blocks media by default — document content
-      // in the editor never leaves the machine readable. Don't relax
-      // maskAllText/blockAllMedia without a product decision.
-      Sentry.replayIntegration(),
-    ],
-    tracesSampleRate: 1.0,
-    // No first-party HTTP backend: webview traffic is Tauri IPC plus
-    // third-party hosts (Supabase, providers). Injecting sentry-trace/baggage
-    // headers into those would only risk CORS preflight failures.
-    tracePropagationTargets: [],
-    replaysSessionSampleRate: 0.1,
-    replaysOnErrorSampleRate: 1.0,
-    enableLogs: true,
+    // Errors only, deliberately: the "Share crash reports" opt-in consents to
+    // crash/error reports and nothing broader. Don't add tracing, session
+    // replay, or log forwarding without widening that consent copy first.
   });
 }
 

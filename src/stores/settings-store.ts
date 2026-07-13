@@ -1,6 +1,9 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 import * as ipc from "~/ipc";
+import { describeIpcError } from "~/lib/errors";
 import { isTauriMobile } from "~/lib/platform";
+import { recordError } from "~/lib/telemetry";
+import { notifyError } from "~/lib/toast";
 import { isPreviewWindow } from "~/lib/window-role";
 import {
   ACCENTS,
@@ -638,10 +641,20 @@ export function applyRemoteSettingValue(key: string, value: unknown): boolean {
   return true;
 }
 
+function hasTauriIpc(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    typeof (window as Window & { __TAURI_INTERNALS__?: { invoke?: unknown } })
+      .__TAURI_INTERNALS__?.invoke === "function"
+  );
+}
+
 createRoot(() => {
   // Seeded from the just-loaded state so the persistence effect's first run
   // (triggered when `settingsLoaded` flips) is a no-op instead of echoing an
-  // identical settings.json back to disk on every launch.
+  // identical settings.json back to disk on every launch. Advanced only after
+  // a write actually lands — advancing it eagerly made a failed write look
+  // persisted, so nothing ever retried and the change was lost on quit.
   let lastSavedJson: string | null = null;
 
   void (async () => {
@@ -658,7 +671,105 @@ createRoot(() => {
     }
   })();
 
+  const SAVE_DEBOUNCE_MS = 250;
+  // Slower than the debounce so a persistently failing write (disk full,
+  // settings.json locked by another process) retries without hammering.
+  // Doubles per consecutive failure up to the cap so a deterministic failure
+  // can't flood the capped telemetry log or retry-spin forever at 2s.
+  const SAVE_RETRY_MS = 2_000;
+  const SAVE_RETRY_MAX_MS = 60_000;
+  // Generous — a slow write that settles still counts as a success. Without
+  // it, one invoke that never settles (AV/backup tool holding settings.json)
+  // would hold the single-flight latch for the rest of the session and no
+  // later change would ever persist.
+  const SAVE_TIMEOUT_MS = 15_000;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let saveInFlight = false;
+  // Toast and telemetry fire once per failure streak; a success resets both.
+  let saveErrorNotified = false;
+  let saveRetryDelay = SAVE_RETRY_MS;
+  // Latest serialized state, refreshed on every effect run. The flush reads it
+  // at fire time, so a retry (or a write queued behind an in-flight one) can
+  // never resurrect a superseded snapshot.
+  let latestSnapshot: { next: ipc.AppSettings; json: string } | null = null;
+
+  function armSave(delay: number): void {
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void flushSave();
+    }, delay);
+  }
+
+  function noteLateSaveSuccess(json: string): void {
+    // Settlement order mirrors write-completion order, so a hung write that
+    // succeeds after its timeout overwrote whatever a faster retry put on
+    // disk in between — adopt it as the baseline and rewrite anything newer.
+    lastSavedJson = json;
+    saveErrorNotified = false;
+    saveRetryDelay = SAVE_RETRY_MS;
+    if (latestSnapshot !== null && latestSnapshot.json !== json) armSave(SAVE_DEBOUNCE_MS);
+  }
+
+  async function flushSave(): Promise<void> {
+    // Single writer: if a write is in flight, its settle handler re-arms when
+    // the store is still dirty.
+    if (saveInFlight || latestSnapshot === null) return;
+    const { next, json } = latestSnapshot;
+    if (json === lastSavedJson) return;
+    saveInFlight = true;
+    let timedOut = false;
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const invoke = ipc.saveSettings(next);
+    // A rejection landing after the timeout was already counted as a failure;
+    // a success landing after it still reached disk and must not be lost.
+    void invoke.then(
+      () => {
+        if (timedOut) noteLateSaveSuccess(json);
+      },
+      () => {},
+    );
+    let failed = false;
+    try {
+      await Promise.race([
+        invoke,
+        new Promise<never>((_resolve, reject) => {
+          timeoutTimer = setTimeout(() => {
+            timedOut = true;
+            reject(
+              new Error(`settings.json write did not settle within ${SAVE_TIMEOUT_MS / 1000}s`),
+            );
+          }, SAVE_TIMEOUT_MS);
+        }),
+      ]);
+      saveErrorNotified = false;
+      saveRetryDelay = SAVE_RETRY_MS;
+    } catch (e) {
+      // Outside Tauri (plain-browser dev, Vitest) there is no settings.json —
+      // treat the write as done instead of retry-looping.
+      if (hasTauriIpc()) {
+        failed = true;
+        if (!saveErrorNotified) {
+          saveErrorNotified = true;
+          recordError("settings-save", "writing settings.json failed", e);
+          notifyError("Couldn't save settings", describeIpcError(e));
+        }
+      }
+    } finally {
+      clearTimeout(timeoutTimer);
+    }
+    saveInFlight = false;
+    if (failed) {
+      // Baseline untouched, so the store stays genuinely dirty — the re-armed
+      // timer retries even if no further setting changes.
+      armSave(saveRetryDelay);
+      saveRetryDelay = Math.min(saveRetryDelay * 2, SAVE_RETRY_MAX_MS);
+    } else {
+      lastSavedJson = json;
+      if (latestSnapshot.json !== json) armSave(SAVE_DEBOUNCE_MS);
+    }
+  }
+
   createEffect(() => {
     const next = buildSettings();
     if (!settingsLoaded()) return;
@@ -668,14 +779,11 @@ createRoot(() => {
     // writer of settings.json.
     if (isPreviewWindow) return;
     const json = JSON.stringify(next);
+    latestSnapshot = { next, json };
     if (json === lastSavedJson) return;
-    lastSavedJson = json;
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      void ipc.saveSettings(next).catch(() => {
-        // Swallow in dev / non-Tauri contexts.
-      });
-    }, 250);
+    // A fresh user change interrupts a failure backoff and retries promptly.
+    saveRetryDelay = SAVE_RETRY_MS;
+    armSave(SAVE_DEBOUNCE_MS);
   });
 });
 

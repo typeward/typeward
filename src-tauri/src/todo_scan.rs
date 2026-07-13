@@ -135,7 +135,7 @@ fn keyword_in(text: &str) -> Option<(&'static str, String)> {
     let mut best: Option<(usize, &'static str, usize)> = None;
     for &(kw, kind) in KEYWORDS {
         if let Some(pos) = find_keyword(text, kw) {
-            if best.map_or(true, |(bp, _, _)| pos < bp) {
+            if best.is_none_or(|(bp, _, _)| pos < bp) {
                 best = Some((pos, kind, kw.len()));
             }
         }

@@ -25,15 +25,18 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
 use base64::Engine as _;
+use bytes::Bytes;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
-use quick_xml::events::Event;
+use quick_xml::events::{BytesRef, Event};
 use quick_xml::Reader;
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
-use crate::integrations::http::{blocking, outbound_client_builder, OutboundRedirect};
+use crate::integrations::http::{
+    blocking, outbound_client_builder, read_body_capped_raw, BodyCapError, OutboundRedirect,
+};
 use crate::{integrations::credentials, settings};
 
 const KEYRING_SERVICE: &str = "webdav";
@@ -506,7 +509,7 @@ async fn execute(
     method: Method,
     url: &Url,
     headers: &[(&str, String)],
-    body: Option<Vec<u8>>,
+    body: Option<Bytes>,
     cap: usize,
 ) -> Result<RawResponse, WebdavError> {
     let account = &session.account;
@@ -545,24 +548,12 @@ async fn execute(
         .and_then(|v| v.to_str().ok())
         .and_then(normalize_etag);
 
-    if let Some(len) = res.content_length() {
-        if len > cap as u64 {
-            return Err(WebdavError::TooLarge(format!("{len} bytes")));
-        }
-    }
-    let bytes = res
-        .bytes()
-        .await
-        .map_err(|e| WebdavError::Network(e.to_string()))?;
-    if bytes.len() > cap {
-        return Err(WebdavError::TooLarge(format!("{} bytes", bytes.len())));
-    }
+    let body = read_body_capped_raw(res, cap).await.map_err(|e| match e {
+        BodyCapError::TooLarge(msg) => WebdavError::TooLarge(msg),
+        BodyCapError::Read(msg) => WebdavError::Network(msg),
+    })?;
 
-    Ok(RawResponse {
-        status,
-        etag,
-        body: bytes.to_vec(),
-    })
+    Ok(RawResponse { status, etag, body })
 }
 
 fn http_ok(status: u16) -> bool {
@@ -629,6 +620,7 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<RawEntry>, WebdavError> {
 
     let mut field = Field::None;
     let mut text_buf = String::new();
+    let mut text_poisoned = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -661,22 +653,27 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<RawEntry>, WebdavError> {
                     "href" => {
                         field = Field::Href;
                         text_buf.clear();
+                        text_poisoned = false;
                     }
                     "status" if in_propstat => {
                         field = Field::Status;
                         text_buf.clear();
+                        text_poisoned = false;
                     }
                     "getetag" if in_propstat => {
                         field = Field::Etag;
                         text_buf.clear();
+                        text_poisoned = false;
                     }
                     "getcontentlength" if in_propstat => {
                         field = Field::Size;
                         text_buf.clear();
+                        text_poisoned = false;
                     }
                     "getlastmodified" if in_propstat => {
                         field = Field::LastMod;
                         text_buf.clear();
+                        text_poisoned = false;
                     }
                     _ => {}
                 }
@@ -689,8 +686,16 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<RawEntry>, WebdavError> {
             }
             Ok(Event::Text(e)) => {
                 if field != Field::None {
-                    let t = e.unescape().unwrap_or_default();
+                    let t = e.decode().unwrap_or_default();
                     text_buf.push_str(&t);
+                }
+            }
+            // quick-xml >= 0.38 no longer inlines `&...;` references into Text
+            // events; they arrive as their own event and must be resolved here
+            // or an href like `a&amp;b.tex` silently loses characters.
+            Ok(Event::GeneralRef(e)) => {
+                if field != Field::None && !push_general_ref(&e, &mut text_buf) {
+                    text_poisoned = true;
                 }
             }
             Ok(Event::End(e)) => {
@@ -698,30 +703,48 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<RawEntry>, WebdavError> {
                 match name.as_str() {
                     "href" => {
                         if matches!(field, Field::Href) {
-                            href = Some(text_buf.trim().to_string());
+                            // A poisoned href drops the whole entry: an empty
+                            // or partial value could alias a different path.
+                            href = if text_poisoned {
+                                None
+                            } else {
+                                Some(text_buf.trim().to_string())
+                            };
                         }
                         field = Field::None;
                     }
                     "status" => {
                         if matches!(field, Field::Status) {
-                            ps_status_text = text_buf.clone();
+                            ps_status_text = if text_poisoned {
+                                String::new()
+                            } else {
+                                text_buf.clone()
+                            };
                         }
                         field = Field::None;
                     }
                     "getetag" => {
                         if matches!(field, Field::Etag) {
-                            ps_etag = normalize_etag(&text_buf);
+                            ps_etag = if text_poisoned {
+                                None
+                            } else {
+                                normalize_etag(&text_buf)
+                            };
                         }
                         field = Field::None;
                     }
                     "getcontentlength" => {
                         if matches!(field, Field::Size) {
-                            ps_size = text_buf.trim().parse::<u64>().ok();
+                            ps_size = if text_poisoned {
+                                None
+                            } else {
+                                text_buf.trim().parse::<u64>().ok()
+                            };
                         }
                         field = Field::None;
                     }
                     "getlastmodified" => {
-                        if matches!(field, Field::LastMod) {
+                        if matches!(field, Field::LastMod) && !text_poisoned {
                             let v = text_buf.trim();
                             if !v.is_empty() {
                                 ps_lastmod = Some(v.to_string());
@@ -766,6 +789,34 @@ fn parse_multistatus(xml: &[u8]) -> Result<Vec<RawEntry>, WebdavError> {
     }
 
     Ok(entries)
+}
+
+/// Resolve numeric character references and the five predefined XML entities —
+/// exactly the set the old `unescape()` inlined. Anything else (a DTD-defined
+/// custom entity, a malformed char ref) returns `false` without touching
+/// `out`: this parser deliberately does no entity expansion, and the caller
+/// poisons the whole accumulated value — emitting partial text instead would
+/// let a truncated href alias a different file.
+#[must_use]
+fn push_general_ref(r: &BytesRef<'_>, out: &mut String) -> bool {
+    match r.resolve_char_ref() {
+        Ok(Some(ch)) => {
+            out.push(ch);
+            true
+        }
+        Ok(None) => match r
+            .decode()
+            .ok()
+            .and_then(|name| quick_xml::escape::resolve_xml_entity(&name))
+        {
+            Some(s) => {
+                out.push_str(s);
+                true
+            }
+            None => false,
+        },
+        Err(_) => false,
+    }
 }
 
 fn status_is_ok(status_line: &str) -> bool {
@@ -908,7 +959,7 @@ async fn webdav_status_probe_body(
 
 async fn webdav_status_probe_inner(session: &WebdavSession) -> Result<bool, WebdavError> {
     let url = request_url(&session.account, "", true)?;
-    let body = PROPFIND_BODY.as_bytes().to_vec();
+    let body = Bytes::from_static(PROPFIND_BODY.as_bytes());
     let res = execute(
         session,
         propfind_method()?,
@@ -955,7 +1006,7 @@ async fn webdav_propfind_inner(
     let account = &session.account;
     let url = request_url(account, rel_path, true)?;
     let depth_header = if depth == 0 { "0" } else { "1" };
-    let body = PROPFIND_BODY.as_bytes().to_vec();
+    let body = Bytes::from_static(PROPFIND_BODY.as_bytes());
     let res = execute(
         session,
         propfind_method()?,
@@ -1017,14 +1068,28 @@ struct PutRequest {
     account: WebdavAccount,
     rel_path: String,
     if_match: Option<String>,
-    body: Vec<u8>,
+    body: Bytes,
+}
+
+fn ensure_upload_within_cap(len: usize) -> Result<(), WebdavError> {
+    if len > MAX_FILE_BYTES {
+        return Err(WebdavError::TooLarge(format!(
+            "upload body is {len} bytes (cap {MAX_FILE_BYTES})"
+        )));
+    }
+    Ok(())
 }
 
 /// Upload bytes ride as the raw IPC body; account/path/if-match as
 /// percent-encoded headers (the JSON arg slot is taken by the raw body).
 /// Parsed synchronously so the borrowed `Request` never crosses an await.
+/// The size cap runs before the body is copied out of the request so an
+/// oversized upload is rejected without ever being duplicated.
 fn parse_put_request(request: &tauri::ipc::Request<'_>) -> Result<PutRequest, WebdavError> {
-    let body = crate::integrations::ipc::raw_body(request);
+    if let tauri::ipc::InvokeBody::Raw(bytes) = request.body() {
+        ensure_upload_within_cap(bytes.len())?;
+    }
+    let body = Bytes::from(crate::integrations::ipc::raw_body(request));
     let account: WebdavAccount = serde_json::from_str(
         &crate::integrations::ipc::decode_header(request, "x-webdav-account")
             .map_err(WebdavError::Network)?,
@@ -1388,6 +1453,123 @@ mod tests {
         let dir = entries.iter().find(|e| e.rel_path == "figures").unwrap();
         assert!(dir.is_dir);
         assert_eq!(dir.etag.as_deref(), Some("dir-x"));
+    }
+
+    #[test]
+    fn multistatus_href_entities_resolve_to_literal_chars() {
+        let xml = br#"<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/files/me/project/a&amp;b &#38; c&#x26;d &lt;e&gt;.tex</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/><d:getetag>"e1"</d:getetag></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"#;
+        let raw = parse_multistatus(xml).unwrap();
+        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].rel_path, "a&b & c&d <e>.tex");
+        assert_eq!(entries[0].etag.as_deref(), Some("e1"));
+    }
+
+    #[test]
+    fn multistatus_drops_entry_with_custom_entity_href_but_keeps_siblings() {
+        let xml = br#"<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/files/me/project/before.tex</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/><d:getetag>"b1"</d:getetag></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/&xxe;/x.tex</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/files/me/project/after.tex</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/><d:getetag>"a1"</d:getetag></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"#;
+        let raw = parse_multistatus(xml).unwrap();
+        assert_eq!(raw.len(), 2);
+        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].rel_path, "before.tex");
+        assert_eq!(entries[1].rel_path, "after.tex");
+    }
+
+    #[test]
+    fn poisoned_href_cannot_alias_another_entry_path() {
+        // If the unresolvable entity merely vanished, `a&custom;b.tex` would
+        // collapse to `ab.tex` and steal the real entry's identity.
+        let xml = br#"<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/files/me/project/a&custom;b.tex</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/><d:getetag>"evil"</d:getetag></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+          <d:response>
+            <d:href>/dav/files/me/project/ab.tex</d:href>
+            <d:propstat>
+              <d:prop><d:resourcetype/><d:getetag>"real"</d:getetag></d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"#;
+        let raw = parse_multistatus(xml).unwrap();
+        assert_eq!(raw.len(), 1);
+        assert_eq!(raw[0].href_path, "/dav/files/me/project/ab.tex");
+        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].rel_path, "ab.tex");
+        assert_eq!(entries[0].etag.as_deref(), Some("real"));
+    }
+
+    #[test]
+    fn custom_entity_in_prop_value_degrades_that_value_only() {
+        let xml = br#"<?xml version="1.0"?>
+        <d:multistatus xmlns:d="DAV:">
+          <d:response>
+            <d:href>/dav/files/me/project/main.tex</d:href>
+            <d:propstat>
+              <d:prop>
+                <d:resourcetype/>
+                <d:getetag>"e1"</d:getetag>
+                <d:getlastmodified>Wed,&nbsp;12 Apr 2006 17:48:03 GMT</d:getlastmodified>
+              </d:prop>
+              <d:status>HTTP/1.1 200 OK</d:status>
+            </d:propstat>
+          </d:response>
+        </d:multistatus>"#;
+        let raw = parse_multistatus(xml).unwrap();
+        let entries = to_entries(raw, "/dav/files/me/project/", "/dav/files/me/project/");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].rel_path, "main.tex");
+        assert_eq!(entries[0].etag.as_deref(), Some("e1"));
+        assert_eq!(entries[0].last_modified, None);
+    }
+
+    #[test]
+    fn put_upload_cap_rejects_oversized_bodies() {
+        assert!(ensure_upload_within_cap(0).is_ok());
+        assert!(ensure_upload_within_cap(MAX_FILE_BYTES).is_ok());
+        assert!(matches!(
+            ensure_upload_within_cap(MAX_FILE_BYTES + 1),
+            Err(WebdavError::TooLarge(_))
+        ));
     }
 
     #[test]

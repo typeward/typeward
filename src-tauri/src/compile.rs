@@ -12,17 +12,37 @@
 //! also mirrored by the grammar path (`GrammarDiagnostic`) and consumed by the
 //! mobile texlive-wasm provider via `parse_latex_log_cmd`.
 
+use std::collections::VecDeque;
 use std::path::Path;
-use std::process::Command;
-use std::time::Instant;
+use std::process::Stdio;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tokio::io::AsyncReadExt;
 
 use crate::commands::checked_project_root_and_file;
 use crate::project::Project;
 
 type CmdResult<T> = Result<T, String>;
+
+/// Hard ceiling per compiler subprocess. Generous — real multi-pass LaTeX
+/// builds run minutes — but finite, so a malicious project (e.g. an infinite
+/// `\loop` that `-halt-on-error` never trips) can't wedge the compile IPC.
+const COMPILE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Per-stream cap on the leading capture. The merged log crosses the IPC
+/// bridge as one string; unbounded capture is an OOM primitive for a
+/// `\typeout` flood.
+const COMPILE_OUTPUT_CAP: usize = 4 * 1024 * 1024;
+/// Rolling window of the most recent output kept alongside the head: TeX puts
+/// its fatal `! ...` lines at the END of a run, so a head-only cap would
+/// discard exactly the bytes the Issues tab needs.
+const COMPILE_TAIL_CAP: usize = 256 * 1024;
+/// How long to keep draining pipes after the child exits or is killed — a
+/// straggling grandchild holding the write end open must not become a hang.
+const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(5);
 
 /// The concrete LaTeX engine to invoke. A strict enum (never a free-form
 /// string) so the flags below are compile-time constants selected by match —
@@ -193,52 +213,55 @@ pub async fn compile_latex(
         LatexEngine::Tectonic => {
             run_tectonic(&app, &root_file, &root, opts.synctex, shell_escape).await?
         }
-        engine => {
-            let root_for_cmd = root.clone();
-            let root_file_for_cmd = root_file.clone();
-            let recipe = opts.recipe;
-            let halt = opts.halt_on_error;
-            let synctex = opts.synctex;
-            tokio::task::spawn_blocking(move || match recipe {
-                BuildRecipe::LatexmkAuto => run_system_tex(
-                    &root_file_for_cmd,
-                    &root_for_cmd,
+        engine => match opts.recipe {
+            BuildRecipe::LatexmkAuto => {
+                run_system_tex(
+                    &root_file,
+                    &root,
                     engine,
-                    halt,
-                    synctex,
+                    opts.halt_on_error,
+                    opts.synctex,
                     shell_escape,
-                ),
-                BuildRecipe::EngineOnly => run_engine_recipe(
-                    &root_file_for_cmd,
-                    &root_for_cmd,
+                )
+                .await?
+            }
+            BuildRecipe::EngineOnly => {
+                run_engine_recipe(
+                    &root_file,
+                    &root,
                     engine,
-                    halt,
-                    synctex,
+                    opts.halt_on_error,
+                    opts.synctex,
                     shell_escape,
                     None,
-                ),
-                BuildRecipe::EngineBibtex => run_engine_recipe(
-                    &root_file_for_cmd,
-                    &root_for_cmd,
+                )
+                .await?
+            }
+            BuildRecipe::EngineBibtex => {
+                run_engine_recipe(
+                    &root_file,
+                    &root,
                     engine,
-                    halt,
-                    synctex,
+                    opts.halt_on_error,
+                    opts.synctex,
                     shell_escape,
                     Some(BibTool::Bibtex),
-                ),
-                BuildRecipe::EngineBiber => run_engine_recipe(
-                    &root_file_for_cmd,
-                    &root_for_cmd,
+                )
+                .await?
+            }
+            BuildRecipe::EngineBiber => {
+                run_engine_recipe(
+                    &root_file,
+                    &root,
                     engine,
-                    halt,
-                    synctex,
+                    opts.halt_on_error,
+                    opts.synctex,
                     shell_escape,
                     Some(BibTool::Biber),
-                ),
-            })
-            .await
-            .map_err(err)??
-        }
+                )
+                .await?
+            }
+        },
     };
 
     let pdf_path = root.join(replace_ext(&root_file, "pdf"));
@@ -283,7 +306,267 @@ fn system_tex_flags(
     args
 }
 
-fn run_system_tex(
+/// What a bounded compiler run produced. `status: None` with `timed_out` set
+/// means the deadline killed it; partial output is still captured.
+struct BoundedOutput {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    status: Option<std::process::ExitStatus>,
+    timed_out: bool,
+}
+
+impl BoundedOutput {
+    fn success(&self) -> bool {
+        self.status.map(|s| s.success()).unwrap_or(false)
+    }
+
+    fn exit_display(&self) -> String {
+        self.status
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    }
+}
+
+/// Two-ended bounded capture: the first `head_cap` bytes verbatim plus a
+/// rolling window of the most recent `tail_cap` bytes, with everything in
+/// between counted rather than stored. TeX's fatal `! ...` lines land at the
+/// END of a run, so a head-only cap would discard exactly the bytes the
+/// Issues tab needs, while the head preserves the command echo and early
+/// context. Appends stay accepted past the caps so the child never blocks on
+/// a full pipe (which would turn every big-output build into a timeout).
+#[derive(Default)]
+struct CappedBuffer {
+    head: Vec<u8>,
+    head_cap: usize,
+    tail: VecDeque<u8>,
+    tail_cap: usize,
+    omitted: u64,
+}
+
+impl CappedBuffer {
+    fn new(head_cap: usize, tail_cap: usize) -> Self {
+        Self {
+            head_cap,
+            tail_cap,
+            ..Self::default()
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        let mut rest = bytes;
+        if self.head.len() < self.head_cap {
+            let take = rest.len().min(self.head_cap - self.head.len());
+            self.head.extend_from_slice(&rest[..take]);
+            rest = &rest[take..];
+        }
+        if rest.is_empty() {
+            return;
+        }
+        if rest.len() >= self.tail_cap {
+            self.omitted += (self.tail.len() + rest.len() - self.tail_cap) as u64;
+            self.tail.clear();
+            self.tail.extend(&rest[rest.len() - self.tail_cap..]);
+            return;
+        }
+        let evict = (self.tail.len() + rest.len()).saturating_sub(self.tail_cap);
+        if evict > 0 {
+            self.tail.drain(..evict);
+            self.omitted += evict as u64;
+        }
+        self.tail.extend(rest);
+    }
+
+    /// Merge head and tail into the final log bytes. A contiguous capture
+    /// (nothing evicted) concatenates losslessly with no marker; a gap trims
+    /// dangling multi-byte UTF-8 fragments at the seam (the log gets
+    /// string-ified later) and names the omitted byte count.
+    fn finalize(mut self) -> Vec<u8> {
+        if self.omitted == 0 {
+            self.head.extend(self.tail);
+            return self.head;
+        }
+        self.omitted += trim_partial_utf8_suffix(&mut self.head) as u64;
+        while self
+            .tail
+            .front()
+            .is_some_and(|b| (*b & 0b1100_0000) == 0b1000_0000)
+        {
+            self.tail.pop_front();
+            self.omitted += 1;
+        }
+        let mut out = self.head;
+        out.extend_from_slice(
+            format!("\n[output truncated — {} bytes omitted]\n", self.omitted).as_bytes(),
+        );
+        out.extend(self.tail);
+        out
+    }
+}
+
+/// Drop a trailing incomplete UTF-8 sequence (at most 3 bytes) so a hard cap
+/// can't leave half a multi-byte char before the seam. Returns the number of
+/// bytes removed; invalid bytes elsewhere are left for `from_utf8_lossy`.
+fn trim_partial_utf8_suffix(buf: &mut Vec<u8>) -> usize {
+    let len = buf.len();
+    let start = len.saturating_sub(4);
+    let Some(offset) = buf[start..]
+        .iter()
+        .rposition(|b| (b & 0b1100_0000) != 0b1000_0000)
+    else {
+        return 0;
+    };
+    let pos = start + offset;
+    let seq_len = match buf[pos] {
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        // ASCII is always complete; invalid leads are left for lossy decode.
+        _ => return 0,
+    };
+    if pos + seq_len > len {
+        buf.truncate(pos);
+        len - pos
+    } else {
+        0
+    }
+}
+
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, buf: Arc<Mutex<CappedBuffer>>) {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => buf.lock().unwrap().append(&chunk[..n]),
+        }
+    }
+}
+
+/// `taskkill /T` takes the whole tree down — latexmk's spawned engine would
+/// survive a plain kill of latexmk itself and keep the pipes (and CPU) alive.
+#[cfg(windows)]
+async fn kill_tree_windows(pid: u32) {
+    let Ok(system_root) = std::env::var("SystemRoot") else {
+        return;
+    };
+    let taskkill = Path::new(&system_root).join("System32").join("taskkill.exe");
+    let _ = tokio::process::Command::new(taskkill)
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+}
+
+async fn kill_compile_child(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        kill_tree_windows(pid).await;
+    }
+    // The child was made a group leader at spawn (pre_exec setsid), so
+    // signalling the negative pid takes the whole group down — latexmk's
+    // engine grandchild included — before the single-process fallback kill.
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+/// Spawn a compiler subprocess with piped, head+tail cap-bounded output and a
+/// hard deadline. `Err` is a spawn failure (callers treat it exactly like the
+/// old `Command::output()` spawn error); a timeout comes back as `Ok` with
+/// `timed_out` set so the partial log still reaches the LogsDrawer.
+async fn run_bounded(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+    cap: usize,
+) -> Result<BoundedOutput, String> {
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    // Own process group per compiler child: latexmk's real work happens in an
+    // engine grandchild that would survive a kill of latexmk alone, spinning
+    // at full CPU forever. setsid cannot fail here (a freshly forked child is
+    // never already a group leader); if it somehow did, the timeout degrades
+    // to the single-process kill. Windows gets the same via taskkill /T.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = cmd.spawn().map_err(err)?;
+
+    // Readers run as detached tasks over shared buffers so a timeout can
+    // still harvest whatever was captured before the kill. The tail window
+    // never exceeds the head budget so test-sized caps stay meaningful.
+    let tail_cap = cap.min(COMPILE_TAIL_CAP);
+    let stdout_buf = Arc::new(Mutex::new(CappedBuffer::new(cap, tail_cap)));
+    let stderr_buf = Arc::new(Mutex::new(CappedBuffer::new(cap, tail_cap)));
+    let stdout_task = child
+        .stdout
+        .take()
+        .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stdout_buf))));
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stderr_buf))));
+
+    let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(status)) => (Some(status), false),
+        Ok(Err(e)) => {
+            kill_compile_child(&mut child).await;
+            return Err(format!("failed to wait on {}: {}", program.display(), e));
+        }
+        Err(_) => {
+            kill_compile_child(&mut child).await;
+            (None, true)
+        }
+    };
+
+    let drain = async {
+        if let Some(task) = stdout_task {
+            let _ = task.await;
+        }
+        if let Some(task) = stderr_task {
+            let _ = task.await;
+        }
+    };
+    let _ = tokio::time::timeout(PIPE_DRAIN_GRACE, drain).await;
+
+    // A lingering reader past the drain grace appends into the zero-cap
+    // default left behind by `take`, so its writes stay bounded and ignored.
+    let stdout = std::mem::take(&mut *stdout_buf.lock().unwrap()).finalize();
+    let stderr = std::mem::take(&mut *stderr_buf.lock().unwrap()).finalize();
+    Ok(BoundedOutput {
+        stdout,
+        stderr,
+        status,
+        timed_out,
+    })
+}
+
+/// `! `-prefixed so `parse_latex_log` lifts the timeout into an error
+/// diagnostic in the Issues tab.
+fn latex_timeout_line(tool: &str) -> String {
+    format!(
+        "\n! {tool} timed out after {} minutes — build aborted.\n",
+        COMPILE_TIMEOUT.as_secs() / 60
+    )
+}
+
+async fn run_system_tex(
     root_file: &str,
     root: &Path,
     engine: LatexEngine,
@@ -300,27 +583,33 @@ fn run_system_tex(
     // `current_dir(root)` would otherwise let Windows' CreateProcess execute a
     // planted `latexmk`/engine binary in a malicious project directory.
     if let Ok(latexmk) = which::which("latexmk") {
-        let mut latexmk_args = system_tex_flags(
+        let mut latexmk_args: Vec<String> = system_tex_flags(
             Some(engine_latexmk_flag(engine)),
             synctex,
             halt_on_error,
             shell_escape,
-        );
-        latexmk_args.push(root_file);
+        )
+        .into_iter()
+        .map(String::from)
+        .collect();
+        latexmk_args.push(root_file.to_string());
         accumulated_log.push_str(&format!("$ latexmk {}\n", latexmk_args.join(" ")));
-        match Command::new(&latexmk)
-            .args(&latexmk_args)
-            .current_dir(root)
-            .output()
+        match run_bounded(&latexmk, &latexmk_args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP).await
         {
             Ok(out) => {
                 accumulated_log.push_str(&merge_io(&out.stdout, &out.stderr));
-                if out.status.success() {
+                // A timeout must NOT fall back to the direct engine — that
+                // would double the worst-case wait for the same document.
+                if out.timed_out {
+                    accumulated_log.push_str(&latex_timeout_line("latexmk"));
+                    return Ok((accumulated_log, false));
+                }
+                if out.success() {
                     return Ok((accumulated_log, true));
                 }
                 accumulated_log.push_str(&format!(
                     "\n[latexmk exit: {}]\n\n--- falling back to {} ---\n",
-                    out.status,
+                    out.exit_display(),
                     engine_binary(engine),
                 ));
             }
@@ -346,19 +635,26 @@ fn run_system_tex(
     };
 
     // Direct binary: same flags minus latexmk's engine selector.
-    let mut bin_args = system_tex_flags(None, synctex, halt_on_error, shell_escape);
-    bin_args.push(root_file);
+    let mut bin_args: Vec<String> = system_tex_flags(None, synctex, halt_on_error, shell_escape)
+        .into_iter()
+        .map(String::from)
+        .collect();
+    bin_args.push(root_file.to_string());
     accumulated_log.push_str(&format!("\n$ {bin_name} {}\n", bin_args.join(" ")));
-    let output = Command::new(&bin)
-        .args(&bin_args)
-        .current_dir(root)
-        .output()
-        .map_err(|e| {
+    let output = match run_bounded(&bin, &bin_args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP).await
+    {
+        Ok(out) => out,
+        Err(e) => {
             accumulated_log.push_str(&format!("[{bin_name} spawn failed: {}]\n", e));
-            format!("compile failed:\n{}", accumulated_log)
-        })?;
+            return Err(format!("compile failed:\n{}", accumulated_log));
+        }
+    };
     accumulated_log.push_str(&merge_io(&output.stdout, &output.stderr));
-    Ok((accumulated_log, output.status.success()))
+    if output.timed_out {
+        accumulated_log.push_str(&latex_timeout_line(bin_name));
+        return Ok((accumulated_log, false));
+    }
+    Ok((accumulated_log, output.success()))
 }
 
 /// One subprocess pass in a recipe. `program` is the logical tool name (engine
@@ -434,7 +730,7 @@ fn recipe_passes(
 /// tracks the last engine pass's success (paired with the pdf-exists check in
 /// `compile_latex`). Resolves each program to its absolute path via `which`,
 /// mirroring `run_system_tex`, and spawns that with `current_dir(root)`.
-fn run_engine_recipe(
+async fn run_engine_recipe(
     root_file: &str,
     root: &Path,
     engine: LatexEngine,
@@ -472,17 +768,23 @@ fn run_engine_recipe(
             }
         };
         log.push_str(&format!("\n$ {} {}\n", pass.program, pass.args.join(" ")));
-        match Command::new(&resolved)
-            .args(&pass.args)
-            .current_dir(root)
-            .output()
-        {
+        match run_bounded(&resolved, &pass.args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP).await {
             Ok(output) => {
                 log.push_str(&merge_io(&output.stdout, &output.stderr));
+                // A timed-out pass aborts the whole recipe — the best-effort
+                // continue is for missing/failed bib tools, not runaway ones.
+                if output.timed_out {
+                    log.push_str(&latex_timeout_line(&pass.program));
+                    return Ok((log, false));
+                }
                 if pass.is_engine {
-                    last_engine_ok = output.status.success();
-                } else if !output.status.success() {
-                    log.push_str(&format!("\n[{} exit: {}]\n", pass.program, output.status));
+                    last_engine_ok = output.success();
+                } else if !output.success() {
+                    log.push_str(&format!(
+                        "\n[{} exit: {}]\n",
+                        pass.program,
+                        output.exit_display()
+                    ));
                 }
             }
             Err(e) => {
@@ -522,10 +824,53 @@ async fn run_tectonic(
         // but-missing externalBin only fails at spawn time (e.g. dev before
         // `npm run fetch:tectonic`). Fall THROUGH to the PATH fallback on a spawn
         // error rather than hard-erroring — a `?` here would kill the fallback.
-        match cmd.args(tectonic_args.clone()).current_dir(root).output().await {
-            Ok(output) => {
-                let ok = output.status.success();
-                return Ok((merge_io(&output.stdout, &output.stderr), ok));
+        // (A TIMEOUT does not fall through — rerunning the same document from
+        // PATH would just double the wait.)
+        match cmd.args(tectonic_args.clone()).current_dir(root).spawn() {
+            Ok((mut rx, child)) => {
+                let deadline = tokio::time::Instant::now() + COMPILE_TIMEOUT;
+                let mut stdout = CappedBuffer::new(COMPILE_OUTPUT_CAP, COMPILE_TAIL_CAP);
+                let mut stderr = CappedBuffer::new(COMPILE_OUTPUT_CAP, COMPILE_TAIL_CAP);
+                let mut code = None;
+                let mut timed_out = false;
+                loop {
+                    match tokio::time::timeout_at(deadline, rx.recv()).await {
+                        // The plugin emits line-chunked events with the
+                        // newline stripped; re-add it so the merged log keeps
+                        // its line structure for the parser.
+                        Ok(Some(CommandEvent::Stdout(line))) => {
+                            stdout.append(&line);
+                            stdout.append(b"\n");
+                        }
+                        Ok(Some(CommandEvent::Stderr(line))) => {
+                            stderr.append(&line);
+                            stderr.append(b"\n");
+                        }
+                        Ok(Some(CommandEvent::Error(e))) => {
+                            stderr.append(e.as_bytes());
+                            stderr.append(b"\n");
+                        }
+                        Ok(Some(CommandEvent::Terminated(payload))) => {
+                            code = payload.code;
+                            break;
+                        }
+                        Ok(Some(_)) => {}
+                        Ok(None) => break,
+                        Err(_) => {
+                            timed_out = true;
+                            #[cfg(windows)]
+                            kill_tree_windows(child.pid()).await;
+                            let _ = child.kill();
+                            break;
+                        }
+                    }
+                }
+                let mut log = merge_io(&stdout.finalize(), &stderr.finalize());
+                if timed_out {
+                    log.push_str(&latex_timeout_line("tectonic"));
+                    return Ok((log, false));
+                }
+                return Ok((log, code == Some(0)));
             }
             Err(_) => { /* sidecar binary not runnable — try PATH below */ }
         }
@@ -540,21 +885,16 @@ async fn run_tectonic(
             )
         }
     };
-    let root_for_cmd = root.to_path_buf();
     let owned_args: Vec<String> = tectonic_args.iter().map(|s| s.to_string()).collect();
-    tokio::task::spawn_blocking(move || {
-        let output = Command::new(&tectonic)
-            .args(&owned_args)
-            .current_dir(root_for_cmd)
-            .output()
-            .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
-        Ok((
-            merge_io(&output.stdout, &output.stderr),
-            output.status.success(),
-        ))
-    })
-    .await
-    .map_err(err)?
+    let output = run_bounded(&tectonic, &owned_args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP)
+        .await
+        .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
+    let mut log = merge_io(&output.stdout, &output.stderr);
+    if output.timed_out {
+        log.push_str(&latex_timeout_line("tectonic"));
+        return Ok((log, false));
+    }
+    Ok((log, output.success()))
 }
 
 fn merge_io(stdout: &[u8], stderr: &[u8]) -> String {
@@ -620,31 +960,33 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
 pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
     let started = Instant::now();
     let (root, root_file) = checked_project_root_and_file(&project)?;
-    let root_for_cmd = root.clone();
-    let root_file_for_cmd = root_file.clone();
-    let (log, success) = tokio::task::spawn_blocking(move || -> CmdResult<(String, bool)> {
-        // Resolve the absolute path on PATH and spawn THAT, not the bare name.
-        // Bare `Command::new("typst")` + `current_dir(project)` lets Windows'
-        // CreateProcess search the project dir first, so a planted `typst.exe`
-        // in a malicious project would run (argument/binary planting). `which`
-        // resolves against the app's CWD/PATH, never the project.
-        let typst = which::which("typst").map_err(|_| {
-            "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
-                .to_string()
-        })?;
+    // Resolve the absolute path on PATH and spawn THAT, not the bare name.
+    // Bare `Command::new("typst")` + `current_dir(project)` lets Windows'
+    // CreateProcess search the project dir first, so a planted `typst.exe`
+    // in a malicious project would run (argument/binary planting). `which`
+    // resolves against the app's CWD/PATH, never the project.
+    let typst = which::which("typst").map_err(|_| {
+        "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
+            .to_string()
+    })?;
 
-        let mut log = String::new();
-        log.push_str(&format!("$ typst compile {}\n", root_file_for_cmd));
-        let output = Command::new(&typst)
-            .args(["compile", root_file_for_cmd.as_str()])
-            .current_dir(&root_for_cmd)
-            .output()
-            .map_err(|e| format!("failed to spawn typst: {}", e))?;
-        log.push_str(&merge_io(&output.stdout, &output.stderr));
-        Ok((log, output.status.success()))
-    })
-    .await
-    .map_err(err)??;
+    let mut log = String::new();
+    log.push_str(&format!("$ typst compile {}\n", root_file));
+    let args = vec!["compile".to_string(), root_file.clone()];
+    let output = run_bounded(&typst, &args, &root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP)
+        .await
+        .map_err(|e| format!("failed to spawn typst: {}", e))?;
+    log.push_str(&merge_io(&output.stdout, &output.stderr));
+    let success = if output.timed_out {
+        // `error:`-prefixed so parse_typst_log lifts it into a diagnostic.
+        log.push_str(&format!(
+            "\nerror: typst timed out after {} minutes — build aborted\n",
+            COMPILE_TIMEOUT.as_secs() / 60
+        ));
+        false
+    } else {
+        output.success()
+    };
 
     let pdf_path = root.join(replace_ext(&root_file, "pdf"));
     let ok = success && pdf_path.exists();
@@ -856,6 +1198,242 @@ mod tests {
             serde_json::from_str::<BuildRecipe>("\"engine-biber\"").unwrap(),
             BuildRecipe::EngineBiber
         );
+    }
+
+    #[cfg(windows)]
+    fn shell_cmd(script: &str) -> (std::path::PathBuf, Vec<String>) {
+        let cmd = which::which("cmd").expect("cmd.exe should be on PATH");
+        (cmd, vec!["/C".to_string(), script.to_string()])
+    }
+
+    #[cfg(not(windows))]
+    fn shell_cmd(script: &str) -> (std::path::PathBuf, Vec<String>) {
+        (
+            std::path::PathBuf::from("/bin/sh"),
+            vec!["-c".to_string(), script.to_string()],
+        )
+    }
+
+    #[tokio::test]
+    async fn run_bounded_passes_short_output_through_untouched() {
+        let (prog, args) = shell_cmd("echo hello");
+        let out = run_bounded(
+            &prog,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_secs(30),
+            COMPILE_OUTPUT_CAP,
+        )
+        .await
+        .expect("spawn should succeed");
+        assert!(out.success());
+        assert!(!out.timed_out);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("hello"));
+        assert!(!text.contains("[output truncated"));
+    }
+
+    #[tokio::test]
+    async fn run_bounded_caps_output_keeping_head_and_tail() {
+        let (prog, args) = shell_cmd("echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let out = run_bounded(&prog, &args, &std::env::temp_dir(), Duration::from_secs(30), 8)
+            .await
+            .expect("spawn should succeed");
+        assert!(!out.timed_out);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.starts_with("aaaaaaaa"));
+        assert!(text.contains("[output truncated"));
+        assert!(text.contains("bytes omitted]"));
+        // The rolling tail keeps the END of the output (line-ending trimmed:
+        // \n vs \r\n differ per platform).
+        assert!(text.trim_end().ends_with('a'));
+    }
+
+    #[tokio::test]
+    async fn fatal_error_line_after_the_cap_survives_in_the_final_log() {
+        let filler = "f".repeat(60);
+        #[cfg(windows)]
+        let script = format!("echo {filler} & echo {filler} & echo ! boom");
+        #[cfg(not(windows))]
+        let script = format!("echo {filler}; echo {filler}; echo '! boom'");
+        let (prog, args) = shell_cmd(&script);
+        let out = run_bounded(&prog, &args, &std::env::temp_dir(), Duration::from_secs(30), 32)
+            .await
+            .expect("spawn should succeed");
+        assert!(!out.timed_out);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("[output truncated"));
+        assert!(text.contains("! boom"), "the tail must keep the fatal line");
+        let diags = parse_latex_log(&text, "main.tex");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == "error" && d.message.contains("boom")),
+            "the post-cap fatal line must still surface as a diagnostic"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_bounded_kills_a_runaway_process_on_timeout() {
+        #[cfg(windows)]
+        let (prog, args) = shell_cmd("ping -n 30 127.0.0.1 > NUL");
+        #[cfg(not(windows))]
+        let (prog, args) = shell_cmd("sleep 30");
+        let started = std::time::Instant::now();
+        let out = run_bounded(
+            &prog,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_millis(400),
+            COMPILE_OUTPUT_CAP,
+        )
+        .await
+        .expect("spawn should succeed");
+        assert!(out.timed_out);
+        assert!(!out.success());
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the kill must beat the 30s sleeper"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_bounded_timeout_kills_the_grandchild_too() {
+        // Mirrors latexmk: the shell child spawns a long-running grandchild.
+        // The group SIGKILL must take the grandchild down, not just the shell.
+        let pidfile = std::env::temp_dir().join(format!(
+            "typeward-group-kill-{}.pid",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&pidfile);
+        let script = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
+        let (prog, args) = shell_cmd(&script);
+        let out = run_bounded(
+            &prog,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_millis(500),
+            COMPILE_OUTPUT_CAP,
+        )
+        .await
+        .expect("spawn should succeed");
+        assert!(out.timed_out);
+        let pid: i32 = std::fs::read_to_string(&pidfile)
+            .expect("grandchild pidfile should exist")
+            .trim()
+            .parse()
+            .expect("pidfile should hold a pid");
+        let _ = std::fs::remove_file(&pidfile);
+        // The SIGKILLed orphan may linger as a zombie until init reaps it.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "grandchild sleeper (pid {pid}) survived the group kill"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn run_bounded_surfaces_spawn_failure_as_err() {
+        let missing = std::path::PathBuf::from("definitely-not-a-real-binary-typeward");
+        let args: Vec<String> = vec![];
+        let result = run_bounded(
+            &missing,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_secs(5),
+            COMPILE_OUTPUT_CAP,
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn capped_buffer_passes_small_output_through_untouched() {
+        let mut buf = CappedBuffer::new(8, 8);
+        buf.append(b"abc");
+        buf.append(b"def");
+        assert_eq!(buf.finalize(), b"abcdef");
+    }
+
+    #[test]
+    fn capped_buffer_contiguous_head_and_tail_merge_without_marker() {
+        // Overflow that fits entirely in the tail window loses nothing, so the
+        // finalized log is the exact original bytes.
+        let mut buf = CappedBuffer::new(4, 4);
+        buf.append(b"abcdef");
+        assert_eq!(buf.finalize(), b"abcdef");
+    }
+
+    #[test]
+    fn capped_buffer_keeps_head_and_tail_and_counts_the_gap() {
+        let mut buf = CappedBuffer::new(4, 4);
+        buf.append(b"abcdefghijkl");
+        let text = String::from_utf8_lossy(&buf.finalize()).into_owned();
+        assert!(text.starts_with("abcd"));
+        assert!(text.ends_with("ijkl"));
+        assert!(text.contains("4 bytes omitted"));
+    }
+
+    #[test]
+    fn capped_buffer_tail_rolls_across_appends() {
+        let mut buf = CappedBuffer::new(2, 4);
+        buf.append(b"ab");
+        buf.append(b"cdef");
+        buf.append(b"gh");
+        let text = String::from_utf8_lossy(&buf.finalize()).into_owned();
+        assert!(text.starts_with("ab"));
+        assert!(text.ends_with("efgh"));
+        assert!(text.contains("2 bytes omitted"));
+    }
+
+    #[test]
+    fn capped_buffer_trims_split_utf8_at_the_head_seam() {
+        // The head cap lands mid-`é` (0xC3 0xA9); the dangling lead byte must
+        // be dropped and counted, not left as a mojibake fragment.
+        let mut buf = CappedBuffer::new(5, 2);
+        buf.append("abcd\u{e9}xyz".as_bytes());
+        let out = buf.finalize();
+        assert!(!out.contains(&0xC3));
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.starts_with("abcd\n["));
+        assert!(text.ends_with("yz"));
+        assert!(text.contains("3 bytes omitted"));
+    }
+
+    #[test]
+    fn capped_buffer_drops_leading_continuation_bytes_in_the_tail() {
+        let mut buf = CappedBuffer::new(1, 2);
+        buf.append("a\u{e9}b".as_bytes());
+        let out = buf.finalize();
+        assert!(!out.contains(&0xA9));
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.starts_with("a\n["));
+        assert!(text.ends_with('b'));
+        assert!(text.contains("2 bytes omitted"));
+    }
+
+    #[test]
+    fn latex_timeout_line_parses_as_an_error_diagnostic() {
+        let diags = parse_latex_log(&latex_timeout_line("latexmk"), "main.tex");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, "error");
+        assert!(diags[0].message.contains("timed out"));
+    }
+
+    #[test]
+    fn typst_timeout_line_parses_as_an_error_diagnostic() {
+        let log = format!(
+            "\nerror: typst timed out after {} minutes — build aborted\n",
+            COMPILE_TIMEOUT.as_secs() / 60
+        );
+        let diags = parse_typst_log(&log, "main.typ");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].severity, "error");
+        assert!(diags[0].message.contains("timed out"));
     }
 
     #[test]

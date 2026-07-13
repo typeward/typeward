@@ -17,7 +17,15 @@ const [sessions, setSessions] = createSignal<SessionEntry[]>([]);
 // Concurrent startSession calls for the same language both pass the
 // `findSession` check before either registers — track in-flight starts so
 // the second caller awaits the first instead of spawning a second server.
-const inFlight = new Map<LspLanguage, Promise<LspSession | null>>();
+// Keyed by language + project root: a pending start from a switched-away
+// project self-cancels via its stale isCurrent and resolves null, so handing
+// it to the new project's start would leave that project without LSP.
+// Cleared on stopAllSessions so a same-key reopen (A -> B -> A) issues a
+// fresh start instead of adopting the abandoned one.
+const inFlight = new Map<string, Promise<LspSession | null>>();
+
+const startKey = (language: LspLanguage, rootPath: string): string =>
+  `${language}::${rootPath}`;
 
 function findSession(language: LspLanguage): LspSession | null {
   return sessions().find((s) => s.language === language)?.session ?? null;
@@ -36,12 +44,30 @@ async function startSession(
   // Avoid duplicate sessions per language.
   const existing = findSession(language);
   if (existing) return existing;
-  const pending = inFlight.get(language);
-  if (pending) return pending;
+  const key = startKey(language, project.rootPath);
+  const pending = inFlight.get(key);
+  if (pending) {
+    const adopted = await pending;
+    if (adopted) return adopted;
+    if (!isCurrent()) return null;
+    // The adopted start belonged to a since-abandoned open of the same
+    // project (A -> B -> A without teardown getting there first) and
+    // self-cancelled to null. This caller is still current, so fall through
+    // to a fresh start instead of surfacing the stale null — but re-check
+    // both registries first: another caller may have registered or reissued
+    // while we awaited.
+    const registered = findSession(language);
+    if (registered) return registered;
+    const reissued = inFlight.get(key);
+    if (reissued) return reissued;
+  }
   const p = doStartSession(language, project, isCurrent).finally(() => {
-    inFlight.delete(language);
+    // Identity-guarded: after teardown clears the map and a reopen issues a
+    // fresh start under the same key, the stale start's cleanup must not
+    // evict the fresh pending entry.
+    if (inFlight.get(key) === p) inFlight.delete(key);
   });
-  inFlight.set(language, p);
+  inFlight.set(key, p);
   return p;
 }
 
@@ -104,6 +130,11 @@ async function doStartSession(
  * unmounts. Errors are swallowed (the server might already be dead).
  */
 async function stopAllSessions(): Promise<void> {
+  // Pending starts belong to the project being closed — drop them (before the
+  // empty-sessions early return: a start can be in flight with nothing
+  // registered yet) so a same-key reopen issues a fresh start instead of
+  // adopting a promise that self-cancels to null via its stale isCurrent.
+  inFlight.clear();
   const current = sessions();
   // No-op when already empty. EditorScreen calls this synchronously from a
   // createEffect; without this guard, setSessions([]) writes a fresh array
