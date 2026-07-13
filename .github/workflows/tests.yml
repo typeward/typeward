@@ -27,10 +27,26 @@ jobs:
         with:
           path: app
 
+      # Same pin as build.yml/release.yml: package.json `config.texliveWasm` is
+      # the ONE place the engine release is recorded, so the tests run against
+      # the engine that actually ships instead of the sibling's moving main.
+      - name: Read texlive-wasm pin
+        id: texlive
+        shell: bash
+        working-directory: app
+        run: |
+          ref="$(node -p "require('./package.json').config?.texliveWasm")"
+          if [ -z "$ref" ] || [ "$ref" = "undefined" ]; then
+            echo "::error::package.json is missing config.texliveWasm — the texlive-wasm sibling checkout has no pinned ref."
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
       - name: Checkout texlive-wasm sibling
         uses: actions/checkout@v4
         with:
           repository: typeward/texlive-wasm
+          ref: ${{ steps.texlive.outputs.ref }}
           path: texlive-wasm
 
       - name: Set up Node
@@ -86,18 +102,46 @@ jobs:
       - name: Install cargo-audit
         uses: taiki-e/install-action@cargo-audit
 
-      # The two ignored quick-xml advisories (fixed >=0.41) still match a residual
-      # quick-xml 0.39.4 pinned by wayland-scanner (Linux-only build-time proc-macro
-      # via tauri-plugin-clipboard-manager -> arboard -> wl-clipboard-rs); it parses
-      # trusted protocol XML bundled inside the wayland crates, never runtime input.
-      # Our direct quick-xml (the WebDAV PROPFIND security boundary) is on 0.41+.
-      # Drop the ignores once wayland-scanner moves off ^0.39.
+      # ADVISORY EXCEPTIONS — every one needs an owner and a review-by date.
+      #
+      # RUSTSEC-2026-0194, RUSTSEC-2026-0195 (quick-xml, fixed >=0.41)
+      #   Owner:     @sokolmarek
+      #   Review by: 2026-10-13
+      #   Why: the only match is a residual quick-xml 0.39.4 pinned by
+      #        wayland-scanner (Linux-only build-time proc-macro via
+      #        tauri-plugin-clipboard-manager -> arboard -> wl-clipboard-rs). It
+      #        parses trusted protocol XML bundled inside the wayland crates,
+      #        never runtime input. Our direct quick-xml — the WebDAV PROPFIND
+      #        security boundary — is on 0.41+.
+      #   Exit:  drop both ignores once wayland-scanner moves off ^0.39.
+      #
+      # Past the review-by date the exception is stale: the job says so loudly in
+      # the run summary instead of letting it rot silently. It also detects when
+      # the ignores have become unnecessary.
       - name: Cargo audit
         working-directory: app/src-tauri
+        env:
+          IGNORE_OWNER: '@sokolmarek'
+          IGNORE_REVIEW_BY: '2026-10-13'
         run: |
-          cargo audit \
-            --ignore RUSTSEC-2026-0194 \
-            --ignore RUSTSEC-2026-0195
+          set -uo pipefail
+          IGNORES=(--ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195)
+
+          if [ "$(date -u +%F)" \> "$IGNORE_REVIEW_BY" ]; then
+            msg="RustSec advisory exceptions (RUSTSEC-2026-0194/0195) passed their review-by date $IGNORE_REVIEW_BY. Owner $IGNORE_OWNER must re-justify them or drop them (see the comment in tests.yml)."
+            echo "::warning::$msg"
+            echo "> [!WARNING]" >> "$GITHUB_STEP_SUMMARY"
+            echo "> $msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if cargo audit --quiet > /dev/null 2>&1; then
+            msg="cargo audit is now clean WITHOUT the RUSTSEC-2026-0194/0195 ignores — delete them from tests.yml."
+            echo "::warning::$msg"
+            echo "> [!NOTE]" >> "$GITHUB_STEP_SUMMARY"
+            echo "> $msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          cargo audit "${IGNORES[@]}"
 
   rust:
     name: Cargo tests

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "preview",
-  "description": "Scoped permissions for the detached PDF preview window (E11). Read-only: it renders a compiled PDF mirrored from the main window over the event bridge and never writes, opens dialogs, or spawns processes. Custom project IPC stays gated by the registered-root registry in project.rs.",
+  "description": "Scoped permissions for the detached PDF preview window (E11). Read-only: it renders a compiled PDF mirrored from the main window over the event bridge and never writes, opens dialogs, or spawns processes. Its only filesystem need is a binary read of the compiled PDF, so the static scope is PDFs under the default projects root — no text reads, no directory listing, no writes. The app-global fs runtime scope (projects root, seeded in lib.rs) is the floor it cannot go below; custom IPC is gated by both the registered-root registry in project.rs and the main-window label check in ipc_guard.rs.",
   "windows": ["preview"],
   "permissions": [
     "core:default",
@@ -10,7 +10,7 @@
     {
       "identifier": "fs:allow-read-file",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/Typeward/**/*.pdf" }
       ]
     }
   ]

@@ -652,56 +652,92 @@ export interface GitAuthor {
   email: string;
 }
 
-export const gitInit = (repoPath: string, bare = false): Promise<void> =>
-  invoke("git_init", { repoPath, bare });
+/** libgit2 (git2/OpenSSL) is desktop-only — the git commands are cfg-gated out
+ * of mobile builds. `gitAvailable()` is the single lever every VCS surface
+ * checks so mobile degrades to "no SCM" instead of throwing on an unknown IPC
+ * command. */
+export const gitAvailable = (): boolean => isDesktop();
 
-export const gitStatus = (repoPath: string): Promise<GitStatusSummary> =>
-  invoke("git_status", { repoPath });
+export const gitInit = (repoPath: string, bare = false): Promise<void> => {
+  assertDesktopCommand("git_init");
+  return invoke("git_init", { repoPath, bare });
+};
 
-export const gitStage = (repoPath: string, paths: string[]): Promise<void> =>
-  invoke("git_stage", { repoPath, paths });
+export const gitStatus = (repoPath: string): Promise<GitStatusSummary> => {
+  assertDesktopCommand("git_status");
+  return invoke("git_status", { repoPath });
+};
 
-export const gitUnstage = (repoPath: string, paths: string[]): Promise<void> =>
-  invoke("git_unstage", { repoPath, paths });
+export const gitStage = (repoPath: string, paths: string[]): Promise<void> => {
+  assertDesktopCommand("git_stage");
+  return invoke("git_stage", { repoPath, paths });
+};
+
+export const gitUnstage = (repoPath: string, paths: string[]): Promise<void> => {
+  assertDesktopCommand("git_unstage");
+  return invoke("git_unstage", { repoPath, paths });
+};
 
 export const gitCommit = (
   repoPath: string,
   message: string,
   author?: GitAuthor,
-): Promise<string> => invoke("git_commit", { repoPath, message, author });
+): Promise<string> => {
+  assertDesktopCommand("git_commit");
+  return invoke("git_commit", { repoPath, message, author });
+};
 
-export const gitLog = (repoPath: string, limit?: number): Promise<GitCommit[]> =>
-  invoke("git_log", { repoPath, limit });
+export const gitLog = (repoPath: string, limit?: number): Promise<GitCommit[]> => {
+  assertDesktopCommand("git_log");
+  return invoke("git_log", { repoPath, limit });
+};
 
-export const gitBranchList = (repoPath: string): Promise<GitBranch[]> =>
-  invoke("git_branch_list", { repoPath });
+export const gitBranchList = (repoPath: string): Promise<GitBranch[]> => {
+  assertDesktopCommand("git_branch_list");
+  return invoke("git_branch_list", { repoPath });
+};
 
 export const gitBranchCreate = (
   repoPath: string,
   name: string,
   checkout = false,
-): Promise<void> => invoke("git_branch_create", { repoPath, name, checkout });
+): Promise<void> => {
+  assertDesktopCommand("git_branch_create");
+  return invoke("git_branch_create", { repoPath, name, checkout });
+};
 
-export const gitBranchCheckout = (repoPath: string, name: string): Promise<void> =>
-  invoke("git_branch_checkout", { repoPath, name });
+export const gitBranchCheckout = (repoPath: string, name: string): Promise<void> => {
+  assertDesktopCommand("git_branch_checkout");
+  return invoke("git_branch_checkout", { repoPath, name });
+};
 
-export const gitFetch = (repoPath: string, remote?: string): Promise<void> =>
-  invoke("git_fetch", { repoPath, remote });
+export const gitFetch = (repoPath: string, remote?: string): Promise<void> => {
+  assertDesktopCommand("git_fetch");
+  return invoke("git_fetch", { repoPath, remote });
+};
 
 export const gitPull = (
   repoPath: string,
   remote?: string,
   author?: GitAuthor,
-): Promise<void> => invoke("git_pull", { repoPath, remote, author });
+): Promise<void> => {
+  assertDesktopCommand("git_pull");
+  return invoke("git_pull", { repoPath, remote, author });
+};
 
 export const gitPush = (
   repoPath: string,
   remote?: string,
   branch?: string,
-): Promise<void> => invoke("git_push", { repoPath, remote, branch });
+): Promise<void> => {
+  assertDesktopCommand("git_push");
+  return invoke("git_push", { repoPath, remote, branch });
+};
 
-export const gitClone = (url: string, destPath: string): Promise<void> =>
-  invoke("git_clone", { url, destPath });
+export const gitClone = (url: string, destPath: string): Promise<void> => {
+  assertDesktopCommand("git_clone");
+  return invoke("git_clone", { url, destPath });
+};
 
 export const overleafImportZip = (
   zipPath: string,

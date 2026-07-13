@@ -215,10 +215,7 @@ pub async fn set_project_tags(project_root: String, tags: Vec<String>) -> CmdRes
 /// Assign the project to a space (`None` clears it). The space id references the
 /// workspace spaces catalog in settings.json; it is not cross-checked here.
 #[tauri::command]
-pub async fn set_project_space(
-    project_root: String,
-    space: Option<String>,
-) -> CmdResult<Project> {
+pub async fn set_project_space(project_root: String, space: Option<String>) -> CmdResult<Project> {
     tokio::task::spawn_blocking(move || -> CmdResult<Project> {
         ensure_registered(&project_root)?;
         project::set_space(Path::new(&project_root), space).map_err(err)
@@ -331,10 +328,7 @@ pub async fn set_project_build(
 /// flow). Existence + extension-match + `write_project` revalidation live in
 /// `project::set_root_file`.
 #[tauri::command]
-pub async fn set_project_root_file(
-    project_root: String,
-    rel_path: String,
-) -> CmdResult<Project> {
+pub async fn set_project_root_file(project_root: String, rel_path: String) -> CmdResult<Project> {
     tokio::task::spawn_blocking(move || -> CmdResult<Project> {
         ensure_registered(&project_root)?;
         project::set_root_file(Path::new(&project_root), &rel_path).map_err(err)
@@ -519,10 +513,7 @@ fn duplicate_project_file_op(root: &Path, rel_path: &str) -> CmdResult<String> {
 }
 
 #[tauri::command]
-pub async fn duplicate_project_file(
-    project_root: String,
-    rel_path: String,
-) -> CmdResult<String> {
+pub async fn duplicate_project_file(project_root: String, rel_path: String) -> CmdResult<String> {
     tokio::task::spawn_blocking(move || -> CmdResult<String> {
         ensure_registered(&project_root)?;
         duplicate_project_file_op(Path::new(&project_root), &rel_path)
@@ -676,6 +667,10 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResu
     // Runs on a debounce while the user drags sliders/toggles — the write plus
     // create_dir_all must not hitch the event-loop thread.
     tokio::task::spawn_blocking(move || -> CmdResult<()> {
+        // The renderer's payload has no `compile` key, so backend-owned values
+        // are carried forward rather than reset on every settings write.
+        let mut settings = settings;
+        settings::preserve_backend_owned(&app, &mut settings);
         settings::save(&app, &settings).map_err(err)?;
         // Keep the clone-destination boundary in sync when the user moves their
         // projects root. (File IO is gated by the opened-project registry, which
@@ -683,6 +678,12 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResu
         let root = PathBuf::from(&settings.projects_root);
         let _ = std::fs::create_dir_all(&root);
         project::set_projects_root(&root);
+        // ...and the two boundaries seeded from settings at startup: plugin-fs's
+        // runtime path scope and the loopback port the local AI daemon is on.
+        crate::grant_projects_root_fs_scope(&app, &root);
+        crate::integrations::http::set_local_ai_base_url(
+            settings.integrations.ai.ollama_base_url.as_deref(),
+        );
         Ok(())
     })
     .await
@@ -831,15 +832,25 @@ mod tests {
         // A nested `.typeward` beyond the first segment is not this guard's job
         // (validate_project_relative_path handles traversal); ordinary paths pass.
         for ok in ["sections/intro.tex", "figures/plot.png", "notes.md"] {
-            assert!(reject_protected_first_component(ok).is_ok(), "{ok} should pass");
+            assert!(
+                reject_protected_first_component(ok).is_ok(),
+                "{ok} should pass"
+            );
         }
     }
 
     #[test]
     fn file_ops_reject_traversal_absolute_and_dash_paths() {
         let root = temp_dir();
-        for bad in ["../outside.tex", "sections/../../evil.tex", "-shell-escape.tex"] {
-            assert!(create_project_dir_op(&root, bad).is_err(), "{bad} rejected by mkdir");
+        for bad in [
+            "../outside.tex",
+            "sections/../../evil.tex",
+            "-shell-escape.tex",
+        ] {
+            assert!(
+                create_project_dir_op(&root, bad).is_err(),
+                "{bad} rejected by mkdir"
+            );
             assert!(
                 rename_project_file_op(&root, "main.tex", bad).is_err(),
                 "{bad} rejected as rename dest"
@@ -871,16 +882,12 @@ mod tests {
         std::fs::write(root.join("real.tex"), "R").unwrap();
         symlink(root.join("real.tex"), root.join("link.tex")).unwrap();
 
-        assert!(
-            rename_project_file_op(&root, "link.tex", "moved.tex")
-                .unwrap_err()
-                .contains("symlink")
-        );
-        assert!(
-            duplicate_project_file_op(&root, "link.tex")
-                .unwrap_err()
-                .contains("symlink")
-        );
+        assert!(rename_project_file_op(&root, "link.tex", "moved.tex")
+            .unwrap_err()
+            .contains("symlink"));
+        assert!(duplicate_project_file_op(&root, "link.tex")
+            .unwrap_err()
+            .contains("symlink"));
         // The real file behind the link is untouched.
         assert!(root.join("real.tex").exists());
         assert!(root.join("link.tex").exists());
@@ -890,7 +897,10 @@ mod tests {
     fn duplicate_naming_escalates_on_collision() {
         let root = temp_dir();
         std::fs::write(root.join("note.tex"), "N").unwrap();
-        assert_eq!(duplicate_rel_name(&root, "note.tex").unwrap(), "note copy.tex");
+        assert_eq!(
+            duplicate_rel_name(&root, "note.tex").unwrap(),
+            "note copy.tex"
+        );
 
         // End-to-end duplicate, then a second duplicate escalates the suffix.
         let first = duplicate_project_file_op(&root, "note.tex").unwrap();
@@ -902,18 +912,19 @@ mod tests {
         // Nested path keeps its directory and handles an extension-less file.
         std::fs::create_dir_all(root.join("d")).unwrap();
         std::fs::write(root.join("d").join("README"), "x").unwrap();
-        assert_eq!(duplicate_rel_name(&root, "d/README").unwrap(), "d/README copy");
+        assert_eq!(
+            duplicate_rel_name(&root, "d/README").unwrap(),
+            "d/README copy"
+        );
     }
 
     #[test]
     fn duplicate_rejects_directories() {
         let root = temp_dir();
         std::fs::create_dir_all(root.join("sub")).unwrap();
-        assert!(
-            duplicate_project_file_op(&root, "sub")
-                .unwrap_err()
-                .contains("only files")
-        );
+        assert!(duplicate_project_file_op(&root, "sub")
+            .unwrap_err()
+            .contains("only files"));
     }
 
     #[test]

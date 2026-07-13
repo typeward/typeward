@@ -9,12 +9,24 @@
 # `releases/latest/download/...` (updater endpoint + download links) goes live
 # with no site redeploy.
 #
-# DORMANCY. Everything signing/updater-related is optional and absent-by-default:
-#   - No TAURI_SIGNING_PRIVATE_KEY -> plain installers, NO updater artifacts, NO
-#     latest.json (the checked-in tauri.conf keeps createUpdaterArtifacts:false).
-#   - No APPLE_* / AZURE_* -> unsigned for that OS (a ::warning, not a failure).
-#   - No RELEASES_REPO_TOKEN -> assets upload as a workflow artifact + a loud
-#     ::error naming the manual step; the build jobs still succeed.
+# SIGNING IS ENFORCED. A release build FAILS when a signing input its OS needs is
+# absent. Shipping deliberately-unsigned builds (the beta) requires an explicit
+# opt-in, so unsigned is never the accidental default:
+#   - workflow_dispatch input `allow_unsigned: true`, or
+#   - repository variable ALLOW_UNSIGNED_RELEASE = 'true' (covers tag pushes).
+# Either one turns the hard failure into a loud ::warning and stamps the release
+# notes as unsigned. Required inputs per leg:
+#   - all:     TAURI_SIGNING_PRIVATE_KEY (updater signature + .sig artifacts).
+#   - macOS:   APPLE_* (codesign + notarization).
+#   - Windows: AZURE_* AND a `bundle.windows.signCommand` in tauri.conf.json —
+#              the env passthrough alone signs nothing.
+#   - Linux:   no OS signing story; integrity rides on SHA256SUMS + attestation.
+# Every published artifact is hashed into SHA256SUMS and attested with build
+# provenance, signed or not — that is what the download/docs pages tell users to
+# verify.
+#
+# Still absent-by-default (not signing): no RELEASES_REPO_TOKEN -> assets upload
+# as a workflow artifact + a loud ::error naming the manual step.
 # See _plans/40-distribution-signing-updates.md and CLAUDE.md > Release & updates.
 
 name: Release
@@ -28,6 +40,11 @@ on:
         description: 'Existing tag to build (e.g. v0.2.0)'
         required: true
         type: string
+      allow_unsigned:
+        description: 'Publish an UNSIGNED build (deliberate beta escape hatch)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
@@ -38,6 +55,8 @@ permissions:
 
 env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  # Set on purpose, never by default. Empty string = enforce signing.
+  ALLOW_UNSIGNED: ${{ (github.event.inputs.allow_unsigned == 'true' || vars.ALLOW_UNSIGNED_RELEASE == 'true') && 'true' || '' }}
 
 jobs:
   build:
@@ -141,29 +160,57 @@ jobs:
           cd app/src-tauri/binaries
           ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
 
-      # Warn per absent signing group; decide whether updater artifacts are
-      # even possible (needs the updater private key). Secrets can't be read in
-      # `if:` so route them through env here and expose a plain output.
-      - name: Signing availability check
+      # Signing gate. Collect every signing input this leg needs; a missing one
+      # FAILS the release unless the unsigned escape hatch was set on purpose.
+      # Secrets can't be read in `if:` so route them through env here and expose
+      # plain outputs.
+      - name: Signing gate
         id: sign
         shell: bash
+        working-directory: app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
         run: |
+          # No `set -u`: the macOS runner's bash 3.2 errors on an empty array
+          # expansion under it.
+          set -eo pipefail
+          missing=()
+
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "::warning::TAURI_SIGNING_PRIVATE_KEY absent — building plain installers with NO updater artifacts. The auto-updater stays dormant until the keypair lands (see _plans/40)."
+            missing+=("TAURI_SIGNING_PRIVATE_KEY (updater signature; no key -> no .sig, no latest.json, updater stays dormant — _plans/40)")
             echo "updater=false" >> "$GITHUB_OUTPUT"
           else
             echo "updater=true" >> "$GITHUB_OUTPUT"
           fi
+
           if [ "${{ matrix.os }}" = "macos" ] && [ -z "$APPLE_CERTIFICATE" ]; then
-            echo "::warning::APPLE_* secrets absent — macOS build is unsigned/unnotarized (Gatekeeper will warn). Fine for a draft smoke test."
+            missing+=("APPLE_* (macOS codesign + notarization; Gatekeeper will refuse/warn)")
           fi
-          if [ "${{ matrix.os }}" = "windows" ] && [ -z "$AZURE_CLIENT_ID" ]; then
-            echo "::warning::AZURE_* secrets absent — Windows build is unsigned (SmartScreen will warn). Fine for a draft smoke test."
+
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            # The AZURE_* passthrough signs nothing on its own: Tauri only signs
+            # when tauri.conf.json declares bundle.windows.signCommand.
+            has_sign_command="$(node -p "Boolean(require('./src-tauri/tauri.conf.json').bundle?.windows?.signCommand)")"
+            if [ -z "$AZURE_CLIENT_ID" ] || [ "$has_sign_command" != "true" ]; then
+              missing+=("Windows Authenticode (needs AZURE_* secrets AND bundle.windows.signCommand in tauri.conf.json; SmartScreen will warn)")
+            fi
           fi
+
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All signing inputs present for ${{ matrix.os }}."
+            exit 0
+          fi
+
+          printf 'Missing signing inputs for %s:\n' "${{ matrix.os }}"
+          printf '  - %s\n' "${missing[@]}"
+          if [ -n "${ALLOW_UNSIGNED:-}" ]; then
+            echo "::warning::UNSIGNED RELEASE (${{ matrix.os }}) — allowed only because the unsigned escape hatch is set. Users get no OS-level authenticity guarantee; SHA256SUMS + build provenance are the only integrity checks."
+            exit 0
+          fi
+          echo "::error::Refusing to build an unsigned release (${{ matrix.os }}). Add the missing signing inputs above, or set the escape hatch on purpose: re-run with the workflow_dispatch input allow_unsigned=true, or set the repository variable ALLOW_UNSIGNED_RELEASE=true."
+          exit 1
 
       # Overlay JSON deep-merged over tauri.conf via `--config`, flipping ONLY
       # createUpdaterArtifacts on — the checked-in config stays dormant so a
@@ -176,6 +223,11 @@ jobs:
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
         env:
+          # Source-map upload is opt-in (vite.config.ts) so ordinary builds stay
+          # hermetic; the release build is the one place that opts in. No token
+          # -> no maps, no upload, just a warning.
+          SENTRY_UPLOAD: 'true'
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           # Frontend secrets (empty is fine — the app degrades to free tier).
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
@@ -228,6 +280,11 @@ jobs:
     name: Assemble + draft release
     needs: build
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Build provenance attestations for the published artifacts.
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout (full history for the changelog)
         uses: actions/checkout@v4
@@ -292,6 +349,66 @@ jobs:
             --base-url "https://github.com/typeward/releases/releases/download/${TAG}" \
             --notes-file RELEASE_NOTES.md \
             --out dist/latest.json
+
+      # Every asset gets a checksum line. The download page and docs tell users
+      # to verify against this file, so it must exist for EVERY release, signed
+      # or not — it is the only integrity check an unsigned build has.
+      - name: SHA256SUMS
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=( * )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No release assets were produced — nothing to checksum."
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Cryptographic provenance for each asset (which workflow, which commit,
+      # which runner built it) — verifiable with `gh attestation verify`.
+      # Independent of code signing; it is what an unsigned beta can still offer.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/*'
+
+      - name: Append verification + signing status to the notes
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          touch RELEASE_NOTES.md
+          # Same inputs the per-OS signing gate checks; if any is absent this
+          # release only got through because the unsigned escape hatch was set,
+          # and the notes must say so rather than let users assume otherwise.
+          has_sign_command="$(node -p "Boolean(require('./src-tauri/tauri.conf.json').bundle?.windows?.signCommand)")"
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$APPLE_CERTIFICATE" ] \
+            || [ -z "$AZURE_CLIENT_ID" ] || [ "$has_sign_command" != "true" ]; then
+            {
+              echo
+              echo "### Unsigned build"
+              echo
+              echo "These installers are **not fully code-signed** and may carry no updater"
+              echo "signature. Windows SmartScreen and macOS Gatekeeper will warn. Verify the"
+              echo "download against \`SHA256SUMS\` below before running it."
+            } >> RELEASE_NOTES.md
+          fi
+          {
+            echo
+            echo "### Verify your download"
+            echo
+            echo '```'
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo '```'
+            echo
+            echo "Build provenance: \`gh attestation verify <file> --repo ${{ github.repository }}\`"
+          } >> RELEASE_NOTES.md
 
       - name: Detect cross-repo release token
         id: token

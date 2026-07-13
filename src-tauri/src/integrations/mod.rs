@@ -22,5 +22,10 @@ pub mod ipc;
 pub mod oauth;
 pub mod overleaf;
 pub mod templates;
+// libgit2 is a desktop-only dependency (Cargo.toml): git2's `https` feature
+// links openssl-sys on non-Apple unix targets, which includes Android. The
+// module — and every git IPC command in lib.rs — is gated to match, so mobile
+// builds neither link libgit2 nor expose a git command surface.
+#[cfg(desktop)]
 pub mod vcs;
 pub mod webdav;

@@ -28,18 +28,31 @@ function updaterConfigured(): boolean {
   }
 }
 
-// Sentry source-map upload. The auth token lives in .env.sentry-build-plugin
-// (gitignored; see .env.example) — Vite doesn't load env files into
-// process.env at config-eval time, so pull it in explicitly. No token means
-// no upload and no sourcemap generation: maps must never reach dist/
-// un-deleted, because `tauri build` ships dist/ verbatim (source leak).
-try {
-  process.loadEnvFile(fileURLToPath(new URL("./.env.sentry-build-plugin", import.meta.url)));
-} catch {
-  /* token file absent — upload disabled */
+// Sentry source-map upload is OPT-IN, never implicit: an ordinary `npm run
+// build` must be hermetic (no network, no sentry.io contact) even on a machine
+// that has a token configured. Release builds set SENTRY_UPLOAD=true (see
+// .github/workflows/release.yml) to turn it on.
+//
+// Only then is the auth token read from .env.sentry-build-plugin (gitignored;
+// see .env.example) — Vite doesn't load env files into process.env at
+// config-eval time, so pull it in explicitly. No token still means no upload
+// and no sourcemap generation: maps must never reach dist/ un-deleted, because
+// `tauri build` ships dist/ verbatim (source leak).
+const sentryUploadRequested =
+  process.env.SENTRY_UPLOAD === "true" && !process.env.VITEST && !process.env.TAURI_ENV_DEBUG;
+if (sentryUploadRequested && !process.env.SENTRY_AUTH_TOKEN) {
+  try {
+    process.loadEnvFile(fileURLToPath(new URL("./.env.sentry-build-plugin", import.meta.url)));
+  } catch {
+    /* token file absent — upload stays disabled */
+  }
 }
-const sentryUpload =
-  !!process.env.SENTRY_AUTH_TOKEN && !process.env.VITEST && !process.env.TAURI_ENV_DEBUG;
+const sentryUpload = sentryUploadRequested && !!process.env.SENTRY_AUTH_TOKEN;
+if (sentryUploadRequested && !sentryUpload) {
+  console.warn(
+    "[sentry] SENTRY_UPLOAD=true but no SENTRY_AUTH_TOKEN — building without source maps.",
+  );
+}
 
 // KaTeX ships woff2 + woff + ttf for all 20 math faces; every Tauri webview
 // target (WebKitGTK / WKWebView / WebView2 / Android WebView) supports woff2,

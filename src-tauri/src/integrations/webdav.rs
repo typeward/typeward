@@ -169,10 +169,7 @@ struct WebdavSession {
 }
 
 impl WebdavSession {
-    async fn open(
-        app: tauri::AppHandle,
-        requested: WebdavAccount,
-    ) -> Result<Self, WebdavError> {
+    async fn open(app: tauri::AppHandle, requested: WebdavAccount) -> Result<Self, WebdavError> {
         let account = trusted_webdav_account_for_app(app, requested).await?;
         let password = account_password(&account.account_id).await?;
         Ok(Self { account, password })
@@ -898,10 +895,7 @@ fn trim_trailing_slash(s: &str) -> &str {
 /// Requires https and screens the host (resolve + deny-table, honoring the
 /// private opt-in). Returns the normalized base URL to persist.
 #[tauri::command]
-pub async fn webdav_validate_host(
-    url: String,
-    allow_private: bool,
-) -> Result<HostVerdict, String> {
+pub async fn webdav_validate_host(url: String, allow_private: bool) -> Result<HostVerdict, String> {
     webdav_validate_host_inner(url, allow_private)
         .await
         .map_err(|e| e.to_string())
@@ -1095,8 +1089,8 @@ fn parse_put_request(request: &tauri::ipc::Request<'_>) -> Result<PutRequest, We
             .map_err(WebdavError::Network)?,
     )
     .map_err(|e| WebdavError::Network(format!("account decode: {e}")))?;
-    let rel_path =
-        crate::integrations::ipc::decode_header(request, "x-rel-path").map_err(WebdavError::Network)?;
+    let rel_path = crate::integrations::ipc::decode_header(request, "x-rel-path")
+        .map_err(WebdavError::Network)?;
     let if_match = crate::integrations::ipc::decode_opt_header(request, "x-if-match")
         .map_err(WebdavError::Network)?;
     Ok(PutRequest {
@@ -1113,7 +1107,9 @@ pub async fn webdav_put(
     request: tauri::ipc::Request<'_>,
 ) -> Result<WebdavPutResult, String> {
     let parsed = parse_put_request(&request).map_err(|e| e.to_string())?;
-    webdav_put_body(app, parsed).await.map_err(|e| e.to_string())
+    webdav_put_body(app, parsed)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn webdav_put_body(

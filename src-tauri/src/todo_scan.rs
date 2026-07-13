@@ -95,7 +95,10 @@ fn scan_line(ext: &str, line: &str) -> Option<(&'static str, String)> {
             if let Some(pos) = line.find("\\todo{") {
                 let inner_start = pos + "\\todo{".len();
                 if let Some(end) = line[inner_start..].find('}') {
-                    return Some(("todo", line[inner_start..inner_start + end].trim().to_string()));
+                    return Some((
+                        "todo",
+                        line[inner_start..inner_start + end].trim().to_string(),
+                    ));
                 }
             }
             keyword_in(tex_comment(line)?)
@@ -223,7 +226,10 @@ mod tests {
     fn word_boundary_avoids_false_positives() {
         // "TODOLIST" should not match TODO (no boundary after).
         assert_eq!(scan_line("typ", "// TODOLIST"), None);
-        assert_eq!(scan_line("typ", "// x-NOTE-y"), Some(("note", "-y".to_string())));
+        assert_eq!(
+            scan_line("typ", "// x-NOTE-y"),
+            Some(("note", "-y".to_string()))
+        );
         // Underscore is a word char — TODO_LIST is a single identifier.
         assert_eq!(scan_line("typ", "// TODO_LIST placeholder"), None);
         // A non-ASCII letter glued to the keyword is not a boundary.

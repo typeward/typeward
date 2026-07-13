@@ -188,12 +188,7 @@ fn append_text_annotation(
     annot.set("Subtype", "Text");
     annot.set(
         "Rect",
-        vec![
-            real(x),
-            real(pdf_y - 18.0),
-            real(x + 18.0),
-            real(pdf_y),
-        ],
+        vec![real(x), real(pdf_y - 18.0), real(x + 18.0), real(pdf_y)],
     );
     annot.set("Contents", text_string(body));
     annot.set("T", text_string(title));

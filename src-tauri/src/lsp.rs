@@ -122,8 +122,8 @@ async fn start_lsp_impl(
     // Resolve to an absolute path and spawn that. A bare `Command::new("texlab")`
     // with `current_dir(project)` lets Windows execute a `texlab.exe`/`tinymist.exe`
     // planted in a malicious project; `which` resolves against PATH, not the project.
-    let bin_path =
-        crate::detect::resolve_program(bin).map_err(|_| LspError::BinaryMissing(bin.to_string()))?;
+    let bin_path = crate::detect::resolve_program(bin)
+        .map_err(|_| LspError::BinaryMissing(bin.to_string()))?;
 
     let server_id = format!(
         "{}-{}",

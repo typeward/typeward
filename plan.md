@@ -13,7 +13,7 @@
 | 0 — Skeleton | **complete** (2026-05-10) | Tauri 2 + Solid + TS scaffolded. Tailwind v4, Kobalte, lucide-solid, corvu, @solidjs/router installed. Theme tokens (Aurora/Obsidian/Graphite/Paper) + accent palettes (Violet-Cyan/Amber-Rose/Emerald-Teal/Indigo-Pink) wired with localStorage persistence. Vitest (jsdom) and `cargo test` baseline tests passing. Icons generated for all platforms. |
 | 1 — Vertical slice on desktop | **complete** (2026-05-10) | All four screens (Onboarding/Projects/Editor/Settings) ported and functional. CodeMirror 6 + PDF.js wired into a 3-pane corvu Resizable shell. Real LaTeX compile via system TeX (latexmk/pdflatex) or Tectonic. Architecture seams defined (DocumentExperience, EditorAdapter, CompileProvider, PreviewProvider, LspProvider, CommandRegistry). LSP transport (texlab spawn + JSON-RPC framing over Tauri event channels), unified file watcher (notify-based), autosave + recovery dialog, and telemetry capture (panic hook + frontend error hook + JSONL log) all in. |
 | 2 — Multi-format & preview polish | substantively complete | CommandRegistry bound, Typst adapter, SyncTeX all landed (2026-05-11..15). Two items intentionally skipped per user direction: smart per-page PDF diff and sync-to-cursor toggle. Quarto support was scoped in then dropped 2026-05-12. Markdown/RMD adapters and notebook shell were subsequently removed (2026-05-20 scope narrowing — see below). |
-| 3 — Tablet | substantively complete (2026-05-13) | Responsive layout (viewport-store + PaneSwitcher + LogsSheet + swipe gestures), texlive-wasm CompileProvider (multi-file walker, bundled-resource assets, SyncTeX persistence), Android target scaffolded via `tauri android init`. APK build-and-run on emulator/device is the only remaining piece — user-driven. |
+| 3 — Tablet | **incomplete — gated** (status corrected 2026-07-13) | What works: the responsive shell (viewport-store + PaneSwitcher + LogsSheet + swipe gestures), the texlive-wasm CompileProvider's multi-file walker + SyncTeX persistence + log parsing, and the in-JS SyncTeX reader. What does NOT: **no APK has ever been built or run**, and three blockers stand between here and one — (1) the Android build fails in `openssl-sys` (pulled in by `git2`), (2) the WASM compile path passed no `enginePath`, so engine init threw on every mobile compile (renderer half fixed 2026-07-13; unproven on a device), (3) OS-keyring credentials would not persist on Android. Ship-blocking for a tablet release; desktop is unaffected. |
 | 4 — Cloud + collab | **superseded** (2026-05-22) | The original "folder sync to Supabase + realtime collab" framing was retired 2026-05-13. The integrations program (below) picks up the still-relevant pieces — third-party cloud storage providers landed as Integ Phase 2; Supabase resurfaces as Integ Phase 7 with a narrower scope (auth + entitlements only, no file storage, no realtime collab). Realtime collab via Yjs remains separately deferred. |
 
 ### Integrations program (2026-05-22 → present)
@@ -358,7 +358,28 @@ Original breakdown follows for reference:
 - Smart page refresh — diff pages, only re-render changed ones
 - Sync-to-cursor toggle
 
-### Phase 3 — Tablet — substantively complete (2026-05-13)
+### Phase 3 — Tablet — INCOMPLETE, gated (status corrected 2026-07-13)
+
+**Reality check (2026-07-13).** This section was written as "substantively complete"; it wasn't. The
+desktop-side work below did land and is used every day. The *mobile* target has never run: no APK has
+been built on an emulator or device, and until one is, nothing in this phase is verified on the actual
+target. Three named blockers:
+
+1. **Android build fails in `openssl-sys`** — `git2` (libgit2) drags OpenSSL into the Android link, which
+   has no system OpenSSL. Fix in flight: cfg-gate the git commands (and `git2`) out of mobile builds. The
+   renderer degrades accordingly — `ipc.gitAvailable()` is false on mobile, so the SCM sidebar tab, the git
+   status bar and the clone entry point don't render, and every git IPC wrapper fails fast with an
+   actionable message instead of an opaque unknown-command rejection.
+2. **The WASM compile path threw at engine init** — the provider called `createEngine("pdflatex")` with no
+   `enginePath`, and texlive-wasm's worker requires one (`config.enginePath is required`). So mobile compile
+   had never worked end to end. Fixed on the renderer side 2026-07-13 (`texlive-wasm-assets.ts`: real
+   engine URLs for the tex engine *and* the bibtexu/biber/makeindex helpers, an honest glue+wasm+TDS
+   availability probe, actionable unavailable-state). Still unproven on a device.
+3. **Android credentials would not persist** — the OS keyring backend has no Android implementation, so
+   every `credential_*` write is silently lost (sign-in, tokens, entitlement cache).
+
+SyncTeX on mobile is fine (`src/adapters/latex/synctex.ts` has a complete in-JS reader) — it was merely
+unreachable while compile was broken.
 
 The plan called for "drop-in replacement for desktop's `compile.rs` on mobile target via cfg-gated Rust"; we landed something simpler and stronger — a frontend Web Worker provider that runs the same way on desktop and tablet, with no Rust cfg-gates needed. `texlive-wasm` owns the worker; Typeward dispatches.
 
@@ -372,8 +393,8 @@ The plan called for "drop-in replacement for desktop's `compile.rs` on mobile ta
 
 **Landed (2026-05-13; replaced 2026-06-04) — texlive-wasm CompileProvider**
 
-- Local `texlive-wasm` package (`file:../texlive-wasm`). One-time asset fetch via `npx texlive-wasm download-assets ./src-tauri/resources/texlive-wasm`, bundled as Tauri resources for mobile builds.
-- `src/providers/compile/texlive-wasm-provider.ts` — wraps `latexmk()` with a lazy `pdflatex` engine handle. Walks the project tree for `.tex`/`.bib`/`.cls`/`.sty`/`.bst`/`.def`/`.ldf`/`.fd`/`.cnf`/`.clo`/`.aux` plus binary figures (capped 200 files / 10MB), auto-enables BibTeX when any `.bib` is present. Sniffs SyncTeX magic bytes (`1f 8b`) to write either `.synctex.gz` or `.synctex` next to the PDF. Reuses the Rust `parse_latex_log` extractor via `parse_latex_log_cmd`.
+- Local `texlive-wasm` package (`file:../texlive-wasm`). One-time asset fetch, **two destinations** (corrected 2026-07-13): engines to `./public/texlive-wasm` (the worker imports the glue + fetches the wasm by URL, so they must sit on the app origin the CSP allows), the TeX Live tree to `./src-tauri/resources/texlive-wasm` (read off disk via TauriFS). See CLAUDE.md > Commands for the exact invocations.
+- `src/providers/compile/texlive-wasm-provider.ts` — wraps `latexmk()` with a lazy `pdflatex` engine handle (`texlive-wasm-assets.ts` owns the engine paths + asset probe). Walks the project tree for `.tex`/`.bib`/`.cls`/`.sty`/`.bst`/`.def`/`.ldf`/`.fd`/`.cnf`/`.clo`/`.aux` plus binary figures (capped 200 files / 10MB), auto-enables BibTeX when any `.bib` is present. Sniffs SyncTeX magic bytes (`1f 8b`) to write either `.synctex.gz` or `.synctex` next to the PDF. Reuses the Rust `parse_latex_log` extractor via `parse_latex_log_cmd`.
 - Rust: new project-scoped `write_project_binary_file` and `parse_latex_log_cmd` Tauri commands.
 - `CompileEngine` type is `"system-tex" | "tectonic" | "texlive-wasm"`, with old persisted `"busytex"` migrated on load.
 - `LatexAdapter.compile()` routes the texlive-wasm branch via dynamic import so the WASM bridge stays out of desktop bundles when unused.

@@ -12,6 +12,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# build.rs splices the configured Supabase project's exact origin into the CSP
+# (the wildcard it replaces would let an XSS payload exfiltrate to any tenant).
+serde_json = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -50,9 +53,6 @@ url = "2"
 sha2 = "0.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
-# VCS — Phase 3. libgit2 bindings; the "https" feature uses openssl on
-# Unix and the OS-native TLS stack (WinHTTP/SChannel) on Windows.
-git2 = { version = "0.20", default-features = false, features = ["https"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 # Project history (history.rs): gzip for the content-addressed version blobs.
@@ -85,11 +85,19 @@ sentry = { version = "0.46.2", default-features = false, features = ["reqwest", 
 uuid = { version = "1.23.4", features = ["v4"] }
 os_info = { version = "3.15.0", default-features = false }
 
-# Desktop-only single-instance guard: a second launch focuses the running
-# window rather than starting a rival process over the same project data.
-# `cfg(desktop)` isn't a cargo-known cfg, so gate by the concrete mobile targets.
+# Desktop-only deps. `cfg(desktop)` isn't a cargo-known cfg, so gate by the
+# concrete mobile targets.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Single-instance guard: a second launch focuses the running window rather than
+# starting a rival process over the same project data.
 tauri-plugin-single-instance = "2"
+# VCS — Phase 3. libgit2 bindings; the "https" feature uses the OS-native TLS
+# stack (WinHTTP/SChannel) on Windows and Security.framework on macOS, but
+# OpenSSL on every other unix — including aarch64-linux-android, where
+# openssl-sys has no NDK-buildable source and kills the whole Android build.
+# Git is a desktop feature, so the dependency (and `integrations::vcs`, and the
+# git IPC commands in lib.rs) is gated off mobile entirely.
+git2 = { version = "0.20", default-features = false, features = ["https"] }
 # Move-to-trash for project delete (Recycle Bin / Trash / freedesktop). Desktop
 # only — mobile has no trash concept, so project.rs falls back to a hard delete.
 trash = "5"

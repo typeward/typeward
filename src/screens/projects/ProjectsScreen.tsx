@@ -1509,12 +1509,14 @@ const NewProjectDialog: Component<{
           <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
             Template
           </Button>
-          <FeatureGate feature="integrations.vcs.git">
-            <span class="text-xs text-fg-3">·</span>
-            <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
-              Clone repository
-            </Button>
-          </FeatureGate>
+          <Show when={ipc.gitAvailable()}>
+            <FeatureGate feature="integrations.vcs.git">
+              <span class="text-xs text-fg-3">·</span>
+              <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
+                Clone repository
+              </Button>
+            </FeatureGate>
+          </Show>
           <FeatureGate feature="integrations.vcs.overleaf_import">
             <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
               Overleaf zip

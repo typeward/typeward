@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the main window",
+  "description": "Default permissions for the main window. The plugin-fs path scope is NOT $DOCUMENT-wide: the static entries cover the default projects root and the bundled resources, and lib.rs seeds the fs plugin's runtime scope with the configured projects root at startup (and again when the user moves it). Dialog-picked files are added to the same runtime scope by tauri-plugin-dialog, so save/open destinations outside the projects root keep working.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -13,58 +13,58 @@
     {
       "identifier": "fs:allow-read-file",
       "allow": [
-        { "path": "$DOCUMENT/**" },
+        { "path": "$DOCUMENT/Typeward/**" },
         { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/Typeward/**" }
       ]
     },
     {
       "identifier": "fs:allow-write-text-file",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/Typeward/**" }
       ]
     },
     {
       "identifier": "fs:allow-write-file",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/Typeward/**" }
       ]
     },
     {
       "identifier": "fs:allow-read-dir",
       "allow": [
-        { "path": "$DOCUMENT/**" },
+        { "path": "$DOCUMENT/Typeward/**" },
         { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     {
       "identifier": "fs:allow-stat",
       "allow": [
-        { "path": "$DOCUMENT/**" },
+        { "path": "$DOCUMENT/Typeward/**" },
         { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },
     {
       "identifier": "fs:allow-mkdir",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/Typeward/**" }
       ]
     },
     {
       "identifier": "fs:allow-remove",
       "allow": [
-        { "path": "$DOCUMENT/**" }
+        { "path": "$DOCUMENT/Typeward/**" }
       ]
     },
     {
       "identifier": "fs:allow-exists",
       "allow": [
-        { "path": "$DOCUMENT/**" },
+        { "path": "$DOCUMENT/Typeward/**" },
         { "path": "$RESOURCE/texlive-wasm/**" }
       ]
     },

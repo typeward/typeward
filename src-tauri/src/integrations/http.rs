@@ -20,6 +20,7 @@
 //!     automatic retry with a 250ms delay; everything else surfaces as-is
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -85,9 +86,7 @@ fn same_host_https_redirect_policy(host: &str) -> reqwest::redirect::Policy {
             return attempt.error("too many redirects");
         }
         let same_host = attempt.url().host_str().map(|h| h.to_ascii_lowercase());
-        if attempt.url().scheme() == "https"
-            && same_host.as_deref() == Some(expected.as_str())
-        {
+        if attempt.url().scheme() == "https" && same_host.as_deref() == Some(expected.as_str()) {
             attempt.follow()
         } else {
             attempt.error("redirect to a different host blocked")
@@ -216,7 +215,7 @@ fn allowlist_redirect_policy() -> reqwest::redirect::Policy {
         let host = url.host_str().map(|h| h.to_ascii_lowercase());
         let allowed = match (url.scheme(), host.as_deref()) {
             ("https", Some(h)) => allowed_https_host(h),
-            ("http", Some(h)) => is_loopback_host(h),
+            ("http", Some(_)) => is_allowed_loopback_url(url),
             _ => false,
         };
         if allowed {
@@ -246,6 +245,71 @@ fn normalized_host(url: &Url) -> Result<String, HttpError> {
 
 fn is_loopback_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
+}
+
+/// Zotero's local HTTP server (Better BibTeX + Zotero 7's built-in local API).
+const ZOTERO_LOCAL_PORT: u16 = 23119;
+/// `ollama serve`'s default port.
+const OLLAMA_DEFAULT_PORT: u16 = 11434;
+
+/// The Ollama port from `integrations.ai.ollamaBaseUrl`, when the user pointed
+/// the local AI daemon at a non-default port. Seeded at startup and refreshed on
+/// `save_settings` — settings are not reachable from this module (nor from the
+/// redirect policy, which has no `AppHandle`), so the one value the loopback
+/// allowlist needs is mirrored here.
+static LOCAL_AI_PORT: AtomicU32 = AtomicU32::new(0);
+
+/// Record the configured Ollama base URL. A non-loopback or unparseable value
+/// clears the extra port: only the two known local integrations may be reached
+/// over plaintext loopback, and a LAN/remote Ollama is already blocked by the
+/// scheme+host allowlist.
+pub fn set_local_ai_base_url(base_url: Option<&str>) {
+    let port = base_url
+        .and_then(|raw| Url::parse(raw.trim()).ok())
+        .filter(|url| url.scheme() == "http" || url.scheme() == "https")
+        .filter(|url| {
+            url.host_str()
+                .map(|h| is_loopback_host(&h.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .and_then(|url| url.port())
+        .unwrap_or(0);
+    LOCAL_AI_PORT.store(u32::from(port), Ordering::Relaxed);
+}
+
+fn local_ai_port() -> Option<u16> {
+    match LOCAL_AI_PORT.load(Ordering::Relaxed) {
+        0 => None,
+        port => u16::try_from(port).ok(),
+    }
+}
+
+/// Loopback HTTP is NOT a general egress channel. It exists for exactly two
+/// supported local integrations — Zotero (Better BibTeX / Zotero 7 local API)
+/// and Ollama — so it is pinned to their ports and API path prefixes. Without
+/// this, an injected renderer could sweep every service listening on localhost
+/// (dev servers, admin consoles, other apps' IPC) through `http_request`.
+/// No credential is ever bound to a loopback host (`validate_auth_ref_for_host`).
+fn is_allowed_loopback_url(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if !is_loopback_host(&host.to_ascii_lowercase()) {
+        return false;
+    }
+    // An explicit port only: the local integrations both publish one, and a
+    // default-port (80) loopback URL is never one of them.
+    let Some(port) = url.port() else {
+        return false;
+    };
+    let path = url.path();
+    if port == ZOTERO_LOCAL_PORT {
+        return path.starts_with("/better-bibtex") || path.starts_with("/api/");
+    }
+    if port == OLLAMA_DEFAULT_PORT || Some(port) == local_ai_port() {
+        return path.starts_with("/api/");
+    }
+    false
 }
 
 fn allowed_https_host(host: &str) -> bool {
@@ -313,7 +377,7 @@ pub fn validate_outbound_url(url: &str, auth_ref: Option<&AuthRef>) -> Result<Ur
     let host = normalized_host(&parsed)?;
     match parsed.scheme() {
         "https" if allowed_https_host(&host) => {}
-        "http" if is_loopback_host(&host) => {}
+        "http" if is_allowed_loopback_url(&parsed) => {}
         _ => return Err(HttpError::BlockedUrl(url.to_string())),
     }
     if let Some(auth) = auth_ref {
@@ -598,7 +662,10 @@ async fn perform_once(
     req: &HttpRequest,
     auth: Option<&AuthRef>,
 ) -> Result<HttpResponse, HttpError> {
-    let body = req.body.as_deref().map_or(OutboundBody::None, OutboundBody::Text);
+    let body = req
+        .body
+        .as_deref()
+        .map_or(OutboundBody::None, OutboundBody::Text);
     let builder =
         build_outbound_request(client(), &req.method, &req.url, &req.headers, auth, body).await?;
 
@@ -666,7 +733,9 @@ struct BinaryRespMeta<'a> {
 /// half of this change.)
 #[tauri::command]
 pub async fn http_request_bytes(req: BinaryHttpRequest) -> Result<tauri::ipc::Response, String> {
-    http_request_bytes_inner(req).await.map_err(|e| e.to_string())
+    http_request_bytes_inner(req)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn http_request_bytes_inner(
@@ -695,7 +764,10 @@ async fn perform_once_bytes(
     req: &BinaryHttpRequest,
     auth: Option<&AuthRef>,
 ) -> Result<BinaryHttpResponse, HttpError> {
-    let body = req.body.as_deref().map_or(OutboundBody::None, OutboundBody::Bytes);
+    let body = req
+        .body
+        .as_deref()
+        .map_or(OutboundBody::None, OutboundBody::Bytes);
     let builder =
         build_outbound_request(client(), &req.method, &req.url, &req.headers, auth, body).await?;
 
@@ -764,6 +836,75 @@ mod tests {
     }
 
     #[test]
+    fn loopback_allows_the_supported_local_integration_endpoints() {
+        for url in [
+            "http://127.0.0.1:23119/better-bibtex/library?/1/library.bib",
+            "http://127.0.0.1:23119/api/users/0/items?format=bibtex",
+            "http://localhost:23119/api/users/0/groups?format=json",
+            "http://localhost:11434/api/tags",
+            "http://127.0.0.1:11434/api/chat",
+            "http://[::1]:11434/api/show",
+        ] {
+            assert!(validate_outbound_url(url, None).is_ok(), "{url}");
+        }
+    }
+
+    #[test]
+    fn loopback_blocks_other_ports_and_paths() {
+        for url in [
+            // Arbitrary local services: dev servers, admin consoles, other apps.
+            "http://127.0.0.1:8080/admin",
+            "http://localhost:5000/callback",
+            "http://127.0.0.1:1420/",
+            // No explicit port at all.
+            "http://localhost/api/tags",
+            // Right port, wrong surface — Zotero's local server also serves
+            // non-API routes, and Ollama's port must not become a file fetcher.
+            "http://127.0.0.1:23119/debug-bridge/execute",
+            "http://127.0.0.1:11434/../etc/passwd",
+        ] {
+            let err = validate_outbound_url(url, None).unwrap_err();
+            assert!(matches!(err, HttpError::BlockedUrl(_)), "{url}");
+        }
+    }
+
+    #[test]
+    fn configured_ollama_port_is_allowed_and_revocable() {
+        let url = "http://127.0.0.1:31434/api/tags";
+        assert!(validate_outbound_url(url, None).is_err());
+
+        set_local_ai_base_url(Some("http://127.0.0.1:31434"));
+        assert!(validate_outbound_url(url, None).is_ok());
+        // Still only the API surface on that port.
+        assert!(validate_outbound_url("http://127.0.0.1:31434/", None).is_err());
+
+        // A non-loopback (or absent) base URL clears the extra port.
+        set_local_ai_base_url(Some("http://192.168.1.9:31434"));
+        assert!(validate_outbound_url(url, None).is_err());
+        set_local_ai_base_url(None);
+        assert!(validate_outbound_url(url, None).is_err());
+    }
+
+    #[test]
+    fn no_credential_is_bound_to_a_loopback_host() {
+        for service in ["zotero-web", "openai", "anthropic", "gemini", "dropbox"] {
+            let auth = AuthRef {
+                service: service.into(),
+                account: "default".into(),
+                header: "Authorization".into(),
+                prefix: "Bearer ".into(),
+                client_id: None,
+            };
+            for host in ["localhost", "127.0.0.1"] {
+                assert!(
+                    validate_auth_ref_for_host(&auth, host).is_err(),
+                    "{service}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn auth_ref_is_bound_to_expected_host() {
         let auth = AuthRef {
             service: "openai".into(),
@@ -802,9 +943,10 @@ mod tests {
 
     #[tokio::test]
     async fn capped_read_rejects_declared_oversize_content_length() {
-        let res = reqwest::Response::from(axum::http::Response::new(reqwest::Body::from(
-            vec![0u8; 8192],
-        )));
+        let res = reqwest::Response::from(axum::http::Response::new(reqwest::Body::from(vec![
+            0u8;
+            8192
+        ])));
         let err = read_body_capped_raw(res, 4096).await.unwrap_err();
         assert!(matches!(err, BodyCapError::TooLarge(_)));
     }

@@ -1,26 +1,12 @@
 import { readDir, type DirEntry } from "@tauri-apps/plugin-fs";
 import type { CompileResult, Project } from "~/adapters/types";
 import * as ipc from "~/ipc";
-
-let engineHandlePromise: Promise<import("texlive-wasm").EngineHandle> | null = null;
-
-async function getEngineHandle(): Promise<import("texlive-wasm").EngineHandle> {
-  if (engineHandlePromise) return engineHandlePromise;
-  const p = (async () => {
-    const { createEngine } = await import("texlive-wasm");
-    const { withTauriFs } = await import("texlive-wasm/tauri");
-    const { BaseDirectory } = await import("@tauri-apps/plugin-fs");
-    return withTauriFs(
-      (vfs) => createEngine("pdflatex", { vfs }),
-      { texmfRoot: "texlive-wasm/texmf", baseDir: BaseDirectory.Resource },
-    );
-  })();
-  engineHandlePromise = p;
-  p.catch(() => {
-    if (engineHandlePromise === p) engineHandlePromise = null;
-  });
-  return p;
-}
+import {
+  DOWNLOAD_HINT,
+  getEngineBundle,
+  texliveWasmAssetStatus,
+  type AssetStatus,
+} from "~/providers/compile/texlive-wasm-assets";
 
 const TEXT_EXTS = new Set([
   ".tex", ".bib", ".cls", ".sty", ".bst", ".def",
@@ -137,23 +123,46 @@ async function collectProjectFiles(
   return collected;
 }
 
-async function ensureAssetsAvailable(): Promise<void> {
-  try {
-    const { exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
-    const ok = await exists("texlive-wasm/pdflatex/emscripten/pdflatex.wasm", {
-      baseDir: BaseDirectory.Resource,
-    });
-    if (!ok) {
-      throw new Error(
-        "texlive-wasm assets not found. Run " +
-        "`npx texlive-wasm download-assets ./src-tauri/resources/texlive-wasm` " +
-        "and rebuild the app.",
-      );
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("texlive-wasm assets")) throw e;
-    // exists() itself failed — Tauri plugin not available or scope issue; let init surface the real error
+/** Helper engines this document will actually invoke but whose artifact wasn't
+ * downloaded — compiling anyway would either throw inside the engine worker or
+ * silently drop the bibliography/index. */
+async function missingHelpers(
+  status: AssetStatus,
+  files: AdditionalFile[],
+): Promise<string[]> {
+  const { willRunBibtex, willRunBiber } = await import("texlive-wasm");
+  const needed: string[] = [];
+  if (!status.engines.bibtexu && willRunBibtex(files)) needed.push("bibtexu");
+  if (!status.engines.biber && willRunBiber(files)) needed.push("biber");
+  if (
+    !status.engines.makeindex &&
+    files.some(
+      (f) =>
+        typeof f.content === "string" &&
+        (f.content.includes("\\makeindex") || f.content.includes("\\printindex")),
+    )
+  ) {
+    needed.push("makeindex");
   }
+  return needed;
+}
+
+function failure(
+  project: Project,
+  message: string,
+  started: number,
+): CompileResult {
+  return {
+    ok: false,
+    diagnostics: [{
+      severity: "error",
+      message,
+      file: project.rootFile,
+      line: 1,
+    }],
+    log: message,
+    durationMs: Math.round(performance.now() - started),
+  };
 }
 
 export async function compileWithTexliveWasm(
@@ -161,20 +170,9 @@ export async function compileWithTexliveWasm(
 ): Promise<CompileResult> {
   const started = performance.now();
 
-  try {
-    await ensureAssetsAvailable();
-  } catch (e) {
-    return {
-      ok: false,
-      diagnostics: [{
-        severity: "error",
-        message: String(e instanceof Error ? e.message : e),
-        file: project.rootFile,
-        line: 1,
-      }],
-      log: String(e instanceof Error ? e.message : e),
-      durationMs: Math.round(performance.now() - started),
-    };
+  const status = await texliveWasmAssetStatus();
+  if (!status.ok) {
+    return failure(project, status.message, started);
   }
 
   let input: string;
@@ -206,18 +204,30 @@ export async function compileWithTexliveWasm(
     ...additionalFiles,
   ];
 
+  const needed = await missingHelpers(status, files);
+  if (needed.length > 0) {
+    return failure(
+      project,
+      `This document needs the ${needed.join(" and ")} engine${needed.length > 1 ? "s" : ""}, ` +
+        `which ${needed.length > 1 ? "are" : "is"} not bundled with this build. ${DOWNLOAD_HINT}`,
+      started,
+    );
+  }
+
   let result: import("texlive-wasm").LatexmkResult;
   try {
     const { latexmk } = await import("texlive-wasm");
-    const tex = await getEngineHandle();
+    const { tex, engineConfig } = await getEngineBundle();
     result = await latexmk({
       engine: "pdflatex",
       mainTex: project.rootFile,
       files,
-      bibtex: "auto",
-      makeindex: "auto",
+      bibtex: status.engines.bibtexu ? "auto" : false,
+      biber: status.engines.biber ? "auto" : false,
+      makeindex: status.engines.makeindex ? "auto" : false,
       rerun: "auto",
       handles: { tex },
+      engineConfig,
     });
   } catch (e) {
     return {
