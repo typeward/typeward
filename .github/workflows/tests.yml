@@ -17,13 +17,18 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job only reads this repo and the public texlive-wasm sibling. Nothing
+# here writes to the repo, publishes, or needs an OIDC token.
+permissions:
+  contents: read
+
 jobs:
   frontend:
     name: Typecheck + Vitest
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           path: app
 
@@ -43,14 +48,14 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Checkout texlive-wasm sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: typeward/texlive-wasm
           ref: ${{ steps.texlive.outputs.ref }}
           path: texlive-wasm
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -92,15 +97,25 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           path: app
 
+      # SHA of the `stable` branch head. That branch's action.yml defaults the
+      # toolchain to stable, but a frozen SHA shouldn't rely on a default that
+      # is invisible at the call site — so the toolchain is named explicitly.
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
 
+      # Was `install-action@cargo-audit`, a per-tool alias tag that MOVES with
+      # every release of the action. The versioned action + explicit `tool` is
+      # the same thing, pinnable to a real tag.
       - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-audit
 
       # ADVISORY EXCEPTIONS — every one needs an owner and a review-by date.
       #
@@ -148,15 +163,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           path: app
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: stable
 
       - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri -> target
 
@@ -176,7 +193,7 @@ jobs:
       # so even `cargo test` needs the (gitignored) Tectonic sidecar present —
       # same fetch + Linux gnu-triple symlink as build.yml.
       - name: Set up Node (for the Tectonic fetch script)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 

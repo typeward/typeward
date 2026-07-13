@@ -81,7 +81,7 @@ jobs:
 
     steps:
       - name: Checkout app (at the release tag)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ env.TAG }}
           path: app
@@ -105,26 +105,27 @@ jobs:
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Checkout texlive-wasm sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: typeward/texlive-wasm
           ref: ${{ steps.texlive.outputs.ref }}
           path: texlive-wasm
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: app/package-lock.json
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cargo cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri -> target
 
@@ -221,7 +222,7 @@ jobs:
         run: echo '{"bundle":{"createUpdaterArtifacts":true}}' > "${{ runner.temp }}/updater.overlay.json"
 
       - name: Build the app
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           # Source-map upload is opt-in (vite.config.ts) so ordinary builds stay
           # hermetic; the release build is the one place that opts in. No token
@@ -260,7 +261,7 @@ jobs:
       # raw .app directory is intentionally excluded — only the .app.tar.gz
       # updater bundle is needed.
       - name: Collect artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-bundle-${{ matrix.os }}
           if-no-files-found: ignore
@@ -287,7 +288,7 @@ jobs:
       attestations: write
     steps:
       - name: Checkout (full history for the changelog)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
@@ -298,7 +299,7 @@ jobs:
         run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-bundle-*
           path: collected
@@ -306,7 +307,7 @@ jobs:
       - name: Changelog (git-cliff)
         id: cliff
         continue-on-error: true
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
         with:
           config: cliff.toml
           args: --latest --strip header
@@ -371,7 +372,7 @@ jobs:
       # which runner built it) — verifiable with `gh attestation verify`.
       # Independent of code signing; it is what an unsigned beta can still offer.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-path: 'dist/*'
 
@@ -424,7 +425,7 @@ jobs:
 
       - name: Publish draft on typeward/releases
         if: steps.token.outputs.has_token == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           repository: typeward/releases
           token: ${{ secrets.RELEASES_REPO_TOKEN }}
@@ -439,7 +440,7 @@ jobs:
       # exact manual step so the release can be finished by hand.
       - name: Fallback — upload assets as a workflow artifact
         if: steps.token.outputs.has_token != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: typeward-release-${{ env.TAG }}
           path: dist/*
