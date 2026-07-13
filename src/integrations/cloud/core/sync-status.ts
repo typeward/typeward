@@ -42,18 +42,31 @@ export function setSyncPhase(
   });
 }
 
+/**
+ * Merge newly-detected conflicts into the tracked set, deduped by path.
+ * Merge — never replace: conflicts minted by a pull pass whose page cursor
+ * already advanced never replay, so a later clean pass reporting zero
+ * conflicts must not erase them. Removal happens only through resolution
+ * (`clearConflict`), keeping the resolver reachable from the badge while the
+ * `.conflict-*` sidecar still exists.
+ */
 export function recordConflicts(
   providerId: string,
   projectId: string,
   conflicts: string[],
 ): void {
+  if (conflicts.length === 0) return;
   setStatuses((m) => {
     const next = new Map(m);
     const prev = next.get(key(providerId, projectId)) ?? DEFAULT_STATUS;
+    const merged = [
+      ...prev.conflicts,
+      ...conflicts.filter((c) => !prev.conflicts.includes(c)),
+    ];
     next.set(key(providerId, projectId), {
       ...prev,
-      phase: conflicts.length > 0 ? "conflict" : prev.phase,
-      conflicts,
+      phase: "conflict",
+      conflicts: merged,
     });
     return next;
   });

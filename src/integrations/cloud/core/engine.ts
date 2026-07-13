@@ -61,6 +61,10 @@ const DEFAULT_POLL_MS = 60_000;
 const PUSH_DEBOUNCE_MS = 1_500;
 const PUSH_RETRY_MS = 15_000;
 const PUSH_RETRY_MAX_MS = 5 * 60_000;
+// Aborted replays of one delta page tolerated before it's processed in
+// salvage mode (failing entries become persisted pending-retries and the
+// cursor advances past the page).
+const PULL_PAGE_MAX_ATTEMPTS = 3;
 
 interface SyncedFileState {
   id: string;
@@ -71,9 +75,26 @@ interface SyncedFileState {
   mtimeMs: number;
 }
 
+interface PendingRetryEntry {
+  relPath: NormalizedRelPath;
+  /** Human-readable apply-failure reason, surfaced in the sync badge. */
+  reason: string;
+  /** Remote snapshot to re-download for a failed write; absent for deletions. */
+  file?: RemoteFile;
+  /** Provider id of the removed entry when the failed change was a deletion. */
+  removedId?: string;
+}
+
 interface SyncStateManifest {
   version: 1;
   files: Record<string, SyncedFileState>;
+  /**
+   * Changes whose local apply kept failing after their page went into salvage
+   * mode (e.g. a remote file named `aux.tex` that Windows refuses to create).
+   * Retried at the start of every pull pass. Optional so manifests written
+   * before this field existed keep loading.
+   */
+  pendingRetries?: Record<string, PendingRetryEntry>;
 }
 
 export class SyncEngine {
@@ -110,6 +131,14 @@ export class SyncEngine {
    * IPC/provider layers and a false positive would silently stop sync.
    */
   private pushFailures = 0;
+  /**
+   * Consecutive aborted attempts of the delta page fetched at a given cursor.
+   * The first PULL_PAGE_MAX_ATTEMPTS failures abort without advancing the
+   * cursor so transients never lose a revision; after that the page runs in
+   * salvage mode. In-memory on purpose — a restart earns the page a fresh set
+   * of transient-friendly attempts.
+   */
+  private pageFailure: { cursor: string | null; attempts: number } | null = null;
 
   constructor(
     private readonly provider: CloudFsProvider,
@@ -303,17 +332,25 @@ export class SyncEngine {
 
   private async pushPass(): Promise<void> {
     if (!this.running || this.pendingPush.size === 0) return;
+    // Snapshot + pre-clear (not delete-per-success) so a queuePush for a path
+    // whose stale upload is in flight re-adds it to the emptied set and
+    // re-arms the debounce for the newer save.
     const batch = [...this.pendingPush];
     this.pendingPush.clear();
     setSyncPhase(this.opts.providerId, this.opts.projectId, "pushing");
     await this.ensureSyncStateLoaded();
+    // Attempt every item — one permanently failing upload (an oversized file,
+    // a provider-rejected name) must not head-of-line-block the rest of the
+    // queue. Only the failed items re-queue; the aggregate rethrow still arms
+    // drainPush's backoff.
+    const failures: { rel: NormalizedRelPath; err: unknown }[] = [];
     for (const rel of batch) {
-      const abs = cachePathForRemoteRel(this.cacheRoot(), rel);
-      if (!(await safeExists(abs))) {
-        await this.pushDeletionIfTracked(rel);
-        continue;
-      }
       try {
+        const abs = cachePathForRemoteRel(this.cacheRoot(), rel);
+        if (!(await safeExists(abs))) {
+          await this.pushDeletionIfTracked(rel);
+          continue;
+        }
         const remote = await pushOne(this.provider, {
           rootId: this.opts.rootId,
           relPath: rel,
@@ -322,51 +359,86 @@ export class SyncEngine {
         if (remote.rev) this.pushedRevs.set(rel, remote.rev);
         await this.recordSyncedFile(rel, remote, abs);
       } catch (err) {
-        // Re-queue this path and abort the batch; drainPush handles retry.
-        this.pendingPush.add(rel);
-        throw err;
+        failures.push({ rel, err });
       }
     }
-    this.pushFailures = 0;
-    if (this.running) {
-      const conflicts = getSyncStatus(this.opts.providerId, this.opts.projectId).conflicts;
-      setSyncPhase(
-        this.opts.providerId,
-        this.opts.projectId,
-        conflicts.length > 0 ? "conflict" : "idle",
+    if (failures.length > 0) {
+      for (const failure of failures) this.pendingPush.add(failure.rel);
+      const listed = failures.slice(0, 3).map((f) => f.rel).join(", ");
+      const rest = failures.length > 3 ? ` and ${failures.length - 3} more` : "";
+      throw new Error(
+        `Upload failed for ${listed}${rest}: ${describeIpcError(failures[0].err)}`,
       );
     }
+    this.pushFailures = 0;
+    this.settlePhaseAfterPass();
   }
 
   private async pullPass(): Promise<PullPassResult> {
     setSyncPhase(this.opts.providerId, this.opts.projectId, "pulling");
+    await this.ensureSyncStateLoaded();
 
     const conflicts: string[] = [];
     let applied = 0;
     let nextCursor = this.cursor ?? "";
     // Drain every page in one pass so conflicts from all pages are recorded
     // together (a single trailing recordConflicts), not just the last page's.
-    for (;;) {
-      const result = await this.provider.delta(this.opts.rootId, this.cursor);
-      for (const change of result.changes) {
-        try {
-          const conflicted = await this.applyChange(change);
-          if (conflicted) conflicts.push(conflicted);
-          else applied++;
-        } catch (e) {
-          // One unsafe/malformed remote entry (e.g. a file literally named
-          // ".typeward" or carrying traversal segments) must not wedge the
-          // page: refusing the write is correct, but aborting before
-          // persistCursor would retry the same page forever and stall sync
-          // for the whole project. Skip it and move on.
+    try {
+      applied += await this.retryPendingChanges(conflicts);
+      for (;;) {
+        const pageCursor = this.cursor ?? null;
+        const salvage =
+          this.pageFailure !== null &&
+          this.pageFailure.cursor === pageCursor &&
+          this.pageFailure.attempts >= PULL_PAGE_MAX_ATTEMPTS;
+        const result = await this.provider.delta(this.opts.rootId, this.cursor);
+        for (const change of result.changes) {
           const rel = change.kind === "removed" ? change.relPath : change.file.relPath;
-          recordError("cloud-sync", `skipped unsafe remote entry ${rel}`, e);
+          let normRel: NormalizedRelPath;
+          try {
+            normRel = normalizeRemoteRelPath(rel);
+          } catch (e) {
+            // One unsafe/malformed remote entry (e.g. a file literally named
+            // ".typeward" or carrying traversal segments) must not wedge the
+            // page: refusing the write is correct, but aborting before
+            // persistCursor would retry the same page forever and stall sync
+            // for the whole project. Skip it and move on.
+            recordError("cloud-sync", `skipped unsafe remote entry ${rel}`, e);
+            continue;
+          }
+          try {
+            const conflicted = await this.applyChange(change);
+            if (conflicted) conflicts.push(conflicted);
+            else applied++;
+          } catch (err) {
+            // An operational failure (download, disk, sync-state write) aborts
+            // the page — the cursor stays at the last good page and the next
+            // pull replays the missed revision — until the SAME page has
+            // aborted PULL_PAGE_MAX_ATTEMPTS times. Then it runs in salvage
+            // mode: the failing entry becomes a persisted pending-retry and
+            // the page completes, so one deterministically-poisoned file
+            // (e.g. a remote `aux.tex` on Windows) can't wedge the whole
+            // project's sync forever.
+            if (!salvage) {
+              this.notePageFailure(pageCursor);
+              throw err;
+            }
+            await this.recordPendingRetry(normRel, change, err);
+          }
         }
+        this.pageFailure = null;
+        this.cursor = result.nextCursor;
+        nextCursor = result.nextCursor;
+        await this.persistCursor(result.nextCursor);
+        if (!result.hasMore) break;
       }
-      this.cursor = result.nextCursor;
-      nextCursor = result.nextCursor;
-      await this.persistCursor(result.nextCursor);
-      if (!result.hasMore) break;
+    } catch (err) {
+      // Pages completed before the failure already advanced the cursor and
+      // never replay — surface their conflict sidecars before bailing.
+      if (!this.dead && conflicts.length > 0) {
+        recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+      }
+      throw err;
     }
 
     // A completed pull proves the connection works — restore the fast push retry.
@@ -377,15 +449,92 @@ export class SyncEngine {
     // conflict badge on a closed project.
     if (!this.dead) {
       recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+      this.settlePhaseAfterPass();
     }
-    if (this.running) {
+    return { applied, conflicts, nextCursor };
+  }
+
+  private notePageFailure(pageCursor: string | null): void {
+    this.pageFailure =
+      this.pageFailure && this.pageFailure.cursor === pageCursor
+        ? { cursor: pageCursor, attempts: this.pageFailure.attempts + 1 }
+        : { cursor: pageCursor, attempts: 1 };
+  }
+
+  /**
+   * Re-attempt every persisted pending-retry entry by re-applying the stored
+   * change (a fresh download for writes — latest content is fine — or the
+   * deferred deletion). Success removes the entry; failure keeps it, per
+   * entry, so one still-poisoned path can't block the others or the pass.
+   * Returns how many entries applied cleanly.
+   */
+  private async retryPendingChanges(conflicts: string[]): Promise<number> {
+    await this.ensureSyncStateLoaded();
+    const pending = this.syncState!.pendingRetries;
+    if (!pending) return 0;
+    let applied = 0;
+    let changed = false;
+    for (const entry of Object.values(pending)) {
+      const change: DeltaChange = entry.file
+        ? { kind: "modified", file: entry.file }
+        : { kind: "removed", relPath: entry.relPath, id: entry.removedId };
+      try {
+        const conflicted = await this.applyChange(change);
+        if (conflicted) conflicts.push(conflicted);
+        else applied++;
+        delete pending[entry.relPath];
+        changed = true;
+      } catch (err) {
+        const reason = describeIpcError(err);
+        if (entry.reason !== reason) {
+          entry.reason = reason;
+          changed = true;
+        }
+      }
+    }
+    if (changed) await this.persistSyncState();
+    return applied;
+  }
+
+  private async recordPendingRetry(
+    normRel: NormalizedRelPath,
+    change: DeltaChange,
+    err: unknown,
+  ): Promise<void> {
+    await this.ensureSyncStateLoaded();
+    const pending = (this.syncState!.pendingRetries ??= {});
+    pending[normRel] = {
+      relPath: normRel,
+      reason: describeIpcError(err),
+      ...(change.kind === "removed" ? { removedId: change.id } : { file: change.file }),
+    };
+    recordError("cloud-sync", `deferred failing remote entry ${normRel} for retry`, err);
+    await this.persistSyncState();
+  }
+
+  /**
+   * Resting phase after a completed pass: unresolved conflicts win, then any
+   * persisted pending-retries surface as a visible error (a pass that had to
+   * salvage entries must never read as cleanly synced), then idle.
+   */
+  private settlePhaseAfterPass(): void {
+    if (!this.running) return;
+    const conflicts = getSyncStatus(this.opts.providerId, this.opts.projectId).conflicts;
+    if (conflicts.length > 0) {
+      setSyncPhase(this.opts.providerId, this.opts.projectId, "conflict");
+      return;
+    }
+    const pending = Object.values(this.syncState?.pendingRetries ?? {});
+    if (pending.length > 0) {
       setSyncPhase(
         this.opts.providerId,
         this.opts.projectId,
-        conflicts.length > 0 ? "conflict" : "idle",
+        "error",
+        pendingRetrySummary(pending),
       );
+      return;
     }
-    return { applied, conflicts, nextCursor };
+    setSyncPhase(this.opts.providerId, this.opts.projectId, "idle");
   }
 
   private async applyChange(change: DeltaChange): Promise<string | undefined> {
@@ -422,9 +571,9 @@ export class SyncEngine {
     // just pushed as a remote change, but its rev matches what uploadFile
     // returned and the bytes are identical to local — applying it would write
     // a junk conflict sidecar on every save.
-    // An unsafe path throws here and is skipped by pullPass's per-change
-    // catch — falling back to the unnormalized string would thread an
-    // unvalidated path into the sync-state writes below.
+    // An unsafe path throws here (pullPass pre-validates and skips such
+    // entries before applying) — falling back to the unnormalized string
+    // would thread an unvalidated path into the sync-state writes below.
     const normRel = normalizeRemoteRelPath(change.file.relPath);
     const pushedRev = this.pushedRevs.get(normRel);
     if (pushedRev && change.file.rev && change.file.rev === pushedRev) {
@@ -438,8 +587,14 @@ export class SyncEngine {
     if (localExists) {
       const synced = this.syncState?.files[normRel];
       const remoteChanged = !synced?.rev || !change.file.rev || synced.rev !== change.file.rev;
+      if (!remoteChanged) {
+        // Already reconciled at this exact rev — e.g. a replayed page after a
+        // local-wins decision recorded the remote rev against the local bytes.
+        // Re-downloading would clobber the local winner with remote content.
+        return undefined;
+      }
       const localChanged = synced ? !(await localMatchesState(abs, synced)) : undefined;
-      if (remoteChanged && localChanged === true) {
+      if (localChanged === true) {
         const local = await stat(abs);
         const remoteMtime = change.file.modifiedAt
           ? Date.parse(change.file.modifiedAt)
@@ -452,6 +607,11 @@ export class SyncEngine {
           const conflictAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
           await mkdirParents(conflictAbs);
           await this.provider.downloadFile(change.file, conflictAbs);
+          // Adopt the remote rev against the LOCAL bytes so a replayed page
+          // sees this change as already reconciled instead of minting another
+          // sidecar; the explicit queuePush still sends the local winner up.
+          await this.recordSyncedFile(normRel, change.file, abs);
+          this.queuePush([normRel]);
           return normRel;
         }
         // Remote wins → save the local copy aside, then overwrite local.
@@ -471,6 +631,8 @@ export class SyncEngine {
             const conflictAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
             await mkdirParents(conflictAbs);
             await this.provider.downloadFile(change.file, conflictAbs);
+            await this.recordSyncedFile(normRel, change.file, abs);
+            this.queuePush([normRel]);
             return normRel;
           }
           const sidecarAbs = cachePathForRemoteRel(this.cacheRoot(), decision.conflictPath);
@@ -562,6 +724,14 @@ export class SyncEngine {
 
 function emptySyncState(): SyncStateManifest {
   return { version: 1, files: {} };
+}
+
+function pendingRetrySummary(pending: PendingRetryEntry[]): string {
+  const paths = pending.map((p) => p.relPath);
+  const listed = paths.slice(0, 3).join(", ");
+  const rest = paths.length > 3 ? ` and ${paths.length - 3} more` : "";
+  const count = `${paths.length} file${paths.length === 1 ? "" : "s"}`;
+  return `${count} couldn't be synced and will be retried: ${listed}${rest} (${pending[0].reason})`;
 }
 
 async function fileSignature(absPath: string): Promise<Pick<SyncedFileState, "hash" | "size" | "mtimeMs">> {

@@ -693,8 +693,10 @@ mod tests {
 
     #[test]
     fn sanitize_falls_back_when_projects_root_invalid() {
-        let mut s = Settings::default();
-        s.projects_root = "not/absolute/root".into();
+        let s = Settings {
+            projects_root: "not/absolute/root".into(),
+            ..Settings::default()
+        };
         let sanitized = sanitize_loaded_settings(s);
         assert_eq!(
             sanitized.projects_root,
@@ -735,8 +737,10 @@ mod tests {
             return;
         }
         let valid = docs.join("Typeward");
-        let mut s = Settings::default();
-        s.projects_root = valid.to_string_lossy().into_owned();
+        let s = Settings {
+            projects_root: valid.to_string_lossy().into_owned(),
+            ..Settings::default()
+        };
         let sanitized = sanitize_loaded_settings(s);
         assert_eq!(sanitized.projects_root, valid.to_string_lossy().into_owned());
     }

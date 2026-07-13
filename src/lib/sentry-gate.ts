@@ -4,7 +4,7 @@ import * as ipc from "~/ipc";
 import { noteInstallId, settingsLoaded, shareCrashReports } from "~/stores/settings-store";
 
 // Whether the SDK chunk was fetched this session — the opt-out branch must
-// not import ~250 KB just to shut down a client that never existed.
+// not import the SDK just to shut down a client that never existed.
 let sdkLoaded = false;
 // The crash-on-previous-run scan fires at most once per session (Rust also
 // guards once-per-process, and re-checks the opt-in server-side).

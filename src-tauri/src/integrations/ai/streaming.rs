@@ -268,6 +268,7 @@ async fn run_stream(
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
+    let mut carry: Vec<u8> = Vec::new();
 
     loop {
         tokio::select! {
@@ -277,6 +278,12 @@ async fn run_stream(
                     Some(Ok(bytes)) => bytes,
                     Some(Err(e)) => return Err(format!("stream read: {e}")),
                     None => {
+                        // A leftover carry at EOF is a genuinely truncated
+                        // sequence — surface it as a replacement char rather
+                        // than dropping it silently.
+                        if !carry.is_empty() {
+                            buffer.push_str(&String::from_utf8_lossy(&carry));
+                        }
                         // Drain remainder of buffer (any final event without trailing newline).
                         let rest = std::mem::take(&mut buffer);
                         for event in extract_remaining(&rest, format) {
@@ -285,14 +292,13 @@ async fn run_stream(
                         return Ok(StreamEnd::Completed);
                     }
                 };
-                if let Ok(text) = std::str::from_utf8(&chunk) {
-                    if buffer.len() + text.len() > MAX_STREAM_BUFFER_BYTES {
-                        return Err(format!(
-                            "stream event exceeded cap of {MAX_STREAM_BUFFER_BYTES} bytes"
-                        ));
-                    }
-                    buffer.push_str(text);
+                let text = decode_utf8_chunk(&mut carry, &chunk);
+                if buffer.len() + text.len() > MAX_STREAM_BUFFER_BYTES {
+                    return Err(format!(
+                        "stream event exceeded cap of {MAX_STREAM_BUFFER_BYTES} bytes"
+                    ));
                 }
+                buffer.push_str(&text);
                 while let Some(end) = next_event_end(&buffer, format) {
                     let raw = buffer[..end].to_string();
                     buffer.drain(..end);
@@ -331,6 +337,49 @@ fn emit_delta(app: &AppHandle, stream_id: &str, delta: &str) {
         error: None,
     };
     let _ = app.emit(&event_name(stream_id), payload);
+}
+
+/// Decode a raw transport chunk whose boundaries need not align with
+/// UTF-8 character boundaries (TCP segments split multi-byte characters
+/// routinely). An incomplete trailing sequence (at most 3 bytes) is
+/// stashed in `carry` and prepended to the next chunk; only genuinely
+/// invalid bytes become U+FFFD — surrounding valid data is never dropped.
+fn decode_utf8_chunk(carry: &mut Vec<u8>, chunk: &[u8]) -> String {
+    let joined: Vec<u8>;
+    let mut rest: &[u8] = if carry.is_empty() {
+        chunk
+    } else {
+        let mut bytes = std::mem::take(carry);
+        bytes.extend_from_slice(chunk);
+        joined = bytes;
+        &joined
+    };
+    let mut out = String::new();
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(s) => {
+                out.push_str(s);
+                break;
+            }
+            Err(e) => {
+                let valid = e.valid_up_to();
+                // The prefix up to `valid_up_to` is proven valid; re-check
+                // instead of reaching for `from_utf8_unchecked`.
+                out.push_str(std::str::from_utf8(&rest[..valid]).expect("valid utf-8 prefix"));
+                match e.error_len() {
+                    Some(n) => {
+                        out.push('\u{FFFD}');
+                        rest = &rest[valid + n..];
+                    }
+                    None => {
+                        carry.extend_from_slice(&rest[valid..]);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Returns the byte index past the end of the next complete event in
@@ -513,6 +562,48 @@ mod tests {
         assert!(validate_stream_id("").is_err());
         assert!(validate_stream_id("chat:123").is_err());
         assert!(validate_stream_id("chat/123").is_err());
+    }
+
+    #[test]
+    fn utf8_decode_carries_split_two_byte_char_across_chunks() {
+        let mut carry = Vec::new();
+        assert_eq!(decode_utf8_chunk(&mut carry, b"ab\xC5"), "ab");
+        assert_eq!(carry, [0xC5]);
+        assert_eq!(decode_utf8_chunk(&mut carry, b"\x99cd"), "\u{159}cd");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn utf8_decode_carries_split_four_byte_char_across_chunks() {
+        let mut carry = Vec::new();
+        assert_eq!(decode_utf8_chunk(&mut carry, b"\xF0\x9F"), "");
+        assert_eq!(carry, [0xF0, 0x9F]);
+        assert_eq!(decode_utf8_chunk(&mut carry, b"\x98\x80!"), "\u{1F600}!");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn utf8_decode_replaces_invalid_byte_without_dropping_neighbors() {
+        let mut carry = Vec::new();
+        assert_eq!(decode_utf8_chunk(&mut carry, b"ok\xFFgo"), "ok\u{FFFD}go");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn utf8_decode_flags_orphaned_lead_byte_as_replacement() {
+        let mut carry = vec![0xC5];
+        assert_eq!(decode_utf8_chunk(&mut carry, b"abc"), "\u{FFFD}abc");
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn utf8_decode_keeps_incomplete_tail_out_of_output() {
+        let mut carry = Vec::new();
+        assert_eq!(
+            decode_utf8_chunk(&mut carry, b"data: {\"x\":\"\xE2\x9C"),
+            "data: {\"x\":\"",
+        );
+        assert_eq!(carry, [0xE2, 0x9C]);
     }
 
     #[test]

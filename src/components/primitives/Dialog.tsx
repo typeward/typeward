@@ -34,7 +34,10 @@ export const Dialog: Component<DialogProps> = (props) => {
                   </KDialog.Description>
                 ) : null}
               </div>
-              <KDialog.CloseButton class="lift -m-1 rounded-md p-1 text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1">
+              <KDialog.CloseButton
+                aria-label="Close dialog"
+                class="lift -m-1 rounded-md p-1 text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+              >
                 <X size={14} />
               </KDialog.CloseButton>
             </div>

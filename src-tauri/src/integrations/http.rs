@@ -345,13 +345,24 @@ pub fn validate_outbound_request(
 const MAX_TEXT_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_BINARY_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 
-pub(crate) async fn read_body_capped(
+/// Split from [`HttpError`] so callers that own their own error domain
+/// (WebDAV) can map an over-cap body and a plain read failure separately.
+#[derive(Debug)]
+pub(crate) enum BodyCapError {
+    TooLarge(String),
+    Read(String),
+}
+
+/// Streams the body and aborts as soon as the accumulated bytes would exceed
+/// `cap` — a chunked (or Content-Length-lying) response never gets buffered
+/// whole before the check. The declared length is only a fast pre-fail.
+pub(crate) async fn read_body_capped_raw(
     mut res: reqwest::Response,
     cap: usize,
-) -> Result<Vec<u8>, HttpError> {
+) -> Result<Vec<u8>, BodyCapError> {
     if let Some(len) = res.content_length() {
         if len > cap as u64 {
-            return Err(HttpError::Body(format!(
+            return Err(BodyCapError::TooLarge(format!(
                 "response too large: {len} bytes exceeds cap of {cap}"
             )));
         }
@@ -360,16 +371,25 @@ pub(crate) async fn read_body_capped(
     while let Some(chunk) = res
         .chunk()
         .await
-        .map_err(|e| HttpError::Body(e.to_string()))?
+        .map_err(|e| BodyCapError::Read(e.to_string()))?
     {
         if buf.len() + chunk.len() > cap {
-            return Err(HttpError::Body(format!(
+            return Err(BodyCapError::TooLarge(format!(
                 "response exceeded cap of {cap} bytes"
             )));
         }
         buf.extend_from_slice(&chunk);
     }
     Ok(buf)
+}
+
+pub(crate) async fn read_body_capped(
+    res: reqwest::Response,
+    cap: usize,
+) -> Result<Vec<u8>, HttpError> {
+    read_body_capped_raw(res, cap).await.map_err(|e| match e {
+        BodyCapError::TooLarge(msg) | BodyCapError::Read(msg) => HttpError::Body(msg),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -764,6 +784,36 @@ mod tests {
         let err =
             validate_outbound_request("https://doi.org/10.1000/test", &headers, None).unwrap_err();
         assert!(matches!(err, HttpError::BlockedAuthHeader(_)));
+    }
+
+    fn stream_response(chunks: Vec<Vec<u8>>) -> reqwest::Response {
+        let items: Vec<Result<Vec<u8>, std::io::Error>> = chunks.into_iter().map(Ok).collect();
+        let body = reqwest::Body::wrap_stream(futures_util::stream::iter(items));
+        reqwest::Response::from(axum::http::Response::new(body))
+    }
+
+    #[tokio::test]
+    async fn capped_read_aborts_chunked_body_without_content_length() {
+        let res = stream_response((0..8).map(|_| vec![0u8; 1024]).collect());
+        assert_eq!(res.content_length(), None);
+        let err = read_body_capped_raw(res, 4096).await.unwrap_err();
+        assert!(matches!(err, BodyCapError::TooLarge(_)));
+    }
+
+    #[tokio::test]
+    async fn capped_read_rejects_declared_oversize_content_length() {
+        let res = reqwest::Response::from(axum::http::Response::new(reqwest::Body::from(
+            vec![0u8; 8192],
+        )));
+        let err = read_body_capped_raw(res, 4096).await.unwrap_err();
+        assert!(matches!(err, BodyCapError::TooLarge(_)));
+    }
+
+    #[tokio::test]
+    async fn capped_read_returns_streamed_body_under_cap() {
+        let res = stream_response(vec![vec![1u8; 3], vec![2u8; 2]]);
+        let body = read_body_capped_raw(res, 4096).await.unwrap();
+        assert_eq!(body, [1, 1, 1, 2, 2]);
     }
 
     #[test]
