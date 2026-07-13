@@ -54,6 +54,12 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
+# Reads this repo + the public texlive-wasm sibling; the installers leave as a
+# workflow artifact (the artifact API runs off the runtime token, not this
+# scope). Nothing is written back to the repo.
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build (${{ matrix.label }})
@@ -103,7 +109,7 @@ jobs:
 
       - name: Checkout app
         if: steps.gate.outputs.build == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           path: app
 
@@ -123,7 +129,7 @@ jobs:
 
       - name: Checkout texlive-wasm sibling
         if: steps.gate.outputs.build == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: typeward/texlive-wasm
           ref: ${{ steps.texlive.outputs.ref }}
@@ -131,7 +137,7 @@ jobs:
 
       - name: Set up Node
         if: steps.gate.outputs.build == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: 'npm'
@@ -139,13 +145,14 @@ jobs:
 
       - name: Set up Rust
         if: steps.gate.outputs.build == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Cargo cache
         if: steps.gate.outputs.build == 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri -> target
           # The Tectonic sidecar binary lives under src-tauri/binaries/
@@ -205,7 +212,7 @@ jobs:
 
       - name: Upload installers
         if: steps.gate.outputs.build == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.paths }}

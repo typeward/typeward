@@ -44,8 +44,10 @@ src-tauri/binaries/*
 
 # texlive-wasm assets (fetched per-host / per-CI, never checked in). Engines are
 # served from the app origin (public/ is copied verbatim into dist/); the TeX
-# Live tree ships as a Tauri resource. Keep placeholder.txt so the
-# `bundle.resources` glob always matches.
+# Live tree ships as a Tauri resource on MOBILE ONLY (the glob lives in
+# tauri.{android,ios}.conf.json, not the base config — a desktop build must
+# never bundle a TeX tree the mobile-gated provider can't reach). Keep
+# placeholder.txt so that `bundle.resources` glob always matches.
 public/texlive-wasm/
 src-tauri/resources/texlive-wasm/*
 !src-tauri/resources/texlive-wasm/placeholder.txt
