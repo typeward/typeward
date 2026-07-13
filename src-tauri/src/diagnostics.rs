@@ -72,7 +72,11 @@ fn replace_home(text: &str, home: &Path) -> String {
 }
 
 fn is_path_terminator(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '|' | ',' | ';')
+    c.is_whitespace()
+        || matches!(
+            c,
+            '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '|' | ',' | ';'
+        )
 }
 
 /// Collapse any absolute path still present after home replacement down to its
@@ -245,7 +249,11 @@ fn ensure_install_id(app: &AppHandle) -> Result<String, String> {
 
 // ----- Sentry one-shot client -------------------------------------------------
 
-fn build_sentry_event(scrubbed: &Event, meta: &ReportMeta, install_id: &str) -> sentry::protocol::Event<'static> {
+fn build_sentry_event(
+    scrubbed: &Event,
+    meta: &ReportMeta,
+    install_id: &str,
+) -> sentry::protocol::Event<'static> {
     use sentry::protocol::{Event as SentryEvent, Level, User};
 
     let mut ev = SentryEvent {
@@ -398,7 +406,11 @@ pub async fn scan_and_submit_crashes(app: AppHandle) -> Result<ScanResult, Strin
         if SCAN_RAN.swap(true, Ordering::SeqCst) {
             return Ok(none);
         }
-        if !settings::load(&app).map_err(err)?.privacy.share_crash_reports {
+        if !settings::load(&app)
+            .map_err(err)?
+            .privacy
+            .share_crash_reports
+        {
             return Ok(none);
         }
         let events = telemetry::read_all_events()?;
@@ -447,7 +459,9 @@ pub struct SystemInfo {
 
 /// Toolchain names worth knowing about in a bug report. Probed as
 /// found/not-found ONLY — never paths (a path can carry the username).
-const PROBED_TOOLS: &[&str] = &["latexmk", "pdflatex", "tectonic", "typst", "texlab", "tinymist"];
+const PROBED_TOOLS: &[&str] = &[
+    "latexmk", "pdflatex", "tectonic", "typst", "texlab", "tinymist",
+];
 
 #[tauri::command]
 pub async fn collect_system_info(app: AppHandle) -> Result<SystemInfo, String> {
@@ -502,7 +516,10 @@ mod tests {
     #[test]
     fn home_dir_matches_case_insensitively_and_both_slash_styles() {
         let home = Path::new("C:\\Users\\marek");
-        let out = scrub_text("saw c:/users/MAREK/proj and C:\\USERS\\Marek\\x", Some(home));
+        let out = scrub_text(
+            "saw c:/users/MAREK/proj and C:\\USERS\\Marek\\x",
+            Some(home),
+        );
         assert_eq!(out, "saw ~/proj and ~\\x");
     }
 
@@ -551,7 +568,10 @@ mod tests {
 
     #[test]
     fn no_home_dir_still_collapses_absolute_paths() {
-        assert_eq!(scrub_text("open /etc/passwd failed", None), "open passwd failed");
+        assert_eq!(
+            scrub_text("open /etc/passwd failed", None),
+            "open passwd failed"
+        );
     }
 
     #[test]
@@ -605,7 +625,10 @@ mod tests {
 
     #[test]
     fn scan_skips_events_with_unparseable_timestamps() {
-        let events = vec![ev("panic", "not-a-time"), ev("panic", "2026-07-04T00:00:00Z")];
+        let events = vec![
+            ev("panic", "not-a-time"),
+            ev("panic", "2026-07-04T00:00:00Z"),
+        ];
         let picked = select_unsubmitted_panics(&events, None, 5);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].at, "2026-07-04T00:00:00Z");

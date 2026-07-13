@@ -423,7 +423,8 @@ fn validate_space_id(space: &str) -> Result<(), ProjectError> {
 /// Trim + validate a user-supplied display name.
 pub fn normalize_project_name(name: &str) -> Result<String, ProjectError> {
     let t = name.trim();
-    if t.is_empty() || t.chars().count() > MAX_PROJECT_NAME_LEN || t.chars().any(|c| c.is_control()) {
+    if t.is_empty() || t.chars().count() > MAX_PROJECT_NAME_LEN || t.chars().any(|c| c.is_control())
+    {
         return Err(ProjectError::InvalidProjectName(name.to_string()));
     }
     Ok(t.to_string())
@@ -1250,7 +1251,11 @@ mod tests {
         assert_eq!(copy.tags, vec!["keep".to_string()]);
         assert!(copy.trashed_at.is_none()); // reset
         assert!(dest.join("main.tex").exists());
-        assert!(dest.join(".typeward").join("citations").join("local.bib").exists());
+        assert!(dest
+            .join(".typeward")
+            .join("citations")
+            .join("local.bib")
+            .exists());
         assert!(!dest.join(".typeward").join("snapshots").exists());
     }
 
@@ -1289,7 +1294,10 @@ mod tests {
                 recipe: Some((*recipe).to_string()),
                 ..Default::default()
             };
-            assert!(set_build(root, Some(build)).is_ok(), "recipe {recipe} should be accepted");
+            assert!(
+                set_build(root, Some(build)).is_ok(),
+                "recipe {recipe} should be accepted"
+            );
         }
 
         let bad = ProjectBuild {

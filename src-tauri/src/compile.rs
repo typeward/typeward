@@ -107,6 +107,10 @@ pub struct BuildOptions {
     pub synctex: bool,
     #[serde(default = "default_true")]
     pub halt_on_error: bool,
+    /// Tectonic `--only-cached`. `None` = not stated by the caller; the
+    /// persisted `compile.strictOffline` setting then decides (default off).
+    #[serde(default)]
+    pub strict_offline: Option<bool>,
 }
 
 fn default_true() -> bool {
@@ -121,6 +125,7 @@ impl Default for BuildOptions {
             shell_escape: false,
             synctex: true,
             halt_on_error: true,
+            strict_offline: None,
         }
     }
 }
@@ -144,6 +149,18 @@ fn engine_binary(engine: LatexEngine) -> &'static str {
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+/// Strict-offline compiles: the caller may state it per build, otherwise the
+/// persisted `compile.strictOffline` setting decides. Unset anywhere = OFF, so
+/// a cold Tectonic cache can still fetch the packages a document asks for.
+fn strict_offline(app: &tauri::AppHandle, opts: &BuildOptions) -> bool {
+    opts.strict_offline.unwrap_or_else(|| {
+        crate::settings::load(app)
+            .ok()
+            .and_then(|s| s.compile.strict_offline)
+            .unwrap_or(false)
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -211,7 +228,15 @@ pub async fn compile_latex(
         // Tectonic runs its own bibliography passes, so the recipe is ignored
         // (the UI states this) — it always takes its own path.
         LatexEngine::Tectonic => {
-            run_tectonic(&app, &root_file, &root, opts.synctex, shell_escape).await?
+            run_tectonic(
+                &app,
+                &root_file,
+                &root,
+                opts.synctex,
+                shell_escape,
+                strict_offline(&app, &opts),
+            )
+            .await?
         }
         engine => match opts.recipe {
             BuildRecipe::LatexmkAuto => {
@@ -448,7 +473,9 @@ async fn kill_tree_windows(pid: u32) {
     let Ok(system_root) = std::env::var("SystemRoot") else {
         return;
     };
-    let taskkill = Path::new(&system_root).join("System32").join("taskkill.exe");
+    let taskkill = Path::new(&system_root)
+        .join("System32")
+        .join("taskkill.exe");
     let _ = tokio::process::Command::new(taskkill)
         .args(["/F", "/T", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
@@ -594,7 +621,14 @@ async fn run_system_tex(
         .collect();
         latexmk_args.push(root_file.to_string());
         accumulated_log.push_str(&format!("$ latexmk {}\n", latexmk_args.join(" ")));
-        match run_bounded(&latexmk, &latexmk_args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP).await
+        match run_bounded(
+            &latexmk,
+            &latexmk_args,
+            root,
+            COMPILE_TIMEOUT,
+            COMPILE_OUTPUT_CAP,
+        )
+        .await
         {
             Ok(out) => {
                 accumulated_log.push_str(&merge_io(&out.stdout, &out.stderr));
@@ -744,7 +778,14 @@ async fn run_engine_recipe(
         Some(BibTool::Bibtex) => BuildRecipe::EngineBibtex,
         Some(BibTool::Biber) => BuildRecipe::EngineBiber,
     };
-    let passes = recipe_passes(recipe, root_file, engine, halt_on_error, synctex, shell_escape);
+    let passes = recipe_passes(
+        recipe,
+        root_file,
+        engine,
+        halt_on_error,
+        synctex,
+        shell_escape,
+    );
 
     let mut log = String::new();
     let mut last_engine_ok = false;
@@ -768,7 +809,15 @@ async fn run_engine_recipe(
             }
         };
         log.push_str(&format!("\n$ {} {}\n", pass.program, pass.args.join(" ")));
-        match run_bounded(&resolved, &pass.args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP).await {
+        match run_bounded(
+            &resolved,
+            &pass.args,
+            root,
+            COMPILE_TIMEOUT,
+            COMPILE_OUTPUT_CAP,
+        )
+        .await
+        {
             Ok(output) => {
                 log.push_str(&merge_io(&output.stdout, &output.stderr));
                 // A timed-out pass aborts the whole recipe — the best-effort
@@ -799,24 +848,52 @@ async fn run_engine_recipe(
     Ok((log, last_engine_ok))
 }
 
+/// Tectonic's argv for one compile. Pure so both spawn paths (bundled sidecar,
+/// PATH fallback) and the tests share one construction.
+///
+/// `--untrusted` puts Tectonic in its hardened mode: the document loses the
+/// capabilities that reach the machine (shell-escape, writing outside the
+/// output dir). It is applied by default — a `.tex` file is attacker-supplied
+/// content — but NOT when the user has granted shell-escape for this project
+/// (`trust.rs`), because untrusted mode refuses `-Z shell-escape` outright and
+/// the two together would silently break a trusted build. Trust is the explicit,
+/// per-machine opt-out; everything else compiles untrusted.
+///
+/// `--only-cached` makes the run strictly offline (no bundle fetches).
+fn tectonic_args(
+    root_file: &str,
+    synctex: bool,
+    shell_escape: bool,
+    strict_offline: bool,
+) -> Vec<&str> {
+    let mut args: Vec<&str> = vec!["-X", "compile", root_file, "--keep-logs"];
+    // --synctex emits the .synctex.gz alongside the PDF; harmless when the
+    // user doesn't have the synctex CLI installed (forward/inverse return None).
+    if synctex {
+        args.push("--synctex");
+    }
+    if shell_escape {
+        // Tectonic's unstable opt-in; only reachable through a trust grant.
+        args.push("-Z");
+        args.push("shell-escape");
+    } else {
+        args.push("--untrusted");
+    }
+    if strict_offline {
+        args.push("--only-cached");
+    }
+    args
+}
+
 async fn run_tectonic(
     app: &tauri::AppHandle,
     root_file: &str,
     root: &Path,
     synctex: bool,
     shell_escape: bool,
+    strict_offline: bool,
 ) -> Result<(String, bool), String> {
-    // --synctex emits the .synctex.gz alongside the PDF; harmless when the
-    // user doesn't have the synctex CLI installed (forward/inverse return None).
-    // `-Z shell-escape` is Tectonic's unstable opt-in; only added when granted.
-    let mut tectonic_args: Vec<&str> = vec!["-X", "compile", root_file, "--keep-logs"];
-    if synctex {
-        tectonic_args.push("--synctex");
-    }
-    if shell_escape {
-        tectonic_args.push("-Z");
-        tectonic_args.push("shell-escape");
-    }
+    let tectonic_args = tectonic_args(root_file, synctex, shell_escape, strict_offline);
     // Try the bundled sidecar first.
     let sidecar_result = app.shell().sidecar("binaries/tectonic");
     if let Ok(cmd) = sidecar_result {
@@ -886,9 +963,15 @@ async fn run_tectonic(
         }
     };
     let owned_args: Vec<String> = tectonic_args.iter().map(|s| s.to_string()).collect();
-    let output = run_bounded(&tectonic, &owned_args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP)
-        .await
-        .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
+    let output = run_bounded(
+        &tectonic,
+        &owned_args,
+        root,
+        COMPILE_TIMEOUT,
+        COMPILE_OUTPUT_CAP,
+    )
+    .await
+    .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
     let mut log = merge_io(&output.stdout, &output.stderr);
     if output.timed_out {
         log.push_str(&latex_timeout_line("tectonic"));
@@ -1055,6 +1138,73 @@ mod tests {
     }
 
     #[test]
+    fn tectonic_compiles_untrusted_by_default() {
+        let args = tectonic_args("main.tex", true, false, false);
+        assert_eq!(
+            args,
+            [
+                "-X",
+                "compile",
+                "main.tex",
+                "--keep-logs",
+                "--synctex",
+                "--untrusted"
+            ]
+        );
+    }
+
+    #[test]
+    fn tectonic_drops_untrusted_only_for_a_trusted_shell_escape_build() {
+        let args = tectonic_args("main.tex", false, true, false);
+        assert_eq!(
+            args,
+            [
+                "-X",
+                "compile",
+                "main.tex",
+                "--keep-logs",
+                "-Z",
+                "shell-escape"
+            ]
+        );
+        // Untrusted mode refuses -Z shell-escape, so the two must never coexist.
+        assert!(!args.contains(&"--untrusted"));
+    }
+
+    #[test]
+    fn tectonic_strict_offline_adds_only_cached() {
+        let args = tectonic_args("main.tex", false, false, true);
+        assert_eq!(
+            args,
+            [
+                "-X",
+                "compile",
+                "main.tex",
+                "--keep-logs",
+                "--untrusted",
+                "--only-cached"
+            ]
+        );
+        let networked = tectonic_args("main.tex", false, false, false);
+        assert!(!networked.contains(&"--only-cached"));
+    }
+
+    #[test]
+    fn build_options_default_to_networked_and_untrusted() {
+        let opts = BuildOptions::default();
+        assert_eq!(opts.strict_offline, None);
+        assert!(!opts.shell_escape);
+
+        // A frontend payload that predates the flag stays on the default.
+        let legacy: BuildOptions =
+            serde_json::from_str(r#"{"engine":"tectonic","recipe":"latexmk"}"#).unwrap();
+        assert_eq!(legacy.strict_offline, None);
+        let explicit: BuildOptions =
+            serde_json::from_str(r#"{"engine":"tectonic","strictOffline":true}"#).unwrap();
+        assert_eq!(explicit.strict_offline, Some(true));
+    }
+
+    #[test]
     fn parse_typst_log_picks_up_error_and_warning_lines() {
         let log = "  error: undefined variable `x`\nnote: at main.typ:3:1\nwarning: unused parameter\nrandom line\n";
         let diags = parse_typst_log(log, "main.typ");
@@ -1067,7 +1217,8 @@ mod tests {
 
     #[test]
     fn parse_latex_log_flags_errors_and_warnings() {
-        let log = "ok line\n! Undefined control sequence.\nPackage hyperref Warning: token\nplain\n";
+        let log =
+            "ok line\n! Undefined control sequence.\nPackage hyperref Warning: token\nplain\n";
         let diags = parse_latex_log(log, "main.tex");
         assert_eq!(diags.len(), 2);
         assert_eq!(diags[0].severity, "error");
@@ -1104,7 +1255,9 @@ mod tests {
             false,
         );
         assert_eq!(passes.len(), 2);
-        assert!(passes.iter().all(|p| p.is_engine && p.program == "pdflatex"));
+        assert!(passes
+            .iter()
+            .all(|p| p.is_engine && p.program == "pdflatex"));
         for p in &passes {
             assert_eq!(p.args.last().unwrap(), "main.tex");
             assert!(p.args.contains(&"-synctex=1".to_string()));
@@ -1125,7 +1278,10 @@ mod tests {
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes.iter().filter(|p| p.is_engine).count(), 3);
-        assert!(passes.iter().filter(|p| p.is_engine).all(|p| p.program == "lualatex"));
+        assert!(passes
+            .iter()
+            .filter(|p| p.is_engine)
+            .all(|p| p.program == "lualatex"));
         // The single bib pass runs `bibtex <stem>` with no other args.
         assert_eq!(passes[1].program, "bibtex");
         assert!(!passes[1].is_engine);
@@ -1236,9 +1392,15 @@ mod tests {
     #[tokio::test]
     async fn run_bounded_caps_output_keeping_head_and_tail() {
         let (prog, args) = shell_cmd("echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let out = run_bounded(&prog, &args, &std::env::temp_dir(), Duration::from_secs(30), 8)
-            .await
-            .expect("spawn should succeed");
+        let out = run_bounded(
+            &prog,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_secs(30),
+            8,
+        )
+        .await
+        .expect("spawn should succeed");
         assert!(!out.timed_out);
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(text.starts_with("aaaaaaaa"));
@@ -1257,9 +1419,15 @@ mod tests {
         #[cfg(not(windows))]
         let script = format!("echo {filler}; echo {filler}; echo '! boom'");
         let (prog, args) = shell_cmd(&script);
-        let out = run_bounded(&prog, &args, &std::env::temp_dir(), Duration::from_secs(30), 32)
-            .await
-            .expect("spawn should succeed");
+        let out = run_bounded(
+            &prog,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_secs(30),
+            32,
+        )
+        .await
+        .expect("spawn should succeed");
         assert!(!out.timed_out);
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(text.contains("[output truncated"));
@@ -1302,10 +1470,8 @@ mod tests {
     async fn run_bounded_timeout_kills_the_grandchild_too() {
         // Mirrors latexmk: the shell child spawns a long-running grandchild.
         // The group SIGKILL must take the grandchild down, not just the shell.
-        let pidfile = std::env::temp_dir().join(format!(
-            "typeward-group-kill-{}.pid",
-            std::process::id()
-        ));
+        let pidfile =
+            std::env::temp_dir().join(format!("typeward-group-kill-{}.pid", std::process::id()));
         let _ = std::fs::remove_file(&pidfile);
         let script = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
         let (prog, args) = shell_cmd(&script);

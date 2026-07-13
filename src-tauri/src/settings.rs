@@ -41,6 +41,25 @@ pub struct Settings {
     pub history: HistorySettings,
     #[serde(default)]
     pub feedback: FeedbackSettings,
+    #[serde(default)]
+    pub compile: CompileSettings,
+}
+
+/// Compile behaviour the Rust side owns.
+///
+/// `strictOffline` passes Tectonic's `--only-cached`, so a compile can never
+/// reach the network — the honest backing for an "offline" claim. Default OFF:
+/// Tectonic downloads packages on first use, and turning this on before the
+/// cache is warm breaks builds. `None` means "not specified by the caller" and
+/// is preserved across settings saves (see [`save`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CompileSettings {
+    #[serde(
+        rename = "strictOffline",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub strict_offline: Option<bool>,
 }
 
 /// Occasional in-app "give us feedback" card. ON by default because the card
@@ -462,6 +481,7 @@ impl Default for Settings {
             sync: SyncSettings::default(),
             history: HistorySettings::default(),
             feedback: FeedbackSettings::default(),
+            compile: CompileSettings::default(),
         }
     }
 }
@@ -608,6 +628,25 @@ pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), Se
     Ok(())
 }
 
+/// Carry backend-owned keys forward into a payload that came from the renderer.
+/// Called on the `save_settings` path only — a Reset writes `Settings::default()`
+/// through [`save`] and is meant to clear them.
+pub fn preserve_backend_owned(app_handle: &tauri::AppHandle, incoming: &mut Settings) {
+    if let Ok(existing) = load(app_handle) {
+        merge_backend_owned(incoming, &existing);
+    }
+}
+
+/// The renderer's `buildSettings()` payload carries only the keys its own
+/// settings tree knows about, so serializing it verbatim would reset any key the
+/// backend owns. Carry the on-disk value forward wherever the payload left one
+/// unset (`None`); an explicit value from the frontend still wins.
+fn merge_backend_owned(incoming: &mut Settings, existing: &Settings) {
+    if incoming.compile.strict_offline.is_none() {
+        incoming.compile.strict_offline = existing.compile.strict_offline;
+    }
+}
+
 /// Per-key settings-sync bookkeeping: the last server `updated_at` seen for a
 /// key and the hash of the value last synced in either direction. The outer
 /// map is keyed by Supabase user id so account switching can't cross-apply.
@@ -663,6 +702,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn backend_owned_keys_survive_a_frontend_settings_roundtrip() {
+        let mut existing = Settings::default();
+        existing.compile.strict_offline = Some(true);
+
+        // What the renderer sends back: its settings tree has no `compile` key.
+        let mut payload = serde_json::to_value(Settings::default()).unwrap();
+        payload.as_object_mut().unwrap().remove("compile");
+        let mut incoming: Settings = serde_json::from_value(payload).unwrap();
+        assert_eq!(incoming.compile.strict_offline, None);
+
+        merge_backend_owned(&mut incoming, &existing);
+        assert_eq!(incoming.compile.strict_offline, Some(true));
+    }
+
+    #[test]
+    fn an_explicit_strict_offline_value_wins_over_the_stored_one() {
+        let mut existing = Settings::default();
+        existing.compile.strict_offline = Some(true);
+        let mut incoming = Settings::default();
+        incoming.compile.strict_offline = Some(false);
+
+        merge_backend_owned(&mut incoming, &existing);
+        assert_eq!(incoming.compile.strict_offline, Some(false));
+    }
+
+    #[test]
+    fn strict_offline_defaults_off_and_is_omitted_when_unset() {
+        let settings = Settings::default();
+        assert_eq!(settings.compile.strict_offline, None);
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(!json.contains("strictOffline"));
+    }
+
+    #[test]
     fn validate_projects_root_rejects_relative_path() {
         // rootFile flows into engines as a positional arg and the projects root
         // gates clone/init destinations; a non-absolute root must never pass.
@@ -711,13 +784,17 @@ mod tests {
 
         s.history.max_versions_per_file = 3;
         assert_eq!(
-            sanitize_loaded_settings(s.clone()).history.max_versions_per_file,
+            sanitize_loaded_settings(s.clone())
+                .history
+                .max_versions_per_file,
             HISTORY_MIN_VERSIONS_PER_FILE
         );
 
         s.history.max_versions_per_file = 10_000;
         assert_eq!(
-            sanitize_loaded_settings(s.clone()).history.max_versions_per_file,
+            sanitize_loaded_settings(s.clone())
+                .history
+                .max_versions_per_file,
             HISTORY_MAX_VERSIONS_PER_FILE
         );
 
@@ -742,6 +819,9 @@ mod tests {
             ..Settings::default()
         };
         let sanitized = sanitize_loaded_settings(s);
-        assert_eq!(sanitized.projects_root, valid.to_string_lossy().into_owned());
+        assert_eq!(
+            sanitized.projects_root,
+            valid.to_string_lossy().into_owned()
+        );
     }
 }

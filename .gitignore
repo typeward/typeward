@@ -42,6 +42,14 @@ coverage/
 src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 
+# texlive-wasm assets (fetched per-host / per-CI, never checked in). Engines are
+# served from the app origin (public/ is copied verbatim into dist/); the TeX
+# Live tree ships as a Tauri resource. Keep placeholder.txt so the
+# `bundle.resources` glob always matches.
+public/texlive-wasm/
+src-tauri/resources/texlive-wasm/*
+!src-tauri/resources/texlive-wasm/placeholder.txt
+
 # Supabase backend moved to the dedicated typeward/infrastructure repo (sibling
 # folder ../infrastructure). Guard against a stale copy landing back on main.
 infrastructure/

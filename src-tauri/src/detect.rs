@@ -50,9 +50,7 @@ pub fn probe() -> EngineProbe {
 
 fn probe_one(name: &str) -> TexEngine {
     let resolved = resolve_program(name).ok();
-    let path = resolved
-        .as_ref()
-        .map(|p| p.to_string_lossy().into_owned());
+    let path = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
     let version = resolved.as_ref().and_then(|exe| run_version(name, exe));
     TexEngine {
         installed: path.is_some(),

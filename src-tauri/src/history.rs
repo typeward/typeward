@@ -331,11 +331,7 @@ fn list_in_store(store: &Path, rel_path: &str) -> Result<Vec<VersionEntry>, Hist
     Ok(entries)
 }
 
-fn read_version_in_store(
-    store: &Path,
-    rel_path: &str,
-    hash: &str,
-) -> Result<String, HistoryError> {
+fn read_version_in_store(store: &Path, rel_path: &str, hash: &str) -> Result<String, HistoryError> {
     let rel = checked_rel(rel_path)?;
     let index = read_index(store)?;
     // The hash must be one of THIS file's recorded versions — membership also
@@ -422,7 +418,9 @@ fn now_ms() -> i64 {
 
 /// Best-effort display name for the index (orphan identification only).
 fn project_name(root: &Path) -> String {
-    project::read_project(root).map(|p| p.name).unwrap_or_default()
+    project::read_project(root)
+        .map(|p| p.name)
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -435,7 +433,10 @@ pub async fn history_record(
     tokio::task::spawn_blocking(move || -> Result<bool, String> {
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
-        let max = settings::load(&app).map_err(err)?.history.max_versions_per_file;
+        let max = settings::load(&app)
+            .map_err(err)?
+            .history
+            .max_versions_per_file;
         let store = store_dir(&app, &root)?;
         let name = project_name(&root);
         let lock = project_mutex(&project_id(&root));
@@ -489,7 +490,10 @@ pub async fn history_restore(
     tokio::task::spawn_blocking(move || -> Result<String, String> {
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
-        let max = settings::load(&app).map_err(err)?.history.max_versions_per_file;
+        let max = settings::load(&app)
+            .map_err(err)?
+            .history
+            .max_versions_per_file;
         let store = store_dir(&app, &root)?;
         let name = project_name(&root);
         let lock = project_mutex(&project_id(&root));
@@ -743,7 +747,16 @@ mod tests {
         fs::remove_file(root.join("chapters/intro.tex")).unwrap();
         fs::remove_dir(root.join("chapters")).unwrap();
 
-        restore_in_store(&store, &root, "chapters/intro.tex", &hash, MAX, T0 + 1, "Test").unwrap();
+        restore_in_store(
+            &store,
+            &root,
+            "chapters/intro.tex",
+            &hash,
+            MAX,
+            T0 + 1,
+            "Test",
+        )
+        .unwrap();
         assert_eq!(
             fs::read_to_string(root.join("chapters/intro.tex")).unwrap(),
             "content"
@@ -790,7 +803,10 @@ mod tests {
                 record_in_store(&store, &root, bad, MAX, false, T0, "Test").is_err(),
                 "{bad} should be rejected"
             );
-            assert!(list_in_store(&store, bad).is_err(), "{bad} should be rejected");
+            assert!(
+                list_in_store(&store, bad).is_err(),
+                "{bad} should be rejected"
+            );
         }
     }
 

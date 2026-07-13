@@ -33,6 +33,11 @@ pub enum CredentialError {
     EmptySecret,
     #[error("frontend reads are not allowed for service: {0}")]
     ReadForbidden(String),
+    /// Only constructed on targets with no keyring backend (see
+    /// `ensure_secure_storage`), so it is dead code on the supported ones.
+    #[allow(dead_code)]
+    #[error("secure storage is not available on this platform — secrets cannot be stored or read")]
+    SecureStorageUnavailable,
     #[error("keyring error: {0}")]
     Keyring(String),
     #[error("background task failed: {0}")]
@@ -57,8 +62,41 @@ fn validate(service: &str, account: &str) -> Result<String, CredentialError> {
     Ok(format!("{SERVICE_PREFIX}.{service}"))
 }
 
+/// `keyring` 3.x selects its backend by target: Apple (macOS/iOS), Windows
+/// Credential Manager, or Secret Service (Linux/BSD). Every other target —
+/// Android today — falls through to the crate's `mock` store, which is
+/// per-`Entry` and in-memory: `set_secret` would report success, and the next
+/// IPC call's fresh `Entry` would read back `None`. A silent write-to-nowhere
+/// for OAuth tokens and API keys is worse than no support, so a target with no
+/// real keystore is a hard, explicit failure at the boundary. Shipping Android
+/// means implementing a Keystore-backed store here first.
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "openbsd"
+))]
+fn ensure_secure_storage() -> Result<(), CredentialError> {
+    Ok(())
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "openbsd"
+)))]
+fn ensure_secure_storage() -> Result<(), CredentialError> {
+    Err(CredentialError::SecureStorageUnavailable)
+}
+
 fn entry(service: &str, account: &str) -> Result<Entry, CredentialError> {
     let scoped = validate(service, account)?;
+    ensure_secure_storage()?;
     Ok(Entry::new(&scoped, account)?)
 }
 
@@ -147,10 +185,7 @@ pub async fn credential_set(
 }
 
 #[tauri::command]
-pub async fn credential_get(
-    service: String,
-    account: String,
-) -> Result<Option<String>, String> {
+pub async fn credential_get(service: String, account: String) -> Result<Option<String>, String> {
     if !frontend_read_allowed(&service) {
         return Err(CredentialError::ReadForbidden(service).to_string());
     }
@@ -225,6 +260,63 @@ mod tests {
         assert!(!frontend_read_allowed("mendeley"));
         assert!(!frontend_read_allowed("supabase.session"));
         assert!(frontend_read_allowed("supabase.entitlements"));
+    }
+
+    /// A target without a real keystore must fail loudly at the boundary rather
+    /// than resolve to keyring's in-memory mock (a secret that vanishes between
+    /// IPC calls). On a supported host this asserts the inverse — the guard is
+    /// open and every credential command still reaches the OS keyring.
+    #[test]
+    fn secure_storage_guard_matches_the_platform_backend() {
+        #[cfg(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "openbsd"
+        ))]
+        assert!(ensure_secure_storage().is_ok());
+
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "linux",
+            target_os = "freebsd",
+            target_os = "openbsd"
+        )))]
+        {
+            assert!(matches!(
+                ensure_secure_storage(),
+                Err(CredentialError::SecureStorageUnavailable)
+            ));
+            // Nothing may report success: a write that silently goes nowhere is
+            // the failure mode this guard exists to prevent.
+            assert!(matches!(
+                set_secret("openai", "default", "sk-test"),
+                Err(CredentialError::SecureStorageUnavailable)
+            ));
+            assert!(matches!(
+                get_secret("openai", "default"),
+                Err(CredentialError::SecureStorageUnavailable)
+            ));
+            assert!(matches!(
+                secret_exists("openai", "default"),
+                Err(CredentialError::SecureStorageUnavailable)
+            ));
+            assert!(matches!(
+                delete_secret("openai", "default"),
+                Err(CredentialError::SecureStorageUnavailable)
+            ));
+        }
+    }
+
+    #[test]
+    fn secure_storage_error_is_explicit_about_the_platform() {
+        assert!(CredentialError::SecureStorageUnavailable
+            .to_string()
+            .contains("secure storage is not available"));
     }
 
     #[test]

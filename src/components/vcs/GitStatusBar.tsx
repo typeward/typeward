@@ -72,7 +72,11 @@ export const GitStatusBar: Component = () => {
   });
 
   const [summary] = createResource(
-    () => [gitEntitled() ? project()?.rootPath : null, tick()] as const,
+    () =>
+      [
+        gitEntitled() && ipc.gitAvailable() ? project()?.rootPath : null,
+        tick(),
+      ] as const,
     async ([rootPath]) => {
       if (!rootPath) {
         stopPolling();

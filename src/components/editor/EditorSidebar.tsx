@@ -170,7 +170,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   // Entitled: only inside a git repo (as before). Locked: visible as a quiet
   // discovery affordance — activating shows the locked panel — but only while
   // Pro discovery is on; during the free-only beta the locked tab hides.
-  const showScm = () => (scmLocked() ? PRO_DISCOVERY_ENABLED : isGitRepo());
+  // Mobile has no git IPC at all (the commands are cfg-gated off), so the tab
+  // never appears there rather than offering actions that cannot run.
+  const showScm = () =>
+    ipc.gitAvailable() && (scmLocked() ? PRO_DISCOVERY_ENABLED : isGitRepo());
 
   // If SCM was active and the project switched to a non-repo, the tab strip
   // no longer shows it — bounce to Files. (With discovery on, a lapsed

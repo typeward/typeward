@@ -965,6 +965,19 @@ const EditorPanel: Component = () => {
     setEditorSettings({ ...editorSettings(), [key]: value });
   };
 
+  // The WASM engine's assets are downloaded per-host/CI, never checked in — so
+  // a build can ship without them. Say so here instead of only at compile time.
+  const [wasmAssets] = createResource(
+    () => compileEngine() === "texlive-wasm",
+    async (active) => {
+      if (!active) return null;
+      const { texliveWasmUnavailableReason } = await import(
+        "~/providers/compile/texlive-wasm-assets"
+      );
+      return await texliveWasmUnavailableReason();
+    },
+  );
+
   return (
     <div class="space-y-3">
       <Card
@@ -984,6 +997,24 @@ const EditorPanel: Component = () => {
               ]}
               onChange={(v) => setCompileEngine(v as CompileEngine)}
             />
+          </Row>
+        </Show>
+        <Show when={compileEngine() === "texlive-wasm"}>
+          <Row
+            label="TeX Live (WASM) engine"
+            hint="Compiles LaTeX on-device. Its engine and TeX tree assets are downloaded when the app is built."
+          >
+            <Show
+              when={wasmAssets.loading || wasmAssets() !== null}
+              fallback={<span class="text-sm text-fg-2">Installed</span>}
+            >
+              <span
+                class="select-text text-right text-xs"
+                style={{ color: wasmAssets.loading ? undefined : "var(--color-err)" }}
+              >
+                {wasmAssets.loading ? "Checking…" : wasmAssets()}
+              </span>
+            </Show>
           </Row>
         </Show>
         <Row

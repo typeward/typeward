@@ -209,10 +209,7 @@ pub fn grammar_ignore_lint(
 }
 
 #[tauri::command]
-pub fn grammar_clear_ignored(
-    app: AppHandle,
-    state: State<'_, GrammarState>,
-) -> Result<(), String> {
+pub fn grammar_clear_ignored(app: AppHandle, state: State<'_, GrammarState>) -> Result<(), String> {
     state.clear_ignored(&app)
 }
 

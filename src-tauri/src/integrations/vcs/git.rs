@@ -377,9 +377,17 @@ pub async fn git_stage(repo_path: String, paths: Vec<String>) -> Result<(), Stri
             i32::from(is_sidecar_path(&path.to_string_lossy()))
         };
         if paths.is_empty() {
-            index.add_all(["*"].iter(), IndexAddOption::DEFAULT, Some(&mut skip_sidecar))?;
+            index.add_all(
+                ["*"].iter(),
+                IndexAddOption::DEFAULT,
+                Some(&mut skip_sidecar),
+            )?;
         } else {
-            index.add_all(paths.iter(), IndexAddOption::DEFAULT, Some(&mut skip_sidecar))?;
+            index.add_all(
+                paths.iter(),
+                IndexAddOption::DEFAULT,
+                Some(&mut skip_sidecar),
+            )?;
         }
         index.write()?;
         Ok(())
