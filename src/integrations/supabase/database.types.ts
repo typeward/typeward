@@ -58,6 +58,42 @@ export type Database = {
           },
         ]
       }
+      feedback_dedupe: {
+        Row: {
+          content_hash: string
+          first_seen: string
+        }
+        Insert: {
+          content_hash: string
+          first_seen?: string
+        }
+        Update: {
+          content_hash?: string
+          first_seen?: string
+        }
+        Relationships: []
+      }
+      feedback_rate_limits: {
+        Row: {
+          count: number
+          scope: string
+          subject: string
+          window_start: string
+        }
+        Insert: {
+          count?: number
+          scope: string
+          subject: string
+          window_start?: string
+        }
+        Update: {
+          count?: number
+          scope?: string
+          subject?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       plan_prices: {
         Row: {
           billing_interval: string
@@ -125,21 +161,33 @@ export type Database = {
           created_at: string
           display_name: string | null
           id: string
+          marketing_consent_version: string | null
           marketing_opt_in: boolean
+          marketing_opt_in_at: string | null
+          marketing_opt_in_source: string | null
+          marketing_opt_out_at: string | null
           updated_at: string
         }
         Insert: {
           created_at?: string
           display_name?: string | null
           id: string
+          marketing_consent_version?: string | null
           marketing_opt_in?: boolean
+          marketing_opt_in_at?: string | null
+          marketing_opt_in_source?: string | null
+          marketing_opt_out_at?: string | null
           updated_at?: string
         }
         Update: {
           created_at?: string
           display_name?: string | null
           id?: string
+          marketing_consent_version?: string | null
           marketing_opt_in?: boolean
+          marketing_opt_in_at?: string | null
+          marketing_opt_in_source?: string | null
+          marketing_opt_out_at?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -211,19 +259,34 @@ export type Database = {
       }
       stripe_events: {
         Row: {
+          attempts: number
           id: string
+          last_error: string | null
+          lease_expires_at: string | null
           received_at: string
+          status: string
           type: string
+          updated_at: string
         }
         Insert: {
+          attempts?: number
           id: string
+          last_error?: string | null
+          lease_expires_at?: string | null
           received_at?: string
+          status?: string
           type: string
+          updated_at?: string
         }
         Update: {
+          attempts?: number
           id?: string
+          last_error?: string | null
+          lease_expires_at?: string | null
           received_at?: string
+          status?: string
           type?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -300,6 +363,29 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_stripe_event: {
+        Args: {
+          p_event_id: string
+          p_event_type: string
+          p_lease_seconds?: number
+        }
+        Returns: {
+          attempts: number
+          claimed: boolean
+          status: string
+        }[]
+      }
+      consume_feedback_quota: {
+        Args: {
+          p_content_hash?: string
+          p_install_hash?: string
+          p_ip_hash: string
+        }
+        Returns: {
+          decision: string
+          retry_after: number
+        }[]
+      }
       get_entitlements: {
         Args: never
         Returns: {
