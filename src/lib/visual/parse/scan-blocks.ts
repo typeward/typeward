@@ -193,10 +193,12 @@ function nextBoundary(
     }
 
     if (name === "verb") {
-      const d = e < limit ? text[e] : "";
-      if (d !== "" && d !== "\n" && d !== "*") {
-        const eol = text.indexOf("\n", e + 1);
-        const closeAt = text.indexOf(d, e + 1);
+      let dAt = e;
+      if (dAt < limit && text.charCodeAt(dAt) === 42 /* * */) dAt++;
+      const d = dAt < limit ? text[dAt] : "";
+      if (d !== "" && d !== "\n") {
+        const eol = text.indexOf("\n", dAt + 1);
+        const closeAt = text.indexOf(d, dAt + 1);
         if (closeAt !== -1 && closeAt < limit && (eol === -1 || closeAt < eol)) {
           i = closeAt + 1;
           continue;

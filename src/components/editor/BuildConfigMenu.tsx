@@ -1,4 +1,4 @@
-import { Check, Settings2 } from "lucide-solid";
+import { Check, Eraser, Settings2 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createResource } from "solid-js";
 import type { ProjectBuild } from "~/adapters/types";
@@ -9,7 +9,7 @@ import { Switch } from "~/components/forms/Switch";
 import * as ipc from "~/ipc";
 import { describeIpcError } from "~/lib/errors";
 import { handleListboxKeydown } from "~/lib/listbox-nav";
-import { notifyError } from "~/lib/toast";
+import { notifyError, notifySuccess } from "~/lib/toast";
 import { project, setProject } from "~/stores/editor-store";
 
 type OverrideEngine = NonNullable<ProjectBuild["engine"]>;
@@ -152,6 +152,24 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
     props.onClose();
   };
 
+  // Stale-aux recovery: delete regenerable build artifacts, keep the PDF.
+  const doClean = async () => {
+    const p = project();
+    if (!p) return;
+    try {
+      const removed = await ipc.compileClean(p);
+      notifySuccess(
+        "Auxiliary files cleaned",
+        removed === 0
+          ? "Nothing to remove — the build directory was already clean."
+          : `Removed ${removed} build ${removed === 1 ? "file" : "files"}. Compile again for a fresh build.`,
+      );
+    } catch (e) {
+      notifyError("Couldn't clean build files", describeIpcError(e));
+    }
+    props.onClose();
+  };
+
   // The panel mixes two single-select listboxes (engine, recipe) with
   // interactive Switch rows and footer buttons, so the root is a plain labeled
   // group — a listbox root would nest interactive controls inside option
@@ -277,10 +295,12 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
         <div class="mt-1 flex items-center justify-between border-t border-glass-stroke px-3 pt-1.5">
           <button
             type="button"
-            onClick={() => void doReset()}
-            class="text-xs text-fg-3 hover:text-fg-1"
+            onClick={() => void doClean()}
+            title="Delete aux/bbl/log build artifacts — fixes builds wedged by stale auxiliary files (e.g. after changing the bibliography setup)"
+            class="lift flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
           >
-            Reset to global defaults
+            <Eraser size={11} />
+            Clean auxiliary files
           </button>
           <button
             type="button"
@@ -293,6 +313,15 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
           >
             <Settings2 size={11} />
             Project settings…
+          </button>
+        </div>
+        <div class="flex items-center justify-start px-3 pb-0.5 pt-1">
+          <button
+            type="button"
+            onClick={() => void doReset()}
+            class="text-xs text-fg-3 hover:text-fg-1"
+          >
+            Reset to global defaults
           </button>
         </div>
       </Show>

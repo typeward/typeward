@@ -35,13 +35,29 @@ interface Match {
   to: number;
 }
 
+/**
+ * The whole-document image window is O(doc) to build; cache it per parse
+ * tree so typing in the search box reuses one build instead of paying it on
+ * every input event. Keyed by VisualDoc identity (a fresh object per parse).
+ */
+const imageCache = new WeakMap<
+  object,
+  { win: ReturnType<typeof buildImageWindow>; lower: string }
+>();
+
 function findMatches(view: EditorView, query: string): Match[] {
   if (query === "") return [];
   const st = view.state.field(visualField, false);
   if (!st || st.doc === null) return [];
-  const docText = view.state.doc.toString();
-  const win = buildImageWindow(st.doc, docText, 0, docText.length);
-  const haystack = win.text.toLowerCase();
+  let cached = imageCache.get(st.doc);
+  if (!cached) {
+    const docText = view.state.doc.toString();
+    const win = buildImageWindow(st.doc, docText, 0, docText.length);
+    cached = { win, lower: win.text.toLowerCase() };
+    imageCache.set(st.doc, cached);
+  }
+  const win = cached.win;
+  const haystack = cached.lower;
   const needle = query.toLowerCase();
   const out: Match[] = [];
   let at = 0;

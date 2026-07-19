@@ -4,6 +4,7 @@ import {
   Folder,
   Settings as SettingsIcon,
 } from "lucide-solid";
+import { HistoryMenu } from "~/components/editor/HistoryMenu";
 import { LayoutMenu } from "~/components/editor/LayoutMenu";
 import { ProjectSwitcherMenu } from "~/components/editor/ProjectSwitcherMenu";
 import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
@@ -662,6 +663,7 @@ const EditorTopBar: Component<{
           <span class="mono text-xs text-fg-2">{compileDuration()}</span>
         </button>
         <SyncStatusBadge />
+        <HistoryMenu />
         <LayoutMenu />
         <button
           type="button"

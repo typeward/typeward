@@ -58,7 +58,11 @@ function widgetActivation(): Extension {
       const st = view.state.field(visualField, false);
       if (!st || st.doc === null) return false;
       let intent: PopoverIntent | null = null;
-      st.built.atomics.between(pos, pos + 1, (_from, _to, value) => {
+      st.built.atomics.between(pos, pos + 1, (from, to, value) => {
+        // RangeSet "between" also yields a range that merely ENDS at pos —
+        // for adjacent constructs ($a$$b$) that is the PREVIOUS one. Only a
+        // range actually covering/starting at the click position counts.
+        if (to <= pos || from > pos) return;
         intent = { from: value.cFrom, to: value.cTo, kind: value.kind };
         return false;
       });
@@ -73,6 +77,11 @@ function widgetActivation(): Extension {
       });
       view.state.facet(visualConfig).onOpenPopover?.(found);
       event.preventDefault();
+      // The popover's outside-click dismiss registers a document-level
+      // mousedown listener DURING this very event's dispatch; without
+      // stopping propagation, that listener still receives this event and
+      // closes the popover in the same breath it opened.
+      event.stopPropagation();
       return true;
     },
   });

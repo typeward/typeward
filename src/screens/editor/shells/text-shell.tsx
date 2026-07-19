@@ -80,10 +80,6 @@ import {
   restoreEditorPosition,
 } from "~/stores/editor-view-store";
 import {
-  requestHistoryPanel_,
-  setRequestHistoryPanel,
-} from "~/commands/palette-store";
-import {
   editorSettings,
   integrationsSettings,
   LINE_HEIGHT_VALUES,
@@ -223,14 +219,8 @@ export const TextShell: Component<{
     setReviewPanelIntent(null);
   });
 
-  // `core.fileHistory` (command palette) opens the History sidebar tab.
-  createEffect(() => {
-    if (!requestHistoryPanel_()) return;
-    setLeftTab("history");
-    if (paneTier() === "one") setActivePane("sidebar");
-    else if (paneTier() === "two") setFilesDrawerOpen(true);
-    setRequestHistoryPanel(false);
-  });
+  // `core.fileHistory` now opens the top-bar HistoryMenu popover — the
+  // intent is consumed there (components/editor/HistoryMenu.tsx).
 
   // The grammar linter mirrors its results into a cross-file store (read by
   // the Logs Grammar tab). Drop them when grammar is switched off or the
@@ -448,15 +438,15 @@ const DesktopLayout: Component<ShellProps> = (props) => {
   // the persisted width (workspace.sidebarPx) wins over the content fit —
   // reactive through desiredPx, so the async settings hydrate still applies.
   const [tabsWidth, setTabsWidth] = createSignal<number | undefined>();
-  const clampSidebar = (px: number) => Math.min(400, Math.max(200, px));
+  const clampSidebar = (px: number) => Math.min(440, Math.max(200, px));
   const fittedWidth = () => {
     const w = tabsWidth();
-    return w ? Math.max(w + 4, 300) : undefined;
+    return w ? Math.max(w + 4, 340) : undefined;
   };
   const sidebar = createSidebarResize({
     minPx: 200,
-    maxPx: 400,
-    defaultPx: sidebarPx() ?? 300,
+    maxPx: 440,
+    defaultPx: sidebarPx() ?? 340,
     desiredPx: () => sidebarPx() ?? fittedWidth(),
   });
   // Mirror genuine drags into the persisted signal. corvu echoes programmatic

@@ -17,81 +17,102 @@ import { describeIpcError } from "~/lib/errors";
 import { sha256Hex } from "~/lib/hash";
 import { recordError } from "~/lib/telemetry";
 import { notifyError, notifySuccess } from "~/lib/toast";
-import { activeFile, adoptDiskContent, project } from "~/stores/editor-store";
+import { adoptDiskContent, openFiles, project } from "~/stores/editor-store";
 import { mountHistoryDiff } from "./history-diff";
 
 /**
- * Sidebar History tab: the active file's recorded versions (newest first),
- * each openable as a read-only diff against the current buffer with a Restore
- * action. Versions are recorded on save by the Rust store (history.rs) — at
- * most one per file per five minutes — and restore always snapshots the state
- * it overwrites, so nothing here is destructive.
+ * Project history (the top-bar HistoryMenu popover): every recorded version
+ * across the whole project, newest first, each openable as a read-only diff
+ * against the file's current state with a Restore action. Versions are
+ * recorded on save by the Rust store (history.rs) — at most one per file per
+ * five minutes — and restore always snapshots the state it overwrites, so
+ * nothing here is destructive.
  */
 export const HistoryPanel: Component = () => {
-  // Bumped after restore/clear so the resource refetches without a tab switch.
+  // Bumped after restore/clear so the resource refetches without a remount.
   const [historyGen, setHistoryGen] = createSignal(0);
-  const [selected, setSelected] = createSignal<ipc.HistoryVersion | null>(null);
+  const [selected, setSelected] = createSignal<ipc.ProjectHistoryVersion | null>(null);
   const [busy, setBusy] = createSignal(false);
 
   const [versions] = createResource(
     () => {
       const p = project();
-      const f = activeFile();
-      return p && f ? { root: p.rootPath, rel: f.relPath, gen: historyGen() } : null;
+      return p ? { root: p.rootPath, gen: historyGen() } : null;
     },
     async (src) => {
       try {
-        return await ipc.historyList(src.root, src.rel);
+        return await ipc.historyListProject(src.root);
       } catch (e) {
-        recordError("history-list", `history_list failed for ${src.rel}`, e);
-        return [] as ipc.HistoryVersion[];
+        recordError("history-list", "history_list_project failed", e);
+        return [] as ipc.ProjectHistoryVersion[];
       }
     },
     { initialValue: [] },
   );
 
-  // The selected version's content, for the diff. Failures surface inside the
-  // dialog body rather than a toast so the list stays usable.
+  /** The version's file, when it's open in a tab (buffer beats disk). */
+  const openBuffer = (relPath: string) =>
+    openFiles().find((f) => f.relPath === relPath);
+
   const [versionContent] = createResource(
     () => {
       const p = project();
-      const f = activeFile();
       const v = selected();
-      return p && f && v ? { root: p.rootPath, rel: f.relPath, hash: v.hash } : null;
+      return p && v ? { root: p.rootPath, rel: v.relPath, hash: v.hash } : null;
     },
     (src) => ipc.historyReadVersion(src.root, src.rel, src.hash),
   );
 
-  const restore = async (version: ipc.HistoryVersion) => {
+  // Current state of the selected version's file — the open buffer when the
+  // file has a tab, else its on-disk content (versions of files that aren't
+  // open must still diff correctly).
+  const [currentContent] = createResource(
+    () => {
+      const p = project();
+      const v = selected();
+      return p && v ? { root: p.rootPath, rel: v.relPath } : null;
+    },
+    async (src) => {
+      const buf = openBuffer(src.rel);
+      if (buf) return buf.content;
+      try {
+        return await ipc.readProjectTextFile(src.root, src.rel);
+      } catch {
+        // Deleted/renamed since the version was recorded — diff vs nothing.
+        return "";
+      }
+    },
+  );
+
+  const restore = async (version: ipc.ProjectHistoryVersion) => {
     const p = project();
-    const f = activeFile();
-    if (!p || !f || busy()) return;
+    if (!p || busy()) return;
     setBusy(true);
     try {
-      // A dirty buffer is saved first so the pre-restore state lands on disk —
-      // the Rust restore then force-records exactly that state before
-      // overwriting it.
-      if (f.dirty) await saveOpenFile(p, f);
-      const restored = await ipc.historyRestore(p.rootPath, f.relPath, version.hash);
-      // Store-level replace (never a CM dispatch swap): content, clean flag,
-      // and a recomputed base hash so the save conflict guard doesn't misfire.
-      // The bumped adopt generation remounts the keyed editor on the restored
-      // content — without it the mounted CM doc stays stale and the next
-      // keystroke + autosave would write the pre-restore text back to disk.
-      adoptDiskContent(f.path, restored, await sha256Hex(restored));
+      // A dirty open buffer is saved first so the pre-restore state lands on
+      // disk — the Rust restore then force-records exactly that state before
+      // overwriting it. Files without a tab are already at their disk state.
+      const buf = openBuffer(version.relPath);
+      if (buf?.dirty) await saveOpenFile(p, buf);
+      const restored = await ipc.historyRestore(p.rootPath, version.relPath, version.hash);
+      // Store-level replace for an open tab (never a CM dispatch swap):
+      // content, clean flag, and a recomputed base hash so the save conflict
+      // guard doesn't misfire. The bumped adopt generation remounts the keyed
+      // editor on the restored content.
+      if (buf) adoptDiskContent(buf.path, restored, await sha256Hex(restored));
       // The restore wrote to disk outside the save funnel — queue the cloud
       // push like every save path, or other devices keep the pre-restore
       // content and interim remote edits mint spurious conflict sidecars.
-      notifyLocalSave(p.rootPath, [f.relPath]);
+      notifyLocalSave(p.rootPath, [version.relPath]);
       setSelected(null);
       setHistoryGen((n) => n + 1);
       notifySuccess(
         "Version restored",
-        `"${f.relPath}" now holds the version from ${formatWhen(version.ts)}. The replaced state was kept in history.`,
+        `"${version.relPath}" now holds the version from ${formatWhen(version.ts)}. The replaced state was kept in history.`,
       );
     } catch (e) {
       notifyError("Couldn't restore version", describeIpcError(e));
-      recordError("history-restore", `history_restore failed for ${f.relPath}`, e);
+      recordError("history-restore", `history_restore failed for ${version.relPath}`, e);
     } finally {
       setBusy(false);
     }
@@ -126,7 +147,7 @@ export const HistoryPanel: Component = () => {
   return (
     <div class="flex h-full flex-col">
       <div class="label-xs flex h-9 flex-shrink-0 items-center justify-between px-3 text-fg-3">
-        <span>File history</span>
+        <span>Project history</span>
         <Show when={versions().length > 0}>
           <button
             type="button"
@@ -141,42 +162,41 @@ export const HistoryPanel: Component = () => {
       </div>
 
       <div class="min-h-0 flex-1 overflow-auto scroll px-2 pb-2">
-        <Show when={activeFile()} fallback={<EmptyState text="Open a file to see its history." />}>
-          <Show
-            when={versions().length > 0}
-            fallback={
-              <EmptyState text="No versions yet. Typeward records one automatically on save — at most one per file every five minutes." />
-            }
-          >
-            <ul class="flex flex-col gap-1">
-              <For each={versions()}>
-                {(v, i) => (
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(v)}
-                      class="lift glass-soft flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-[var(--color-control-fill)]"
-                    >
-                      <HistoryIcon size={12} class="flex-shrink-0 text-fg-3" />
-                      <span class="min-w-0 flex-1">
-                        <span class="block truncate text-sm text-fg-1">{formatWhen(v.ts)}</span>
-                        <span class="mono block text-xs text-fg-3">
-                          {formatSize(v.size)}
-                          <Show when={i() === 0}> · latest</Show>
-                        </span>
+        <Show
+          when={versions().length > 0}
+          fallback={
+            <EmptyState text="No versions yet. Typeward records one automatically on save — at most one per file every five minutes." />
+          }
+        >
+          <ul class="flex flex-col gap-1">
+            <For each={versions()}>
+              {(v) => (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => setSelected(v)}
+                    class="lift glass-soft flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-[var(--color-control-fill)]"
+                  >
+                    <HistoryIcon size={12} class="flex-shrink-0 text-fg-3" />
+                    <span class="min-w-0 flex-1">
+                      <span class="mono block truncate text-sm text-fg-1">
+                        {v.relPath}
                       </span>
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
+                      <span class="block text-xs text-fg-3">
+                        {formatWhen(v.ts)} · {formatSize(v.size)}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              )}
+            </For>
+          </ul>
         </Show>
       </div>
 
       {/* Diff-and-restore dialog for the selected version. The diff shows the
-          recorded version as the base and the current buffer as the target,
-          so additions since that version read as insertions. */}
+          recorded version as the base and the file's current state as the
+          target, so additions since that version read as insertions. */}
       <Dialog
         open={selected() !== null}
         onOpenChange={(open) => {
@@ -185,7 +205,7 @@ export const HistoryPanel: Component = () => {
         title="Restore this version?"
         description={
           selected()
-            ? `"${activeFile()?.relPath ?? ""}" from ${formatWhen(selected()!.ts)} (${formatSize(selected()!.size)}) compared against the current buffer.`
+            ? `"${selected()!.relPath}" from ${formatWhen(selected()!.ts)} (${formatSize(selected()!.size)}) compared against the current state.`
             : ""
         }
         widthClass="w-[760px]"
@@ -218,10 +238,10 @@ export const HistoryPanel: Component = () => {
           }
         >
           <Show
-            when={versionContent() !== undefined}
+            when={versionContent() !== undefined && currentContent() !== undefined}
             fallback={<div class="text-sm text-fg-3">Loading version…</div>}
           >
-            <HistoryDiff original={versionContent()!} current={activeFile()?.content ?? ""} />
+            <HistoryDiff original={versionContent()!} current={currentContent() ?? ""} />
           </Show>
         </Show>
         <div class="mt-3 text-xs leading-relaxed text-fg-3">

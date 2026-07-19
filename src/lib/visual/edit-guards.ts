@@ -112,8 +112,10 @@ function normalizeRange(state: EditorState, r: SelectionRange): SelectionRange {
  * Rewrite one user deletion range to construct closure: constructs fully
  * inside the deletion go whole; a construct only partially covered keeps
  * ALL its atomic pieces (only the visible content between them is deleted).
+ * Exported for the clipboard filter — a copy carries exactly the ranges a
+ * closure-rewritten cut would remove, so the two can never drift.
  */
-function closureDeletion(
+export function closureDeletion(
   state: EditorState,
   from: number,
   to: number,
@@ -237,10 +239,27 @@ function backspace(view: EditorView): boolean {
   const { state } = view;
   const sel = state.selection.main;
   if (!sel.empty) return false; // default selection delete → filter closes it
-  const pos = sel.head;
-
-  const behind = atomicEndingAt(state, pos);
+  const behind = atomicEndingAt(state, sel.head);
   if (!behind) return false;
+  return backspaceConstruct(view, behind, 0);
+}
+
+/**
+ * Construct-aware Backspace on the construct whose atomic span ends at the
+ * caret. Retargets recurse: when the "one character back" position is itself
+ * the tail of another atomic (adjacent constructs like `\textbf{a}\emph{|b}`
+ * or a nested trailing widget in `\textbf{a$x$|}`), the SAME semantics apply
+ * to that construct — a raw one-char delete there would eat half a wrapper
+ * pair, the exact corruption the guards exist to prevent.
+ */
+function backspaceConstruct(
+  view: EditorView,
+  behind: AtomicHit,
+  depth: number,
+): boolean {
+  if (depth > 8) return true; // pathological adjacency chain — safe no-op
+  const { state } = view;
+  const sel = state.selection.main;
   const v = behind.value;
 
   switch (v.kind) {
@@ -272,9 +291,11 @@ function backspace(view: EditorView): boolean {
     case "group":
     case "heading": {
       if (v.role === "close") {
-        // Caret after the construct: delete the last content character, or
-        // the whole construct once its content is empty.
+        // Caret after the construct: delete its last content character —
+        // construct-aware when that "character" is itself a construct.
         if (v.contentTo > v.contentFrom) {
+          const inner = atomicEndingAt(state, v.contentTo);
+          if (inner) return backspaceConstruct(view, inner, depth + 1);
           return dispatchEdit(
             view,
             {
@@ -319,8 +340,10 @@ function backspace(view: EditorView): boolean {
           "delete.visual.unwrap",
         );
       }
-      // Style/group content start: delete the character before the whole
-      // construct (that's what the caret visually sits after).
+      // Style/group content start: the caret visually sits after whatever
+      // precedes the construct — recurse when that is another construct.
+      const prev = atomicEndingAt(state, v.cFrom);
+      if (prev) return backspaceConstruct(view, prev, depth + 1);
       if (v.cFrom === 0) return true;
       return dispatchEdit(
         view,
@@ -364,6 +387,17 @@ function forwardDelete(view: EditorView): boolean {
   if (!sel.empty) return false;
   const ahead = atomicStartingAt(state, sel.head);
   if (!ahead) return false;
+  return forwardDeleteConstruct(view, ahead, 0);
+}
+
+function forwardDeleteConstruct(
+  view: EditorView,
+  ahead: AtomicHit,
+  depth: number,
+): boolean {
+  if (depth > 8) return true;
+  const { state } = view;
+  const sel = state.selection.main;
   const v = ahead.value;
   switch (v.kind) {
     case "glyph":
@@ -391,6 +425,10 @@ function forwardDelete(view: EditorView): boolean {
     case "heading": {
       if (v.role === "open") {
         if (v.contentTo > v.contentFrom) {
+          // First content unit may itself be a construct — recurse rather
+          // than eating half of its wrapper with a raw one-char delete.
+          const inner = atomicStartingAt(state, v.contentFrom);
+          if (inner) return forwardDeleteConstruct(view, inner, depth + 1);
           return dispatchEdit(
             view,
             {
@@ -409,7 +447,19 @@ function forwardDelete(view: EditorView): boolean {
           "delete.visual.construct",
         );
       }
-      return true;
+      // Caret at content end (before the close wrapper): Delete acts on
+      // whatever follows the construct, construct-aware.
+      const next = atomicStartingAt(state, v.cTo);
+      if (next) return forwardDeleteConstruct(view, next, depth + 1);
+      if (v.cTo >= state.doc.length) return true;
+      return dispatchEdit(
+        view,
+        {
+          changes: { from: v.cTo, to: v.cTo + 1 },
+          selection: EditorSelection.cursor(sel.head),
+        },
+        "delete.visual.content",
+      );
     }
     case "environment":
       return true;
@@ -528,15 +578,19 @@ function enter(view: EditorView): boolean {
           "input.visual.exit",
         );
       }
-      // Mid-title → split into two headings of the same level.
+      // Mid-title → split into two headings of the same level; the caret
+      // continues in the SECOND title (Word semantics — the default
+      // before-insertion mapping would strand it in the first).
       const st = state.field(visualField, false);
       const block = st?.doc ? blockAt(st.doc, ctx.cFrom ?? pos) : null;
       if (block?.kind === "heading") {
         const cmd = state.doc.sliceString(block.hide[0].from, block.content.from);
+        const insert = `}\n${cmd.replace(/\{\s*$/, "{")}`;
         return dispatchEdit(
           view,
           {
-            changes: { from: pos, insert: `}\n${cmd.replace(/\{\s*$/, "{")}` },
+            changes: { from: pos, insert },
+            selection: EditorSelection.cursor(pos + insert.length),
           },
           "input.visual.split",
         );
