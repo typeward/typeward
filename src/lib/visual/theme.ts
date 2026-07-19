@@ -13,18 +13,20 @@ import type { Extension } from "@codemirror/state";
  * source-mode preferences survive underneath.
  */
 export const documentTheme: Extension = EditorView.theme({
+  // The page surface lives on the SCROLLER, not .cm-content: CM draws the
+  // selection in a negative-z-index layer between the scroller's background
+  // and the content, so an opaque content background makes selection
+  // highlighting invisible. Full-bleed paper + a centered measure gives the
+  // same document feel with the selection layer intact.
   "&.cm-editor .cm-scroller": {
     fontFamily: "var(--font-doc)",
-    padding: "2.5rem 1.5rem 4rem",
+    background: "var(--color-doc-surface)",
+    padding: "0",
   },
   "&.cm-editor .cm-content": {
     maxWidth: "44rem",
     margin: "0 auto",
-    padding: "3.5rem 3rem",
-    background: "var(--color-doc-surface)",
-    border: "1px solid var(--color-glass-stroke)",
-    borderRadius: "6px",
-    boxShadow: "var(--shadow-glass-drop)",
+    padding: "3rem 3rem 5rem",
     fontFamily: "var(--font-doc)",
     fontSize: "max(16px, 1.05em)",
     lineHeight: "1.75",

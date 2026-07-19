@@ -294,6 +294,14 @@ export interface BuildOptionsWire {
   haltOnError: boolean;
 }
 
+/**
+ * Deletes auxiliary build artifacts (aux/bbl/log/…, plus every .aux in the
+ * tree). Returns the number of files removed. The recovery for the stale-aux
+ * wedge after a bibliography-setup change.
+ */
+export const compileClean = (project: Project): Promise<number> =>
+  invoke<number>("compile_clean", { project });
+
 export const compileLatex = async (
   project: Project,
   options: BuildOptionsWire,
@@ -962,6 +970,17 @@ export const historyList = (
   projectRoot: string,
   relPath: string,
 ): Promise<HistoryVersion[]> => invoke("history_list", { projectRoot, relPath });
+
+/** One recorded version anywhere in the project (a HistoryVersion + its file). */
+export interface ProjectHistoryVersion extends HistoryVersion {
+  relPath: string;
+}
+
+/** Every tracked file's versions, newest first across the whole project. */
+export const historyListProject = (
+  projectRoot: string,
+): Promise<ProjectHistoryVersion[]> =>
+  invoke("history_list_project", { projectRoot });
 
 /** Decompress one recorded version. The hash must belong to this file's history. */
 export const historyReadVersion = (

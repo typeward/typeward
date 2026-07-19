@@ -463,6 +463,47 @@ pub async fn history_list(
     .map_err(err)?
 }
 
+/// One recorded version anywhere in the project — a file's VersionEntry
+/// plus the relative path it belongs to. Powers the project-wide history
+/// popover (newest first across every tracked file).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectVersionEntry {
+    pub rel_path: String,
+    pub hash: String,
+    pub ts: i64,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub async fn history_list_project(
+    app: AppHandle,
+    project_root: String,
+) -> Result<Vec<ProjectVersionEntry>, String> {
+    tokio::task::spawn_blocking(move || -> Result<Vec<ProjectVersionEntry>, String> {
+        let root = PathBuf::from(&project_root);
+        project::require_registered_root(&root).map_err(err)?;
+        let store = store_dir(&app, &root)?;
+        let index = read_index(&store).map_err(err)?;
+        let mut out: Vec<ProjectVersionEntry> = index
+            .files
+            .iter()
+            .flat_map(|(rel, entries)| {
+                entries.iter().map(|e| ProjectVersionEntry {
+                    rel_path: rel.clone(),
+                    hash: e.hash.clone(),
+                    ts: e.ts,
+                    size: e.size,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| a.rel_path.cmp(&b.rel_path)));
+        Ok(out)
+    })
+    .await
+    .map_err(err)?
+}
+
 #[tauri::command]
 pub async fn history_read_version(
     app: AppHandle,

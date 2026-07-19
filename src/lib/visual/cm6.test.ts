@@ -305,6 +305,45 @@ describe("visual cm6: keymap semantics", () => {
     view.destroy();
   });
 
+  it("Backspace at a construct's start never eats the neighbor's wrapper", () => {
+    // Regression: the retarget used to raw-delete cFrom-1, taking half of an
+    // adjacent construct's wrapper pair with it.
+    const doc = "\\textbf{a}\\emph{b}";
+    const view = makeView(doc);
+    const emphContent = doc.indexOf("{b}") + 1;
+    view.dispatch({ selection: { anchor: emphContent } });
+    expect(cmd.backspace(view)).toBe(true);
+    // Construct-aware recursion reaches the preceding bold construct and
+    // deletes ITS last content char — both wrapper pairs stay balanced.
+    expect(view.state.doc.toString()).toBe("\\textbf{}\\emph{b}");
+    view.destroy();
+  });
+
+  it("Backspace after a construct ending in nested math selects the math", () => {
+    const doc = "\\textbf{a$x$}";
+    const view = makeView(doc);
+    view.dispatch({ selection: { anchor: doc.length } });
+    expect(cmd.backspace(view)).toBe(true);
+    // Select-then-delete semantics for the trailing inline-math widget —
+    // never a raw one-char delete inside `$x$`.
+    const sel = view.state.selection.main;
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(doc.slice(sel.from, sel.to)).toBe("$x$");
+    view.destroy();
+  });
+
+  it("Enter mid-title continues typing in the SECOND heading", () => {
+    const doc = "\\section{One Two}\nBody\n";
+    const view = makeView(doc);
+    const at = doc.indexOf("One Two") + 3;
+    view.dispatch({ selection: { anchor: at } });
+    expect(cmd.enter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("\\section{One}\n\\section{ Two}\nBody\n");
+    const head = view.state.selection.main.head;
+    expect(view.state.doc.toString().slice(head, head + 4)).toBe(" Two");
+    view.destroy();
+  });
+
   it("keeps structural deletions as single undo steps", () => {
     const doc = "\\section{}\nText\n";
     const view = makeView(doc);
@@ -314,6 +353,26 @@ describe("visual cm6: keymap semantics", () => {
     expect(undoDepth(view.state)).toBeGreaterThan(0);
     undo(view);
     expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+});
+
+describe("visual cm6: widget activation", () => {
+  it("clicking a widget adjacent to another construct targets the clicked one", () => {
+    // Regression: RangeSet.between also yields the atomic ENDING at the
+    // click position, so `$a$$b$` used to open the popover for `$a$`.
+    let intent: { from: number; to: number } | null = null;
+    const doc = "see $a$$b$ end";
+    const view = makeView(doc, {
+      onOpenPopover: (i: { from: number; to: number }) => (intent = i),
+    });
+    const widgets = view.contentDOM.querySelectorAll(".cm-vis-math-inline");
+    expect(widgets.length).toBe(2);
+    widgets[1].dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+    );
+    expect(intent).not.toBeNull();
+    expect(doc.slice(intent!.from, intent!.to)).toBe("$b$");
     view.destroy();
   });
 });

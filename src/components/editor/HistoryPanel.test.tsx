@@ -7,7 +7,8 @@ import type { Project } from "~/adapters/types";
 // hash helper, toast, telemetry, and the lazily-mounted CM diff — and drive
 // the REAL editor-store so adoptDiskContent behaves as it ships.
 const spies = vi.hoisted(() => ({
-  historyList: vi.fn(),
+  historyListProject: vi.fn(),
+  readProjectTextFile: vi.fn(),
   historyReadVersion: vi.fn(),
   historyRestore: vi.fn(),
   historyClear: vi.fn(),
@@ -23,7 +24,8 @@ const spies = vi.hoisted(() => ({
 vi.mock("~/ipc", async () => {
   const { ipcMock } = await import("~/test/ipc-mock");
   return ipcMock({
-    historyList: spies.historyList,
+    historyListProject: spies.historyListProject,
+    readProjectTextFile: spies.readProjectTextFile,
     historyReadVersion: spies.historyReadVersion,
     historyRestore: spies.historyRestore,
     historyClear: spies.historyClear,
@@ -56,13 +58,24 @@ const projectA: Project = {
   name: "A",
 };
 
-// Two recorded versions, newest first (the Rust list order).
-const V_NEW = { hash: "a".repeat(64), ts: Date.now() - 2 * 60_000, size: 2048 };
-const V_OLD = { hash: "b".repeat(64), ts: Date.now() - 2 * 3_600_000, size: 100 };
+// Two recorded versions, newest first (the Rust list order), project-wide.
+const V_NEW = {
+  relPath: "main.tex",
+  hash: "a".repeat(64),
+  ts: Date.now() - 2 * 60_000,
+  size: 2048,
+};
+const V_OLD = {
+  relPath: "chapters/intro.tex",
+  hash: "b".repeat(64),
+  ts: Date.now() - 2 * 3_600_000,
+  size: 100,
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
-  spies.historyList.mockResolvedValue([V_NEW, V_OLD]);
+  spies.historyListProject.mockResolvedValue([V_NEW, V_OLD]);
+  spies.readProjectTextFile.mockResolvedValue("disk content");
   spies.historyReadVersion.mockResolvedValue("old content");
   spies.historyRestore.mockResolvedValue("old content");
   spies.mountHistoryDiff.mockResolvedValue(() => {});
@@ -85,23 +98,24 @@ const restoreButton = (): HTMLButtonElement | undefined =>
   ) as HTMLButtonElement | undefined;
 
 describe("HistoryPanel", () => {
-  it("lists the active file's versions with timestamp and size", async () => {
+  it("lists every file's versions project-wide with path, time, and size", async () => {
     const { findByText, container } = render(() => <HistoryPanel />);
 
-    await findByText("2m ago");
-    await findByText("2h ago");
-    expect(spies.historyList).toHaveBeenCalledWith("/A", "main.tex");
+    await findByText(/2m ago/);
+    await findByText(/2h ago/);
+    expect(spies.historyListProject).toHaveBeenCalledWith("/A");
 
     const text = container.textContent ?? "";
+    expect(text).toContain("main.tex");
+    expect(text).toContain("chapters/intro.tex");
     expect(text).toContain("2.0 KB");
     expect(text).toContain("100 B");
-    expect(text).toContain("latest");
   });
 
   it("selecting a version opens a read-only diff against the current buffer", async () => {
     const { findByText } = render(() => <HistoryPanel />);
 
-    (await findByText("2m ago")).click();
+    (await findByText(/2m ago/)).click();
 
     await waitFor(() => {
       expect(spies.historyReadVersion).toHaveBeenCalledWith("/A", "main.tex", V_NEW.hash);
@@ -115,6 +129,26 @@ describe("HistoryPanel", () => {
     expect(document.body.textContent).toContain("Restore this version");
   });
 
+  it("diffs a version of a file that has no open tab against its disk content", async () => {
+    const { findByText } = render(() => <HistoryPanel />);
+
+    (await findByText(/2h ago/)).click();
+
+    await waitFor(() => {
+      expect(spies.historyReadVersion).toHaveBeenCalledWith(
+        "/A",
+        "chapters/intro.tex",
+        V_OLD.hash,
+      );
+      expect(spies.readProjectTextFile).toHaveBeenCalledWith("/A", "chapters/intro.tex");
+      expect(spies.mountHistoryDiff).toHaveBeenCalledWith(
+        expect.any(HTMLElement),
+        "old content",
+        "disk content",
+      );
+    });
+  });
+
   it("restore saves a dirty buffer first, then adopts the restored content clean", async () => {
     resetTabs();
     openFile({
@@ -126,7 +160,7 @@ describe("HistoryPanel", () => {
     });
     const { findByText } = render(() => <HistoryPanel />);
 
-    (await findByText("2m ago")).click();
+    (await findByText(/2m ago/)).click();
     const btn = await waitFor(() => {
       const b = restoreButton();
       expect(b).toBeTruthy();
@@ -163,13 +197,13 @@ describe("HistoryPanel", () => {
     );
     expect(spies.notifySuccess).toHaveBeenCalled();
     // The list refetches so the just-captured pre-restore version shows up.
-    expect(spies.historyList.mock.calls.length).toBeGreaterThan(1);
+    expect(spies.historyListProject.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("does not save first when the buffer is already clean", async () => {
     const { findByText } = render(() => <HistoryPanel />);
 
-    (await findByText("2m ago")).click();
+    (await findByText(/2m ago/)).click();
     const btn = await waitFor(() => {
       const b = restoreButton();
       expect(b).toBeTruthy();
@@ -188,7 +222,7 @@ describe("HistoryPanel", () => {
     spies.historyRestore.mockRejectedValue(new Error("blob missing"));
     const { findByText } = render(() => <HistoryPanel />);
 
-    (await findByText("2m ago")).click();
+    (await findByText(/2m ago/)).click();
     const btn = await waitFor(() => {
       const b = restoreButton();
       expect(b).toBeTruthy();
@@ -210,8 +244,8 @@ describe("HistoryPanel", () => {
     expect(spies.notifyLocalSave).not.toHaveBeenCalled();
   });
 
-  it("shows the empty state for files with no history", async () => {
-    spies.historyList.mockResolvedValue([]);
+  it("shows the empty state for a project with no history", async () => {
+    spies.historyListProject.mockResolvedValue([]);
     const { findByText } = render(() => <HistoryPanel />);
     await findByText(/No versions yet/);
   });

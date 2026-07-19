@@ -1002,7 +1002,12 @@ const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
   },
 };
 
-const AI_PROVIDER_LIST: AiKnownProvider[] = Object.values(AI_PROVIDERS);
+// Cloud providers (Claude / ChatGPT / Gemini) are HIDDEN for now per user
+// direction 2026-07-19 — local Ollama is the only surfaced AI backend. The
+// full AI_PROVIDERS record, registries, and streaming paths stay intact so
+// re-listing them here is the whole revert; an already-configured cloud
+// provider keeps working, it just can't be (re)configured from Settings.
+const AI_PROVIDER_LIST: AiKnownProvider[] = [AI_PROVIDERS.ollama];
 
 const AiCard: Component = () => {
   const ai = () => integrationsSettings().ai;

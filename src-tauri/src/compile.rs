@@ -280,6 +280,85 @@ pub struct Diagnostic {
     pub source: String,
 }
 
+/// Auxiliary-artifact extensions latexmk/pdflatex regenerate freely. A stale
+/// `.aux` from a bibliography-backend switch is the classic wedge: it carries
+/// macros (`\abx@aux@...`) the new preamble no longer defines, every rerun
+/// fails at `\begin{document}`, and latexmk exits 12 with "gave an error in
+/// previous invocation" while claiming everything is up to date.
+const CLEANABLE_EXTS: &[&str] = &[
+    "aux",
+    "bbl",
+    "bcf",
+    "blg",
+    "fls",
+    "fdb_latexmk",
+    "log",
+    "out",
+    "toc",
+    "lof",
+    "lot",
+    "nav",
+    "snm",
+    "vrb",
+    "idx",
+    "ilg",
+    "ind",
+    "run.xml",
+    "synctex",
+    "synctex.gz",
+];
+
+/// Deletes LaTeX auxiliary build files: the root file's artifact set plus
+/// every `.aux` in the project tree (multi-file documents leave one per
+/// `\include`d chapter). The compiled PDF is left alone. Registered-root
+/// gated via `checked_project_root_and_file`; symlinks are not followed.
+#[tauri::command]
+pub async fn compile_clean(project: Project) -> CmdResult<u32> {
+    let (root, root_file) = checked_project_root_and_file(&project)?;
+    tokio::task::spawn_blocking(move || {
+        let mut removed = 0u32;
+        let base = root.join(&root_file);
+        for ext in CLEANABLE_EXTS {
+            let p = base.with_extension(ext);
+            if p.is_file() && std::fs::remove_file(&p).is_ok() {
+                removed += 1;
+            }
+        }
+        remove_aux_recursive(&root, 0, &mut removed);
+        Ok::<u32, String>(removed)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+fn remove_aux_recursive(dir: &std::path::Path, depth: u32, removed: &mut u32) {
+    if depth > 5 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') || name == "node_modules" {
+                continue;
+            }
+            remove_aux_recursive(&path, depth + 1, removed);
+        } else if meta.is_file()
+            && path.extension().is_some_and(|e| e == "aux")
+            && std::fs::remove_file(&path).is_ok()
+        {
+            *removed += 1;
+        }
+    }
+}
+
 /// Exposes the existing `parse_latex_log` diagnostic extractor over IPC
 /// so the WASM CompileProvider can produce diagnostics in the same
 /// shape as the desktop path without duplicating the parser in TS.
@@ -1166,6 +1245,23 @@ fn merge_io(stdout: &[u8], stderr: &[u8]) -> String {
 /// resolve the source file; this v0 just attributes everything to the entry.
 pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
     let mut out = Vec::new();
+    // Stale-aux wedge: biblatex macros in the .aux with no biblatex in the
+    // current preamble (backend/package switch), or latexmk refusing to act
+    // on a previously-failed run. Both clear the same way — clean aux files.
+    if log.contains("\\abx@aux@")
+        || log.contains("gave an error in previous invocation of latexmk")
+    {
+        out.push(Diagnostic {
+            severity: "warning".into(),
+            message: "Stale auxiliary files are blocking this build (often after changing \
+                      the bibliography setup). Use Engine \u{2192} Clean auxiliary files, \
+                      then compile again."
+                .into(),
+            file: entry.to_string(),
+            line: 1,
+            source: "compile".into(),
+        });
+    }
     for (i, line) in log.lines().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("! ") {
@@ -1411,6 +1507,28 @@ mod tests {
         assert_eq!(diags[0].file, "main.tex");
         assert_eq!(diags[1].severity, "warning");
         assert_eq!(diags[0].source, "compile");
+    }
+
+    #[test]
+    fn parse_latex_log_hints_stale_aux_recovery() {
+        // The biblatex-macro-in-aux signature (backend switch wedge).
+        let log = "! Undefined control sequence.\nl.7 \\abx@aux@refcontext\n";
+        let diags = parse_latex_log(log, "main.tex");
+        assert!(diags
+            .iter()
+            .any(|d| d.severity == "warning" && d.message.contains("Clean auxiliary files")));
+
+        // latexmk exit-12 refusal after a previously failed run.
+        let log2 = "Latexmk: Nothing to do for 'main.tex'.\n  pdflatex: gave an error in previous invocation of latexmk.\n";
+        let diags2 = parse_latex_log(log2, "main.tex");
+        assert!(diags2
+            .iter()
+            .any(|d| d.message.contains("Clean auxiliary files")));
+
+        // A clean log gets no hint.
+        assert!(parse_latex_log("all good\n", "main.tex")
+            .iter()
+            .all(|d| !d.message.contains("Clean auxiliary files")));
     }
 
     #[test]

@@ -389,9 +389,11 @@ const ProjectsScreen: Component = () => {
           }}
         />
 
-        {/* max-w cap: on ultrawide monitors an uncapped auto-fill grid reads
-            as a wall of cards — center the library instead. */}
-        <div class="relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 gap-2 p-2">
+        {/* The sidebar stays pinned to the left edge at every window width;
+            only the CONTENT column carries the ultrawide cap (left-anchored,
+            spare space to the right) — a centered wrapper made the whole
+            layout float with growing side margins. */}
+        <div class="relative flex min-h-0 w-full flex-1 gap-2 p-2">
           <Show when={!isTabletViewport()}>
             <LibrarySidebar
               projects={projects()}
@@ -403,7 +405,7 @@ const ProjectsScreen: Component = () => {
           </Show>
 
           <div
-            class="flex min-w-0 flex-1 flex-col gap-2"
+            class="flex min-w-0 max-w-[1400px] flex-1 flex-col gap-2"
             // Modal contract while the library drawer is up (mirrors the
             // editor shell's LogsSheet/FilesDrawer): the scrimmed content
             // must leave the tab order, or Tab walks into the grid behind

@@ -1,6 +1,7 @@
 import { describeIpcError } from "~/lib/errors";
 import {
   BookMarked,
+  ChevronUp,
   ChevronsDownUp,
   ClipboardCopy,
   Copy,
@@ -13,7 +14,6 @@ import {
   FolderPlus,
   Import,
   GitBranch,
-  History,
   ListTodo,
   Lock,
   MessageSquare,
@@ -36,7 +36,6 @@ import {
 } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import { FileTree, type FileNode } from "~/components/editor/FileTree";
-import { HistoryPanel } from "~/components/editor/HistoryPanel";
 import { OutlinePanel } from "~/components/editor/OutlinePanel";
 import { ReferencesPanel } from "~/components/references/ReferencesPanel";
 import { TodoPanel } from "~/components/editor/TodoPanel";
@@ -97,7 +96,7 @@ import { getActiveEditorView } from "~/stores/editor-view-store";
  * and lets future shells decide what tabs they support.
  */
 
-export type LeftTab = "files" | "references" | "scm" | "review" | "todo" | "history";
+export type LeftTab = "files" | "references" | "scm" | "review" | "todo";
 
 interface SidebarTab {
   id: LeftTab;
@@ -499,8 +498,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       : []),
     { id: "review", label: "Review", icon: MessageSquare, count: openCommentThreadCount() },
     { id: "todo", label: "TODO", icon: ListTodo, count: todoCount() },
-    // FREE, always shown — per-file version history with restore.
-    { id: "history", label: "History", icon: History },
+    // History moved to the top-bar HistoryMenu popover (2026-07-19).
   ]);
 
   // Natural width is measured off the hidden full-label clone, not the visible
@@ -761,9 +759,6 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         </Show>
         <Show when={props.tab === "todo"}>
           <TodoPanel />
-        </Show>
-        <Show when={props.tab === "history"}>
-          <HistoryPanel />
         </Show>
       </div>
 
@@ -1095,12 +1090,18 @@ const EnginePill: Component = () => {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open()}
-        title="Build settings"
-        class="glass-soft flex w-full items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-[var(--color-control-fill)]"
+        title="Build settings — engine, recipe, and compile options"
+        class="lift group glass-soft flex w-full items-center gap-2 rounded-lg border border-transparent px-2.5 py-2 hover:border-[var(--color-control-stroke)] hover:bg-[var(--color-control-fill)]"
       >
         <Zap size={12} style={{ color: "var(--color-accent-1)" }} />
         <span class="text-xs text-fg-2">Engine</span>
         <span class="mono ml-auto text-xs text-fg-1">{label()}</span>
+        {/* Disclosure cue — the pill opens the build-config popover. */}
+        <ChevronUp
+          size={12}
+          class="text-fg-3 transition-transform group-hover:-translate-y-0.5"
+          style={{ opacity: open() ? 1 : 0.7 }}
+        />
       </button>
       <Show when={open()}>
         <BuildConfigMenu

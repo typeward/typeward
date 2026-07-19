@@ -99,9 +99,13 @@ const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
     if (isNew) {
       const insert = text.trim() === "" ? "" : `$${text.trim()}$`;
       if (insert !== "") {
+        // The document can move while the popover is open (sync adoption,
+        // external write) — clamp so a stale offset can't throw or land
+        // past the end.
+        const at = Math.min(props.intent.from, v.state.doc.length);
         v.dispatch({
-          changes: { from: props.intent.from, to: props.intent.from, insert },
-          selection: { anchor: props.intent.from + insert.length },
+          changes: { from: at, to: at, insert },
+          selection: { anchor: at + insert.length },
           scrollIntoView: true,
         });
       }

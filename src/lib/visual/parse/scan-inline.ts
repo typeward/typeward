@@ -351,11 +351,13 @@ export function scanInline(
     const name = text.slice(i + 1, e);
 
     if (name === "verb") {
-      // \verb⟨d⟩…⟨d⟩ — delimiter is the next char, same line.
-      const d = e < to ? text[e] : "";
-      if (d !== "" && d !== "\n" && d !== "*") {
-        const eol = text.indexOf("\n", e + 1);
-        const closeAt = text.indexOf(d, e + 1);
+      // \verb⟨d⟩…⟨d⟩ / \verb*⟨d⟩…⟨d⟩ — delimiter is the next char, same line.
+      let dAt = e;
+      if (dAt < to && text.charCodeAt(dAt) === 42 /* * */) dAt++;
+      const d = dAt < to ? text[dAt] : "";
+      if (d !== "" && d !== "\n") {
+        const eol = text.indexOf("\n", dAt + 1);
+        const closeAt = text.indexOf(d, dAt + 1);
         if (closeAt !== -1 && closeAt < to && (eol === -1 || closeAt < eol)) {
           nodes.push({ kind: "verb", from: i, to: closeAt + 1 });
           i = closeAt + 1;
