@@ -145,7 +145,7 @@ export const GrammarProblemsPanel: Component = () => {
           <div class="max-w-[380px] text-xs leading-relaxed text-fg-3">
             {grammarEnabled()
               ? "Diagnostics appear for files you've opened with grammar on."
-              : "Grammar lint is off — enable it in Settings → Grammar."}
+              : "Grammar lint is off — enable it in Settings → Integrations → Grammar."}
           </div>
         </div>
       }

@@ -522,6 +522,213 @@ pub async fn duplicate_project_file(project_root: String, rel_path: String) -> C
     .map_err(err)?
 }
 
+const MAX_IMPORT_FILE_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_IMPORT_FILES: usize = 100;
+
+/// Join a (possibly empty = project root) rel dir with a leaf name using the
+/// forward-slash convention the frontend uses for rel paths.
+fn join_rel(dir_rel: &str, name: &str) -> String {
+    if dir_rel.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir_rel}/{name}")
+    }
+}
+
+/// Normalize a renderer-supplied target directory: empty means the project
+/// root; anything else passes the shared rel-path validator plus the
+/// sidecar/VCS guard, and comes back slash-normalized for prefix comparisons.
+fn normalize_target_dir(target_rel_dir: &str) -> CmdResult<String> {
+    if target_rel_dir.trim().is_empty() {
+        return Ok(String::new());
+    }
+    reject_protected_first_component(target_rel_dir)?;
+    let rel = project::validate_project_relative_path(target_rel_dir).map_err(err)?;
+    Ok(rel.to_string_lossy().replace('\\', "/"))
+}
+
+/// First name that doesn't collide in `dir_rel`: "figure.png", then
+/// "figure (2).png", "figure (3).png"… Existence probes use `symlink_metadata`
+/// so a planted symlink at a candidate name still counts as taken.
+fn collision_free_rel(root: &Path, dir_rel: &str, file_name: &str) -> String {
+    let taken = |candidate: &str| root.join(candidate).symlink_metadata().is_ok();
+    let first = join_rel(dir_rel, file_name);
+    if !taken(&first) {
+        return first;
+    }
+    let p = Path::new(file_name);
+    let stem = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file_name.to_string());
+    let ext = p.extension().map(|s| s.to_string_lossy().into_owned());
+    let mut n = 2;
+    loop {
+        let name = match &ext {
+            Some(e) => format!("{stem} ({n}).{e}"),
+            None => format!("{stem} ({n})"),
+        };
+        let candidate = join_rel(dir_rel, &name);
+        if !taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// Copy OS-absolute files (drag-drop / file picker) into a project directory.
+/// This is the one place absolute source paths are legitimate: dropped/picked
+/// paths live outside the fs plugin's runtime scope, so the copy must happen
+/// here in Rust. Sources must be regular files (no symlinks, no directories —
+/// never follow a planted link), size-capped; name collisions auto-suffix
+/// " (2)" style. Returns the created rel paths.
+fn import_files_op(
+    root: &Path,
+    target_rel_dir: &str,
+    source_paths: &[String],
+) -> CmdResult<Vec<String>> {
+    if source_paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    if source_paths.len() > MAX_IMPORT_FILES {
+        return Err(format!(
+            "too many files in one import (max {MAX_IMPORT_FILES})"
+        ));
+    }
+    let dir_rel = normalize_target_dir(target_rel_dir)?;
+    if !dir_rel.is_empty() {
+        let dir = project::resolve_project_write_path(root, &dir_rel).map_err(err)?;
+        if let Ok(meta) = dir.symlink_metadata() {
+            if !meta.file_type().is_dir() {
+                return Err(format!("target is not a directory: {dir_rel}"));
+            }
+        } else {
+            std::fs::create_dir_all(&dir).map_err(err)?;
+        }
+    }
+    // Two passes so the batch is all-or-nothing: a bad entry rejected AFTER
+    // earlier copies would leave orphans in the project while the command —
+    // and the toast built from it — reports total failure.
+    let mut planned: Vec<(&Path, String, std::path::PathBuf)> =
+        Vec::with_capacity(source_paths.len());
+    for source in source_paths {
+        let src = Path::new(source);
+        if !src.is_absolute() {
+            return Err(format!("import source must be an absolute path: {source}"));
+        }
+        let meta = std::fs::symlink_metadata(src)
+            .map_err(|_| format!("source does not exist: {source}"))?;
+        if meta.file_type().is_symlink() {
+            return Err(format!("refusing to import a symlink: {source}"));
+        }
+        if !meta.file_type().is_file() {
+            return Err(format!(
+                "only files can be imported (drop files, not folders): {source}"
+            ));
+        }
+        if meta.len() > MAX_IMPORT_FILE_BYTES {
+            return Err(format!(
+                "file is too large to import (over {} MB): {source}",
+                MAX_IMPORT_FILE_BYTES / (1024 * 1024)
+            ));
+        }
+        let name = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("source has no usable file name: {source}"))?;
+        // Re-validate the composed rel path: a dropped file literally named
+        // like a CLI flag ("-shell-escape.tex") or a sidecar dir must not land
+        // in the project, where it could later flow into a compile command line.
+        let rel = collision_free_rel(root, &dir_rel, name);
+        // collision_free_rel consults the disk, so two same-named sources in
+        // ONE batch would both claim the same destination.
+        if planned.iter().any(|(_, r, _)| r == &rel) {
+            return Err(format!(
+                "two files in this import share the name {name} — add them separately"
+            ));
+        }
+        reject_protected_first_component(&rel)?;
+        project::validate_project_relative_path(&rel).map_err(err)?;
+        let dest = project::resolve_project_write_path(root, &rel).map_err(err)?;
+        planned.push((src, rel, dest));
+    }
+    let mut created = Vec::with_capacity(planned.len());
+    for (src, rel, dest) in planned {
+        std::fs::copy(src, &dest).map_err(err)?;
+        created.push(rel);
+    }
+    Ok(created)
+}
+
+#[tauri::command]
+pub async fn import_files_into_project(
+    project_root: String,
+    target_rel_dir: String,
+    source_paths: Vec<String>,
+) -> CmdResult<Vec<String>> {
+    tokio::task::spawn_blocking(move || -> CmdResult<Vec<String>> {
+        ensure_registered(&project_root)?;
+        import_files_op(Path::new(&project_root), &target_rel_dir, &source_paths)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Move a project-relative file OR directory into another project directory
+/// (`""` = the project root), keeping the leaf name. Refuses to overwrite an
+/// existing target, never follows a symlink leaf, and rejects moving a
+/// directory into its own subtree. Returns the new rel path.
+fn move_project_path_op(root: &Path, from_rel: &str, to_rel_dir: &str) -> CmdResult<String> {
+    reject_protected_first_component(from_rel)?;
+    let from_norm = project::validate_project_relative_path(from_rel)
+        .map_err(err)?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let dir_rel = normalize_target_dir(to_rel_dir)?;
+    let from = project::resolve_project_write_path(root, &from_norm).map_err(err)?;
+    let meta = std::fs::symlink_metadata(&from)
+        .map_err(|_| format!("source does not exist: {from_rel}"))?;
+    if meta.file_type().is_symlink() {
+        return Err("refusing to move a symlink".to_string());
+    }
+    if meta.file_type().is_dir()
+        && (dir_rel == from_norm || dir_rel.starts_with(&format!("{from_norm}/")))
+    {
+        return Err("cannot move a folder into itself".to_string());
+    }
+    let name = Path::new(&from_norm)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| format!("cannot move: {from_rel}"))?;
+    let to_rel = join_rel(&dir_rel, name);
+    if to_rel == from_norm {
+        return Err("source is already in that folder".to_string());
+    }
+    let to = project::resolve_project_write_path(root, &to_rel).map_err(err)?;
+    if to.symlink_metadata().is_ok() {
+        return Err(format!("destination already exists: {to_rel}"));
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(err)?;
+    }
+    std::fs::rename(&from, &to).map_err(err)?;
+    Ok(to_rel)
+}
+
+#[tauri::command]
+pub async fn move_project_path(
+    project_root: String,
+    from_rel: String,
+    to_rel_dir: String,
+) -> CmdResult<String> {
+    tokio::task::spawn_blocking(move || -> CmdResult<String> {
+        ensure_registered(&project_root)?;
+        move_project_path_op(Path::new(&project_root), &from_rel, &to_rel_dir)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Reveal a project-relative file in the OS file manager (Finder/Explorer).
 /// Unlike the raw `opener` plugin's reveal command — which took an unscoped
 /// absolute path straight from the renderer — this gates on the opened-project
@@ -941,5 +1148,100 @@ mod tests {
         let root = temp_dir();
         create_project_dir_op(&root, "chapters/appendix").unwrap();
         assert!(root.join("chapters").join("appendix").is_dir());
+    }
+
+    #[test]
+    fn rename_moves_directories_too() {
+        // The frontend rename flow now offers directories; lock the op's
+        // directory support so a future file-only guard can't regress it.
+        let root = temp_dir();
+        std::fs::create_dir_all(root.join("chapters")).unwrap();
+        std::fs::write(root.join("chapters").join("a.tex"), "A").unwrap();
+        rename_project_file_op(&root, "chapters", "parts").unwrap();
+        assert!(root.join("parts").join("a.tex").exists());
+        assert!(!root.join("chapters").exists());
+    }
+
+    #[test]
+    fn import_copies_and_suffixes_collisions() {
+        let root = temp_dir();
+        let outside = temp_dir();
+        std::fs::write(outside.join("fig.png"), b"png").unwrap();
+        let src = outside.join("fig.png").to_string_lossy().into_owned();
+
+        let first = import_files_op(&root, "", &[src.clone()]).unwrap();
+        assert_eq!(first, vec!["fig.png".to_string()]);
+        // Into a not-yet-existing subdir (created on demand).
+        let second = import_files_op(&root, "assets", &[src.clone()]).unwrap();
+        assert_eq!(second, vec!["assets/fig.png".to_string()]);
+        // Collision auto-suffixes " (2)" before the extension.
+        let third = import_files_op(&root, "assets", &[src]).unwrap();
+        assert_eq!(third, vec!["assets/fig (2).png".to_string()]);
+        assert!(root.join("assets").join("fig (2).png").exists());
+    }
+
+    #[test]
+    fn import_rejects_dirs_relative_sources_and_unsafe_names() {
+        let root = temp_dir();
+        let outside = temp_dir();
+        // A directory source is refused.
+        assert!(
+            import_files_op(&root, "", &[outside.to_string_lossy().into_owned()])
+                .unwrap_err()
+                .contains("only files")
+        );
+        // Relative source paths never come from the drop/dialog surfaces.
+        assert!(import_files_op(&root, "", &["fig.png".into()]).is_err());
+        // A file literally named like a CLI flag can't land in the project.
+        std::fs::write(outside.join("-flag.tex"), "x").unwrap();
+        assert!(import_files_op(
+            &root,
+            "",
+            &[outside.join("-flag.tex").to_string_lossy().into_owned()]
+        )
+        .is_err());
+        // Protected target dirs are refused.
+        std::fs::write(outside.join("ok.tex"), "x").unwrap();
+        let ok_src = outside.join("ok.tex").to_string_lossy().into_owned();
+        assert!(import_files_op(&root, ".typeward", &[ok_src.clone()]).is_err());
+        // Traversal in the target dir is refused.
+        assert!(import_files_op(&root, "../outside", &[ok_src]).is_err());
+    }
+
+    #[test]
+    fn move_relocates_files_and_dirs_with_guards() {
+        let root = temp_dir();
+        std::fs::create_dir_all(root.join("chapters").join("sub")).unwrap();
+        std::fs::write(root.join("a.tex"), "A").unwrap();
+        std::fs::write(root.join("chapters").join("b.tex"), "B").unwrap();
+
+        // File into a dir keeps the leaf name.
+        assert_eq!(
+            move_project_path_op(&root, "a.tex", "chapters").unwrap(),
+            "chapters/a.tex"
+        );
+        assert!(root.join("chapters").join("a.tex").exists());
+        assert!(!root.join("a.tex").exists());
+        // Moving into the folder it's already in is refused.
+        assert!(move_project_path_op(&root, "chapters/a.tex", "chapters").is_err());
+        // An existing target is never overwritten.
+        std::fs::write(root.join("b.tex"), "B2").unwrap();
+        assert!(move_project_path_op(&root, "b.tex", "chapters")
+            .unwrap_err()
+            .contains("already exists"));
+        // A directory can't move into its own subtree.
+        assert!(move_project_path_op(&root, "chapters", "chapters/sub")
+            .unwrap_err()
+            .contains("into itself"));
+        // A directory move works and carries its contents.
+        std::fs::create_dir_all(root.join("dest")).unwrap();
+        assert_eq!(
+            move_project_path_op(&root, "chapters", "dest").unwrap(),
+            "dest/chapters"
+        );
+        assert!(root.join("dest").join("chapters").join("b.tex").exists());
+        // Protected paths are refused on either side.
+        assert!(move_project_path_op(&root, ".typeward/project.json", "dest").is_err());
+        assert!(move_project_path_op(&root, "b.tex", ".git").is_err());
     }
 }

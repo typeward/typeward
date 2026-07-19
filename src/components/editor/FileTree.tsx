@@ -1,7 +1,22 @@
 import { readDir, type DirEntry } from "@tauri-apps/plugin-fs";
 import { ChevronRight, File as FileIcon, FileText, Folder } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createEffect, createResource, createSignal, on } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createResource,
+  createSignal,
+  on,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import {
+  anchoredMenuEvent,
+  isMenuKey,
+  menuEventAtRect,
+} from "~/lib/menu-position";
+import { touchAffordances } from "~/stores/viewport-store";
 import { fsVersion } from "~/stores/watcher-store";
 
 export interface FileNode {
@@ -58,18 +73,20 @@ function joinPath(parent: string, name: string): string {
   return parent.includes("\\") ? `${parent}\\${name}` : `${parent}/${name}`;
 }
 
-// Roving arrow-key navigation over the rendered row buttons (DOM order
-// matches visual order). Rows stay plain tabbable <button>s — the rove is an
-// ergonomics layer, not a full ARIA tree.
-function handleTreeKeydown(e: KeyboardEvent & { currentTarget: HTMLElement }) {
-  const rows = Array.from(
-    e.currentTarget.querySelectorAll<HTMLButtonElement>("button"),
+function treeRows(container: HTMLElement): HTMLButtonElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLButtonElement>('[role="treeitem"]'),
   );
+}
+
+// ARIA tree keyboard pattern over the rendered row buttons (DOM order matches
+// visual order): arrows move focus, and the roving tabindex — exactly one row
+// with tabIndex 0 — moves with it via the container's focusin handler, so the
+// whole tree costs a single Tab stop entering and leaving.
+function handleTreeKeydown(e: KeyboardEvent & { currentTarget: HTMLElement }) {
+  const rows = treeRows(e.currentTarget);
   if (rows.length === 0) return;
-  const current =
-    document.activeElement instanceof HTMLButtonElement
-      ? rows.indexOf(document.activeElement)
-      : -1;
+  const current = rows.findIndex((r) => r === document.activeElement);
   if (e.key === "ArrowDown") {
     rows[Math.min(current + 1, rows.length - 1)]?.focus();
   } else if (e.key === "ArrowUp") {
@@ -80,25 +97,105 @@ function handleTreeKeydown(e: KeyboardEvent & { currentTarget: HTMLElement }) {
     rows[rows.length - 1]?.focus();
   } else if (e.key === "ArrowRight") {
     const el = rows[current];
-    if (el?.getAttribute("aria-expanded") === "false") el.click();
+    if (el?.getAttribute("aria-expanded") === "false") {
+      el.click();
+    } else if (el?.getAttribute("aria-expanded") === "true") {
+      // APG: on an open node, ArrowRight descends to the first child (the
+      // next row in DOM order, when it's one level deeper).
+      const next = rows[current + 1];
+      const level = Number(el.getAttribute("aria-level"));
+      if (next && Number(next.getAttribute("aria-level")) === level + 1) {
+        next.focus();
+      }
+    }
   } else if (e.key === "ArrowLeft") {
     const el = rows[current];
-    if (el?.getAttribute("aria-expanded") === "true") el.click();
+    if (el?.getAttribute("aria-expanded") === "true") {
+      el.click();
+    } else if (el) {
+      // APG: on a leaf or collapsed node, ArrowLeft ascends to the parent —
+      // the nearest preceding row one level shallower.
+      const level = Number(el.getAttribute("aria-level"));
+      for (let i = current - 1; i >= 0; i--) {
+        if (Number(rows[i].getAttribute("aria-level")) === level - 1) {
+          rows[i].focus();
+          break;
+        }
+      }
+    }
   } else {
     return;
   }
   e.preventDefault();
 }
 
+// Clicking or arrowing onto a row moves the roving 0 with focus, so Tab
+// re-enters the tree at the row the user left it on.
+function handleTreeFocusIn(e: FocusEvent & { currentTarget: HTMLElement }) {
+  const t = e.target;
+  if (!(t instanceof HTMLElement) || t.getAttribute("role") !== "treeitem") return;
+  for (const row of treeRows(e.currentTarget)) row.tabIndex = row === t ? 0 : -1;
+}
+
+// Re-derive which row holds the roving 0: the focused row, else the active
+// file's row, else the first row. Needed whenever rows change under the tree —
+// the watcher refresh preserves node identity where it can, but a removed row
+// would otherwise take the tree's only Tab stop with it.
+function syncRovingTabIndex(container: HTMLElement): void {
+  const rows = treeRows(container);
+  if (rows.length === 0) return;
+  const target =
+    rows.find((r) => r === document.activeElement) ??
+    rows.find((r) => r.getAttribute("aria-selected") === "true") ??
+    rows[0];
+  for (const row of rows) row.tabIndex = row === target ? 0 : -1;
+}
+
+// Shared keyboard-invocation helpers (Shift+F10 / ContextMenu key anchoring)
+// live in lib/menu-position alongside the clamping math.
+
 export const FileTree: Component<FileTreeProps> = (props) => {
   // The "Files" section header used to live here; it's now owned by
   // EditorSidebar so action icons (new folder / new file / more) can sit
   // across from it in the same row.
+  let treeRef: HTMLDivElement | undefined;
+
+  // Rows render with tabIndex -1 and appear asynchronously (per-directory
+  // resources), so the container owns the roving-0 bookkeeping: re-derive it
+  // when rows mount/unmount or the active row moves (aria-selected flips).
+  // Attribute writes from the sync itself aren't observed, so no feedback loop.
+  onMount(() => {
+    const el = treeRef;
+    if (!el) return;
+    let queued = false;
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => {
+        queued = false;
+        syncRovingTabIndex(el);
+      });
+    };
+    schedule();
+    const observer = new MutationObserver(schedule);
+    observer.observe(el, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["aria-selected"],
+    });
+    onCleanup(() => observer.disconnect());
+  });
+
   return (
     <div
+      ref={treeRef}
+      role="tree"
+      aria-label="Project files"
       class="scroll h-full overflow-auto px-1.5 pb-2"
       onKeyDown={handleTreeKeydown}
-      onContextMenu={(e) => props.onEmptyMenu?.(e)}
+      onFocusIn={handleTreeFocusIn}
+      onContextMenu={(e) => props.onEmptyMenu?.(anchoredMenuEvent(e))}
     >
       <DirectoryNode
         path={props.rootPath}
@@ -176,22 +273,39 @@ const DirectoryNode: Component<DirectoryNodeProps> = (props) => {
     },
   );
 
+  const selfNode = (): FileNode => ({
+    name: props.name,
+    path: props.path,
+    relPath: props.relPath,
+    isDir: true,
+  });
+
   return (
     <div>
       <Show when={props.depth > 0}>
         <button
           type="button"
+          role="treeitem"
+          // depth already counts from 1 for the first visible ring (the depth-0
+          // root renders no row), which is exactly aria-level's 1-based scale.
+          aria-level={props.depth}
+          tabIndex={-1}
           onClick={() => setExpanded((v) => !v)}
-          onContextMenu={(e) =>
-            props.onDirMenu?.(
-              { name: props.name, path: props.path, relPath: props.relPath, isDir: true },
-              e,
-            )
-          }
+          onContextMenu={(e) => props.onDirMenu?.(selfNode(), anchoredMenuEvent(e))}
+          onKeyDown={(e) => {
+            if (!isMenuKey(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            props.onDirMenu?.(selfNode(), menuEventAtRect(e.currentTarget));
+          }}
           aria-expanded={expanded()}
-          aria-label={`${expanded() ? "Collapse" : "Expand"} ${props.name}`}
           class="lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-base text-fg-2 hover:bg-[var(--color-control-fill)]"
-          style={{ "padding-left": `${4 + props.depth * 12}px` }}
+          // 44px rows + a wider indent step on coarse pointers — keying this
+          // on width gave landscape tablets the small desktop rows.
+          classList={{ "min-h-11": touchAffordances() }}
+          style={{
+            "padding-left": `${4 + props.depth * (touchAffordances() ? 16 : 12)}px`,
+          }}
         >
           <ChevronRight
             class={`ui-icon-menu transition ${expanded() ? "rotate-90" : ""}`}
@@ -257,15 +371,30 @@ const FileEntry: Component<{
   return (
     <button
       type="button"
+      role="treeitem"
+      aria-level={props.depth}
+      tabIndex={-1}
       onClick={() => props.onOpen(props.node.relPath)}
-      onContextMenu={(e) => props.onMenu?.(props.node, e)}
+      onContextMenu={(e) => props.onMenu?.(props.node, anchoredMenuEvent(e))}
+      onKeyDown={(e) => {
+        if (!isMenuKey(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        props.onMenu?.(props.node, menuEventAtRect(e.currentTarget));
+      }}
+      // aria-selected is the tree-idiomatic selection attribute; aria-current
+      // stays alongside it for consumers that surface the "current" landmark.
+      aria-selected={props.active ? "true" : undefined}
       aria-current={props.active ? "true" : undefined}
       class={`lift flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-base ${
         props.active
-          ? "bg-[var(--color-control-fill-hover)] text-fg-1"
+          ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
           : "text-fg-2 hover:bg-[var(--color-control-fill)]"
       }`}
-      style={{ "padding-left": `${22 + props.depth * 12}px` }}
+      classList={{ "min-h-11": touchAffordances() }}
+      style={{
+        "padding-left": `${22 + props.depth * (touchAffordances() ? 16 : 12)}px`,
+      }}
     >
       <Icon class="ui-icon-menu text-fg-3" />
       <span class="truncate">{props.node.name}</span>

@@ -1,4 +1,5 @@
 import { describeIpcError } from "~/lib/errors";
+import { trashLabel } from "~/lib/platform-nouns";
 import { useNavigate } from "@solidjs/router";
 import {
   CalendarClock,
@@ -7,6 +8,7 @@ import {
   FolderOpen,
   GitBranch,
   MoreHorizontal,
+  PanelLeft,
   Plus,
   SearchX,
   Trash2,
@@ -46,8 +48,10 @@ import type { SpaceDef } from "~/ipc";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
+import { TextField } from "~/components/forms/TextField";
 import { Dialog } from "~/components/primitives/Dialog";
 import { Button } from "~/components/primitives/Button";
+import { IconButton } from "~/components/primitives/IconButton";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { NotificationsPanel, unreadCount } from "~/components/projects/NotificationsPanel";
 import { LibrarySidebar } from "~/components/projects/LibrarySidebar";
@@ -86,6 +90,7 @@ import {
 } from "~/lib/deadlines";
 import { project as editorProject, setProject } from "~/stores/editor-store";
 import { setPreviousRoute } from "~/stores/nav-store";
+import { isTabletViewport, touchAffordances } from "~/stores/viewport-store";
 import {
   defaultSort,
   defaultView,
@@ -123,6 +128,54 @@ const ProjectsScreen: Component = () => {
   // palette / focus-mode precedent).
   const [selection, setSelection] = createSignal<LibrarySelection>({ kind: "all" });
   const [search, setSearch] = createSignal("");
+
+  // Below the tablet breakpoint the docked sidebar collapses into a slide-in
+  // drawer (NotificationsPanel house pattern: stays mounted, transform +
+  // inert while closed) toggled from the toolbar row.
+  const [libraryOpen, setLibraryOpen] = createSignal(false);
+  let libraryDrawerRef: HTMLDivElement | undefined;
+  installDismiss(
+    () => libraryDrawerRef,
+    () => isTabletViewport() && libraryOpen(),
+    () => setLibraryOpen(false),
+    // The toggle's own click would otherwise close + immediately reopen.
+    { ignoreSelector: "[data-library-toggle]" },
+  );
+
+  // Crossing back to desktop re-docks the sidebar; a drawer left open would
+  // strand its scrim over the library.
+  createEffect(() => {
+    if (!isTabletViewport() && libraryOpen()) setLibraryOpen(false);
+  });
+
+  // Focus contract (LogsSheet pattern): move into the drawer on open; hand
+  // focus back to the toolbar toggle on close — but only when focus is loose
+  // (fell to <body> or is still inside the now-inert drawer), so an outside
+  // tap that focused something else keeps its target.
+  let libraryWasOpen = false;
+  createEffect(() => {
+    if (!libraryOpen()) {
+      if (libraryWasOpen) {
+        const active = document.activeElement;
+        const focusIsLoose =
+          active === document.body ||
+          active === null ||
+          (libraryDrawerRef instanceof HTMLElement &&
+            libraryDrawerRef.contains(active));
+        if (focusIsLoose) {
+          document
+            .querySelector<HTMLElement>('button[aria-label="Library filters"]')
+            ?.focus();
+        }
+      }
+      libraryWasOpen = false;
+      return;
+    }
+    libraryWasOpen = true;
+    requestAnimationFrame(() => {
+      libraryDrawerRef?.querySelector<HTMLElement>("button")?.focus();
+    });
+  });
 
   // Deleting a space (or a persisted selection pointing at a since-removed one)
   // would otherwise strand the filter on an id with no sidebar row and, if the
@@ -199,20 +252,23 @@ const ProjectsScreen: Component = () => {
 
   // Soft-trash / restore route through the store; when the trashed project is
   // the one currently open, tear the editor runtime (and its cloud engine) down.
-  const trashProject = async (p: Project) => {
-    try {
-      await setTrashed(p.rootPath, true);
-      if (editorProject()?.rootPath === p.rootPath) setProject(null);
-      notifySuccess("Moved to trash", p.name);
-    } catch (e) {
-      notifyError(describeIpcError(e));
-    }
-  };
   const restoreProject = async (p: Project) => {
     try {
       await setTrashed(p.rootPath, false);
     } catch (e) {
-      notifyError(describeIpcError(e));
+      notifyError("Couldn't restore project", describeIpcError(e));
+    }
+  };
+  const trashProject = async (p: Project) => {
+    try {
+      await setTrashed(p.rootPath, true);
+      if (editorProject()?.rootPath === p.rootPath) setProject(null);
+      notifySuccess("Moved to trash", p.name, {
+        label: "Undo",
+        run: () => void restoreProject(p),
+      });
+    } catch (e) {
+      notifyError("Couldn't move to trash", describeIpcError(e));
     }
   };
 
@@ -333,16 +389,28 @@ const ProjectsScreen: Component = () => {
           }}
         />
 
-        <div class="relative flex min-h-0 flex-1 gap-2 p-2">
-          <LibrarySidebar
-            projects={projects()}
-            selection={selection()}
-            onSelect={setSelection}
-            onNewProject={() => setDialogOpen(true)}
-            onImport={() => void importFolder()}
-          />
+        {/* max-w cap: on ultrawide monitors an uncapped auto-fill grid reads
+            as a wall of cards — center the library instead. */}
+        <div class="relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 gap-2 p-2">
+          <Show when={!isTabletViewport()}>
+            <LibrarySidebar
+              projects={projects()}
+              selection={selection()}
+              onSelect={setSelection}
+              onNewProject={() => setDialogOpen(true)}
+              onImport={() => void importFolder()}
+            />
+          </Show>
 
-          <div class="flex min-w-0 flex-1 flex-col gap-2">
+          <div
+            class="flex min-w-0 flex-1 flex-col gap-2"
+            // Modal contract while the library drawer is up (mirrors the
+            // editor shell's LogsSheet/FilesDrawer): the scrimmed content
+            // must leave the tab order, or Tab walks into the grid behind
+            // the "modal" drawer.
+            aria-hidden={isTabletViewport() && libraryOpen()}
+            inert={isTabletViewport() && libraryOpen()}
+          >
             <div class="flex items-end justify-between px-2 pt-3">
               <div>
                 <h1 class="text-xl font-semibold tracking-tight text-fg-1">
@@ -353,7 +421,21 @@ const ProjectsScreen: Component = () => {
                   local-first
                 </div>
               </div>
-              <LibraryViewControls />
+              <div class="flex items-center gap-1.5">
+                <Show when={isTabletViewport()}>
+                  <IconButton
+                    label="Library filters"
+                    variant="control"
+                    size="lg"
+                    data-library-toggle
+                    touchTarget
+                    onClick={() => setLibraryOpen((v) => !v)}
+                  >
+                    <PanelLeft size={15} />
+                  </IconButton>
+                </Show>
+                <LibraryViewControls />
+              </div>
             </div>
 
             <div class="mt-2 flex-1 overflow-auto scroll px-1 pb-2">
@@ -430,6 +512,59 @@ const ProjectsScreen: Component = () => {
               </Show>
             </div>
           </div>
+
+          <Show when={isTabletViewport()}>
+            <Show when={libraryOpen()}>
+              <button
+                type="button"
+                aria-label="Close library filters"
+                onClick={() => setLibraryOpen(false)}
+                class="absolute inset-0 z-30 bg-[var(--color-overlay-scrim)] backdrop-blur-[1px]"
+              />
+            </Show>
+            <div
+              ref={libraryDrawerRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Library filters"
+              class="absolute bottom-2 left-2 top-2 z-40 overflow-hidden rounded-xl"
+              style={{
+                width: "280px",
+                transition:
+                  "transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 200ms ease",
+                transform: libraryOpen()
+                  ? "translateX(0)"
+                  : "translateX(calc(-100% - 12px))",
+                opacity: libraryOpen() ? "1" : "0",
+                "pointer-events": libraryOpen() ? "auto" : "none",
+                "box-shadow":
+                  "var(--shadow-glass-drop), 0 0 0 1px var(--color-glass-stroke)",
+              }}
+              aria-hidden={!libraryOpen()}
+              // Hidden via transform/opacity, so its buttons would still be in
+              // the tab order without inert (aria-hidden + focusable is a WCAG
+              // failure).
+              inert={!libraryOpen()}
+            >
+              <LibrarySidebar
+                width="100%"
+                projects={projects()}
+                selection={selection()}
+                onSelect={(s) => {
+                  setSelection(s);
+                  setLibraryOpen(false);
+                }}
+                onNewProject={() => {
+                  setLibraryOpen(false);
+                  setDialogOpen(true);
+                }}
+                onImport={() => {
+                  setLibraryOpen(false);
+                  void importFolder();
+                }}
+              />
+            </div>
+          </Show>
 
           <NotificationsPanel open={notifOpen()} onClose={() => setNotifOpen(false)} />
         </div>
@@ -763,7 +898,11 @@ const OverflowButton: Component<{ onOpen: (x: number, y: number) => void }> = (
       const r = e.currentTarget.getBoundingClientRect();
       props.onOpen(r.left, r.bottom + 4);
     }}
-    class="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+    // 44px target on coarse pointers only — keyed on touchAffordances(), not
+    // the viewport width, so narrow mouse-driven windows keep the compact size.
+    class={`flex flex-shrink-0 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1 ${
+      touchAffordances() ? "h-11 w-11" : "h-6 w-6"
+    }`}
   >
     <MoreHorizontal size={14} />
   </button>
@@ -1075,11 +1214,13 @@ const DeadlineEditor: Component<{
           style={{ padding: "var(--ui-pad-section)", background: "var(--color-popover-bg)" }}
         >
           <span class="label-xs text-fg-3">Deadline</span>
-          <input
+          <TextField
+            label="Deadline"
+            hideLabel
+            size="sm"
             type="date"
             value={props.deadline ?? ""}
             onInput={(e) => props.onChange(e.currentTarget.value || null)}
-            class="glass-inset rounded-md px-2 py-1.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <Show when={status()}>
             <div class="flex items-center justify-between">
@@ -1172,7 +1313,9 @@ const NameDialog: Component<{
       }
     >
       <div class="flex flex-col gap-3">
-        <input
+        <TextField
+          label="Name"
+          hideLabel
           type="text"
           value={name()}
           onInput={(e) => setName(e.currentTarget.value)}
@@ -1181,11 +1324,8 @@ const NameDialog: Component<{
           }}
           /* eslint-disable-next-line jsx-a11y/no-autofocus */
           autofocus
-          class="glass-inset rounded-md px-3 py-2 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
+          error={err() ?? undefined}
         />
-        <Show when={err()}>
-          <div class="select-text text-sm text-[var(--color-err)]">{err()}</div>
-        </Show>
       </div>
     </Dialog>
   );
@@ -1319,14 +1459,6 @@ const RestorePromptDialog: Component<{
   );
 };
 
-function trashLabel(): string {
-  const platform =
-    typeof navigator !== "undefined" ? navigator.platform.toLowerCase() : "";
-  if (platform.includes("win")) return "Recycle Bin";
-  if (platform.includes("mac")) return "Trash";
-  return "system trash";
-}
-
 // =================================================================
 // New project dialog (unchanged from previous version)
 // =================================================================
@@ -1357,6 +1489,11 @@ const NewProjectDialog: Component<{
   // opens the ProDialog instead of selecting, so free users always stay on
   // LaTeX. With discovery off (free-only beta) the locked option hides.
   const typstEntitled = useEntitlement("formats.typst");
+  // Clone stays visible when EITHER VCS is entitled: the Overleaf git-bridge
+  // branch rides the free migration-import key (repriced 2026-07-16), so free
+  // users keep a clone path even though general git is Pro.
+  const gitEntitled = useEntitlement("integrations.vcs.git");
+  const overleafImportEntitled = useEntitlement("integrations.vcs.overleaf_import");
   const visibleFormats = () =>
     FORMATS.filter(
       (f) => f.id !== "typst" || typstEntitled() || PRO_DISCOVERY_ENABLED,
@@ -1509,13 +1646,11 @@ const NewProjectDialog: Component<{
           <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
             Template
           </Button>
-          <Show when={ipc.gitAvailable()}>
-            <FeatureGate feature="integrations.vcs.git">
-              <span class="text-xs text-fg-3">·</span>
-              <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
-                Clone repository
-              </Button>
-            </FeatureGate>
+          <Show when={ipc.gitAvailable() && (gitEntitled() || overleafImportEntitled())}>
+            <span class="text-xs text-fg-3">·</span>
+            <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
+              Clone repository
+            </Button>
           </Show>
           <FeatureGate feature="integrations.vcs.overleaf_import">
             <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
@@ -1642,31 +1777,24 @@ const NewProjectDialog: Component<{
           </fieldset>
         </Show>
 
-        <label class="flex flex-col gap-1.5">
-          <span class="text-sm font-medium text-fg-2">Name</span>
-          <input
-            type="text"
-            value={name()}
-            onInput={(e) => setName(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.isComposing && !submitting()) void submit();
-            }}
-            placeholder="My thesis"
-            class="glass-inset rounded-md px-3 py-2 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
-        </label>
+        <TextField
+          label="Name"
+          type="text"
+          value={name()}
+          onInput={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.isComposing && !submitting()) void submit();
+          }}
+          placeholder="My thesis"
+        />
 
-        <label class="flex flex-col gap-1.5">
-          <span class="text-sm font-medium text-fg-2">
-            Deadline <span class="text-xs font-normal text-fg-3">(optional)</span>
-          </span>
-          <input
-            type="date"
-            value={deadlineInput()}
-            onInput={(e) => setDeadlineInput(e.currentTarget.value)}
-            class="glass-inset w-fit rounded-md px-3 py-2 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
-        </label>
+        <TextField
+          label="Deadline (optional)"
+          type="date"
+          value={deadlineInput()}
+          onInput={(e) => setDeadlineInput(e.currentTarget.value)}
+          class="w-fit"
+        />
 
         <fieldset class="flex flex-col gap-2">
           <legend class="text-sm font-medium text-fg-2">Format</legend>

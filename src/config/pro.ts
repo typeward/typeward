@@ -35,7 +35,7 @@ export const PRO_FEATURES: ReadonlyArray<{ label: string; detail: string }> = [
   },
   {
     label: "Git and GitHub",
-    detail: "Commit, push, pull, clone, and Overleaf import",
+    detail: "Commit, push, pull, and clone",
   },
   { label: "AI assistant", detail: "Claude, GPT, Gemini, or local Ollama" },
   { label: "Grammar checking", detail: "On-device grammar and spelling via Harper" },

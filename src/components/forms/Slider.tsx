@@ -36,7 +36,7 @@ export const Slider: Component<SliderProps> = (props) => {
       </div>
       <KSlider.Track class="relative h-[6px] rounded-full bg-glass-fill">
         <KSlider.Fill class="absolute inset-y-0 left-0 rounded-full accent-grad" />
-        <KSlider.Thumb class="block h-[14px] w-[14px] -mt-1 rounded-full border border-[var(--color-control-thumb-stroke)] bg-[var(--color-control-thumb)] shadow-[var(--shadow-raised)] outline-none data-[focus-visible]:ring-2 data-[focus-visible]:ring-accent-1">
+        <KSlider.Thumb class="block h-[14px] w-[14px] -mt-1 rounded-full border border-[var(--color-control-thumb-stroke)] bg-[var(--color-control-thumb)] shadow-[var(--shadow-raised)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus-ring)]">
           <KSlider.Input />
         </KSlider.Thumb>
       </KSlider.Track>

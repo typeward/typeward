@@ -168,7 +168,7 @@ export const ProjectSettingsDialog: Component = () => {
               <button
                 type="button"
                 onClick={() => void reset()}
-                class="lift flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+                class="lift -my-0.5 flex items-center gap-1 rounded px-1.5 py-1 text-xs text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
               >
                 <RotateCcw size={11} />
                 Reset to global defaults

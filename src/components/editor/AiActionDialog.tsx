@@ -14,6 +14,7 @@ import {
   setRequestAiAction,
   type AiActionRequestInfo,
 } from "~/commands/palette-store";
+import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { mountHistoryDiff } from "~/components/editor/history-diff";
 import { activeProvider } from "~/integrations/ai/registry";
@@ -209,34 +210,33 @@ export const AiActionDialog: Component = () => {
       footer={
         <>
           <Show when={streaming()}>
-            <button
-              type="button"
+            <Button
+              variant="danger"
+              size="compact"
+              class="rounded-lg font-semibold"
               onClick={() => abortController?.abort()}
-              class="lift flex h-8 items-center gap-1.5 rounded-lg bg-[var(--color-danger-fill)] px-2.5 text-sm font-semibold text-white"
+              leadingIcon={<Square size={12} stroke-width={2.2} />}
             >
-              <Square size={12} stroke-width={2.2} />
               Stop
-            </button>
+            </Button>
           </Show>
           <Show when={!streaming() && result().length > 0}>
-            <button
-              type="button"
+            <Button
+              size="compact"
+              class="rounded-lg"
               onClick={() => void copyResult()}
-              class="lift glass-soft flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm"
+              leadingIcon={<Copy size={12} />}
             >
-              <Copy size={12} />
               Copy
-            </button>
-            <button
-              type="button"
-              onClick={applyInsert}
-              class="lift glass-soft flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm"
-            >
+            </Button>
+            <Button size="compact" class="rounded-lg" onClick={applyInsert}>
               {request()?.kind === "transform" ? "Insert below" : "Insert at cursor"}
-            </button>
+            </Button>
             <Show when={request()?.kind === "transform"}>
-              <button
-                type="button"
+              <Button
+                variant="primary"
+                size="compact"
+                class="rounded-lg font-semibold"
                 disabled={!selectionValid()}
                 title={
                   selectionValid()
@@ -244,11 +244,10 @@ export const AiActionDialog: Component = () => {
                     : "The selection changed since this action started — use Insert or Copy."
                 }
                 onClick={applyReplace}
-                class="lift flex h-8 items-center gap-1.5 rounded-lg accent-grad px-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-50"
+                leadingIcon={<Check size={12} stroke-width={2.2} />}
               >
-                <Check size={12} stroke-width={2.2} />
                 Replace
-              </button>
+              </Button>
             </Show>
           </Show>
         </>

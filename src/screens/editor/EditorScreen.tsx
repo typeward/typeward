@@ -36,6 +36,7 @@ import {
 import { sha256Hex } from "~/lib/hash";
 import { setCursorLine, setSelectionRange } from "~/stores/editor-view-store";
 import { setPreviousRoute } from "~/stores/nav-store";
+import { isTabletViewport, logsSheetOpen } from "~/stores/viewport-store";
 import {
   abortActiveAiStream,
   flushPendingAiChatSaves,
@@ -50,17 +51,59 @@ import { hasEntitlement } from "~/integrations/entitlements";
 import { startSession, stopAllSessions } from "~/stores/lsp-store";
 import { startWatching, stopWatching } from "~/stores/watcher-store";
 import { TextShell } from "./shells/text-shell";
+import { DropImport } from "~/components/editor/DropImport";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
-import { adapterFor } from "~/commands/actions";
+import { adapterFor, compileActiveProject } from "~/commands/actions";
 import { asLspLanguage } from "~/adapters/languages";
 import {
   registerAdapterCommands,
   unregisterAdapterCommands,
 } from "~/commands/boot";
-import { focusMode } from "~/stores/ui-store";
-import type { EditorAdapter } from "~/adapters/types";
+import { registerCommand, unregisterCommand } from "~/commands/registry";
+import {
+  focusMode,
+  requestTabAction,
+  revealCompileErrors,
+} from "~/stores/ui-store";
+import type { EditorAdapter, EditorCommand } from "~/adapters/types";
 
 const BINARY_EXT = /\.(png|jpe?g|gif|pdf|eps|webp|bmp|ico|woff2?|ttf|otf|zip)$/i;
+
+// Tab management rides the adapter-command lifecycle: registered on project
+// load, unregistered on teardown, so Mod+W can't fire on the Projects or
+// Settings screens. The runs raise one-shot intents consumed by the shell's
+// CenterPane, which owns the dirty-close confirm and the tab order. Ctrl is
+// literal on purpose (tab cycling is Ctrl+Tab on macOS too, never ⌘Tab —
+// that's the OS app switcher).
+const TAB_COMMANDS: EditorCommand[] = [
+  {
+    id: "editor.closeTab",
+    title: "Close tab",
+    shortcut: "Mod+W",
+    group: "File",
+    scope: "editor",
+    when: () => activeFile() !== null,
+    run: () => requestTabAction("close"),
+  },
+  {
+    id: "editor.nextTab",
+    title: "Next tab",
+    shortcut: "Ctrl+Tab",
+    group: "File",
+    scope: "editor",
+    when: () => openFiles().length > 1,
+    run: () => requestTabAction("next"),
+  },
+  {
+    id: "editor.prevTab",
+    title: "Previous tab",
+    shortcut: "Ctrl+Shift+Tab",
+    group: "File",
+    scope: "editor",
+    when: () => openFiles().length > 1,
+    run: () => requestTabAction("prev"),
+  },
+];
 
 const EditorScreen: Component = () => {
   const [params] = useSearchParams();
@@ -78,6 +121,7 @@ const EditorScreen: Component = () => {
   const teardownAdapter = () => {
     if (registeredAdapter) {
       unregisterAdapterCommands(registeredAdapter);
+      for (const cmd of TAB_COMMANDS) unregisterCommand(cmd.id);
       registeredAdapter = null;
     }
   };
@@ -143,6 +187,7 @@ const EditorScreen: Component = () => {
         // palette and Mod+Enter work format-specifically.
         const adapter = adapterFor(p);
         registerAdapterCommands(adapter);
+        for (const cmd of TAB_COMMANDS) registerCommand(cmd);
         registeredAdapter = adapter;
         // Start the file watcher so external edits / new files / deletions
         // refresh the FileTree (it reads `fsVersion` as a resource source).
@@ -266,6 +311,72 @@ const EditorScreen: Component = () => {
     unlistenClose?.();
   });
 
+  // macOS File > Close Tab (Cmd+W): the NSMenu accelerator swallows the
+  // keystroke before the webview ever sees it, so lib.rs emits an event
+  // instead. Route it like the Mod+W command — close the active tab when one
+  // exists, otherwise fall through to the window-close guard above.
+  let unlistenCloseTab: (() => void) | undefined;
+  let closeTabDisposed = false;
+  void (async () => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenCloseTab = await listen("menu:close-tab", () => {
+        if (activeFile()) {
+          requestTabAction("close");
+          return;
+        }
+        void (async () => {
+          try {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
+            // close(), not destroy() — onCloseRequested must get its prompt.
+            await getCurrentWindow().close();
+          } catch {
+            /* non-Tauri context */
+          }
+        })();
+      });
+      if (closeTabDisposed) {
+        unlistenCloseTab();
+        unlistenCloseTab = undefined;
+      }
+    } catch {
+      /* non-Tauri context — no native menu to listen to */
+    }
+  })();
+  onCleanup(() => {
+    closeTabDisposed = true;
+    unlistenCloseTab?.();
+  });
+
+  // Taskbar / Alt-Tab / Dock legibility: a permanent "Typeward" title makes
+  // every window indistinguishable. Purely cosmetic, so failures (non-Tauri
+  // context) are swallowed.
+  const setWindowTitle = (title: string) => {
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import("@tauri-apps/api/window");
+        await getCurrentWindow().setTitle(title);
+      } catch {
+        /* title is cosmetic */
+      }
+    })();
+  };
+  createEffect(() => {
+    const p = project();
+    const f = activeFile();
+    if (!p) {
+      setWindowTitle("Typeward");
+      return;
+    }
+    const fileName = f?.relPath.split(/[\\/]/).pop();
+    setWindowTitle(
+      fileName
+        ? `${fileName} — ${p.name} — Typeward`
+        : `${p.name} — Typeward`,
+    );
+  });
+  onCleanup(() => setWindowTitle("Typeward"));
+
   const openFile = async (
     relPath: string,
     ownerProject: NonNullable<ReturnType<typeof project>> | null = project(),
@@ -367,6 +478,18 @@ const EditorScreen: Component = () => {
 
   return (
     <div class="no-emoji relative h-full w-full overflow-hidden bg-bg-base">
+      {/* Always-mounted compile live region: the top-bar pill (the visible
+          status) unmounts in focus mode, which would silence compile
+          announcements for assistive tech — this one never unmounts. */}
+      <div role="status" class="sr-only">
+        {compileState() === "compiling"
+          ? "Compiling"
+          : compileState() === "ok"
+            ? "Compile succeeded"
+            : compileState() === "error"
+              ? "Compile failed"
+              : ""}
+      </div>
       <AmbientBackdrop />
       <Switch>
         <Match when={!project() && opening()}>
@@ -382,8 +505,15 @@ const EditorScreen: Component = () => {
           <NoProject onBack={() => navigate("/projects")} />
         </Match>
         <Match when={project()}>
+          {/* Drag-and-drop file import for the open project (self-contained;
+              owns its own listeners + overlay). */}
+          <DropImport />
           <div class="relative z-10 flex h-full flex-col">
             <Show when={!focusMode()}>
+              {/* The tablet LogsSheet is aria-modal; the bar above it must
+                  leave the tab order while the sheet is open (layout-neutral
+                  wrapper — the flex column has no gap). */}
+              <div inert={isTabletViewport() && logsSheetOpen()} aria-hidden={isTabletViewport() && logsSheetOpen()}>
               <EditorTopBar
                 onBack={() => navigate("/projects")}
                 onSettings={() => {
@@ -399,6 +529,7 @@ const EditorScreen: Component = () => {
                   navigate("/settings");
                 }}
               />
+              </div>
             </Show>
             <div class="flex min-h-0 flex-1 gap-2 p-2">
               <TextShell onSelectFile={(rel) => void openFile(rel)} />
@@ -499,11 +630,19 @@ const EditorTopBar: Component<{
 
       {/* right cluster — collaborator avatars only (none until Phase 4) */}
       <div class="flex items-center gap-2">
-        {/* role=status: the only live region compile results ever reach —
-            keeps success/failure announced to assistive tech. */}
-        <div
-          role="status"
-          class="glass-soft flex h-7 items-center gap-1.5 rounded-full px-2.5"
+        {/* The pill is a control now: error → Errors console, otherwise
+            recompile. Announcements live in the always-mounted role=status
+            region at the screen root (this bar unmounts in focus mode). */}
+        <button
+          type="button"
+          onClick={() => {
+            if (compileState() === "error") revealCompileErrors();
+            else void compileActiveProject();
+          }}
+          title={
+            compileState() === "error" ? "Show compile errors" : "Compile project"
+          }
+          class="lift glass-soft flex h-7 items-center gap-1.5 rounded-full px-2.5"
         >
           <span
             class="h-1.5 w-1.5 rounded-full"
@@ -521,7 +660,7 @@ const EditorTopBar: Component<{
           <span class="text-xs text-fg-2">{compileLabel()}</span>
           <span class="mono text-xs text-fg-4">·</span>
           <span class="mono text-xs text-fg-2">{compileDuration()}</span>
-        </div>
+        </button>
         <SyncStatusBadge />
         <LayoutMenu />
         <button

@@ -72,6 +72,14 @@
   --color-card-bg-soft: rgb(13 15 20 / 0.35);
 
   /*
+   * Opaque page surface for the visual editor's document card. Unlike
+   * --color-card-bg it must be fully opaque — editable text sits directly
+   * on it and translucency would let the ambient backdrop shimmer through
+   * the reading measure.
+   */
+  --color-doc-surface: rgb(19 22 28);
+
+  /*
    * Per-format accent tints used on Projects cards/rows. Light themes
    * override with deeper variants so labels stay readable on light bgs.
    */
@@ -105,6 +113,15 @@
    * take a light fg. White-on-light-accent failed AA (cyan end was 1.81:1).
    */
   --color-accent-fg: #111314; /* dark ink — Aurora's accents are light (was #ffffff) */
+
+  /* Keyboard focus ring — one token so custom themes can retune the ring. */
+  --color-focus-ring: color-mix(in srgb, var(--color-accent-1) 90%, transparent);
+
+  /* Today glass-stroke doubles as card edge AND list divider — the alias
+   * lets them diverge without a sweep. Forward-only for now: new dividers
+   * should consume it, existing borders migrate opportunistically (retuning
+   * it in a custom theme has no effect until they do). */
+  --color-divider: var(--color-glass-stroke);
 
   /* .glass-soft body tint — light themes invert to a faint ink wash. */
   --color-glass-soft-fill: rgb(255 255 255 / 0.02);
@@ -174,6 +191,12 @@
   --font-mono:
     "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular,
     Consolas, monospace;
+  /*
+   * Document body face for the visual editor page. System serifs only — the
+   * page should read like a manuscript without shipping another font.
+   */
+  --font-doc:
+    Georgia, "Iowan Old Style", "Times New Roman", "Source Serif Pro", serif;
 }
 
 /*
@@ -183,6 +206,11 @@
  *
  * The defaults below are Aurora's signature violet/cyan/blue mix.
  */
+/* Disabled-state opacity — components previously improvised 30/40/45/50/60. */
+:root {
+  --ui-disabled-opacity: 0.5;
+}
+
 :root {
   --blob-1: #4c1d95;
   --blob-2: #155e75;

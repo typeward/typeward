@@ -105,7 +105,7 @@ export const HistoryPanel: Component = () => {
       const { ask } = await import("@tauri-apps/plugin-dialog");
       proceed = await ask(
         `Delete every recorded version for "${p.name}"? Files on disk are untouched, but earlier states can no longer be restored.`,
-        { title: "Clear project history", kind: "warning", okLabel: "Delete history", cancelLabel: "Keep" },
+        { title: "Clear project history", kind: "warning", okLabel: "Clear all history", cancelLabel: "Cancel" },
       );
     } catch {
       proceed = window.confirm("Delete every recorded version for this project?");
@@ -130,8 +130,8 @@ export const HistoryPanel: Component = () => {
         <Show when={versions().length > 0}>
           <button
             type="button"
-            title="Clear project history"
-            aria-label="Clear project history"
+            title="Clear project history…"
+            aria-label="Clear project history…"
             onClick={() => void clearHistory()}
             class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
           >

@@ -33,7 +33,6 @@ export const BuildMenu: Component = () => {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
         aria-expanded={open()}
         title="Build settings"
         class="lift flex h-5 items-center gap-1 rounded px-1.5 hover:bg-[var(--color-control-fill)]"

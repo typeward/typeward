@@ -24,6 +24,16 @@
   try {
     var raw = localStorage.getItem("typeward.theme");
     var theme = raw ? JSON.parse(raw).theme : undefined;
+    // Mirrors resolveTheme in theme-store.ts (lockstep — this script can't
+    // import it): "system" follows the OS, daylight when light, lamplight
+    // when dark. Nothing persisted keeps the Daylight defaults in index.html.
+    if (theme === "system") {
+      theme =
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "lamplight"
+          : "daylight";
+    }
     var palette = theme ? SPLASH[theme] : undefined;
     if (palette) {
       var style = document.documentElement.style;

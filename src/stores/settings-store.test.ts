@@ -7,6 +7,7 @@ import {
   setHistoryMaxVersions,
   setShareCrashReports,
   setSyncSettingsEnabled,
+  setUiScale,
   setUpdatesCheckAutomatically,
   validEnum,
 } from "./settings-store";
@@ -156,6 +157,43 @@ describe("settings-store visualModeLatex roundtrip", () => {
     const { visualModeLatex: _omitted, ...older } = buildSettings().editor;
     expect(applyRemoteSettingValue("editor", older)).toBe(true);
     expect(buildSettings().editor.visualModeLatex).toBe(false);
+  });
+});
+
+// "system" is a persisted theme SETTING (resolves to daylight/lamplight at
+// render time) — the load boundary must accept it and round-trip it verbatim,
+// never the resolved theme.
+describe("settings-store theme setting", () => {
+  it("accepts and round-trips the system option", () => {
+    expect(applyRemoteSettingValue("theme", "system")).toBe(true);
+    expect(buildSettings().theme).toBe("system");
+    applyRemoteSettingValue("theme", "daylight");
+    expect(buildSettings().theme).toBe("daylight");
+  });
+});
+
+// Interface scale persists like any other field; the load boundary snaps to
+// the picker's 90–150 step-5 grid and non-numeric garbage lands on 100.
+describe("settings-store interface scale", () => {
+  it("defaults to 100 and persists changes", () => {
+    expect(buildSettings().ui.uiScale).toBe(100);
+    setUiScale(120);
+    expect(buildSettings().ui.uiScale).toBe(120);
+    setUiScale(100);
+  });
+
+  it("snaps and clamps persisted values", () => {
+    expect(applyRemoteSettingValue("ui.uiScale", 87)).toBe(true);
+    expect(buildSettings().ui.uiScale).toBe(90);
+
+    expect(applyRemoteSettingValue("ui.uiScale", 40)).toBe(true);
+    expect(buildSettings().ui.uiScale).toBe(90);
+
+    expect(applyRemoteSettingValue("ui.uiScale", 500)).toBe(true);
+    expect(buildSettings().ui.uiScale).toBe(150);
+
+    expect(applyRemoteSettingValue("ui.uiScale", "huge")).toBe(true);
+    expect(buildSettings().ui.uiScale).toBe(100);
   });
 });
 

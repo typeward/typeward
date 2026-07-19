@@ -6,6 +6,7 @@ import {
 } from "lucide-solid";
 import type { Component } from "solid-js";
 import { Show } from "solid-js";
+import { IconButton } from "~/components/primitives/IconButton";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { SubscriptionBadge } from "~/components/account/SubscriptionBadge";
 import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
@@ -55,7 +56,7 @@ export const TopBar: Component<TopBarProps> = (props) => {
               class="lift glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-sm text-fg-3 hover:text-fg-2"
             >
               <Search class="ui-icon-chrome" style={{ opacity: 0.6 }} />
-              <span>Search projects, papers, collaborators…</span>
+              <span>Search commands and projects…</span>
               <span class="ml-auto">
                 <KbdHint shortcut="Mod+K" />
               </span>
@@ -88,7 +89,7 @@ export const TopBar: Component<TopBarProps> = (props) => {
                   type="button"
                   onClick={() => search().onInput("")}
                   aria-label="Clear search"
-                  class="lift flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+                  class="lift flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
                 >
                   <X size={12} />
                 </button>
@@ -111,12 +112,15 @@ export const TopBar: Component<TopBarProps> = (props) => {
         <SubscriptionBadge />
         <GitStatusBar />
         <SyncStatusBadge />
-        <button
-          type="button"
+        {/* Inline fg-2 keeps the chrome tint the ghost variant's text
+            utilities would otherwise override. */}
+        <IconButton
+          label="Notifications"
+          size="lg"
           data-notif-toggle
           onClick={() => props.onToggleNotifications?.()}
-          aria-label="Notifications"
-          class="lift relative flex h-9 w-9 items-center justify-center rounded-md text-fg-2 hover:bg-[var(--color-control-fill)]"
+          class="relative"
+          style={{ color: "var(--color-fg-2)" }}
         >
           <Bell class="ui-icon-chrome" style={{ opacity: 0.85 }} />
           <Show when={props.notifications && props.notifications > 0}>
@@ -130,15 +134,15 @@ export const TopBar: Component<TopBarProps> = (props) => {
               {props.notifications}
             </span>
           </Show>
-        </button>
-        <button
-          type="button"
+        </IconButton>
+        <IconButton
+          label="Settings"
+          size="lg"
           onClick={() => props.onOpenSettings?.()}
-          aria-label="Settings"
-          class="lift flex h-9 w-9 items-center justify-center rounded-md text-fg-2 hover:bg-[var(--color-control-fill)]"
+          style={{ color: "var(--color-fg-2)" }}
         >
           <SettingsIcon class="ui-icon-chrome" style={{ opacity: 0.85 }} />
-        </button>
+        </IconButton>
       </div>
     </div>
   );

@@ -25,6 +25,8 @@ import { compileState, lastResult, requestGotoSource } from "~/stores/editor-sto
 import { grammarTotalCount } from "~/stores/grammar-store";
 import { logsTabIntent } from "~/stores/ui-store";
 import { formatShortcutForDisplay } from "~/lib/shortcuts";
+import { handleTablistKeydown, rovingTabIndex } from "~/lib/tablist-nav";
+import { touchAffordances } from "~/stores/viewport-store";
 import { GrammarProblemsPanel } from "./GrammarProblemsPanel";
 
 const TAB_IDS: readonly LogsTabId[] = ["all", "errors", "warnings", "info", "grammar"];
@@ -125,12 +127,31 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
       style={
         props.embedded
           ? { height: "100%" }
-          : { height: minimized() ? "36px" : "240px" }
+          // Minimized height = the header strip's height, which grows to fit
+          // the 44px tabs on coarse pointers (h-12 below).
+          : { height: minimized() ? (touchAffordances() ? "48px" : "36px") : "240px" }
       }
     >
       {/* Header */}
-      <div class="flex h-9 flex-shrink-0 items-center gap-0.5 border-b border-glass-stroke px-2">
-        <div role="tablist" aria-label="Log panels" class="flex items-center gap-0.5 overflow-x-auto scroll">
+      <div
+        class="flex flex-shrink-0 items-center gap-0.5 border-b border-glass-stroke px-2"
+        classList={{
+          "h-12": touchAffordances(),
+          "h-9": !touchAffordances(),
+        }}
+      >
+        <div
+          role="tablist"
+          aria-label="Log panels"
+          onKeyDown={(e) =>
+            handleTablistKeydown(e, {
+              count: visibleTabs().length,
+              activeIndex: visibleTabs().findIndex((t) => t.id === tab()),
+              activate: (i) => handleSelectTab(visibleTabs()[i].id),
+            })
+          }
+          class="flex items-center gap-0.5 overflow-x-auto scroll"
+        >
           <For each={visibleTabs()}>
             {(t) => {
               const active = () => tab() === t.id && !minimized();
@@ -139,11 +160,21 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
                 <button
                   type="button"
                   role="tab"
+                  id={`logs-tab-${t.id}`}
+                  aria-controls="logs-tabpanel"
                   aria-selected={active()}
+                  // Roving tabindex keys off the selected tab, not `active()`:
+                  // while minimized no tab is "active", and an all -1 strip
+                  // would drop out of the Tab order entirely.
+                  tabIndex={rovingTabIndex(tab() === t.id)}
                   onClick={() => handleSelectTab(t.id)}
-                  class={`relative flex h-8 flex-shrink-0 items-center gap-1.5 px-2.5 text-sm font-medium ${
+                  class={`relative flex flex-shrink-0 items-center gap-1.5 px-2.5 text-sm font-medium ${
                     active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
                   }`}
+                  classList={{
+                    "h-11": touchAffordances(),
+                    "h-8": !touchAffordances(),
+                  }}
                 >
                   <t.icon size={12} class="" />
                   {t.label}
@@ -208,7 +239,11 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
               onClick={() => setMinimized((v) => !v)}
               title={minimized() ? "Expand" : "Minimize"}
               aria-label={minimized() ? "Expand logs" : "Minimize logs"}
-              class="lift flex h-7 w-7 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+              class="lift flex items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+              classList={{
+                "h-11 w-11": touchAffordances(),
+                "h-7 w-7": !touchAffordances(),
+              }}
             >
               <Show when={minimized()} fallback={<ChevronsDown size={12} class="opacity-60" />}>
                 <ChevronsUp size={12} class="opacity-60" />
@@ -218,9 +253,15 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
         </div>
       </div>
 
-      {/* Body */}
+      {/* Body — single shared tabpanel whose content swaps with the tab
+          (mirrors the EditorSidebar wiring). */}
       <Show when={props.embedded || !minimized()}>
-        <div class="min-h-0 flex-1 overflow-auto scroll">
+        <div
+          id="logs-tabpanel"
+          role="tabpanel"
+          aria-labelledby={`logs-tab-${tab()}`}
+          class="min-h-0 flex-1 overflow-auto scroll"
+        >
           <TabBody tab={tab()} />
         </div>
       </Show>

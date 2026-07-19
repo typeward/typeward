@@ -1,25 +1,52 @@
-import { Command, Sparkles } from "lucide-solid";
+import { readDir, type DirEntry } from "@tauri-apps/plugin-fs";
+import { Command, FileText, Sparkles } from "lucide-solid";
 import type { Component } from "solid-js";
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  on,
+} from "solid-js";
 import type { EditorCommand, Project } from "~/adapters/types";
 import { closePalette } from "~/commands/actions";
-import { navigateTo, paletteOpen_ } from "~/commands/palette-store";
+import {
+  navigateTo,
+  noteRecentCommand,
+  paletteOpen_,
+  paletteSeedGeneration_,
+  recentCommandIds_,
+  takePaletteSeedQuery,
+} from "~/commands/palette-store";
 import { commands as registryCommands } from "~/commands/registry";
 import { dispatchCommand } from "~/commands/run";
+import { scoreFields } from "~/lib/fuzzy";
 import { shortcutTokens } from "~/lib/shortcuts";
+import {
+  activateFileByRelPath,
+  project,
+  requestGotoSource,
+} from "~/stores/editor-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import { isTrashed, projects } from "~/stores/projects-store";
+import { fsVersion } from "~/stores/watcher-store";
 
 /**
  * Shared command palette overlay. Renders once at the App root so Cmd+K
- * works on every screen. Reads commands from the registry and recent
- * projects from projects-store. Arrow keys navigate; Enter runs the
- * highlighted row. Esc dismissal goes through `core.closePalette` from
- * the keyboard router.
+ * works on every screen. Reads commands from the registry, recent projects
+ * from projects-store, and (when a project is open) the project's text files
+ * for quick-open — a "file:" query prefix (what Mod+P seeds) narrows to files
+ * only. Matching is the scored fuzzy matcher in lib/fuzzy; with a query the
+ * results flatten into one rank-ordered list, without one the grouped view
+ * returns with a "Recently used" section on top. Arrow keys navigate; Enter
+ * runs the highlighted row. Esc dismissal goes through `core.closePalette`
+ * from the keyboard router.
  */
 
 interface PaletteRow {
-  kind: "command" | "project";
+  kind: "command" | "project" | "file";
   /** Stable id used for selection state. */
   id: string;
   /** Display title. */
@@ -33,11 +60,71 @@ interface PaletteRow {
   run: () => void;
 }
 
-const matchesQuery = (q: string, ...fields: Array<string | undefined>): boolean => {
-  if (!q) return true;
-  const needle = q.toLowerCase();
-  return fields.some((f) => f && f.toLowerCase().includes(needle));
+// Per-field fuzzy weights: title hits outrank subtitle hits outrank id/group.
+const W_TITLE = 1;
+const W_SUBTITLE = 0.7;
+const W_META = 0.4;
+
+/** Hard cap on rendered rows in ranked/file mode — the listbox scrolls, but
+ *  thousands of buttons would make every keystroke re-render sluggish. */
+const RANKED_ROW_CAP = 250;
+
+interface FileHit {
+  name: string;
+  relPath: string;
+}
+
+const FILE_INDEX_CAP = 2000;
+const FILE_INDEX_MAX_DEPTH = 12;
+
+// Quick-open targets are files the editor can actually open as text — the
+// same families the compile walkers and FileTree care about.
+const TEXT_FILE_RE =
+  /\.(tex|typ|md|bib|cls|sty|bst|def|ldf|fd|clo|cnf|txt|csv|json|ya?ml|toml)$/i;
+
+// Mirrors FileTree's shouldHide pruning (dotfiles cover .git/.typeward) plus
+// the junk directories the walker must not descend into.
+const skipEntry = (name: string): boolean => {
+  if (name.startsWith(".")) return true;
+  return (
+    name === "node_modules" || name === "build" || name === "out" || name === "dist"
+  );
 };
+
+const joinPath = (parent: string, name: string): string => {
+  if (parent.endsWith("/") || parent.endsWith("\\")) return parent + name;
+  return parent.includes("\\") ? `${parent}\\${name}` : `${parent}/${name}`;
+};
+
+async function walkProjectFiles(root: string): Promise<FileHit[]> {
+  const out: FileHit[] = [];
+  const walk = async (abs: string, rel: string, depth: number): Promise<void> => {
+    if (out.length >= FILE_INDEX_CAP || depth > FILE_INDEX_MAX_DEPTH) return;
+    let entries: DirEntry[];
+    try {
+      entries = await readDir(abs);
+    } catch {
+      // Unreadable subtree (permissions, race with a delete) — index the rest.
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= FILE_INDEX_CAP) return;
+      if (skipEntry(e.name)) continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory) {
+        await walk(joinPath(abs, e.name), childRel, depth + 1);
+      } else if (TEXT_FILE_RE.test(e.name)) {
+        out.push({ name: e.name, relPath: childRel });
+      }
+    }
+  };
+  await walk(root, "", 0);
+  return out;
+}
+
+// Cached across palette opens; the key folds in fsVersion so any watcher
+// event invalidates it (same re-key scheme FileTree uses).
+let fileIndexCache: { key: string; files: FileHit[] } | null = null;
 
 const isRunnable = (cmd: EditorCommand): boolean => {
   if (!cmd.when) return true;
@@ -60,7 +147,7 @@ export const CommandPalette: Component = () => {
         document.activeElement instanceof HTMLElement
           ? document.activeElement
           : null;
-      setQuery("");
+      setQuery(takePaletteSeedQuery() ?? "");
       setSelectedIdx(0);
       // Defer focus until the input has actually rendered.
       queueMicrotask(() => inputRef?.focus());
@@ -73,50 +160,169 @@ export const CommandPalette: Component = () => {
     }
   });
 
+  // Seeding an ALREADY-open palette (Mod+P while Mod+K is up): the open state
+  // doesn't change, so adopt the new query here. On a fresh open the seed was
+  // already consumed by the open effect above and this finds nothing.
+  createEffect(
+    on(
+      paletteSeedGeneration_,
+      () => {
+        if (!paletteOpen_()) return;
+        const q = takePaletteSeedQuery();
+        if (q === null) return;
+        setQuery(q);
+        setSelectedIdx(0);
+        queueMicrotask(() => inputRef?.focus());
+      },
+      { defer: true },
+    ),
+  );
+
+  // Quick-open file index: walked lazily on palette open, re-keyed by watcher
+  // events, served from the module cache when nothing changed.
+  const [fileIndex] = createResource(
+    () => {
+      const proj = project();
+      return paletteOpen_() && proj ? `${proj.rootPath}|${fsVersion()}` : null;
+    },
+    async (key) => {
+      if (fileIndexCache?.key === key) return fileIndexCache.files;
+      const root = project()?.rootPath;
+      if (!root) return [];
+      const files = await walkProjectFiles(root);
+      fileIndexCache = { key, files };
+      return files;
+    },
+  );
+
   const rows = createMemo<PaletteRow[]>(() => {
-    const q = query();
-    const cmdRows: PaletteRow[] = registryCommands()
+    const raw = query().trim();
+    // "file:" prefix = quick-open mode (what Mod+P seeds): files only,
+    // matched against the remainder of the query.
+    const fileMode = raw.toLowerCase().startsWith("file:");
+    const q = fileMode ? raw.slice("file:".length).trim() : raw;
+
+    const toCommandRow = (c: EditorCommand, group: string): PaletteRow => ({
+      kind: "command",
+      id: c.id,
+      title: c.title,
+      subtitle: c.subtitle,
+      shortcut: c.shortcut,
+      group,
+      run: () => {
+        noteRecentCommand(c.id);
+        closePalette();
+        dispatchCommand(c);
+      },
+    });
+    const toProjectRow = (p: Project, group: string): PaletteRow => ({
+      kind: "project",
+      id: `project:${p.rootPath}`,
+      title: p.name,
+      subtitle: `${p.format} · ${p.rootFile}`,
+      group,
+      run: () => {
+        closePalette();
+        openProject(p);
+      },
+    });
+    const toFileRow = (f: FileHit, group: string): PaletteRow => ({
+      kind: "file",
+      id: `file:${f.relPath}`,
+      title: f.name,
+      subtitle: f.relPath,
+      group,
+      run: () => {
+        closePalette();
+        // Already-open tabs activate in place (keeps cursor/scroll); the goto
+        // intent — which force-moves the caret — is only for unopened files.
+        if (!activateFileByRelPath(f.relPath)) requestGotoSource(f.relPath, 1);
+      },
+    });
+
+    let fileHits: FileHit[] = [];
+    // File rows only make sense with the editor mounted — from the Projects/
+    // Settings screens their goto intent has no consumer (same gate as the
+    // core.quickOpen command).
+    if (document.querySelector("[data-editor-shell]") !== null) {
+      try {
+        fileHits = fileIndex() ?? [];
+      } catch {
+        // Resource accessor re-throws a failed walk — the palette still works
+        // without file rows.
+      }
+    }
+
+    if (fileMode) {
+      return fileHits
+        .map((f) => ({
+          f,
+          score: scoreFields(q, [
+            { text: f.name, weight: W_TITLE },
+            { text: f.relPath, weight: W_META },
+          ]),
+        }))
+        .filter((s): s is { f: FileHit; score: number } => s.score !== null)
+        .sort((a, b) => b.score - a.score || a.f.relPath.length - b.f.relPath.length)
+        .slice(0, RANKED_ROW_CAP)
+        .map((s) => toFileRow(s.f, "Files"));
+    }
+
+    const visibleCommands = registryCommands()
       .filter(isRunnable)
       // Hide bookkeeping commands like the Esc-to-close binding — they
       // exist for the keyboard router, not the palette UI.
-      .filter((c) => c.id !== "core.closePalette" && c.id !== "core.togglePalette")
-      .filter((c) =>
-        matchesQuery(q, c.title, c.subtitle, c.id, c.group),
-      )
-      .map<PaletteRow>((c) => ({
-        kind: "command",
-        id: c.id,
-        title: c.title,
-        subtitle: c.subtitle,
-        shortcut: c.shortcut,
-        group: c.group ?? "Commands",
-        run: () => {
-          closePalette();
-          dispatchCommand(c);
-        },
-      }));
+      .filter((c) => c.id !== "core.closePalette" && c.id !== "core.togglePalette");
+    const openProjects = projects().filter((p) => !isTrashed(p));
 
-    const recentProjects: PaletteRow[] = projects()
-      .filter((p) => !isTrashed(p))
-      .filter((p) => matchesQuery(q, p.name, p.rootFile, p.format))
-      .slice(0, 5)
-      .map<PaletteRow>((p) => ({
-        kind: "project",
-        id: `project:${p.rootPath}`,
-        title: p.name,
-        subtitle: `${p.format} · ${p.rootFile}`,
-        group: "Recent projects",
-        run: () => {
-          closePalette();
-          openProject(p);
-        },
-      }));
+    if (!q) {
+      // Grouped browse view: recently-used commands first, then recent
+      // projects, then every command under its own group.
+      const byId = new Map(visibleCommands.map((c) => [c.id, c]));
+      const recentRows = recentCommandIds_()
+        .map((id) => byId.get(id))
+        .filter((c): c is EditorCommand => c !== undefined)
+        .map((c) => toCommandRow(c, "Recently used"));
+      const projectRows = openProjects
+        .slice(0, 5)
+        .map((p) => toProjectRow(p, "Recent projects"));
+      const cmdRows = visibleCommands.map((c) =>
+        toCommandRow(c, c.group ?? "Commands"),
+      );
+      return [...recentRows, ...projectRows, ...cmdRows];
+    }
 
-    // Projects first when query is empty (matches design's "Recent" section),
-    // commands first when the user is searching for something specific.
-    return q
-      ? [...cmdRows, ...recentProjects]
-      : [...recentProjects, ...cmdRows];
+    // Ranked mode: one flat list across commands, projects, and files,
+    // highest score first; ties break toward shorter titles.
+    const scored: Array<{ row: PaletteRow; score: number }> = [];
+    for (const c of visibleCommands) {
+      const score = scoreFields(q, [
+        { text: c.title, weight: W_TITLE },
+        { text: c.subtitle, weight: W_SUBTITLE },
+        { text: c.id, weight: W_META },
+        { text: c.group, weight: W_META },
+      ]);
+      if (score !== null) scored.push({ row: toCommandRow(c, "Results"), score });
+    }
+    for (const p of openProjects) {
+      const score = scoreFields(q, [
+        { text: p.name, weight: W_TITLE },
+        { text: p.rootFile, weight: W_SUBTITLE },
+        { text: p.format, weight: W_META },
+      ]);
+      if (score !== null) scored.push({ row: toProjectRow(p, "Results"), score });
+    }
+    for (const f of fileHits) {
+      const score = scoreFields(q, [
+        { text: f.name, weight: W_TITLE },
+        { text: f.relPath, weight: W_META },
+      ]);
+      if (score !== null) scored.push({ row: toFileRow(f, "Results"), score });
+    }
+    return scored
+      .sort((a, b) => b.score - a.score || a.row.title.length - b.row.title.length)
+      .slice(0, RANKED_ROW_CAP)
+      .map((s) => s.row);
   });
 
   // Group rows by their `group` field while preserving order — render
@@ -202,12 +408,15 @@ export const CommandPalette: Component = () => {
             <Sparkles size={14} style={{ opacity: 0.6 }} />
             <input
               ref={(el) => (inputRef = el)}
-              placeholder="Jump to project, command, or paper…"
+              placeholder="Search commands, files, and projects…"
               value={query()}
               role="combobox"
+              aria-label="Search commands, files, and projects"
               aria-expanded="true"
               aria-controls="palette-listbox"
-              aria-activedescendant={`palette-option-${selectedIdx()}`}
+              aria-activedescendant={
+                rows().length > 0 ? `palette-option-${selectedIdx()}` : undefined
+              }
               onInput={(e) => {
                 setQuery(e.currentTarget.value);
                 setSelectedIdx(0);
@@ -264,7 +473,12 @@ export const CommandPalette: Component = () => {
                               class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
                               style={{ background: "var(--color-control-fill)" }}
                             >
-                              <Command size={12} />
+                              <Show
+                                when={row.kind === "file"}
+                                fallback={<Command size={12} />}
+                              >
+                                <FileText size={12} />
+                              </Show>
                             </div>
                             <div class="min-w-0 flex-1">
                               <div class="truncate text-base text-fg-1">

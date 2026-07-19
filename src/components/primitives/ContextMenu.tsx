@@ -31,6 +31,17 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
   onMount(() => {
     const el = menuRef;
     if (!el) return;
+    const restoreTo =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    onCleanup(() => {
+      // Restore only when focus is still inside the (unmounting) menu or
+      // already fell to <body> — an outside-click dismissal that focused
+      // something else (e.g. the CodeMirror document) must keep its focus.
+      const active = document.activeElement;
+      const focusIsLoose =
+        active === document.body || active === null || el.contains(active);
+      if (focusIsLoose && restoreTo?.isConnected) restoreTo.focus();
+    });
     const r = el.getBoundingClientRect();
     const { x, y } = clampMenuPosition({
       x: props.x,
@@ -126,7 +137,7 @@ export const ContextMenuItem: Component<{
     aria-haspopup={props.expanded !== undefined ? "menu" : undefined}
     aria-expanded={props.expanded}
     onClick={props.onClick}
-    class={`lift flex w-full items-center gap-2.5 rounded-md px-2 text-left text-sm disabled:pointer-events-none disabled:opacity-40 ${
+    class={`lift flex w-full items-center gap-2.5 rounded-md px-2 text-left text-sm disabled:pointer-events-none disabled:opacity-50 ${
       props.danger
         ? "text-[var(--color-err)] hover:bg-[color-mix(in_srgb,var(--color-err)_14%,transparent)]"
         : "text-fg-2 hover:bg-[var(--color-control-fill)] hover:text-fg-1"

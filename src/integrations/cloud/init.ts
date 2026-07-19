@@ -12,7 +12,7 @@ import { hasEntitlement } from "~/integrations/entitlements";
 import { project } from "~/stores/editor-store";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 
-import { SyncEngine, clearSyncStatus } from "./core";
+import { SyncEngine, clearSyncStatus, setSyncPhase } from "./core";
 import {
   cloudProviderForAccount,
   readCloudOrigin,
@@ -38,7 +38,27 @@ interface EngineTarget {
   projectsRoot: string;
 }
 
+/**
+ * A cloud-bound project whose engine cannot start. Distinguished from a
+ * plain local project (null) so the badge can say "sync is off" instead of
+ * silently unmounting — before this, "syncing" and "silently not syncing"
+ * looked identical.
+ */
+interface DisconnectedTarget {
+  disconnected: true;
+  providerId: CloudProviderId;
+  projectId: string;
+  reason: "credentials" | "entitlement";
+}
+
+const PROVIDER_LABEL: Record<CloudProviderId, string> = {
+  dropbox: "Dropbox",
+  webdav: "WebDAV",
+};
+
 let active: ActiveEngine | null = null;
+/** The (provider, project) whose "disconnected" status we minted, if any. */
+let disconnectedShown: { providerId: string; projectId: string } | null = null;
 /**
  * Serializes teardown→start across effect runs. Because `SyncEngine.stop()` is
  * now async (it drains the in-flight pass so a late write can't clobber the
@@ -60,21 +80,33 @@ export function initCloudSync(): void {
   });
 }
 
-function computeTarget(): EngineTarget | null {
+function computeTarget(): EngineTarget | DisconnectedTarget | null {
   const proj = project();
   const root = projectsRoot();
   if (!proj || !root) return null;
 
   const origin = readCloudOrigin(proj);
   if (!origin) return null;
-  if (!hasEntitlement(`integrations.cloud.${origin.provider}`)) return null;
+  if (!hasEntitlement(`integrations.cloud.${origin.provider}`)) {
+    return {
+      disconnected: true,
+      providerId: origin.provider,
+      projectId: deriveProjectId(proj.rootPath),
+      reason: "entitlement",
+    };
+  }
 
   const accountRef = findAccount(origin.provider, origin.accountId);
   if (!accountRef) {
     // The project remembers a binding for an account we no longer have
     // credentials for. Don't crash — leave the project usable as a plain
     // local folder until the user reconnects.
-    return null;
+    return {
+      disconnected: true,
+      providerId: origin.provider,
+      projectId: deriveProjectId(proj.rootPath),
+      reason: "credentials",
+    };
   }
 
   return {
@@ -86,11 +118,20 @@ function computeTarget(): EngineTarget | null {
   };
 }
 
-async function reconcile(target: EngineTarget | null): Promise<void> {
+async function reconcile(
+  target: EngineTarget | DisconnectedTarget | null,
+): Promise<void> {
   if (!target) {
     await teardown();
+    clearDisconnected();
     return;
   }
+  if ("disconnected" in target) {
+    await teardown();
+    showDisconnected(target);
+    return;
+  }
+  clearDisconnected();
   // If the same engine is already running for this project, leave it.
   if (
     active?.providerId === target.accountRef.provider &&
@@ -136,6 +177,36 @@ async function reconcile(target: EngineTarget | null): Promise<void> {
 export function notifyLocalSave(cacheRoot: string, relPaths: string[]): void {
   if (!active || active.cacheRoot !== cacheRoot || relPaths.length === 0) return;
   active.engine.queuePush(relPaths);
+}
+
+function showDisconnected(target: DisconnectedTarget): void {
+  const label = PROVIDER_LABEL[target.providerId] ?? target.providerId;
+  // Replace a stale entry for a different project before minting the new one.
+  if (
+    disconnectedShown &&
+    (disconnectedShown.providerId !== target.providerId ||
+      disconnectedShown.projectId !== target.projectId)
+  ) {
+    clearDisconnected();
+  }
+  setSyncPhase(
+    target.providerId,
+    target.projectId,
+    "disconnected",
+    target.reason === "credentials"
+      ? `${label} isn't connected on this machine — reconnect it in Settings to resume syncing. Your files stay safe locally.`
+      : `Cloud sync needs your plan restored — this project keeps working locally meanwhile.`,
+  );
+  disconnectedShown = {
+    providerId: target.providerId,
+    projectId: target.projectId,
+  };
+}
+
+function clearDisconnected(): void {
+  if (!disconnectedShown) return;
+  clearSyncStatus(disconnectedShown.providerId, disconnectedShown.projectId);
+  disconnectedShown = null;
 }
 
 async function teardown(): Promise<void> {

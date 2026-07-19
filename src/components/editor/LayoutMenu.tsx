@@ -48,7 +48,6 @@ export const LayoutMenu: Component = () => {
         title="Layout"
         aria-label="Layout"
         onClick={onTrigger}
-        aria-haspopup="listbox"
         aria-expanded={open()}
         class="lift flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--color-control-fill)]"
       >
@@ -57,6 +56,8 @@ export const LayoutMenu: Component = () => {
       <Show when={open()}>
         <div
           tabindex={-1}
+          role="group"
+          aria-label="Layout"
           onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute right-0 top-full z-50 mt-1 w-[260px] rounded-xl"
           style={{

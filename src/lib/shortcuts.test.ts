@@ -42,6 +42,19 @@ describe("shortcuts.matches", () => {
       false,
     );
   });
+
+  it("matches literal Ctrl combos off-Mac via ctrlKey", () => {
+    // Off-Mac, Mod and literal Ctrl share the physical key, so the tab-cycle
+    // bindings behave identically to a Mod combo here.
+    expect(matches(event({ key: "Tab", ctrlKey: true }), "Ctrl+Tab")).toBe(true);
+    expect(matches(event({ key: "Tab" }), "Ctrl+Tab")).toBe(false);
+    expect(
+      matches(event({ key: "Tab", ctrlKey: true, shiftKey: true }), "Ctrl+Shift+Tab"),
+    ).toBe(true);
+    expect(
+      matches(event({ key: "Tab", ctrlKey: true }), "Ctrl+Shift+Tab"),
+    ).toBe(false);
+  });
 });
 
 describe("shortcuts display helpers", () => {
@@ -51,6 +64,11 @@ describe("shortcuts display helpers", () => {
 
   it("splits into per-key tokens for <kbd> chips", () => {
     expect(shortcutTokens("Mod+Shift+Enter")).toEqual(["Ctrl", "Shift", "↵"]);
+  });
+
+  it("renders literal Ctrl as Ctrl off-Mac", () => {
+    expect(formatShortcutForDisplay("Ctrl+Tab")).toBe("Ctrl+Tab");
+    expect(shortcutTokens("Ctrl+Shift+Tab")).toEqual(["Ctrl", "Shift", "Tab"]);
   });
 
   it("falls back to the raw string when shortcut has no key after modifiers", () => {
@@ -84,6 +102,21 @@ describe("shortcuts on Mac", () => {
         "Mod+K",
       ),
     ).toBe(true);
+    // Literal Ctrl stays the physical Control key on Mac — never folds
+    // into ⌘ — and renders as ⌃ (first in the HIG order).
+    expect(
+      mod.matches(
+        new KeyboardEvent("keydown", { key: "Tab", ctrlKey: true }),
+        "Ctrl+Tab",
+      ),
+    ).toBe(true);
+    expect(
+      mod.matches(
+        new KeyboardEvent("keydown", { key: "Tab", metaKey: true }),
+        "Ctrl+Tab",
+      ),
+    ).toBe(false);
+    expect(mod.formatShortcutForDisplay("Ctrl+Tab")).toBe("⌃Tab");
     // Restore for any later tests.
     Object.defineProperty(globalThis.navigator, "platform", {
       configurable: true,

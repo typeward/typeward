@@ -12,6 +12,10 @@ export const isMac =
 
 interface ParsedShortcut {
   mod: boolean;
+  /** Literal Control key ("Ctrl+"), NOT folded into Mod — the physical Ctrl
+   * key on every platform. Needed for bindings like Ctrl+Tab, where macOS
+   * convention is Control (⌃), never ⌘. */
+  ctrl: boolean;
   shift: boolean;
   alt: boolean;
   /** Lowercased; "enter", "k", "/", etc. */
@@ -35,13 +39,18 @@ const parseShortcut = (shortcut: string): ParsedShortcut | null => {
   const parts = shortcut.split("+").map((p) => p.trim());
   if (parts.length === 0) return null;
   let mod = false;
+  let ctrl = false;
   let shift = false;
   let alt = false;
   let key: string | null = null;
   for (const part of parts) {
     const lower = part.toLowerCase();
-    if (lower === "mod" || lower === "cmd" || lower === "ctrl" || lower === "control") {
+    if (lower === "mod" || lower === "cmd") {
       mod = true;
+    } else if (lower === "ctrl" || lower === "control") {
+      // Literal Control, distinct from Mod. Off-Mac the two land on the same
+      // physical key (see `matches`); on Mac this is ⌃ while Mod is ⌘.
+      ctrl = true;
     } else if (lower === "shift") {
       shift = true;
     } else if (lower === "alt" || lower === "option") {
@@ -51,7 +60,7 @@ const parseShortcut = (shortcut: string): ParsedShortcut | null => {
     }
   }
   if (!key) return null;
-  return { mod, shift, alt, key };
+  return { mod, ctrl, shift, alt, key };
 };
 
 /**
@@ -63,8 +72,14 @@ const parseShortcut = (shortcut: string): ParsedShortcut | null => {
 export const matches = (event: KeyboardEvent, shortcut: string): boolean => {
   const parsed = parseShortcut(shortcut);
   if (!parsed) return false;
-  const modPressed = isMac ? event.metaKey : event.ctrlKey;
-  if (parsed.mod !== modPressed) return false;
+  if (isMac) {
+    if (parsed.mod !== event.metaKey) return false;
+    if (parsed.ctrl !== event.ctrlKey) return false;
+  } else {
+    // Off-Mac, Mod and literal Ctrl share the physical Control key — either
+    // requirement (or both) resolves to ctrlKey.
+    if ((parsed.mod || parsed.ctrl) !== event.ctrlKey) return false;
+  }
   if (parsed.shift !== event.shiftKey) return false;
   if (parsed.alt !== event.altKey) return false;
   return normalizeKey(event.key) === parsed.key;
@@ -73,6 +88,7 @@ export const matches = (event: KeyboardEvent, shortcut: string): boolean => {
 const KEY_DISPLAY: Record<string, string> = {
   enter: "↵",
   escape: "esc",
+  tab: "Tab",
   arrowup: "↑",
   arrowdown: "↓",
   arrowleft: "←",
@@ -80,17 +96,19 @@ const KEY_DISPLAY: Record<string, string> = {
   " ": "Space",
 };
 
-// Mac glyphs follow the HIG menu order Control–Option–Shift–Command; Ctrl
-// folds into Mod on parse, so the sequence reduces to ⌥⇧⌘ with ⌘ last —
-// "⇧⌘F", not "⌘⇧F". Non-Mac keeps the conventional Ctrl+Alt+Shift order.
+// Mac glyphs follow the HIG menu order Control–Option–Shift–Command:
+// ⌃⌥⇧⌘ with ⌘ last — "⇧⌘F", not "⌘⇧F". Non-Mac keeps the conventional
+// Ctrl+Alt+Shift order (Mod and literal Ctrl both render "Ctrl" there,
+// collapsed to one token when a binding carries both).
 const modifierTokens = (parsed: ParsedShortcut): string[] => {
   const tokens: string[] = [];
   if (isMac) {
+    if (parsed.ctrl) tokens.push("⌃");
     if (parsed.alt) tokens.push("⌥");
     if (parsed.shift) tokens.push("⇧");
     if (parsed.mod) tokens.push("⌘");
   } else {
-    if (parsed.mod) tokens.push("Ctrl");
+    if (parsed.mod || parsed.ctrl) tokens.push("Ctrl");
     if (parsed.alt) tokens.push("Alt");
     if (parsed.shift) tokens.push("Shift");
   }

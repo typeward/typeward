@@ -13,11 +13,13 @@ import type { Component, JSX } from "solid-js";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { Project } from "~/adapters/types";
 import type { SpaceDef } from "~/ipc";
+import { TextField } from "~/components/forms/TextField";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { currentTier } from "~/integrations/entitlements";
 import { installDismiss } from "~/lib/dismiss";
 import { setPreviousRoute } from "~/stores/nav-store";
 import { isTrashed, isYours } from "~/stores/projects-store";
+import { touchAffordances } from "~/stores/viewport-store";
 import {
   SPACE_TINTS,
   type SpaceTint,
@@ -37,6 +39,8 @@ interface LibrarySidebarProps {
   onSelect: (s: LibrarySelection) => void;
   onNewProject: () => void;
   onImport: () => void;
+  /** Panel width — the tablet drawer stretches it to fill its shell. */
+  width?: string;
 }
 
 export const LibrarySidebar: Component<LibrarySidebarProps> = (props) => {
@@ -76,7 +80,7 @@ export const LibrarySidebar: Component<LibrarySidebarProps> = (props) => {
   return (
     <div
       class="glass flex flex-col overflow-hidden rounded-xl"
-      style={{ width: "240px", height: "100%" }}
+      style={{ width: props.width ?? "240px", height: "100%" }}
     >
       <div class="border-b border-glass-stroke p-3">
         <button
@@ -244,7 +248,14 @@ const SidebarRow: Component<{
           ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
           : "text-fg-2 hover:bg-[var(--color-control-fill)]"
       }`}
-      style={{ height: "var(--ui-row)" }}
+      // max() keeps comfortable density's taller rows while guaranteeing the
+      // 44px WCAG target on coarse pointers; keyed on touchAffordances(), not
+      // the viewport width, so narrow mouse-driven windows are unaffected.
+      style={{
+        height: touchAffordances()
+          ? "max(44px, var(--ui-row))"
+          : "var(--ui-row)",
+      }}
     >
       <Show
         when={props.dot}
@@ -261,7 +272,7 @@ const SidebarRow: Component<{
       <Show when={props.count != null}>
         <span
           class={`mono ml-auto text-xs text-fg-3 ${
-            props.trailing ? "transition-opacity group-hover/row:opacity-0" : ""
+            props.trailing ? "transition-opacity group-hover/row:opacity-0 group-focus-within/row:opacity-0" : ""
           }`}
         >
           {props.count}
@@ -298,7 +309,7 @@ const AddSpaceButton: Component = () => {
           setTint("accent");
           setOpen((v) => !v);
         }}
-        class="lift -mr-1 flex h-5 w-5 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+        class="lift -m-0.5 -mr-1.5 flex h-6 w-6 items-center justify-center rounded text-fg-3 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
       >
         <Plus size={12} />
       </button>
@@ -311,7 +322,10 @@ const AddSpaceButton: Component = () => {
           }}
         >
           <span class="label-xs text-fg-3">New space</span>
-          <input
+          <TextField
+            label="Space name"
+            hideLabel
+            size="sm"
             type="text"
             value={name()}
             placeholder="Space name"
@@ -327,7 +341,6 @@ const AddSpaceButton: Component = () => {
             }}
             /* eslint-disable-next-line jsx-a11y/no-autofocus */
             autofocus
-            class="glass-inset rounded-md px-2 py-1.5 text-sm text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <TintSwatches value={tint()} onChange={setTint} />
           <div class="flex items-center justify-end gap-1.5">
@@ -405,7 +418,7 @@ const SpaceRow: Component<{
               e.stopPropagation();
               menuOpen() ? setMenuOpen(false) : openMenu();
             }}
-            class="lift absolute right-1 flex h-5 w-5 items-center justify-center rounded text-fg-3 opacity-0 hover:bg-[var(--color-control-fill)] hover:text-fg-1 group-hover/row:opacity-100"
+            class="lift absolute right-0.5 -mt-0.5 flex h-6 w-6 items-center justify-center rounded text-fg-3 opacity-0 hover:bg-[var(--color-control-fill)] hover:text-fg-1 group-hover/row:opacity-100 focus-visible:opacity-100 group-focus-within/row:opacity-100"
           >
             <MoreHorizontal size={13} />
           </button>
@@ -420,7 +433,10 @@ const SpaceRow: Component<{
           }}
         >
           <span class="label-xs text-fg-3">Edit space</span>
-          <input
+          <TextField
+            label="Space name"
+            hideLabel
+            size="sm"
             type="text"
             value={name()}
             onInput={(e) => setName(e.currentTarget.value)}
@@ -433,7 +449,6 @@ const SpaceRow: Component<{
                 setMenuOpen(false);
               }
             }}
-            class="glass-inset rounded-md px-2 py-1.5 text-sm text-fg-1 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <TintSwatches value={tint()} onChange={setTint} />
           <div class="flex items-center justify-between gap-1.5">
@@ -480,15 +495,21 @@ const TintSwatches: Component<{
           type="button"
           aria-label={`Color ${t}`}
           onClick={() => props.onChange(t)}
-          class="h-5 w-5 rounded-full"
-          style={{
-            background: tintColor(t),
-            "box-shadow":
-              props.value === t
-                ? "0 0 0 2px var(--color-popover-bg), 0 0 0 3.5px var(--color-fg-1)"
-                : "none",
-          }}
-        />
+          // The 24px hit box wraps a 20px visual swatch so the circles keep
+          // their size while the target meets WCAG 2.5.8.
+          class="flex h-6 w-6 items-center justify-center rounded-full"
+        >
+          <span
+            class="h-5 w-5 rounded-full"
+            style={{
+              background: tintColor(t),
+              "box-shadow":
+                props.value === t
+                  ? "0 0 0 2px var(--color-popover-bg), 0 0 0 3.5px var(--color-fg-1)"
+                  : "none",
+            }}
+          />
+        </button>
       )}
     </For>
   </div>

@@ -7,6 +7,8 @@
  * (longpoll cadence for Dropbox) arrive with each provider.
  */
 
+import { createSignal } from "solid-js";
+
 import { describeIpcError } from "~/lib/errors";
 import {
   exists,
@@ -21,6 +23,7 @@ import {
 
 import type { CloudFsProvider, DeltaChange, RemoteFile } from "~/integrations/types";
 import { recordError } from "~/lib/telemetry";
+import { notifyError } from "~/lib/toast";
 
 import { decideConflict, suffixWithConflict } from "./conflict";
 import {
@@ -36,6 +39,40 @@ import {
   recordConflicts,
   setSyncPhase,
 } from "./sync-status";
+
+/**
+ * Transport-shaped failures (reqwest strings crossing the IPC verbatim) are
+ * retried by the engine's own poll/backoff loops — the badge shows them as a
+ * neutral "Offline — will retry" instead of a red raw-string error. Anything
+ * unmatched stays a real error.
+ */
+function isNetworkShapedError(detail: string): boolean {
+  const d = detail.toLowerCase();
+  return (
+    d.includes("error sending request") ||
+    d.includes("connection refused") ||
+    d.includes("connection reset") ||
+    d.includes("timed out") ||
+    d.includes("timeout") ||
+    d.includes("dns error") ||
+    d.includes("failed to lookup") ||
+    d.includes("no such host") ||
+    d.includes("network is unreachable") ||
+    d.includes("host unreachable")
+  );
+}
+
+/**
+ * One-shot intent raised by the conflict toast's Resolve action; the
+ * SyncStatusBadge (which owns the ConflictResolverDialog) reacts to it. Lives
+ * here rather than in the badge so engine-layer code never imports a
+ * component module.
+ */
+const [conflictResolverIntent, setConflictResolverIntent] = createSignal(0);
+export { conflictResolverIntent };
+export function requestConflictResolver(): void {
+  setConflictResolverIntent((n) => n + 1);
+}
 
 export interface SyncEngineOptions {
   providerId: string;
@@ -291,17 +328,49 @@ export class SyncEngine {
     return next;
   }
 
+  /** Route a failed pass to the badge: transient network shapes read as a
+   *  neutral offline state, everything else as a real error. */
+  private reportPassFailure(err: unknown): void {
+    const detail = describeIpcError(err);
+    setSyncPhase(
+      this.opts.providerId,
+      this.opts.projectId,
+      isNetworkShapedError(detail) ? "offline" : "error",
+      detail,
+    );
+  }
+
+  /**
+   * Record newly-detected conflicts and, on the 0 -> N transition only, raise
+   * a one-shot toast (the badge itself deliberately stays non-live — see its
+   * comment). Later passes that add MORE conflicts stay quiet: the badge
+   * already shows the count.
+   */
+  private recordConflictsWithNotice(conflicts: string[]): void {
+    if (conflicts.length === 0) return;
+    const prevCount = getSyncStatus(
+      this.opts.providerId,
+      this.opts.projectId,
+    ).conflicts.length;
+    recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+    if (prevCount > 0) return;
+    const [first] = conflicts;
+    const rest = conflicts.length - 1;
+    notifyError(
+      `Sync conflict in "${first}"`,
+      rest > 0
+        ? `Both this device and the cloud copy changed (and ${rest} more file${rest === 1 ? "" : "s"}). The other version is kept beside yours.`
+        : "Both this device and the cloud copy changed. The other version is kept beside yours.",
+      { label: "Resolve", run: requestConflictResolver },
+    );
+  }
+
   private async tick(): Promise<void> {
     if (!this.running) return;
     try {
       await this.runExclusive(() => this.pullPass());
     } catch (err) {
-      setSyncPhase(
-        this.opts.providerId,
-        this.opts.projectId,
-        "error",
-        describeIpcError(err),
-      );
+      this.reportPassFailure(err);
     }
     if (!this.running) return;
     this.timer = setTimeout(() => void this.tick(), this.opts.pollIntervalMs ?? DEFAULT_POLL_MS);
@@ -311,12 +380,7 @@ export class SyncEngine {
     try {
       await this.runExclusive(() => this.pushPass());
     } catch (err) {
-      setSyncPhase(
-        this.opts.providerId,
-        this.opts.projectId,
-        "error",
-        describeIpcError(err),
-      );
+      this.reportPassFailure(err);
       // Leave the failed paths queued and retry on an exponential backoff
       // (base 15s, doubling to a 5-minute cap).
       const delay = Math.min(PUSH_RETRY_MS * 2 ** this.pushFailures, PUSH_RETRY_MAX_MS);
@@ -436,7 +500,7 @@ export class SyncEngine {
       // Pages completed before the failure already advanced the cursor and
       // never replay — surface their conflict sidecars before bailing.
       if (!this.dead && conflicts.length > 0) {
-        recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+        this.recordConflictsWithNotice(conflicts);
       }
       throw err;
     }
@@ -448,7 +512,7 @@ export class SyncEngine {
     // entry that teardown's clearSyncStatus just deleted, stranding a phantom
     // conflict badge on a closed project.
     if (!this.dead) {
-      recordConflicts(this.opts.providerId, this.opts.projectId, conflicts);
+      this.recordConflictsWithNotice(conflicts);
       this.settlePhaseAfterPass();
     }
     return { applied, conflicts, nextCursor };

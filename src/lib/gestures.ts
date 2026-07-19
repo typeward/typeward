@@ -14,6 +14,35 @@ const THRESHOLD_PX = 70;
 const HORIZONTAL_RATIO = 1.5;
 const POINTER_KINDS = new Set(["touch", "pen"]);
 
+/**
+ * True when the pointer went down inside something that pans horizontally
+ * itself — a wide code line, the zoomed PDF page, the editor content
+ * (`.cm-content` can report equal widths while CodeMirror still owns the
+ * horizontal pan). Cycling panes on those gestures would hijack the scroll,
+ * so the swipe listener skips tracking entirely. Walks the composed path
+ * from the innermost target outward, stopping at the listener boundary so
+ * document-level overflow can't veto swipes everywhere.
+ */
+export const startsInHorizontalScrollRegion = (
+  path: EventTarget[],
+  boundary: HTMLElement,
+): boolean => {
+  for (const entry of path) {
+    if (!(entry instanceof Element)) break;
+    if (entry.classList.contains("cm-content")) return true;
+    // Overflowing width alone isn't pannable — every `truncate`d label
+    // (overflow:hidden + ellipsis) overflows without scrolling, and a swipe
+    // starting on a file name must still cycle panes. Require a scrollable
+    // overflow-x too.
+    if (entry.scrollWidth > entry.clientWidth + 1) {
+      const overflowX = getComputedStyle(entry).overflowX;
+      if (overflowX === "auto" || overflowX === "scroll") return true;
+    }
+    if (entry === boundary) break;
+  }
+  return false;
+};
+
 export const installSwipeListener = (
   target: HTMLElement,
   onSwipe: (direction: 1 | -1) => void,
@@ -25,6 +54,7 @@ export const installSwipeListener = (
   const onDown = (e: PointerEvent) => {
     if (pointerId !== null) return;
     if (!POINTER_KINDS.has(e.pointerType)) return;
+    if (startsInHorizontalScrollRegion(e.composedPath(), target)) return;
     pointerId = e.pointerId;
     startX = e.clientX;
     startY = e.clientY;

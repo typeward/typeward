@@ -85,7 +85,7 @@ export const SignInForm: Component = () => {
       <Button
         variant="primary"
         leadingIcon={<LogIn class="ui-icon-sm" />}
-        disabled={busy()}
+        loading={busy()}
         onClick={handleSignIn}
       >
         {busy() ? "Signing in…" : "Sign in"}

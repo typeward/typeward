@@ -351,7 +351,7 @@ export const AiView: Component = () => {
                     onClick={() =>
                       setPendingAttachments((prev) => prev.filter((_, j) => j !== i()))
                     }
-                    class="lift rounded p-0.5 text-fg-3 hover:text-fg-1"
+                    class="lift -m-1 rounded p-1.5 text-fg-3 hover:text-fg-1"
                   >
                     <X size={12} />
                   </button>
@@ -580,7 +580,7 @@ const ConversationSwitcher: Component = () => {
                     title="Delete conversation"
                     aria-label={`Delete conversation "${conv.title}"`}
                     onClick={() => void deleteConversation(conv.id)}
-                    class="mr-1 rounded p-1 text-fg-4 opacity-0 hover:text-[var(--color-err)] group-hover:opacity-100 focus-visible:opacity-100"
+                    class="-m-0.5 mr-0.5 rounded p-1.5 text-fg-4 opacity-0 hover:text-[var(--color-err)] group-hover:opacity-100 focus-visible:opacity-100"
                   >
                     <Trash2 size={12} />
                   </button>

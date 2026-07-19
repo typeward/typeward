@@ -8,7 +8,7 @@
   --color-bg-base: #0d0c0a;
 
   --color-fg-1: #ede6d8;
-  --color-fg-2: rgb(237 230 216 / 0.62);
+  --color-fg-2: rgb(237 230 216 / 0.70); /* was 0.62 — ~7.4:1 so it separates from fg-3 (0.56) */
   --color-fg-3: rgb(237 230 216 / 0.56); /* was 0.51 — ≈4.6:1 on bare bg, still fine on glass */
   --color-fg-4: rgb(237 230 216 / 0.40); /* was 0.38 — keeps the 3:1 floor on bare bg */
 
@@ -30,6 +30,7 @@
   --color-selection-bg: rgb(232 163 77 / 0.12);
   --color-text-selection: rgb(232 163 77 / 0.40);
   --color-card-bg: rgb(23 21 15 / 0.60);
+  --color-doc-surface: rgb(28 26 20);
   --color-card-bg-soft: rgb(23 21 15 / 0.40);
 
   --color-control-track-off: rgb(237 230 216 / 0.16);

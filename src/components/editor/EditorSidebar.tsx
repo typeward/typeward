@@ -7,8 +7,11 @@ import {
   ExternalLink,
   Files,
   FilePlus,
+  Folder,
+  FolderInput,
   FolderOpen,
   FolderPlus,
+  Import,
   GitBranch,
   History,
   ListTodo,
@@ -19,7 +22,7 @@ import {
   Trash2,
   Zap,
 } from "lucide-solid";
-import { exists } from "@tauri-apps/plugin-fs";
+import { exists, readDir, type DirEntry } from "@tauri-apps/plugin-fs";
 import type { Component } from "solid-js";
 import {
   For,
@@ -51,7 +54,7 @@ import { ProLockedPanel } from "~/components/entitlement/ProChip";
 import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
-import { notifyError } from "~/lib/toast";
+import { notifyError, notifySuccess } from "~/lib/toast";
 import { hasEntitlement, useEntitlement } from "~/integrations/entitlements";
 import { refsAvailability } from "~/integrations/references/availability";
 import { citationProviders } from "~/integrations/references/registry";
@@ -60,6 +63,7 @@ import {
   closeFileByRelPath,
   openFiles,
   project,
+  remapOpenFilesUnderDir,
   renameOpenFile,
   setProject,
 } from "~/stores/editor-store";
@@ -71,12 +75,16 @@ import {
 import { openProjectSettings } from "~/components/editor/ProjectSettingsDialog";
 import { installDismiss } from "~/lib/dismiss";
 import { useListboxOpenFocus } from "~/lib/listbox-nav";
+import { handleTablistKeydown, rovingTabIndex } from "~/lib/tablist-nav";
+import { fileManagerLabel } from "~/lib/platform-nouns";
 import {
   openCommentThreadCount,
   reanchorThreadById,
+  remapThreadDir,
   remapThreadFile,
 } from "~/stores/review-store";
 import { todoCount } from "~/stores/todo-store";
+import { touchAffordances } from "~/stores/viewport-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 
 /**
@@ -126,6 +134,38 @@ type FileMenuPayload =
   | { kind: "file"; node: FileNode }
   | { kind: "dir"; node: FileNode }
   | { kind: "empty" };
+
+/** Platform-native join matching EditorScreen's joinPath convention. */
+const joinAbs = (parent: string, rel: string): string => {
+  const sep = parent.includes("\\") ? "\\" : "/";
+  return parent.endsWith(sep) ? parent + rel : parent + sep + rel;
+};
+
+/**
+ * Flat list of the project's directories (rel paths, forward slashes) for the
+ * Move to… picker. Depth/entry-capped walk; hidden and dependency dirs are
+ * skipped like the FileTree hides them.
+ */
+async function listProjectDirs(rootPath: string): Promise<string[]> {
+  const out: string[] = [];
+  const walk = async (abs: string, rel: string, depth: number): Promise<void> => {
+    if (depth >= 6 || out.length >= 200) return;
+    let entries: DirEntry[];
+    try {
+      entries = await readDir(abs);
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (!e.isDirectory || e.name.startsWith(".") || e.name === "node_modules") continue;
+      const childRel = rel ? `${rel}/${e.name}` : e.name;
+      out.push(childRel);
+      await walk(joinAbs(abs, e.name), childRel, depth + 1);
+    }
+  };
+  await walk(rootPath, "", 0);
+  return out.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
 
 export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   const [prompt, setPrompt] = createSignal<PromptRequest | null>(null);
@@ -266,11 +306,45 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
     });
   };
 
+  /**
+   * Post-move/rename bookkeeping shared by Rename… and Move to…: repoint open
+   * buffers, keep comment/TODO threads attached, and re-target the project's
+   * entry file when it travelled with the move.
+   */
+  const afterPathMove = async (node: FileNode, newRel: string) => {
+    const p = project();
+    if (!p) return;
+    if (node.isDir) {
+      remapOpenFilesUnderDir(node.relPath, newRel, p.rootPath);
+      remapThreadDir(node.relPath, newRel);
+      const prefix = `${node.relPath}/`;
+      if (p.rootFile.startsWith(prefix)) {
+        const newRoot = `${newRel}/${p.rootFile.slice(prefix.length)}`;
+        try {
+          setProject(await ipc.setProjectRootFile(p.rootPath, newRoot));
+        } catch (e) {
+          recordError("move-path", `repointing rootFile to ${newRoot} failed`, e);
+        }
+      }
+    } else {
+      // Keep an open buffer attached (content + dirty preserved).
+      renameOpenFile(node.relPath, newRel, joinAbs(p.rootPath, newRel));
+      if (p.rootFile === node.relPath) {
+        try {
+          setProject(await ipc.setProjectRootFile(p.rootPath, newRel));
+        } catch (e) {
+          recordError("move-path", `repointing rootFile to ${newRel} failed`, e);
+        }
+      }
+      remapThreadFile(node.relPath, newRel);
+    }
+  };
+
   const openRenamePrompt = (node: FileNode) => {
     const dir = parentRel(node.relPath);
     setPrompt({
-      title: "Rename file",
-      placeholder: "name.tex",
+      title: node.isDir ? "Rename folder" : "Rename file",
+      placeholder: node.isDir ? "chapters" : "name.tex",
       initial: node.name,
       confirmLabel: "Rename",
       onConfirm: async (value) => {
@@ -285,22 +359,70 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           recordError("rename-file", `renaming ${node.relPath} failed`, e);
           throw e;
         }
-        const newAbs = node.path.slice(0, node.path.length - node.name.length) + trimmed;
-        // Keep an open buffer attached (content + dirty preserved).
-        renameOpenFile(node.relPath, newRel, newAbs);
-        // Repoint the entry file if we just renamed it.
-        if (p.rootFile === node.relPath) {
-          try {
-            const updated = await ipc.setProjectRootFile(p.rootPath, newRel);
-            setProject(updated);
-          } catch (e) {
-            recordError("rename-file", `repointing rootFile to ${newRel} failed`, e);
-          }
-        }
-        // Keep comment/TODO threads attached to the renamed file.
-        remapThreadFile(node.relPath, newRel);
+        await afterPathMove(node, newRel);
       },
     });
+  };
+
+  // Pick files anywhere on disk and copy them into `dirRel` ("" = project
+  // root). The dialog returns absolute paths, which is exactly why the copy
+  // happens in the Rust import IPC rather than through the fs plugin.
+  const addFiles = async (dirRel: string) => {
+    const p = project();
+    if (!p) return;
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({ multiple: true, title: "Add files to project" });
+    if (!picked) return;
+    const paths = Array.isArray(picked) ? picked : [picked];
+    if (paths.length === 0) return;
+    try {
+      const created = await ipc.importFilesIntoProject(p.rootPath, dirRel, paths);
+      if (created.length === 0) return;
+      notifySuccess(
+        created.length === 1
+          ? `Added ${created[0].split("/").pop()}`
+          : `Added ${created.length} files`,
+      );
+    } catch (e) {
+      notifyError("Couldn't add files", describeIpcError(e));
+      recordError("import-files", `importing into ${dirRel || "the project root"} failed`, e);
+    }
+  };
+
+  // ---- Move to… dialog ----------------------------------------------------
+
+  const [moveNode, setMoveNode] = createSignal<FileNode | null>(null);
+  const [moveDirs] = createResource(
+    () => (moveNode() ? (project()?.rootPath ?? null) : null),
+    async (root) => (root ? await listProjectDirs(root) : []),
+    { initialValue: [] },
+  );
+  // Valid destinations: the root plus every project dir, minus the node's
+  // current parent (a no-op move) and — for folders — the node's own subtree.
+  const moveTargets = createMemo<string[]>(() => {
+    const node = moveNode();
+    if (!node) return [];
+    const parent = parentRel(node.relPath);
+    return ["", ...(moveDirs() ?? [])].filter((d) => {
+      if (d === parent) return false;
+      if (node.isDir && (d === node.relPath || d.startsWith(`${node.relPath}/`)))
+        return false;
+      return true;
+    });
+  });
+
+  const doMove = async (destRel: string) => {
+    const node = moveNode();
+    const p = project();
+    setMoveNode(null);
+    if (!node || !p) return;
+    try {
+      const newRel = await ipc.moveProjectPath(p.rootPath, node.relPath, destRel);
+      await afterPathMove(node, newRel);
+    } catch (e) {
+      notifyError("Couldn't move", describeIpcError(e));
+      recordError("move-path", `moving ${node.relPath} failed`, e);
+    }
   };
 
   const duplicateFile = async (node: FileNode) => {
@@ -323,7 +445,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       node.isDir
         ? `Move the folder "${node.name}" and its contents to the trash? You can restore it from your system trash.`
         : `Move "${node.name}" to the trash? Any unsaved changes in this file will be lost. You can restore it from your system trash.`,
-      { title: "Delete", kind: "warning" },
+      { title: "Delete", kind: "warning", okLabel: "Move to trash", cancelLabel: "Cancel" },
     );
     if (!ok) return;
     try {
@@ -469,6 +591,13 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         ref={tabStripRef}
         role="tablist"
         aria-label="Sidebar panels"
+        onKeyDown={(e) =>
+          handleTablistKeydown(e, {
+            count: tabDefs().length,
+            activeIndex: tabDefs().findIndex((t) => t.id === props.tab),
+            activate: (i) => props.setTab(tabDefs()[i].id),
+          })
+        }
         class="flex flex-shrink-0 items-center gap-0 overflow-x-auto scroll border-b border-glass-stroke px-2 pt-1.5"
       >
         <For each={tabDefs()}>
@@ -478,14 +607,20 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               <button
                 type="button"
                 role="tab"
+                id={`sidebar-tab-${t.id}`}
                 aria-selected={active()}
+                aria-controls="sidebar-tabpanel"
                 aria-label={t.label}
+                tabIndex={rovingTabIndex(active())}
                 title={compact() ? t.label : undefined}
                 onClick={() => props.setTab(t.id)}
                 class={`relative flex flex-shrink-0 items-center gap-1.5 px-2.5 text-base font-medium ${
                   active() ? "text-fg-1" : "text-fg-3 hover:text-fg-2"
                 }`}
-                style={{ height: "var(--ui-row)" }}
+                // 44px tabs on coarse pointers. The hidden measurement clone
+                // below must mirror this ternary so it measures the same size
+                // variant the strip renders.
+                style={{ height: touchAffordances() ? "44px" : "var(--ui-row)" }}
               >
                 <Show when={compact() && t.id !== "files"} fallback={t.label}>
                   <Dynamic component={t.icon} size={14} />
@@ -538,7 +673,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
           {(t) => (
             <span
               class="flex flex-shrink-0 items-center gap-1.5 px-2.5 text-base font-medium"
-              style={{ height: "var(--ui-row)" }}
+              style={{ height: touchAffordances() ? "44px" : "var(--ui-row)" }}
             >
               {t.label}
               <Show when={t.locked}>
@@ -555,7 +690,11 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       {/* "Files" section header — uppercase label + new-file / new-folder actions. */}
       <Show when={props.tab === "files"}>
         <div
-          class="label-xs flex h-9 flex-shrink-0 items-center justify-between px-3 text-fg-3"
+          class="label-xs flex flex-shrink-0 items-center justify-between px-3 text-fg-3"
+          classList={{
+            "h-11": touchAffordances(),
+            "h-9": !touchAffordances(),
+          }}
         >
           <span>File tree</span>
           <div class="flex items-center gap-0.5">
@@ -564,7 +703,11 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               title="New folder"
               aria-label="New folder"
               onClick={() => openNewFolderPrompt("")}
-              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+              class="flex items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+              classList={{
+                "h-11 w-11": touchAffordances(),
+                "h-6 w-6": !touchAffordances(),
+              }}
             >
               <FolderPlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
             </button>
@@ -573,7 +716,11 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
               title="New file"
               aria-label="New file"
               onClick={() => openNewFilePrompt("")}
-              class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+              class="flex items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+              classList={{
+                "h-11 w-11": touchAffordances(),
+                "h-6 w-6": !touchAffordances(),
+              }}
             >
               <FilePlus class="ui-icon-menu" style={{ opacity: 0.8 }} />
             </button>
@@ -581,7 +728,13 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
         </div>
       </Show>
 
-      <div class="min-h-0 flex-1 overflow-auto scroll">
+      {/* One shared tabpanel whose content swaps with the selected tab. */}
+      <div
+        id="sidebar-tabpanel"
+        role="tabpanel"
+        aria-labelledby={`sidebar-tab-${props.tab}`}
+        class="min-h-0 flex-1 overflow-auto scroll"
+      >
         <Show when={props.tab === "files" && project()}>
           <FileTree
             rootPath={project()!.rootPath}
@@ -627,7 +780,11 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
             title="Project settings"
             aria-label="Project settings"
             onClick={() => openProjectSettings()}
-            class="flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+            class="flex items-center justify-center rounded hover:bg-[var(--color-control-fill)]"
+            classList={{
+              "h-11 w-11": touchAffordances(),
+              "h-6 w-6": !touchAffordances(),
+            }}
           >
             <Settings2 class="ui-icon-menu" style={{ opacity: 0.8 }} />
           </button>
@@ -658,14 +815,16 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                           props.onSelectFile(pl().node.relPath);
                         }}
                       />
-                      <ContextMenuItem
-                        icon={Pencil}
-                        label="Rename…"
-                        onClick={() => {
-                          fileMenu.close();
-                          openRenamePrompt(pl().node);
-                        }}
-                      />
+                    </Show>
+                    <ContextMenuItem
+                      icon={Pencil}
+                      label="Rename…"
+                      onClick={() => {
+                        fileMenu.close();
+                        openRenamePrompt(pl().node);
+                      }}
+                    />
+                    <Show when={pl().kind === "file"}>
                       <ContextMenuItem
                         icon={Copy}
                         label="Duplicate"
@@ -675,6 +834,15 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                         }}
                       />
                     </Show>
+                    <ContextMenuItem
+                      icon={FolderInput}
+                      label="Move to…"
+                      onClick={() => {
+                        fileMenu.close();
+                        setMoveNode(pl().node);
+                      }}
+                    />
+                    <ContextMenuSeparator />
                     <ContextMenuItem
                       icon={FilePlus}
                       label="New file here"
@@ -699,6 +867,18 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                         );
                       }}
                     />
+                    <ContextMenuItem
+                      icon={Import}
+                      label="Add files here…"
+                      onClick={() => {
+                        fileMenu.close();
+                        void addFiles(
+                          pl().kind === "dir"
+                            ? pl().node.relPath
+                            : parentRel(pl().node.relPath),
+                        );
+                      }}
+                    />
                     <ContextMenuSeparator />
                     <ContextMenuItem
                       icon={ClipboardCopy}
@@ -710,7 +890,7 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                     />
                     <ContextMenuItem
                       icon={ExternalLink}
-                      label="Reveal in file manager"
+                      label={fileManagerLabel()}
                       onClick={() => {
                         fileMenu.close();
                         void revealInFileManager(pl().node);
@@ -746,6 +926,14 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
                     openNewFolderPrompt("");
                   }}
                 />
+                <ContextMenuItem
+                  icon={Import}
+                  label="Add files…"
+                  onClick={() => {
+                    fileMenu.close();
+                    void addFiles("");
+                  }}
+                />
                 <ContextMenuSeparator />
                 <ContextMenuItem
                   icon={ChevronsDownUp}
@@ -762,6 +950,37 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
       </Show>
 
       <NamePromptDialog request={prompt()} onClose={() => setPrompt(null)} />
+
+      {/* Move to… destination picker — the project root plus every directory
+          visible in the tree, minus the source's parent and its own subtree. */}
+      <Dialog
+        open={moveNode() !== null}
+        onOpenChange={(o) => {
+          if (!o) setMoveNode(null);
+        }}
+        title={moveNode() ? `Move "${moveNode()!.name}" to…` : ""}
+        widthClass="w-[420px]"
+      >
+        <div class="flex max-h-72 flex-col gap-0.5 overflow-auto scroll">
+          <For each={moveTargets()}>
+            {(dest) => (
+              <button
+                type="button"
+                onClick={() => void doMove(dest)}
+                class="lift flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-fg-2 hover:bg-[var(--color-control-fill)] hover:text-fg-1"
+              >
+                <Folder class="ui-icon-menu flex-shrink-0 text-fg-3" />
+                <span class="truncate">{dest === "" ? "Project root" : dest}</span>
+              </button>
+            )}
+          </For>
+          <Show when={!moveDirs.loading && moveTargets().length === 0}>
+            <div class="px-2 py-1.5 text-sm text-fg-3">
+              No other folders in this project.
+            </div>
+          </Show>
+        </div>
+      </Dialog>
     </div>
   );
 };
@@ -875,7 +1094,6 @@ const EnginePill: Component = () => {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
         aria-expanded={open()}
         title="Build settings"
         class="glass-soft flex w-full items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-[var(--color-control-fill)]"

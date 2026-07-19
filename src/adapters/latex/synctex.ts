@@ -18,25 +18,29 @@ import { requestGotoSource, requestPdfScroll } from "~/stores/editor-store";
 /**
  * Best-effort: convert an absolute source path to a path relative to the
  * project root. SyncTeX emits the source path as the engine resolved it,
- * which may include normalized casing or symlink resolution — we compare
- * case-insensitively on Windows where the FS is case-insensitive anyway.
- * Returns null if the absolute path doesn't live under the project.
+ * which may include normalized casing or symlink resolution — we try an exact
+ * match first, then retry case-insensitively on EVERY platform (not a Windows
+ * UA sniff: macOS APFS defaults case-insensitive too). The retry is strictly
+ * safe even on a case-sensitive filesystem — it only maps an engine-resolved
+ * path back to a project-relative one, so it can rescue a match but never
+ * corrupt one. Returns null if the absolute path doesn't live under the
+ * project.
  */
 export function pathRelativeToProjectRoot(root: string, abs: string): string | null {
   const norm = (s: string) => s.replace(/\\/g, "/").replace(/\/+$/, "");
   const r = norm(root);
   const a = norm(abs);
-  const caseInsensitive =
-    typeof navigator !== "undefined" &&
-    /Windows/i.test(navigator.userAgent || navigator.platform || "");
-  const cmp = (x: string, y: string) =>
-    caseInsensitive ? x.toLowerCase() === y.toLowerCase() : x === y;
-  if (cmp(a, r)) return null;
-  if (!cmp(a.slice(0, r.length), r) || a.charAt(r.length) !== "/") {
-    return null;
+  for (const fold of [(s: string) => s, (s: string) => s.toLowerCase()]) {
+    const fr = fold(r);
+    const fa = fold(a);
+    if (fa === fr) return null;
+    if (fa.slice(0, fr.length) === fr && fa.charAt(fr.length) === "/") {
+      // Slice the unfolded path so the returned rel path keeps disk casing.
+      const rest = a.slice(r.length + 1);
+      return rest || null;
+    }
   }
-  const rest = a.slice(r.length + 1);
-  return rest || null;
+  return null;
 }
 
 function synctexSourceToProjectRel(projectRoot: string, sourceFile: string): string | null {

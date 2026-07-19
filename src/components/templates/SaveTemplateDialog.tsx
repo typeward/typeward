@@ -3,6 +3,7 @@ import { Save } from "lucide-solid";
 import type { Component } from "solid-js";
 import { createEffect, createSignal, Show } from "solid-js";
 
+import { TextField } from "~/components/forms/TextField";
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { hasEntitlement } from "~/integrations/entitlements";
@@ -100,20 +101,18 @@ export const SaveTemplateDialog: Component = () => {
       }
     >
       <div class="flex flex-col gap-3">
-        <label class="flex flex-col gap-1">
-          <span class="text-sm text-fg-2">Name</span>
-          <input
-            type="text"
-            value={name()}
-            onInput={(e) => setName(e.currentTarget.value)}
-            placeholder="My thesis template"
-            class="glass-inset h-10 w-full rounded-md px-3 text-base text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-            autofocus
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.isComposing && !busy() && name().trim()) handleSave();
-            }}
-          />
-        </label>
+        <TextField
+          label="Name"
+          size="lg"
+          type="text"
+          value={name()}
+          onInput={(e) => setName(e.currentTarget.value)}
+          placeholder="My thesis template"
+          autofocus
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.isComposing && !busy() && name().trim()) handleSave();
+          }}
+        />
         <label class="flex flex-col gap-1">
           <span class="text-sm text-fg-2">Description (optional)</span>
           <textarea

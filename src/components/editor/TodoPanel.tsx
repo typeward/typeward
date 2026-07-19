@@ -151,7 +151,7 @@ export const TodoPanel: Component = () => {
       <div class="flex min-h-0 flex-1 flex-col">
         <Show when={todoThreads().some((t) => t.status === "resolved")}>
           <div class="flex items-center justify-end border-b border-[var(--color-border)] px-3 py-1.5">
-            <label class="flex items-center gap-1.5 text-[10px] text-fg-3 select-none">
+            <label class="-m-1.5 flex items-center gap-1.5 p-1.5 text-[10px] text-fg-3 select-none">
               <input
                 type="checkbox"
                 checked={showResolved()}

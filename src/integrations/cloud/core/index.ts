@@ -1,4 +1,11 @@
-export { SyncEngine, pushOne, type PushPlan, type SyncEngineOptions } from "./engine";
+export {
+  SyncEngine,
+  conflictResolverIntent,
+  pushOne,
+  requestConflictResolver,
+  type PushPlan,
+  type SyncEngineOptions,
+} from "./engine";
 export { decideConflict, suffixWithConflict } from "./conflict";
 export {
   REMOTE_CACHE_DIR,

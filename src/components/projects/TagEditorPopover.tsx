@@ -3,6 +3,7 @@ import type { Component } from "solid-js";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { Project } from "~/adapters/types";
+import { TextField } from "~/components/forms/TextField";
 import { describeIpcError } from "~/lib/errors";
 import { installDismiss } from "~/lib/dismiss";
 import { notifyError } from "~/lib/toast";
@@ -57,7 +58,7 @@ export const TagEditorPopover: Component<TagEditorPopoverProps> = (props) => {
   const commit = (next: string[]) => {
     setLocalTags(next);
     void setTags(props.project.rootPath, next).catch((e) =>
-      notifyError(describeIpcError(e)),
+      notifyError("Couldn't save tags", describeIpcError(e)),
     );
   };
 
@@ -122,7 +123,9 @@ export const TagEditorPopover: Component<TagEditorPopoverProps> = (props) => {
                   type="button"
                   onClick={() => removeTag(tag)}
                   aria-label={`Remove tag ${tag}`}
-                  class="-mr-0.5 flex h-3.5 w-3.5 items-center justify-center rounded text-fg-3 hover:text-[var(--color-err)]"
+                  // 24px hit target (WCAG 2.5.8); negative margins keep the
+                  // chip's visual footprint unchanged.
+                  class="-my-1 -ml-1 -mr-1.5 flex h-6 w-6 items-center justify-center rounded text-fg-3 hover:text-[var(--color-err)]"
                 >
                   <X size={9} />
                 </button>
@@ -133,22 +136,26 @@ export const TagEditorPopover: Component<TagEditorPopoverProps> = (props) => {
       </Show>
 
       <div class="flex items-center gap-1.5">
-        <input
-          type="text"
-          value={draft()}
-          placeholder="Add a tag…"
-          onInput={(e) => setDraft(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.isComposing) {
-              e.preventDefault();
-              addTag(draft());
-            } else if (e.key === "Escape") {
-              e.stopPropagation();
-              props.onClose();
-            }
-          }}
-          class="glass-inset min-w-0 flex-1 rounded-md px-2 py-1.5 text-sm text-fg-1 placeholder:text-fg-3 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-        />
+        <div class="min-w-0 flex-1">
+          <TextField
+            label="Add a tag"
+            hideLabel
+            size="sm"
+            type="text"
+            value={draft()}
+            placeholder="Add a tag…"
+            onInput={(e) => setDraft(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.isComposing) {
+                e.preventDefault();
+                addTag(draft());
+              } else if (e.key === "Escape") {
+                e.stopPropagation();
+                props.onClose();
+              }
+            }}
+          />
+        </div>
         <button
           type="button"
           onClick={() => addTag(draft())}

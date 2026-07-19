@@ -1,5 +1,5 @@
 import { Check, Settings2 } from "lucide-solid";
-import type { Component } from "solid-js";
+import type { Component, JSX } from "solid-js";
 import { For, Show, createResource } from "solid-js";
 import type { ProjectBuild } from "~/adapters/types";
 import type { BuildRecipe } from "~/adapters/latex/build-config";
@@ -103,7 +103,22 @@ export function usePerProjectBuild(active: () => boolean) {
     }
   };
 
-  return { eff, trust, patch, reset, onToggleShellEscape };
+  // A stored denial makes ensureShellEscapeTrust return early forever — this
+  // is the one UI path that clears it (grants are untouched) and re-prompts.
+  const reapproveShellEscape = async () => {
+    const p = project();
+    if (!p) return;
+    try {
+      await ipc.trustClearShellEscape(p.rootPath);
+    } catch (e) {
+      notifyError("Couldn't clear the shell-escape block", describeIpcError(e));
+      return;
+    }
+    await ensureShellEscapeTrust(p);
+    void refetchTrust();
+  };
+
+  return { eff, trust, patch, reset, onToggleShellEscape, reapproveShellEscape };
 }
 
 interface BuildConfigMenuProps {
@@ -122,9 +137,8 @@ interface BuildConfigMenuProps {
  */
 export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
   let panelRef: HTMLDivElement | undefined;
-  const { eff, trust, patch, reset, onToggleShellEscape } = usePerProjectBuild(
-    () => true,
-  );
+  const { eff, trust, patch, reset, onToggleShellEscape, reapproveShellEscape } =
+    usePerProjectBuild(() => true);
 
   // Tectonic and the WASM engine run their own bibliography passes, so a curated
   // recipe would be ignored — hide it and say so instead.
@@ -138,10 +152,16 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
     props.onClose();
   };
 
+  // The panel mixes two single-select listboxes (engine, recipe) with
+  // interactive Switch rows and footer buttons, so the root is a plain labeled
+  // group — a listbox root would nest interactive controls inside option
+  // semantics. handleListboxKeydown still roves the option rows (they live in
+  // the sub-listboxes) and closes on Escape.
   return (
     <div
       ref={panelRef}
-      role="listbox"
+      role="group"
+      aria-label="Build configuration"
       tabindex={-1}
       onKeyDown={(e) => handleListboxKeydown(e, panelRef, props.onClose)}
       class={`glass absolute left-0 z-50 w-[248px] rounded-lg py-1.5 ${
@@ -151,28 +171,30 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
     >
       <Show when={eff()}>
         <div class="label-xs px-3 py-1 text-fg-3">Engine</div>
-        <For each={ENGINES}>
-          {(en) => {
-            const activeEngine = () => eff()!.engine === en.id;
-            return (
-              <button
-                type="button"
-                role="option"
-                aria-selected={activeEngine()}
-                tabindex={-1}
-                onClick={() => void patch({ engine: en.id })}
-                class="flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)]"
-              >
-                <span class={activeEngine() ? "font-medium text-fg-1" : "text-fg-2"}>
-                  {en.label}
-                </span>
-                <Show when={activeEngine()}>
-                  <Check size={12} class="ml-auto" style={{ color: "var(--color-accent-1)" }} />
-                </Show>
-              </button>
-            );
-          }}
-        </For>
+        <div role="listbox" aria-label="Engine">
+          <For each={ENGINES}>
+            {(en) => {
+              const activeEngine = () => eff()!.engine === en.id;
+              return (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={activeEngine()}
+                  tabindex={-1}
+                  onClick={() => void patch({ engine: en.id })}
+                  class="flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)]"
+                >
+                  <span class={activeEngine() ? "font-medium text-fg-1" : "text-fg-2"}>
+                    {en.label}
+                  </span>
+                  <Show when={activeEngine()}>
+                    <Check size={12} class="ml-auto" style={{ color: "var(--color-accent-1)" }} />
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
+        </div>
 
         <div class="my-1.5 border-t border-glass-stroke" />
 
@@ -186,29 +208,31 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
           }
         >
           <div class="label-xs px-3 py-1 text-fg-3">Recipe</div>
-          <For each={RECIPES}>
-            {(rc) => {
-              const activeRecipe = () => eff()!.recipe === rc.id;
-              return (
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={activeRecipe()}
-                  tabindex={-1}
-                  onClick={() => void patch({ recipe: rc.id })}
-                  title={rc.hint}
-                  class="flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)]"
-                >
-                  <span class={activeRecipe() ? "font-medium text-fg-1" : "text-fg-2"}>
-                    {rc.label}
-                  </span>
-                  <Show when={activeRecipe()}>
-                    <Check size={12} class="ml-auto" style={{ color: "var(--color-accent-1)" }} />
-                  </Show>
-                </button>
-              );
-            }}
-          </For>
+          <div role="listbox" aria-label="Recipe">
+            <For each={RECIPES}>
+              {(rc) => {
+                const activeRecipe = () => eff()!.recipe === rc.id;
+                return (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={activeRecipe()}
+                    tabindex={-1}
+                    onClick={() => void patch({ recipe: rc.id })}
+                    title={rc.hint}
+                    class="flex h-7 w-full items-center px-3 text-left text-sm hover:bg-[var(--color-control-fill)]"
+                  >
+                    <span class={activeRecipe() ? "font-medium text-fg-1" : "text-fg-2"}>
+                      {rc.label}
+                    </span>
+                    <Show when={activeRecipe()}>
+                      <Check size={12} class="ml-auto" style={{ color: "var(--color-accent-1)" }} />
+                    </Show>
+                  </button>
+                );
+              }}
+            </For>
+          </div>
         </Show>
 
         <div class="my-1.5 border-t border-glass-stroke" />
@@ -216,9 +240,18 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
         <BuildToggle
           label="Shell-escape"
           hint={
-            trust() === "denied"
-              ? "Blocked on this machine"
-              : "Lets the document run programs — needs approval"
+            <Show
+              when={trust() === "denied"}
+              fallback={<>Lets the document run programs — needs approval</>}
+            >
+              <button
+                type="button"
+                onClick={() => void reapproveShellEscape()}
+                class="text-left underline decoration-dotted underline-offset-2 hover:text-fg-1"
+              >
+                Blocked on this machine — re-approve…
+              </button>
+            </Show>
           }
           checked={eff()!.shellEscape}
           onChange={(v) => void onToggleShellEscape(v)}
@@ -269,7 +302,7 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
 
 const BuildToggle: Component<{
   label: string;
-  hint?: string;
+  hint?: JSX.Element;
   checked: boolean;
   onChange: (v: boolean) => void;
 }> = (props) => (

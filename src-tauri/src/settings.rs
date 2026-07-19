@@ -210,6 +210,10 @@ fn default_pdf_zoom() -> u16 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiSettings {
     pub density: String,
+    /// Interface scale in percent (100 = 1.0). The frontend owns the 90–150
+    /// step-5 clamp at its load boundary; Rust only round-trips the value.
+    #[serde(rename = "uiScale", default = "default_ui_scale")]
+    pub ui_scale: u16,
     pub animations: bool,
     #[serde(rename = "ambientLights", default = "default_true")]
     pub ambient_lights: bool,
@@ -225,6 +229,9 @@ pub struct UiSettings {
 
 fn default_true() -> bool {
     true
+}
+fn default_ui_scale() -> u16 {
+    100
 }
 
 /// Integrations preferences. Each sub-section is `#[serde(default)]` so the
@@ -440,6 +447,30 @@ pub struct WorkspaceSettings {
     /// each project.json `space` field). Order = display order. Additive.
     #[serde(default)]
     pub spaces: Vec<SpaceDef>,
+    /// Editor pane layout ("split" | "editor" | "preview"). The frontend owns
+    /// the enum validation at its load boundary; Rust only round-trips it.
+    #[serde(rename = "editorLayout", default = "default_editor_layout")]
+    pub editor_layout: String,
+    /// Where the logs/issues console docks ("drawer" | "pdf-tab").
+    #[serde(rename = "consolePosition", default = "default_console_position")]
+    pub console_position: String,
+    /// Sidebar width in px once the user drags the handle. `None` = never
+    /// dragged, the sidebar keeps auto-fitting its tab strip.
+    #[serde(rename = "sidebarPx", default)]
+    pub sidebar_px: Option<u16>,
+    /// Editor panel's fraction of the editor/preview split (frontend clamps).
+    #[serde(rename = "centerSplit", default = "default_center_split")]
+    pub center_split: f64,
+}
+
+fn default_editor_layout() -> String {
+    "split".into()
+}
+fn default_console_position() -> String {
+    "pdf-tab".into()
+}
+fn default_center_split() -> f64 {
+    0.55
 }
 
 /// A workspace "space" — a named, tinted grouping for the library sidebar. The
@@ -513,6 +544,7 @@ impl Default for UiSettings {
     fn default() -> Self {
         Self {
             density: "cozy".into(),
+            ui_scale: 100,
             animations: true,
             ambient_lights: true,
             accent_gradient: true,
@@ -537,6 +569,10 @@ impl Default for WorkspaceSettings {
             project_card_words: false,
             stats_cards: default_stats_cards(),
             spaces: Vec::new(),
+            editor_layout: default_editor_layout(),
+            console_position: default_console_position(),
+            sidebar_px: None,
+            center_split: default_center_split(),
         }
     }
 }

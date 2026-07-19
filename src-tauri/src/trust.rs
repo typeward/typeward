@@ -72,6 +72,29 @@ pub async fn shell_escape_trust_get(
     .map_err(|e| e.to_string())?
 }
 
+/// Clear a stored shell-escape DENIAL so the trust prompt can run again. A
+/// stored grant is left untouched — revoking a grant stays an explicit
+/// `shell_escape_trust_set(root, "denied")`.
+#[tauri::command]
+pub async fn trust_clear_shell_escape(
+    app: tauri::AppHandle,
+    project_root: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let root = Path::new(&project_root);
+        project::require_registered_root(root).map_err(|e| e.to_string())?;
+        let mut store = load(&app);
+        let key = canon(root);
+        if store.entries.get(&key).map(|v| v == "denied").unwrap_or(false) {
+            store.entries.remove(&key);
+            save(&app, &store)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn shell_escape_trust_set(
     app: tauri::AppHandle,

@@ -19,7 +19,7 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "zoomHotkeysEnabled": false,
+        "zoomHotkeysEnabled": true,
         "backgroundColor": "#F8F4EA"
       }
     ],
@@ -32,6 +32,29 @@
     "active": true,
     "targets": ["nsis", "app", "dmg", "deb", "appimage", "rpm"],
     "createUpdaterArtifacts": false,
+    "fileAssociations": [
+      {
+        "ext": ["tex"],
+        "name": "LaTeX Source",
+        "description": "LaTeX source file",
+        "role": "Editor",
+        "mimeType": "text/x-tex"
+      },
+      {
+        "ext": ["typ"],
+        "name": "Typst Source",
+        "description": "Typst source file",
+        "role": "Editor",
+        "mimeType": "text/x-typst"
+      },
+      {
+        "ext": ["bib"],
+        "name": "BibTeX Bibliography",
+        "description": "BibTeX bibliography file",
+        "role": "Editor",
+        "mimeType": "text/x-bibtex"
+      }
+    ],
     "externalBin": ["binaries/tectonic"],
     "resources": ["resources/templates/**/*"],
     "icon": [

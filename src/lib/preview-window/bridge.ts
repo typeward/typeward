@@ -10,6 +10,7 @@
  */
 import { emitTo, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow, getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
+import { currentMonitor } from "@tauri-apps/api/window";
 import type { CreateThreadInput, PdfAnnotation } from "~/lib/pdf-annotations/types";
 import { setPreviewDetached } from "~/stores/ui-store";
 
@@ -94,6 +95,35 @@ function armDestroyListener(win: WebviewWindow): void {
   });
 }
 
+// Portrait-ish default sized for a full LaTeX page; taller than a 1080p work
+// area, so it is clamped to the current monitor before the window is created.
+const PREVIEW_DEFAULT_WIDTH = 900;
+const PREVIEW_DEFAULT_HEIGHT = 1100;
+const PREVIEW_MIN_SIZE = 400;
+const PREVIEW_CHROME_MARGIN = 48;
+
+/**
+ * Clamp the preview window's default size to the current monitor's work area
+ * (minus a margin for titlebar/taskbar chrome). `workArea` is physical pixels
+ * while `WebviewWindow` options take logical, so convert via `scaleFactor`.
+ * Falls back to the unclamped defaults when the monitor can't be queried.
+ */
+async function clampedPreviewSize(): Promise<{ width: number; height: number }> {
+  try {
+    const monitor = await currentMonitor();
+    if (!monitor) return { width: PREVIEW_DEFAULT_WIDTH, height: PREVIEW_DEFAULT_HEIGHT };
+    const work = monitor.workArea.size.toLogical(monitor.scaleFactor);
+    const clamp = (preferred: number, available: number) =>
+      Math.max(PREVIEW_MIN_SIZE, Math.min(preferred, Math.floor(available - PREVIEW_CHROME_MARGIN)));
+    return {
+      width: clamp(PREVIEW_DEFAULT_WIDTH, work.width),
+      height: clamp(PREVIEW_DEFAULT_HEIGHT, work.height),
+    };
+  } catch {
+    return { width: PREVIEW_DEFAULT_WIDTH, height: PREVIEW_DEFAULT_HEIGHT };
+  }
+}
+
 /**
  * Open the detached preview window (or focus it if it already exists) and mark
  * the session detached. Wires the window's destroy event back to `previewDetached`
@@ -108,15 +138,16 @@ export async function detachPreview(): Promise<void> {
     armDestroyListener(existing);
     return;
   }
+  const size = await clampedPreviewSize();
   // A query param (not a router path) keeps the SPA/asset-protocol fallback
   // identical to the main window; index.tsx branches on it before importing App.
   const win = new WebviewWindow(PREVIEW_LABEL, {
     url: "index.html?window=preview",
     title: "Typeward — Preview",
-    width: 900,
-    height: 1100,
-    minWidth: 400,
-    minHeight: 400,
+    width: size.width,
+    height: size.height,
+    minWidth: PREVIEW_MIN_SIZE,
+    minHeight: PREVIEW_MIN_SIZE,
     resizable: true,
   });
   setPreviewDetached(true);

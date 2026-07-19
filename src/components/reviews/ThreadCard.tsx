@@ -82,7 +82,7 @@ export const ThreadCard: Component<ThreadCardProps> = (props) => {
               e.stopPropagation();
               props.onClickAnchor();
             }}
-            class="mono block max-w-full truncate text-xs text-fg-2 hover:text-[var(--color-accent-1)]"
+            class="mono -my-1 block max-w-full truncate py-1 text-xs text-fg-2 hover:text-[var(--color-accent-1)]"
             title="Jump to anchor in editor"
           >
             {props.orphaned ? `(anchor lost) ${props.thread.anchorText}` : `"${props.thread.anchorText}"`}

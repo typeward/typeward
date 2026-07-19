@@ -20,6 +20,7 @@ import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
 import { SignInForm } from "~/components/account/SignInForm";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
+import { Button } from "~/components/primitives/Button";
 import { setRequestProDialog } from "~/commands/palette-store";
 import {
   PRO_DISCOVERY_ENABLED,
@@ -183,7 +184,7 @@ const StepBar: Component<{ step: number }> = (props) => (
     <span class="ml-2.5 text-base font-semibold tracking-tight text-fg-1">
       Typeward
     </span>
-    <span class="mono ml-2.5 text-xs text-fg-3">· first run · v0.0.1</span>
+    <span class="mono ml-2.5 text-xs text-fg-3">· first run · v{__APP_VERSION__}</span>
     <div class="ml-auto flex items-center gap-1.5">
       <For each={STEP_ORDER}>
         {(_, i) => {
@@ -289,14 +290,15 @@ const Footer: Component<{
         </Show>
         <SolidSwitch
           fallback={
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="lg"
+              class="glow-accent font-semibold"
               onClick={props.onNext}
-              class="glow-accent flex h-[38px] items-center gap-2 rounded-[10px] px-[18px] text-base font-semibold accent-grad"
+              trailingIcon={<ArrowRight size={12} stroke-width={2.2} />}
             >
               Continue
-              <ArrowRight size={12} stroke-width={2.2} />
-            </button>
+            </Button>
           }
         >
           {/* Signed out, the pane's Sign in button is the primary action —

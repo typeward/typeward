@@ -105,7 +105,7 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setScope("file")}
-            class={`rounded px-2 py-0.5 text-xs font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
+            class={`-my-0.5 rounded px-2 py-1 text-xs font-medium ${scope() === "file" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
             style={scope() === "file" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             This file
@@ -113,13 +113,13 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
           <button
             type="button"
             onClick={() => setScope("all")}
-            class={`rounded px-2 py-0.5 text-xs font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
+            class={`-my-0.5 rounded px-2 py-1 text-xs font-medium ${scope() === "all" ? "text-fg-1" : "text-fg-3 hover:text-fg-2"}`}
             style={scope() === "all" ? { background: "var(--color-control-fill-hover)" } : {}}
           >
             All files
           </button>
         </div>
-        <label class="flex items-center gap-1.5 text-[10px] text-fg-3 select-none">
+        <label class="-m-1.5 flex items-center gap-1.5 p-1.5 text-[10px] text-fg-3 select-none">
           <input
             type="checkbox"
             checked={showResolved()}
