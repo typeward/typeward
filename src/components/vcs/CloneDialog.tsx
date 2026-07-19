@@ -15,10 +15,11 @@ import { GitBranch } from "lucide-solid";
 import type { Component } from "solid-js";
 import { Show, createMemo, createSignal } from "solid-js";
 
+import { TextField } from "~/components/forms/TextField";
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { setCredential } from "~/integrations/auth/credentials";
-import { assertEntitlement } from "~/integrations/entitlements";
+import { assertEntitlement, useEntitlement } from "~/integrations/entitlements";
 import {
   connectGithub,
   hasGithubCredential,
@@ -42,6 +43,11 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+
+  // A free user reaches this dialog via the Overleaf import entitlement, but
+  // GitHub/generic clones still need the Pro VCS key — hint before submit
+  // instead of surfacing a raw entitlement error afterward.
+  const gitEntitled = useEntitlement("integrations.vcs.git");
 
   const kind = createMemo<Kind>(() => {
     const u = url();
@@ -102,9 +108,13 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
     }
     setBusy(true);
     try {
-      assertEntitlement("integrations.vcs.git");
-      // Overleaf's git bridge rides the git IPC but is its own entitlement.
-      if (kind() === "overleaf") assertEntitlement("integrations.vcs.overleaf_import");
+      // Overleaf's git bridge rides the git IPC but carries the free
+      // migration-import entitlement, not the Pro VCS one (repriced 2026-07-16).
+      if (kind() === "overleaf") {
+        assertEntitlement("integrations.vcs.overleaf_import");
+      } else {
+        assertEntitlement("integrations.vcs.git");
+      }
       // Stash credentials before triggering the clone so libgit2's
       // callback can find them.
       const host = hostFromUrl();
@@ -176,34 +186,34 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
       }
     >
       <div class="flex flex-col gap-3">
-        <label class="flex flex-col gap-1">
-          <span class="text-sm font-medium text-fg-2">URL</span>
-          <input
-            type="text"
-            value={url()}
-            onInput={(e) => setUrl(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.isComposing && !busy() && url().trim()) void handleClone();
-            }}
-            placeholder="https://github.com/typeward/app.git"
-            class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-            autofocus
-          />
-        </label>
+        <TextField
+          label="URL"
+          type="text"
+          value={url()}
+          onInput={(e) => setUrl(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.isComposing && !busy() && url().trim()) void handleClone();
+          }}
+          placeholder="https://github.com/typeward/app.git"
+          autofocus
+        />
 
-        <label class="flex flex-col gap-1">
-          <span class="text-sm font-medium text-fg-2">Project name</span>
-          <input
-            type="text"
-            value={name()}
-            onInput={(e) => setName(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.isComposing && !busy() && url().trim()) void handleClone();
-            }}
-            placeholder={inferredName() || "my-thesis"}
-            class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
-        </label>
+        <TextField
+          label="Project name"
+          type="text"
+          value={name()}
+          onInput={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.isComposing && !busy() && url().trim()) void handleClone();
+          }}
+          placeholder={inferredName() || "my-thesis"}
+        />
+
+        <Show when={kind() !== "overleaf" && !gitEntitled()}>
+          <div class="text-xs text-fg-3">
+            Cloning arbitrary repositories is part of Pro — Overleaf project links work on the free tier.
+          </div>
+        </Show>
 
         <Show when={kind() === "github"}>
           <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2">
@@ -223,19 +233,22 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
               <GitBranch class="ui-icon-sm text-fg-3" />
               Overleaf's git bridge is a premium feature. Paste your account email + the project-specific token from Overleaf's Project → Git → Generate token.
             </div>
-            <input
+            <TextField
+              label="Email (Overleaf account)"
+              hideLabel
               type="text"
               placeholder="Email (Overleaf account)"
               value={username()}
               onInput={(e) => setUsername(e.currentTarget.value)}
-              class="glass-inset h-9 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
-            <input
+            <TextField
+              label="Project token"
+              hideLabel
+              mono
               type="password"
               placeholder="Project token"
               value={password()}
               onInput={(e) => setPassword(e.currentTarget.value)}
-              class="glass-inset h-9 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
             />
           </div>
         </Show>
@@ -246,20 +259,27 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
               Optional. Leave blank for public repos; fill for any HTTPS repo that needs basic auth or a personal access token.
             </div>
             <div class="flex gap-2">
-              <input
-                type="text"
-                placeholder="Username (optional)"
-                value={username()}
-                onInput={(e) => setUsername(e.currentTarget.value)}
-                class="glass-inset h-9 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-              />
-              <input
-                type="password"
-                placeholder="Password / token (optional)"
-                value={password()}
-                onInput={(e) => setPassword(e.currentTarget.value)}
-                class="glass-inset h-9 flex-1 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-              />
+              <div class="min-w-0 flex-1">
+                <TextField
+                  label="Username (optional)"
+                  hideLabel
+                  type="text"
+                  placeholder="Username (optional)"
+                  value={username()}
+                  onInput={(e) => setUsername(e.currentTarget.value)}
+                />
+              </div>
+              <div class="min-w-0 flex-1">
+                <TextField
+                  label="Password / token (optional)"
+                  hideLabel
+                  mono
+                  type="password"
+                  placeholder="Password / token (optional)"
+                  value={password()}
+                  onInput={(e) => setPassword(e.currentTarget.value)}
+                />
+              </div>
             </div>
           </div>
         </Show>

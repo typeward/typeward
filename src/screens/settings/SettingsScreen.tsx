@@ -3,11 +3,13 @@ import { useNavigate } from "@solidjs/router";
 import {
   Activity,
   ArrowLeft,
-  Bell,
   BookMarked,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Cloud,
+  Folder,
   GitBranch,
   Info,
   Keyboard,
@@ -20,8 +22,9 @@ import {
   Trash2,
   Type,
 } from "lucide-solid";
+import { Switch as KSwitch } from "@kobalte/core/switch";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createEffect, createResource, createSignal } from "solid-js";
+import { For, Show, createEffect, createResource, createSignal, onCleanup } from "solid-js";
 import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { ProChip, ProLockedPanel } from "~/components/entitlement/ProChip";
 import { setRequestProDialog } from "~/commands/palette-store";
@@ -30,7 +33,8 @@ import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Slider } from "~/components/forms/Slider";
-import { Switch } from "~/components/forms/Switch";
+import { Switch, SwitchControl } from "~/components/forms/Switch";
+import { TextField } from "~/components/forms/TextField";
 import { Button } from "~/components/primitives/Button";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { SoonBadge } from "~/components/primitives/SoonBadge";
@@ -54,19 +58,25 @@ import {
   type CompileEngine,
   type EditorSettings,
   type LineHeightMode,
+  buildSettings,
   compileEngine,
   editorSettings,
   feedbackPromptsEnabled,
   historyMaxVersions,
   integrationsSettings,
+  projectsRoot,
+  latchDensityChoice,
   setCompileEngine,
   setEditorSettings,
   setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setIntegrationsSettings,
+  setProjectsRoot,
   setShareCrashReports,
+  setUiScale,
   setUpdatesCheckAutomatically,
   shareCrashReports,
+  uiScale,
   updatesCheckAutomatically,
 } from "~/stores/settings-store";
 import { checkForUpdates } from "~/lib/updater";
@@ -86,6 +96,7 @@ import {
   setAccent,
   setTheme,
   theme,
+  themeSetting,
 } from "~/themes/theme-store";
 import {
   type Density,
@@ -121,6 +132,7 @@ import {
   setProjectCardWords,
 } from "~/stores/workspace-store";
 import { isTauriMobile } from "~/lib/platform";
+import { isTabletViewport, touchAffordances } from "~/stores/viewport-store";
 
 type SectionId =
   | "account"
@@ -131,6 +143,7 @@ type SectionId =
   | "editor"
   | "appearance"
   | "shortcuts"
+  | "projects-files"
   | "int-references"
   | "int-cloud"
   | "int-vcs"
@@ -161,18 +174,21 @@ const NAV: NavGroup[] = [
     label: "Account",
     items: [
       { id: "account", label: "Account & plan", icon: Key },
-      { id: "notifications", label: "Notifications", icon: Bell },
+      // The "Notifications" row is unlisted while delivery doesn't exist —
+      // the panel was a fully inert preview. NotificationsPanel stays in this
+      // file so the row can return with the real feature.
       { id: "security", label: "Security", icon: Shield },
       { id: "diagnostics", label: "Diagnostics", icon: Activity },
       { id: "about", label: "About", icon: Info },
     ],
   },
   {
-    label: "Workspace",
+    label: "General",
     items: [
       { id: "editor", label: "Editor", icon: Type },
       { id: "appearance", label: "Appearance", icon: Palette },
       { id: "shortcuts", label: "Keyboard", icon: Keyboard },
+      { id: "projects-files", label: "Projects & files", icon: Folder },
     ],
   },
   {
@@ -191,23 +207,166 @@ const SECTION_IDS: ReadonlySet<string> = new Set(
   NAV.flatMap((g) => g.items.map((i) => i.id)),
 );
 
+// Static search index for the sidebar filter: each section's nav label plus a
+// hand-maintained keyword list covering the settings that live inside it.
+// Substring match only — no content-level highlighting.
+const SECTION_KEYWORDS: Record<SectionId, string[]> = {
+  account: ["plan", "subscription", "pro", "sign in", "email", "billing", "sync settings"],
+  notifications: ["email", "push", "quiet hours"],
+  security: ["privacy", "crash reports", "telemetry", "sentry", "feedback", "two-factor", "2fa", "reset", "danger"],
+  diagnostics: ["telemetry", "log", "errors", "report", "bug", "crash"],
+  about: ["version", "updates", "release", "check for updates"],
+  editor: [
+    "engine", "compile", "latexmk", "tectonic", "autosave", "history", "versions",
+    "font", "wrap", "line height", "tab size", "line numbers", "autocomplete",
+    "brackets", "vim", "grammar", "spell", "pdf", "zoom", "invert",
+  ],
+  appearance: [
+    "theme", "dark", "light", "system", "accent", "color", "gradient", "glow",
+    "density", "scale", "zoom", "animations", "ambient", "custom theme",
+  ],
+  shortcuts: ["keyboard", "keybinding", "hotkey", "binding"],
+  "projects-files": [
+    "storage", "projects folder", "path", "location", "spaces", "tags",
+    "word count", "notifications panel", "workspace",
+  ],
+  "int-references": ["zotero", "mendeley", "bibtex", "citations", "bibliography", "doi", "arxiv"],
+  "int-cloud": ["dropbox", "webdav", "nextcloud", "owncloud", "sync", "cloud storage"],
+  "int-vcs": ["git", "github", "overleaf", "commit", "clone", "version control", "repository"],
+  "int-ai": ["ai", "claude", "anthropic", "openai", "chatgpt", "gemini", "ollama", "chat", "models"],
+  "int-grammar": ["harper", "grammar", "spelling", "spell check", "dictionary"],
+};
+
+/** The active section's content — the same panel chain feeds the desktop
+ *  two-pane layout and level 2 of the tablet drill-down. */
+const SectionPanel: Component<{ id: SectionId }> = (props) => (
+  <>
+    <Show when={props.id === "appearance"}>
+      <AppearancePanel />
+    </Show>
+    <Show when={props.id === "editor"}>
+      <EditorPanel />
+    </Show>
+    <Show when={props.id === "projects-files"}>
+      <ProjectsFilesPanel />
+    </Show>
+    {/* Unreachable while the Notifications nav row is unlisted; the
+        panel stays wired for the feature's return. */}
+    <Show when={props.id === "notifications"}>
+      <NotificationsPanel />
+    </Show>
+    <Show when={props.id === "security"}>
+      <SecurityPanel />
+    </Show>
+    <Show when={props.id === "diagnostics"}>
+      <DiagnosticsPanel />
+    </Show>
+    <Show when={props.id === "about"}>
+      <AboutPanel />
+    </Show>
+    {/* Locked integration sections render a quiet Pro state instead
+        of their cards; entitled users see everything as before. */}
+    <Show when={props.id === "int-references"}>
+      <Show when={referencesEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+        <IntegrationsPanel section="references" />
+      </Show>
+    </Show>
+    <Show when={props.id === "int-cloud"}>
+      <Show when={cloudEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+        <IntegrationsPanel section="cloud" />
+      </Show>
+    </Show>
+    <Show when={props.id === "int-vcs"}>
+      <Show when={vcsEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+        <IntegrationsPanel section="vcs" />
+      </Show>
+    </Show>
+    <Show when={props.id === "int-ai"}>
+      <Show when={aiEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+        <IntegrationsPanel section="ai" />
+      </Show>
+    </Show>
+    <Show when={props.id === "int-grammar"}>
+      <Show when={grammarEntitled()} fallback={<ProLockedPanel class="py-16" />}>
+        <IntegrationsPanel section="grammar" />
+      </Show>
+    </Show>
+    <Show when={props.id === "account"}>
+      <AccountSection />
+    </Show>
+    <Show when={props.id === "shortcuts"}>
+      <ShortcutsPanel />
+    </Show>
+  </>
+);
+
 const SettingsScreen: Component = () => {
   const navigate = useNavigate();
   const [active, setActive] = createSignal<SectionId>("appearance");
+  const [navQuery, setNavQuery] = createSignal("");
+
+  const matchesQuery = (item: NavItem): boolean => {
+    const q = navQuery().trim().toLowerCase();
+    if (!q) return true;
+    return (
+      item.label.toLowerCase().includes(q) ||
+      SECTION_KEYWORDS[item.id].some((k) => k.includes(q))
+    );
+  };
+
+  // Tablet drill-down (§15-C): below the tablet breakpoint the screen shows
+  // one level at a time — the grouped nav list (level 1) or a single section
+  // behind a back header (level 2). Desktop keeps the two-pane layout, where
+  // `drilled` is simply never read.
+  const [drilled, setDrilled] = createSignal(false);
+  let navListEl: HTMLDivElement | undefined;
+  let savedNavScroll = 0;
+  const drillIn = (id: SectionId) => {
+    savedNavScroll = navListEl?.scrollTop ?? 0;
+    setActive(id);
+    setDrilled(true);
+  };
+  const backToNav = () => {
+    setDrilled(false);
+    // Solid renders synchronously, so the remounted list can take its
+    // scroll offset back right away.
+    if (navListEl) navListEl.scrollTop = savedNavScroll;
+  };
+  const activeLabel = () =>
+    NAV.flatMap((g) => g.items).find((i) => i.id === active())?.label ?? "Settings";
+
+  // Escape backs out of level 2 — deliberately deferential to overlays:
+  // Kobalte layers and the listbox popups preventDefault the key when they
+  // consume it, and installDismiss popovers stop it before window entirely.
+  const onEscapeKeydown = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || e.defaultPrevented) return;
+    if (!isTabletViewport() || !drilled()) return;
+    e.preventDefault();
+    backToNav();
+  };
+  window.addEventListener("keydown", onEscapeKeydown);
+  onCleanup(() => window.removeEventListener("keydown", onEscapeKeydown));
 
   // One-shot deep link (e.g. onboarding's "Sign in" → Account). With Pro
   // discovery on, locked integration rows don't hide, so no visibility
-  // bounce is needed there.
+  // bounce is needed there. On tablet the deep link lands directly on the
+  // section (level 2), not on the nav list.
   const intent = settingsSectionIntent();
   if (intent) {
     setSettingsSectionIntent(null);
-    if (SECTION_IDS.has(intent)) setActive(intent as SectionId);
+    if (SECTION_IDS.has(intent)) {
+      setActive(intent as SectionId);
+      setDrilled(true);
+    }
   }
 
   // While Pro discovery is off, locked integration rows hide from the nav —
-  // and a group they empty out hides with them.
+  // and a group they empty out hides with them. The sidebar filter narrows
+  // the same list; a group with no matches hides through the same length gate.
   const visibleItems = (g: NavGroup) =>
-    g.items.filter((item) => PRO_DISCOVERY_ENABLED || !item.locked?.());
+    g.items.filter(
+      (item) => (PRO_DISCOVERY_ENABLED || !item.locked?.()) && matchesQuery(item),
+    );
 
   // A locked section can vanish from the nav underneath the user (e.g.
   // sign-out while an integrations panel is open); bounce off the now-blank
@@ -215,7 +374,12 @@ const SettingsScreen: Component = () => {
   createEffect(() => {
     if (PRO_DISCOVERY_ENABLED) return;
     const item = NAV.flatMap((g) => g.items).find((i) => i.id === active());
-    if (item?.locked?.()) setActive("appearance");
+    if (item?.locked?.()) {
+      setActive("appearance");
+      // On tablet, bounce all the way back to the nav list rather than
+      // teleporting the user into a section they never opened.
+      setDrilled(false);
+    }
   });
 
   // Back-button label + target derived from `nav-store.previousRoute`. Falls
@@ -266,132 +430,217 @@ const SettingsScreen: Component = () => {
           <div class="flex-1" />
         </div>
 
-        <div class="flex min-h-0 flex-1 gap-2 p-2">
-          {/* Sidebar */}
-          <div
-            class="glass flex flex-col overflow-hidden rounded-xl"
-            style={{ width: "240px", height: "100%" }}
-          >
-            <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
-              <For each={NAV}>
-                {(g) => (
-                  <Show when={visibleItems(g).length > 0}>
-                    <div>
-                      <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
-                      <For each={visibleItems(g)}>
-                        {(item) => {
-                          const isActive = () => active() === item.id;
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => setActive(item.id)}
-                              class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-base ${
-                                isActive()
-                                  ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
-                                  : "text-fg-2 hover:bg-[var(--color-control-fill)]"
-                              }`}
-                              style={{ height: "var(--ui-row)" }}
-                            >
-                              <item.icon class="ui-icon-menu" />
-                              <span class={isActive() ? "font-medium" : ""}>
-                                {item.label}
-                              </span>
-                              <Show when={item.badge}>
-                                <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
-                                  {item.badge}
+        {/* Desktop: the two-pane layout, unchanged. */}
+        <Show when={!isTabletViewport()}>
+          <div class="flex min-h-0 flex-1 gap-2 p-2">
+            {/* Sidebar */}
+            <div
+              class="glass flex flex-col overflow-hidden rounded-xl"
+              style={{ width: "240px", height: "100%" }}
+            >
+              <div class="p-2 pb-0">
+                <TextField
+                  label="Filter settings"
+                  hideLabel
+                  size="sm"
+                  type="text"
+                  placeholder="Search settings"
+                  value={navQuery()}
+                  onInput={(e) => setNavQuery(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" && navQuery()) {
+                      e.stopPropagation();
+                      setNavQuery("");
+                    }
+                  }}
+                />
+              </div>
+              <div class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3">
+                <For each={NAV}>
+                  {(g) => (
+                    <Show when={visibleItems(g).length > 0}>
+                      <div>
+                        <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
+                        <For each={visibleItems(g)}>
+                          {(item) => {
+                            const isActive = () => active() === item.id;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => setActive(item.id)}
+                                class={`lift relative flex w-full items-center gap-2 rounded-md px-2 text-base ${
+                                  isActive()
+                                    ? "side-active bg-[var(--color-selection-bg)] text-fg-1"
+                                    : "text-fg-2 hover:bg-[var(--color-control-fill)]"
+                                }`}
+                                style={{ height: "var(--ui-row)" }}
+                              >
+                                <item.icon class="ui-icon-menu" />
+                                <span class={isActive() ? "font-medium" : ""}>
+                                  {item.label}
                                 </span>
-                              </Show>
-                              <Show when={item.locked?.()}>
-                                <span class="ml-auto">
-                                  <ProChip />
-                                </span>
-                              </Show>
-                              <Show when={item.id === "account"}>
-                                <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
-                                  {currentTier()}
-                                </span>
-                              </Show>
-                            </button>
-                          );
-                        }}
-                      </For>
+                                <Show when={item.badge}>
+                                  <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
+                                    {item.badge}
+                                  </span>
+                                </Show>
+                                <Show when={item.locked?.()}>
+                                  <span class="ml-auto">
+                                    <ProChip />
+                                  </span>
+                                </Show>
+                                <Show when={item.id === "account"}>
+                                  <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
+                                    {currentTier()}
+                                  </span>
+                                </Show>
+                              </button>
+                            );
+                          }}
+                        </For>
+                      </div>
+                    </Show>
+                  )}
+                </For>
+              </div>
+              <Show when={supabaseUser()}>
+                <div class="border-t border-glass-stroke p-3">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class="h-8 w-full"
+                    leadingIcon={<LogOut class="ui-icon-sm" />}
+                    onClick={() => void handleSignOut()}
+                  >
+                    Sign out
+                  </Button>
+                </div>
+              </Show>
+            </div>
+
+            {/* Main panel */}
+            <div class="flex min-w-0 flex-1 flex-col">
+              <div class="scroll mx-auto flex w-full max-w-[820px] flex-1 flex-col gap-3 overflow-auto px-2 pb-4">
+                <SectionPanel id={active()} />
+              </div>
+            </div>
+          </div>
+        </Show>
+
+        {/* Tablet drill-down (§15-C): one level at a time. Level 1 is the
+            search field + the grouped nav as a full-width list; tapping a
+            section drills to level 2 — the same panel components behind a
+            back header. */}
+        <Show when={isTabletViewport()}>
+          <div class="flex min-h-0 flex-1 flex-col p-2">
+            <Show
+              when={drilled()}
+              fallback={
+                <div class="glass mx-auto flex h-full w-full max-w-[820px] flex-col overflow-hidden rounded-xl">
+                  <div class="p-2 pb-0">
+                    <TextField
+                      label="Filter settings"
+                      hideLabel
+                      size="sm"
+                      type="text"
+                      placeholder="Search settings"
+                      value={navQuery()}
+                      onInput={(e) => setNavQuery(e.currentTarget.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape" && navQuery()) {
+                          e.stopPropagation();
+                          setNavQuery("");
+                        }
+                      }}
+                    />
+                  </div>
+                  <div
+                    ref={navListEl}
+                    class="flex-1 space-y-3.5 overflow-auto scroll p-2 pt-3"
+                  >
+                    <For each={NAV}>
+                      {(g) => (
+                        <Show when={visibleItems(g).length > 0}>
+                          <div>
+                            <div class="label-xs mb-1.5 px-2 text-fg-3">{g.label}</div>
+                            <For each={visibleItems(g)}>
+                              {(item) => (
+                                <button
+                                  type="button"
+                                  onClick={() => drillIn(item.id)}
+                                  class="lift relative flex w-full items-center gap-2 rounded-md px-2 text-base text-fg-2 hover:bg-[var(--color-control-fill)]"
+                                  style={{
+                                    "min-height": touchAffordances()
+                                      ? "44px"
+                                      : "var(--ui-row)",
+                                  }}
+                                >
+                                  <item.icon class="ui-icon-menu" />
+                                  <span>{item.label}</span>
+                                  <span class="ml-auto flex items-center gap-2">
+                                    <Show when={item.badge}>
+                                      <span class="mono rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold">
+                                        {item.badge}
+                                      </span>
+                                    </Show>
+                                    <Show when={item.locked?.()}>
+                                      <ProChip />
+                                    </Show>
+                                    <Show when={item.id === "account"}>
+                                      <span class="mono rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
+                                        {currentTier()}
+                                      </span>
+                                    </Show>
+                                    <ChevronRight size={14} style={{ opacity: 0.5 }} />
+                                  </span>
+                                </button>
+                              )}
+                            </For>
+                          </div>
+                        </Show>
+                      )}
+                    </For>
+                  </div>
+                  <Show when={supabaseUser()}>
+                    <div class="border-t border-glass-stroke p-3">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="h-8 w-full"
+                        leadingIcon={<LogOut class="ui-icon-sm" />}
+                        onClick={() => void handleSignOut()}
+                      >
+                        Sign out
+                      </Button>
                     </div>
                   </Show>
-                )}
-              </For>
-            </div>
-            <Show when={supabaseUser()}>
-              <div class="border-t border-glass-stroke p-3">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  class="h-8 w-full"
-                  leadingIcon={<LogOut class="ui-icon-sm" />}
-                  onClick={() => void handleSignOut()}
-                >
-                  Sign out
-                </Button>
+                </div>
+              }
+            >
+              <div class="flex min-h-0 flex-1 flex-col">
+                <div class="mx-auto flex w-full max-w-[820px] flex-shrink-0 items-center gap-2 px-2 pb-2">
+                  <button
+                    type="button"
+                    onClick={backToNav}
+                    class="lift flex items-center gap-1 rounded-md px-2 text-sm text-fg-2 hover:bg-[var(--color-control-fill)]"
+                    style={{
+                      "min-height": touchAffordances() ? "44px" : "var(--ui-row)",
+                    }}
+                  >
+                    <ChevronLeft size={14} style={{ opacity: 0.6 }} />
+                    <span>Settings</span>
+                  </button>
+                  <span class="text-base font-semibold tracking-tight text-fg-1">
+                    {activeLabel()}
+                  </span>
+                </div>
+                <div class="scroll mx-auto flex w-full max-w-[820px] flex-1 flex-col gap-3 overflow-auto px-2 pb-4">
+                  <SectionPanel id={active()} />
+                </div>
               </div>
             </Show>
           </div>
-
-          {/* Main panel */}
-          <div class="flex min-w-0 flex-1 flex-col">
-            <div class="scroll mx-auto flex w-full max-w-[820px] flex-1 flex-col gap-3 overflow-auto px-2 pb-4">
-              <Show when={active() === "appearance"}>
-                <AppearancePanel />
-              </Show>
-              <Show when={active() === "editor"}>
-                <EditorPanel />
-              </Show>
-              <Show when={active() === "notifications"}>
-                <NotificationsPanel />
-              </Show>
-              <Show when={active() === "security"}>
-                <SecurityPanel />
-              </Show>
-              <Show when={active() === "diagnostics"}>
-                <DiagnosticsPanel />
-              </Show>
-              <Show when={active() === "about"}>
-                <AboutPanel />
-              </Show>
-              {/* Locked integration sections render a quiet Pro state instead
-                  of their cards; entitled users see everything as before. */}
-              <Show when={active() === "int-references"}>
-                <Show when={referencesEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-                  <IntegrationsPanel section="references" />
-                </Show>
-              </Show>
-              <Show when={active() === "int-cloud"}>
-                <Show when={cloudEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-                  <IntegrationsPanel section="cloud" />
-                </Show>
-              </Show>
-              <Show when={active() === "int-vcs"}>
-                <Show when={vcsEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-                  <IntegrationsPanel section="vcs" />
-                </Show>
-              </Show>
-              <Show when={active() === "int-ai"}>
-                <Show when={aiEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-                  <IntegrationsPanel section="ai" />
-                </Show>
-              </Show>
-              <Show when={active() === "int-grammar"}>
-                <Show when={grammarEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-                  <IntegrationsPanel section="grammar" />
-                </Show>
-              </Show>
-              <Show when={active() === "account"}>
-                <AccountSection />
-              </Show>
-              <Show when={active() === "shortcuts"}>
-                <ShortcutsPanel />
-              </Show>
-            </div>
-          </div>
-        </div>
+        </Show>
       </div>
     </div>
   );
@@ -441,6 +690,38 @@ const Row: Component<{
     </div>
     <div class="flex-shrink-0">{props.children}</div>
   </div>
+);
+
+/** Row hosting a single Switch, rendered as one Kobalte switch root so the
+ *  visible text IS the control's label (name + description for screen
+ *  readers, and the block-level label makes the whole label line a click
+ *  target). Same chrome as Row — keep the two visually in lockstep. */
+const ToggleRow: Component<{
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}> = (props) => (
+  <KSwitch
+    checked={props.checked}
+    onChange={props.onChange}
+    disabled={props.disabled}
+    class="flex items-center gap-4 border-t border-glass-stroke px-5 py-3.5 first:border-t-0"
+  >
+    <KSwitch.Input class="peer sr-only" />
+    <div class="min-w-0 flex-1">
+      <KSwitch.Label class="block text-base font-medium text-fg-1">
+        {props.label}
+      </KSwitch.Label>
+      <Show when={props.hint}>
+        <KSwitch.Description class="mt-0.5 text-xs leading-relaxed text-fg-3">
+          {props.hint}
+        </KSwitch.Description>
+      </Show>
+    </div>
+    <SwitchControl />
+  </KSwitch>
 );
 
 // =================================================================
@@ -541,6 +822,56 @@ const customThemeActive = (): boolean =>
   Boolean(activeCustomTheme()) &&
   customThemes().some((t) => t.id === activeCustomTheme());
 
+// APG radio-group keyboard convention for the appearance pickers (theme tiles,
+// accent chips, density segments, custom-theme tiles): arrows move focus AND
+// select — selection follows focus, like native radios — with a roving
+// tabindex on the options. Same shape as lib/tablist-nav's tablist helper, but
+// each option carries its own click handler, so selecting delegates to
+// `.click()` and disabled options drop out of the cycle.
+function handleRadiogroupKeydown(
+  e: KeyboardEvent & { currentTarget: HTMLElement },
+): void {
+  let delta: -1 | 0 | 1;
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp") delta = -1;
+  else if (e.key === "ArrowRight" || e.key === "ArrowDown") delta = 1;
+  else if (e.key === "Home" || e.key === "End") delta = 0;
+  else return;
+  const radios = Array.from(
+    e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]'),
+  ).filter((r) => !r.disabled);
+  if (radios.length === 0) return;
+  e.preventDefault();
+  let next: number;
+  if (e.key === "Home") next = 0;
+  else if (e.key === "End") next = radios.length - 1;
+  else {
+    let current = radios.indexOf(document.activeElement as HTMLButtonElement);
+    if (current < 0)
+      current = radios.findIndex(
+        (r) => r.getAttribute("aria-checked") === "true",
+      );
+    if (current < 0) current = 0;
+    next = (current + delta + radios.length) % radios.length;
+  }
+  radios[next]!.focus();
+  // Skip the synthetic click when the target is already checked: the
+  // custom-theme tiles are click-toggles, so re-clicking the active one would
+  // DEACTIVATE it — with a single custom theme installed, every arrow key
+  // wraps back to it. (No-op guard for the plain set-value groups.)
+  if (radios[next]!.getAttribute("aria-checked") !== "true") {
+    radios[next]!.click();
+  }
+}
+
+// One line of live text inside the dimmed Theme/Accent cards so keyboard and
+// AT users learn WHY the pickers are inert, not just that they look faded.
+const CustomThemeOverrideNote: Component = () => (
+  <div class="px-5 pt-4 text-xs leading-relaxed text-fg-3">
+    Managed by your custom theme — turn it off in Custom themes below to
+    change these.
+  </div>
+);
+
 const AppearancePanel: Component = () => {
   return (
     <div class="space-y-3">
@@ -548,7 +879,13 @@ const AppearancePanel: Component = () => {
         title="Theme"
         subtitle="Built-in themes. Disabled while a custom theme is active."
       >
+        <Show when={customThemeActive()}>
+          <CustomThemeOverrideNote />
+        </Show>
         <div
+          role="radiogroup"
+          aria-label="Theme"
+          onKeyDown={handleRadiogroupKeydown}
           class="space-y-4 p-5"
           style={
             customThemeActive()
@@ -561,11 +898,19 @@ const AppearancePanel: Component = () => {
               <div class="space-y-2">
                 <div class="label-xs text-fg-3">{group.label}</div>
                 <div class="grid grid-cols-4 gap-3">
+                  <Show when={group.label === "Styled"}>
+                    <SystemThemeTile
+                      active={themeSetting() === "system"}
+                      disabled={customThemeActive()}
+                      onClick={() => setTheme("system")}
+                    />
+                  </Show>
                   <For each={group.themes}>
                     {(t) => (
                       <ThemeTile
                         meta={THEME_META[t]}
-                        active={theme() === t}
+                        active={themeSetting() === t}
+                        disabled={customThemeActive()}
                         onClick={() => setTheme(t)}
                       />
                     )}
@@ -581,7 +926,13 @@ const AppearancePanel: Component = () => {
         title="Accent"
         subtitle="The signature gradient on buttons, active items, and highlights."
       >
+        <Show when={customThemeActive()}>
+          <CustomThemeOverrideNote />
+        </Show>
         <div
+          role="radiogroup"
+          aria-label="Accent"
+          onKeyDown={handleRadiogroupKeydown}
           class="flex flex-wrap items-center gap-2 p-5"
           style={
             customThemeActive()
@@ -598,6 +949,10 @@ const AppearancePanel: Component = () => {
               return (
                 <button
                   type="button"
+                  role="radio"
+                  aria-checked={active()}
+                  tabindex={active() ? 0 : -1}
+                  disabled={customThemeActive()}
                   onClick={() => setAccent(a)}
                   class="lift relative rounded-lg"
                   style={{
@@ -637,19 +992,19 @@ const AppearancePanel: Component = () => {
             }}
           </For>
         </div>
-        <Row
+        <ToggleRow
           label="Gradient"
           hint="Blend both accent stops across buttons, active items, and highlights. Off uses the solid accent color."
-        >
-          <Switch checked={accentGradient()} onChange={setAccentGradient} />
-        </Row>
+          checked={accentGradient()}
+          onChange={setAccentGradient}
+        />
         <Show when={THEME_ROSTER[theme()].category === "styled"}>
-          <Row
+          <ToggleRow
             label="Glow"
             hint="Soft accent glow behind primary buttons and card hovers."
-          >
-            <Switch checked={glowEffects()} onChange={setGlowEffects} />
-          </Row>
+            checked={glowEffects()}
+            onChange={setGlowEffects}
+          />
         </Show>
       </Card>
 
@@ -657,14 +1012,27 @@ const AppearancePanel: Component = () => {
 
       <Card title="Density & motion">
         <Row label="UI density" hint="Affects padding and row heights across the app.">
-          <div class="glass-inset flex items-center gap-1 rounded-md p-0.5">
+          <div
+            role="radiogroup"
+            aria-label="UI density"
+            onKeyDown={handleRadiogroupKeydown}
+            class="glass-inset flex items-center gap-1 rounded-md p-0.5"
+          >
             <For each={DENSITIES}>
               {(d) => {
                 const active = () => density() === d;
                 return (
                   <button
                     type="button"
-                    onClick={() => setDensity(d as Density)}
+                    role="radio"
+                    aria-checked={active()}
+                    tabindex={active() ? 0 : -1}
+                    onClick={() => {
+                      setDensity(d as Density);
+                      // An explicit pick (any value, incl. cozy) opts this
+                      // device out of the coarse-pointer auto-default.
+                      latchDensityChoice();
+                    }}
                     class={`h-7 rounded px-3 text-xs capitalize ${
                       active()
                         ? "accent-grad font-semibold"
@@ -678,51 +1046,126 @@ const AppearancePanel: Component = () => {
             </For>
           </div>
         </Row>
-        <Row
+        <div class="border-t border-glass-stroke px-5 py-4">
+          <Slider
+            label="Interface scale"
+            value={uiScale()}
+            onChange={setUiScale}
+            min={90}
+            max={150}
+            step={5}
+            unit="%"
+          />
+          <div class="mt-1.5 text-xs leading-relaxed text-fg-3">
+            Scales text and controls together. Ctrl/Cmd +/- zooms the whole
+            window.
+          </div>
+        </div>
+        <ToggleRow
           label="Animations"
           hint="Toggles transitions, easings, and ambient motion across the app."
-        >
-          <Switch checked={animations()} onChange={setAnimations} />
-        </Row>
-        <Row
+          checked={animations()}
+          onChange={setAnimations}
+        />
+        <ToggleRow
           label="Ambient lights"
           hint="Soft radial blobs behind the glass surfaces. Disable for a flat, distraction-free backdrop."
+          checked={ambientLights()}
+          onChange={setAmbientLights}
+        />
+      </Card>
+
+    </div>
+  );
+};
+
+// =================================================================
+// Projects & files — storage location + projects-screen options
+// =================================================================
+
+/** Middle-ellipsis for long absolute paths so the drive/home prefix and the
+ *  leaf folder both stay readable. */
+const truncatePathMiddle = (path: string, max = 46): string => {
+  if (path.length <= max) return path;
+  const head = Math.ceil((max - 1) * 0.4);
+  const tail = max - 1 - head;
+  return `${path.slice(0, head)}…${path.slice(path.length - tail)}`;
+};
+
+const ProjectsFilesPanel: Component = () => {
+  const changeProjectsRoot = async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const picked = await open({
+      directory: true,
+      defaultPath: projectsRoot() || undefined,
+      title: "Choose the projects folder",
+    });
+    if (typeof picked !== "string" || picked.length === 0 || picked === projectsRoot()) {
+      return;
+    }
+    try {
+      // Pre-flight through save_settings: the Rust boundary validates the new
+      // root (absolute path under Documents) and widens the fs runtime scope.
+      // Committing the signal first would leave the store's reactive save
+      // retry-looping on a rejected path, so the signal only moves on success.
+      await ipc.saveSettings({ ...buildSettings(), projectsRoot: picked });
+      setProjectsRoot(picked);
+    } catch (e) {
+      notifyError("Couldn't change the projects folder", describeIpcError(e));
+    }
+  };
+
+  return (
+    <div class="space-y-3">
+      <Card title="Storage" subtitle="Where Typeward keeps your work on this machine.">
+        <Row
+          label="Projects folder"
+          hint="New projects are created here. Existing projects stay where they are."
         >
-          <Switch checked={ambientLights()} onChange={setAmbientLights} />
+          <div class="flex items-center gap-2">
+            <span
+              class="mono select-text text-xs text-fg-2"
+              title={projectsRoot() || undefined}
+            >
+              {projectsRoot() ? truncatePathMiddle(projectsRoot()) : "…"}
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              class="h-8"
+              onClick={() => void changeProjectsRoot()}
+            >
+              Change…
+            </Button>
+          </div>
         </Row>
       </Card>
 
-      <Card title="Workspace">
-        <Row
+      <Card title="Projects screen">
+        <ToggleRow
           label="Enable Spaces"
           hint="Show the Spaces grouping in the projects sidebar."
-        >
-          <Switch checked={enableSpaces()} onChange={setEnableSpaces} />
-        </Row>
-        <Row
+          checked={enableSpaces()}
+          onChange={setEnableSpaces}
+        />
+        <ToggleRow
           label="Enable Tags"
           hint="Show the Tags list in the projects sidebar."
-        >
-          <Switch checked={enableTags()} onChange={setEnableTags} />
-        </Row>
-        <Row
+          checked={enableTags()}
+          onChange={setEnableTags}
+        />
+        <ToggleRow
           label="Notifications panel default"
           hint="Show the right-side notifications drawer on every projects-screen visit."
-        >
-          <Switch
-            checked={notificationsPanelDefault()}
-            onChange={setNotificationsPanelDefault}
-          />
-        </Row>
-        <Row
+          checked={notificationsPanelDefault()}
+          onChange={setNotificationsPanelDefault}
+        />
+        <ToggleRow
           label="Word count on project cards"
           hint="Show an approximate word count on each card. Reads each project's root file when the library loads."
-        >
-          <Switch
-            checked={projectCardWords()}
-            onChange={setProjectCardWords}
-          />
-        </Row>
+          checked={projectCardWords()}
+          onChange={setProjectCardWords}
+        />
       </Card>
     </div>
   );
@@ -761,17 +1204,23 @@ const CustomThemesCard: Component = () => {
     Boolean(activeCustomTheme()) &&
     !customThemes().some((t) => t.id === activeCustomTheme());
 
+  // Unlike the other appearance radiogroups this one can have nothing checked
+  // (custom themes are toggleable off) — the roving tabindex then falls back
+  // to the first tile so the group stays reachable by Tab.
+  const anyTileChecked = () =>
+    customThemes().some((t) => t.id === activeCustomTheme());
+
   return (
     <Card
       title="Custom themes"
       subtitle="JSON theme files layered over a built-in base. Edit a file, hit Reload, and the app re-skins live — see the sample for the full token vocabulary."
     >
-      <Row
+      <ToggleRow
         label="Enable custom themes"
         hint="While a custom theme is active the built-in theme and accent pickers above are bypassed."
-      >
-        <Switch checked={customThemesEnabled()} onChange={setCustomThemesEnabled} />
-      </Row>
+        checked={customThemesEnabled()}
+        onChange={setCustomThemesEnabled}
+      />
       <Show when={customThemesEnabled()}>
         <div class="border-t border-glass-stroke px-5 py-4">
           <Show
@@ -785,15 +1234,25 @@ const CustomThemesCard: Component = () => {
               </div>
             }
           >
-            <div class="grid grid-cols-4 gap-3">
+            <div
+              role="radiogroup"
+              aria-label="Custom theme"
+              onKeyDown={handleRadiogroupKeydown}
+              class="grid grid-cols-4 gap-3"
+            >
               <For each={customThemes()}>
-                {(t) => {
+                {(t, i) => {
                   const active = () => activeCustomTheme() === t.id;
                   const swatchBg = () => t.tokens["--color-bg-base"] ?? THEME_META[t.base as Theme]?.vibe ?? "#222";
                   const swatchAccent = () => t.tokens["--color-accent-1"] ?? "#888";
                   return (
                     <button
                       type="button"
+                      role="radio"
+                      aria-checked={active()}
+                      tabindex={
+                        active() || (!anyTileChecked() && i() === 0) ? 0 : -1
+                      }
                       onClick={() => setActiveCustomTheme(active() ? null : t.id)}
                       class="lift relative overflow-hidden rounded-xl text-left"
                       style={{
@@ -884,13 +1343,73 @@ const CustomThemesCard: Component = () => {
   );
 };
 
-const ThemeTile: Component<{
-  meta: ThemeMeta;
+/** The "follow the OS" option — a diagonal split previewing both themes it
+ * resolves to (Daylight when the OS is light, Lamplight when dark). Same
+ * chrome as ThemeTile; the label styling uses the dark half's treatment
+ * because the bottom edge sits mostly on the Lamplight triangle. */
+const SystemThemeTile: Component<{
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
 }> = (props) => (
   <button
     type="button"
+    role="radio"
+    aria-checked={props.active}
+    tabindex={props.active ? 0 : -1}
+    disabled={props.disabled}
+    onClick={props.onClick}
+    class={"lift relative overflow-hidden rounded-xl"}
+    style={{
+      height: "104px",
+      border: props.active ? "none" : "1px solid var(--color-glass-stroke)",
+      "box-shadow": props.active
+        ? "0 0 0 1.5px var(--color-accent-1), 0 6px 18px color-mix(in srgb, var(--color-accent-1) 22%, transparent)"
+        : undefined,
+    }}
+  >
+    <div
+      class="absolute inset-0"
+      style={{
+        background: THEME_VIBE.daylight,
+        "clip-path": "polygon(0 0, 100% 0, 0 100%)",
+      }}
+    />
+    <div
+      class="absolute inset-0"
+      style={{
+        background: THEME_VIBE.lamplight,
+        "clip-path": "polygon(100% 0, 100% 100%, 0 100%)",
+      }}
+    />
+    <div class="absolute bottom-1.5 left-2 right-2 flex items-center justify-between">
+      <span
+        class="text-xs font-semibold"
+        style={{ color: "#E6E8EC", "text-shadow": "0 1px 2px rgba(0,0,0,0.6)" }}
+      >
+        System
+      </span>
+      <Show when={props.active}>
+        <div class="flex h-4 w-4 items-center justify-center rounded-full accent-grad">
+          <Check size={10} stroke-width={3} />
+        </div>
+      </Show>
+    </div>
+  </button>
+);
+
+const ThemeTile: Component<{
+  meta: ThemeMeta;
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}> = (props) => (
+  <button
+    type="button"
+    role="radio"
+    aria-checked={props.active}
+    tabindex={props.active ? 0 : -1}
+    disabled={props.disabled}
     onClick={props.onClick}
     class={"lift relative overflow-hidden rounded-xl"}
     style={{
@@ -960,10 +1479,81 @@ const ENGINE_LABEL: Record<CompileEngine, string> = {
   "texlive-wasm": "TeX Live (WASM)",
 };
 
+interface EngineStatus {
+  text: string;
+  tone: "ok" | "warn" | "err";
+}
+
+const ENGINE_STATUS_COLOR: Record<EngineStatus["tone"], string> = {
+  ok: "var(--color-ok)",
+  warn: "var(--color-warn)",
+  err: "var(--color-err)",
+};
+
+/** Short "4.86a"-style version out of a full `--version` banner line. */
+const shortToolVersion = (raw: string | null): string | null =>
+  raw?.match(/\d+(?:\.\d+)+[a-z]?/i)?.[0] ?? null;
+
+/** One status line for the selected engine from the detect_tex probe. Red only
+ *  when the SELECTED engine cannot work; degraded-but-working states warn. */
+const engineStatusFor = (
+  probe: ipc.EngineProbe | null,
+  engine: CompileEngine,
+): EngineStatus | null => {
+  if (!probe) return null;
+  const installed = (name: string) =>
+    probe.engines.find((e) => e.name === name && e.installed);
+  if (engine === "tectonic") {
+    const tectonic = installed("tectonic");
+    if (tectonic) {
+      const v = shortToolVersion(tectonic.version);
+      return { text: `tectonic${v ? ` ${v}` : ""} found`, tone: "ok" };
+    }
+    // The sidecar is tried before PATH, so a missing PATH binary isn't fatal.
+    return {
+      text: "tectonic isn't on PATH — the bundled engine is used when this build ships it",
+      tone: "warn",
+    };
+  }
+  if (engine !== "system-tex") return null;
+  const latexmk = installed("latexmk");
+  if (latexmk && probe.anyLatexAvailable) {
+    const v = shortToolVersion(latexmk.version);
+    return {
+      text: `latexmk${v ? ` ${v}` : ""}${installed("pdflatex") ? " · pdflatex found" : ""}`,
+      tone: "ok",
+    };
+  }
+  if (probe.anyLatexAvailable) {
+    return {
+      text: "pdflatex only — latexmk missing, compiling calls pdflatex directly",
+      tone: "warn",
+    };
+  }
+  if (latexmk) {
+    return {
+      text: "latexmk found but no TeX engine — install a TeX distribution or switch to Tectonic",
+      tone: "err",
+    };
+  }
+  return {
+    text: "No TeX installation detected — the Tectonic engine runs without one",
+    tone: "err",
+  };
+};
+
 const EditorPanel: Component = () => {
   const update = <K extends keyof EditorSettings>(key: K, value: EditorSettings[K]) => {
     setEditorSettings({ ...editorSettings(), [key]: value });
   };
+
+  // Mirror of the Ollama probe pattern: surface whether the selected engine
+  // can actually run, right under the picker instead of only at compile time.
+  const [texProbe, { refetch: refetchTexProbe }] = createResource(
+    () => !isTauriMobile(),
+    async (enabled) => (enabled ? await ipc.detectTex().catch(() => null) : null),
+  );
+  const engineStatus = () => engineStatusFor(texProbe() ?? null, compileEngine());
 
   // The WASM engine's assets are downloaded per-host/CI, never checked in — so
   // a build can ship without them. Say so here instead of only at compile time.
@@ -998,6 +1588,43 @@ const EditorPanel: Component = () => {
               onChange={(v) => setCompileEngine(v as CompileEngine)}
             />
           </Row>
+          <div class="flex items-center gap-2 border-t border-glass-stroke px-5 py-2.5">
+            <Show
+              when={engineStatus()}
+              fallback={
+                <span class="text-xs text-fg-3">
+                  {texProbe.loading ? "Checking installed TeX tools…" : "TeX detection unavailable"}
+                </span>
+              }
+            >
+              <Show when={engineStatus()!.tone === "ok"}>
+                <Check
+                  size={12}
+                  stroke-width={3}
+                  style={{ color: "var(--color-ok)" }}
+                />
+              </Show>
+              <span
+                class={`select-text text-xs ${engineStatus()!.tone === "ok" ? "text-fg-2" : ""}`}
+                style={
+                  engineStatus()!.tone === "ok"
+                    ? undefined
+                    : { color: ENGINE_STATUS_COLOR[engineStatus()!.tone] }
+                }
+              >
+                {engineStatus()!.text}
+              </span>
+            </Show>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="ml-auto h-7"
+              disabled={texProbe.loading}
+              onClick={() => void refetchTexProbe()}
+            >
+              Re-check
+            </Button>
+          </div>
         </Show>
         <Show when={compileEngine() === "texlive-wasm"}>
           <Row
@@ -1017,33 +1644,24 @@ const EditorPanel: Component = () => {
             </Show>
           </Row>
         </Show>
-        <Row
+        <ToggleRow
           label="Auto-compile on save"
           hint="Recompile automatically after each save (Mod+S)."
-        >
-          <Switch
-            checked={editorSettings().autoCompile}
-            onChange={(v) => update("autoCompile", v)}
-          />
-        </Row>
-        <Row
+          checked={editorSettings().autoCompile}
+          onChange={(v) => update("autoCompile", v)}
+        />
+        <ToggleRow
           label="Stop on first error"
           hint="Halt latexmk/pdflatex at the first error. Off = push through and collect every diagnostic in one pass (Tectonic always halts)."
-        >
-          <Switch
-            checked={editorSettings().stopOnFirstError}
-            onChange={(v) => update("stopOnFirstError", v)}
-          />
-        </Row>
-        <Row
+          checked={editorSettings().stopOnFirstError}
+          onChange={(v) => update("stopOnFirstError", v)}
+        />
+        <ToggleRow
           label="Autosave"
           hint="Write changes to disk automatically after an idle pause."
-        >
-          <Switch
-            checked={editorSettings().autosaveEnabled}
-            onChange={(v) => update("autosaveEnabled", v)}
-          />
-        </Row>
+          checked={editorSettings().autosaveEnabled}
+          onChange={(v) => update("autosaveEnabled", v)}
+        />
         <Row
           label="Autosave delay"
           hint="Idle time before changes are saved (crash-recovery snapshot when autosave is off)."
@@ -1086,12 +1704,11 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("fontSize", Number(v))}
           />
         </Row>
-        <Row label="Soft wrap long lines">
-          <Switch
-            checked={editorSettings().lineWrap}
-            onChange={(v) => update("lineWrap", v)}
-          />
-        </Row>
+        <ToggleRow
+          label="Soft wrap long lines"
+          checked={editorSettings().lineWrap}
+          onChange={(v) => update("lineWrap", v)}
+        />
         <Row label="Line height">
           <SelectStub
             value={editorSettings().lineHeight}
@@ -1109,54 +1726,46 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("tabSize", Number(v))}
           />
         </Row>
-        <Row label="Line numbers">
-          <Switch
-            checked={editorSettings().lineNumbers}
-            onChange={(v) => update("lineNumbers", v)}
-          />
-        </Row>
-        <Row label="Highlight active line">
-          <Switch
-            checked={editorSettings().highlightActiveLine}
-            onChange={(v) => update("highlightActiveLine", v)}
-          />
-        </Row>
-        <Row
+        <ToggleRow
+          label="Line numbers"
+          checked={editorSettings().lineNumbers}
+          onChange={(v) => update("lineNumbers", v)}
+        />
+        <ToggleRow
+          label="Highlight active line"
+          checked={editorSettings().highlightActiveLine}
+          onChange={(v) => update("highlightActiveLine", v)}
+        />
+        <ToggleRow
           label="Autocomplete"
           hint="Built-in word/snippet completion. Language-server completion is unaffected."
-        >
-          <Switch
-            checked={editorSettings().autocomplete}
-            onChange={(v) => update("autocomplete", v)}
-          />
-        </Row>
-        <Row label="Bracket matching" hint="Highlight the matching bracket at the cursor.">
-          <Switch
-            checked={editorSettings().bracketMatching}
-            onChange={(v) => update("bracketMatching", v)}
-          />
-        </Row>
-        <Row label="Auto-close brackets" hint="Insert the closing bracket/quote automatically.">
-          <Switch
-            checked={editorSettings().autoCloseBrackets}
-            onChange={(v) => update("autoCloseBrackets", v)}
-          />
-        </Row>
-        <Row label="Vim mode" hint="Modal editing bindings in the source pane.">
-          <Switch
-            checked={editorSettings().vimMode}
-            onChange={(v) => update("vimMode", v)}
-          />
-        </Row>
-        <Row
+          checked={editorSettings().autocomplete}
+          onChange={(v) => update("autocomplete", v)}
+        />
+        <ToggleRow
+          label="Bracket matching"
+          hint="Highlight the matching bracket at the cursor."
+          checked={editorSettings().bracketMatching}
+          onChange={(v) => update("bracketMatching", v)}
+        />
+        <ToggleRow
+          label="Auto-close brackets"
+          hint="Insert the closing bracket/quote automatically."
+          checked={editorSettings().autoCloseBrackets}
+          onChange={(v) => update("autoCloseBrackets", v)}
+        />
+        <ToggleRow
+          label="Vim mode"
+          hint="Modal editing bindings in the source pane."
+          checked={editorSettings().vimMode}
+          onChange={(v) => update("vimMode", v)}
+        />
+        <ToggleRow
           label="Visual editing for LaTeX"
-          hint="Render headings, styles, lists, and references visually over the source of .tex files (Mod+Shift+V)."
-        >
-          <Switch
-            checked={editorSettings().visualModeLatex}
-            onChange={(v) => update("visualModeLatex", v)}
-          />
-        </Row>
+          hint="Edit .tex files as a formatted document — markup stays hidden (Mod+Shift+V)."
+          checked={editorSettings().visualModeLatex}
+          onChange={(v) => update("visualModeLatex", v)}
+        />
         <FeatureGate
           feature="integrations.grammar.harper"
           // The locked row is a discovery surface — without the flag the row
@@ -1172,20 +1781,17 @@ const EditorPanel: Component = () => {
             ) : undefined
           }
         >
-          <Row
+          <ToggleRow
             label="Spell & grammar check"
             hint="Powered by Harper — configure it under Settings → Integrations → Grammar."
-          >
-            <Switch
-              checked={integrationsSettings().grammar.enabled}
-              onChange={(v) =>
-                setIntegrationsSettings((prev) => ({
-                  ...prev,
-                  grammar: { ...prev.grammar, enabled: v },
-                }))
-              }
-            />
-          </Row>
+            checked={integrationsSettings().grammar.enabled}
+            onChange={(v) =>
+              setIntegrationsSettings((prev) => ({
+                ...prev,
+                grammar: { ...prev.grammar, enabled: v },
+              }))
+            }
+          />
         </FeatureGate>
       </Card>
 
@@ -1200,15 +1806,12 @@ const EditorPanel: Component = () => {
             onChange={(v) => update("pdfDefaultZoom", Number(v))}
           />
         </Row>
-        <Row
+        <ToggleRow
           label="Invert on dark themes"
           hint="Flip the white page to dark for night reading (only while a dark theme is active)."
-        >
-          <Switch
-            checked={editorSettings().pdfInvertDark}
-            onChange={(v) => update("pdfInvertDark", v)}
-          />
-        </Row>
+          checked={editorSettings().pdfInvertDark}
+          onChange={(v) => update("pdfInvertDark", v)}
+        />
       </Card>
     </div>
   );
@@ -1340,9 +1943,12 @@ const NotificationsPanel: Component = () => {
         subtitle="Pause email and push outside writing time. Disabled until delivery exists."
         action={<SoonBadge />}
       >
-        <Row label="Quiet hours">
-          <Switch checked={false} onChange={() => {}} disabled />
-        </Row>
+        <ToggleRow
+          label="Quiet hours"
+          checked={false}
+          onChange={() => {}}
+          disabled
+        />
       </Card>
     </div>
   );
@@ -1421,27 +2027,24 @@ const SecurityPanel: Component = () => {
         title="Privacy"
         subtitle="What leaves this machine. Everything is off by default."
       >
-        <Row
+        <ToggleRow
           label="Share crash reports"
           hint="Send crash and error reports to Sentry to help fix bugs: enables in-app error reporting and an automatic scan for crashes from previous runs at launch. Off keeps diagnostics in the local log only (browse and report individual events under Diagnostics). Takes effect immediately."
-        >
-          <Switch checked={shareCrashReports()} onChange={setShareCrashReports} />
-        </Row>
+          checked={shareCrashReports()}
+          onChange={setShareCrashReports}
+        />
       </Card>
 
       <Card
         title="Feedback"
         subtitle="Nothing is sent unless you press Send on the feedback card."
       >
-        <Row
+        <ToggleRow
           label="Occasionally ask for feedback"
           hint="Every once in a while (at most once a month), show a small card asking how Typeward is working for you. You can always send feedback yourself via the command palette."
-        >
-          <Switch
-            checked={feedbackPromptsEnabled()}
-            onChange={setFeedbackPromptsEnabled}
-          />
-        </Row>
+          checked={feedbackPromptsEnabled()}
+          onChange={setFeedbackPromptsEnabled}
+        />
       </Card>
 
       <Card
@@ -1536,15 +2139,12 @@ const AboutPanel: Component = () => {
               {checking() ? "Checking…" : "Check now"}
             </Button>
           </Row>
-          <Row
+          <ToggleRow
             label="Check automatically"
             hint="Shortly after launch, look for a newer release and prompt you to install it. The check is a plain HTTPS GET to GitHub with no identifiers, and updates never install without your confirmation."
-          >
-            <Switch
-              checked={updatesCheckAutomatically()}
-              onChange={setUpdatesCheckAutomatically}
-            />
-          </Row>
+            checked={updatesCheckAutomatically()}
+            onChange={setUpdatesCheckAutomatically}
+          />
         </Show>
       </Card>
     </div>

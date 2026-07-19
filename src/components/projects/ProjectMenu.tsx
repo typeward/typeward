@@ -60,11 +60,11 @@ export const ProjectMenu: Component<ProjectMenuProps> = (props) => {
     () => props.x + MENU_W + SUBMENU_W <= window.innerWidth - 8,
   );
 
-  const run = async (fn: () => Promise<unknown>) => {
+  const run = async (verb: string, fn: () => Promise<unknown>) => {
     try {
       await fn();
     } catch (e) {
-      notifyError(describeIpcError(e));
+      notifyError(`Couldn't ${verb} project`, describeIpcError(e));
     }
     props.onClose();
   };
@@ -102,7 +102,7 @@ export const ProjectMenu: Component<ProjectMenuProps> = (props) => {
                   <SpaceItem
                     label="None"
                     active={!p().space}
-                    onClick={() => void run(() => setSpace(p().rootPath, null))}
+                    onClick={() => void run("move", () => setSpace(p().rootPath, null))}
                   />
                   <For each={props.spaces}>
                     {(s) => (
@@ -110,7 +110,7 @@ export const ProjectMenu: Component<ProjectMenuProps> = (props) => {
                         label={s.name}
                         dot={tintColor(s.tint)}
                         active={p().space === s.id}
-                        onClick={() => void run(() => setSpace(p().rootPath, s.id))}
+                        onClick={() => void run("move", () => setSpace(p().rootPath, s.id))}
                       />
                     )}
                   </For>
@@ -128,7 +128,9 @@ export const ProjectMenu: Component<ProjectMenuProps> = (props) => {
               icon={p().archived ? ArchiveRestore : Archive}
               label={p().archived ? "Unarchive" : "Archive"}
               onClick={() =>
-                void run(() => setArchived(p().rootPath, !p().archived))
+                void run(p().archived ? "unarchive" : "archive", () =>
+                  setArchived(p().rootPath, !p().archived),
+                )
               }
             />
 

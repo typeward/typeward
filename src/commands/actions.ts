@@ -1,3 +1,4 @@
+import { createSignal } from "solid-js";
 import { describeIpcError } from "~/lib/errors";
 import { notifyError, notifyInfo } from "~/lib/toast";
 import type { EditorAdapter, Project, ProjectFormat } from "~/adapters/types";
@@ -38,12 +39,35 @@ import {
 import { currentCursorLine } from "~/stores/editor-view-store";
 import { editorSettings } from "~/stores/settings-store";
 import {
+  consolePosition,
+  editorLayout,
+  focusMode,
+  previewDetached,
+  requestLogsTab,
+  setEditorLayout,
+  setFocusMode,
+  setPreviewDetached,
+  setPreviewMode,
+} from "~/stores/ui-store";
+import {
+  activePane,
+  paneTier,
+  setLogsSheetOpen,
+} from "~/stores/viewport-store";
+import {
   navigateTo,
   setPaletteOpen,
   setRequestNewProject,
   togglePalette,
 } from "./palette-store";
-import { setCompileRunners } from "./compile-runner";
+import {
+  COMPILE_CANCELLED,
+  beginCompileAttempt,
+  cancelCompile,
+  endCompileAttempt,
+  setCompileRunners,
+  wasCancelledEarly,
+} from "./compile-runner";
 
 /**
  * Single point that maps a project's format to its adapter. EditorScreen
@@ -206,15 +230,97 @@ async function preserveConflictingDiskCopy(p: Project, file: OpenFile): Promise<
   }
   try {
     await ipc.writeProjectTextFile(p.rootPath, sidecarRel, disk);
-    notifyInfo(
-      "Saved over newer changes",
-      `"${file.relPath}" had changed on disk since you opened it. That version was kept as "${sidecarRel}".`,
+    notifyError(
+      "Overwrote newer changes on disk",
+      `"${file.relPath}" had changed on disk since you opened it. The newer version was preserved as "${sidecarRel}".`,
     );
   } catch (e) {
     // Preserving the other copy failed — record it, but don't block the save;
     // the buffer content is what the user explicitly asked to persist.
     recordError("save-conflict", `failed to preserve disk copy of ${file.relPath}`, e);
   }
+}
+
+// Contract signals for the compile-loop UI (PdfViewer cancel button, elapsed
+// pill, stale-preview hint). `compileStartedAt` is epoch ms while a compile
+// runs and null once it settles; `lastSuccessAt` is the epoch ms of the last
+// successful compile of this session.
+const [compileStartedAt, setCompileStartedAtInternal] = createSignal<number | null>(null);
+const [lastSuccessAt, setLastSuccessAtInternal] = createSignal<number | null>(null);
+export { compileStartedAt, lastSuccessAt };
+
+/**
+ * Kill the in-flight compile's process tree. Safe no-op when idle. The
+ * running `compileActiveProject` attempt observes the cancellation as its
+ * IPC rejecting with the stable marker and returns the UI to idle itself.
+ */
+export async function cancelActiveCompile(): Promise<void> {
+  if (compileState() !== "compiling") return;
+  try {
+    await cancelCompile();
+  } catch (e) {
+    recordError("compile-cancel", "compile_cancel IPC threw", e);
+  }
+}
+
+/**
+ * Surface a failed compile when no console surface can show it: in focus mode
+ * the bottom drawer is hidden chrome, and in editor-only layout the preview
+ * pane (home of the pdf-tab console) doesn't render — either way the only
+ * feedback would be a status pill that focus mode also unmounts. The toast's
+ * action restores a visible console and routes through the same logs-tab
+ * intent the status-bar indicators use.
+ */
+function notifyCompileFailureIfHidden(errorCount: number): void {
+  // Every layout where the console cannot currently paint: focus mode hides
+  // the drawer; editor-only layout unmounts the preview pane (home of the
+  // pdf-tab console) — as does a DETACHED preview, whose window is PDF-only;
+  // tablet renders one pane at a time (drawer lives in the closed LogsSheet).
+  // Tier semantics: only the ONE-pane tier hosts the drawer in a LogsSheet;
+  // the two-pane tier (800-1023px) always renders the preview pane (pdf-tab
+  // console works like desktop) and mounts the bottom drawer like desktop.
+  const onePane = paneTier() === "one";
+  const pdfTabHidden =
+    consolePosition() === "pdf-tab" &&
+    (editorLayout() === "editor" ||
+      previewDetached() ||
+      (onePane && activePane() !== "preview"));
+  const drawerHidden =
+    consolePosition() === "drawer" && (focusMode() || onePane);
+  if (!pdfTabHidden && !drawerHidden) return;
+  if (onePane) {
+    // The sheet hosts the drawer on the single-pane tier regardless of
+    // console position; auto-open it the way the desktop drawer reveals
+    // itself. Skip the toast — the now-visible console IS the notification.
+    setLogsSheetOpen(true);
+    queueMicrotask(() => requestLogsTab("errors"));
+    return;
+  }
+  const summary =
+    errorCount > 0
+      ? `${errorCount} error${errorCount === 1 ? "" : "s"} — open the log to jump to them`
+      : "The build failed — open the log for details";
+  notifyError("Compile failed", summary, {
+    label: "View errors",
+    run: () => {
+      if (focusMode()) setFocusMode(false);
+      if (paneTier() === "one") {
+        setLogsSheetOpen(true);
+        queueMicrotask(() => requestLogsTab("errors"));
+        return;
+      }
+      if (consolePosition() === "pdf-tab") {
+        // The console needs an attached preview pane to land in ("editor"
+        // layout only exists on the three tier; two always shows preview).
+        if (previewDetached()) setPreviewDetached(false);
+        if (editorLayout() === "editor") setEditorLayout("split");
+        setPreviewMode("console");
+        queueMicrotask(() => requestLogsTab("errors"));
+      } else {
+        requestLogsTab("errors");
+      }
+    },
+  });
 }
 
 /**
@@ -232,22 +338,29 @@ export async function compileActiveProject(): Promise<void> {
   // one directory fight over aux files and corrupt the output.
   if (compileState() === "compiling") return;
 
-  // adapter.compile is an un-cancellable IPC await; the user can switch
-  // projects before it resolves. Stamp the request with the active project's
-  // root and drop the result if the project changed underneath us, so a stale
-  // compile can't paint project A's PDF/status/diagnostics into project B.
+  // adapter.compile is a long IPC await; the user can switch projects before
+  // it resolves. Stamp the request with the active project's root and drop
+  // the result if the project changed underneath us, so a stale compile can't
+  // paint project A's PDF/status/diagnostics into project B.
   const compileRoot = p.rootPath;
   const isCurrent = () => project()?.rootPath === compileRoot;
 
   setCompileState("compiling");
+  setCompileStartedAtInternal(Date.now());
+  const compileId = beginCompileAttempt();
   try {
     // Inside the try so a failed save surfaces as a compile error in the
     // Issues tab instead of an unhandled rejection.
     await saveAllDirtyFiles();
+    // Stop clicked during the save phase (or a shell-escape trust prompt the
+    // adapter is about to raise) lands before Rust ever registers the id —
+    // honor it here instead of starting the subprocess it meant to prevent.
+    if (wasCancelledEarly(compileId)) throw COMPILE_CANCELLED;
     const result = await adapter.compile(p);
     if (!isCurrent()) return;
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");
+    if (result.ok) setLastSuccessAtInternal(Date.now());
     if (result.ok && result.outputPath) {
       bumpPdfVersion();
     } else {
@@ -256,9 +369,19 @@ export async function compileActiveProject(): Promise<void> {
         `${p.format} compile exited non-zero`,
         result.log.slice(-2000),
       );
+      notifyCompileFailureIfHidden(
+        result.diagnostics.filter((d) => d.severity === "error").length,
+      );
     }
   } catch (e) {
     if (!isCurrent()) return;
+    // A user-initiated cancel is a return to idle, not an error: no
+    // diagnostics, no drawer auto-open, just a quiet confirmation.
+    if (describeIpcError(e) === COMPILE_CANCELLED) {
+      setCompileState("idle");
+      notifyInfo("Compile stopped");
+      return;
+    }
     setLastResult({
       ok: false,
       diagnostics: [
@@ -275,6 +398,12 @@ export async function compileActiveProject(): Promise<void> {
     });
     setCompileState("error");
     recordError("compile-failed", "compile threw before producing a result", e);
+    notifyCompileFailureIfHidden(1);
+  } finally {
+    // Settle bookkeeping runs on every path — including the stale-project
+    // early returns — so the elapsed pill and cancel handle can't leak.
+    endCompileAttempt(compileId);
+    setCompileStartedAtInternal(null);
   }
 }
 

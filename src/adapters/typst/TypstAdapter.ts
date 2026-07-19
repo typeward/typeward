@@ -6,7 +6,7 @@ import type {
 } from "~/adapters/types";
 import { hasEntitlement } from "~/integrations/entitlements";
 import * as ipc from "~/ipc";
-import { runCompile } from "~/commands/compile-runner";
+import { currentCompileId, runCompile } from "~/commands/compile-runner";
 
 const compile = async (project: Project): Promise<CompileResult> => {
   // Typst is a Pro format. A free user can still open and read .typ files
@@ -15,7 +15,7 @@ const compile = async (project: Project): Promise<CompileResult> => {
   if (!hasEntitlement("formats.typst")) {
     throw new Error("Typst support requires Typeward Pro.");
   }
-  return ipc.compileTypst(project);
+  return ipc.compileTypst(project, currentCompileId());
 };
 
 /**

@@ -9,9 +9,10 @@ import {
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { Show, createSignal } from "solid-js";
+import { IconButton } from "~/components/primitives/IconButton";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
-import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
+import { handleMenuKeydown, useMenuOpenFocus } from "~/lib/menu-nav";
 import { offsetToLine } from "~/lib/reviews/lines";
 import { notifyInfo, notifySuccess } from "~/lib/toast";
 import { recordError } from "~/lib/telemetry";
@@ -33,7 +34,7 @@ export const ExportMenu: Component<{
   const [error, setError] = createSignal<string | null>(null);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
-  useListboxOpenFocus(open, () => rootRef);
+  useMenuOpenFocus(open, () => rootRef);
   const onTrigger = () => {
     setError(null);
     setOpen((v) => !v);
@@ -191,7 +192,7 @@ export const ExportMenu: Component<{
   }> = (o) => (
     <button
       type="button"
-      role="option"
+      role="menuitem"
       tabindex={-1}
       disabled={o.disabled}
       onClick={o.onSelect}
@@ -214,22 +215,25 @@ export const ExportMenu: Component<{
 
   return (
     <div ref={rootRef} class="relative">
-      <button
-        type="button"
+      {/* Inline fg-2 keeps the toolbar tint the ghost variant's text
+          utilities would otherwise override. */}
+      <IconButton
+        label="Export"
+        size="lg"
         onClick={onTrigger}
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
         aria-expanded={open()}
-        class="lift glass-soft flex h-9 w-9 items-center justify-center rounded-md text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
-        title="Export"
-        aria-label="Export"
+        class="glass-soft enabled:hover:bg-[var(--color-control-fill-hover)]"
+        style={{ color: "var(--color-fg-2)" }}
       >
         <FileDown size={16} class="opacity-80" />
-      </button>
+      </IconButton>
       <Show when={open()}>
         <div
-          role="listbox"
+          role="menu"
+          aria-label="Export as"
           tabindex={-1}
-          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
+          onKeyDown={(e) => handleMenuKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute left-0 top-full z-50 mt-1 w-[260px] rounded-xl"
           style={{ padding: "var(--ui-pad-section)", background: "var(--color-popover-bg)" }}
         >

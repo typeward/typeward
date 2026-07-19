@@ -28,6 +28,19 @@ function updaterConfigured(): boolean {
   }
 }
 
+// The one version source is package.json (scripts/bump-version.mjs keeps the
+// other manifests in step) — inject it so UI copy never hardcodes a literal.
+function appVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
+    );
+    return String(pkg?.version ?? "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+}
+
 // Sentry source-map upload is OPT-IN, never implicit: an ordinary `npm run
 // build` must be hermetic (no network, no sentry.io contact) even on a machine
 // that has a token configured. Release builds set SENTRY_UPLOAD=true (see
@@ -143,6 +156,7 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   define: {
     __UPDATER_CONFIGURED__: JSON.stringify(updaterConfigured()),
+    __APP_VERSION__: JSON.stringify(appVersion()),
   },
   build: {
     target:

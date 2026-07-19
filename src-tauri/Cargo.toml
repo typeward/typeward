@@ -91,6 +91,10 @@ os_info = { version = "3.15.0", default-features = false }
 # Single-instance guard: a second launch focuses the running window rather than
 # starting a rival process over the same project data.
 tauri-plugin-single-instance = "2"
+# Window geometry persistence across launches. Restore/save are automatic
+# Rust-side hooks — no JS API is used, so no capability entry exists for it.
+# Mobile windows are OS-managed fullscreen surfaces with nothing to persist.
+tauri-plugin-window-state = "2"
 # VCS — Phase 3. libgit2 bindings; the "https" feature uses the OS-native TLS
 # stack (WinHTTP/SChannel) on Windows and Security.framework on macOS, but
 # OpenSSL on every other unix — including aarch64-linux-android, where

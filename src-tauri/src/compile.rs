@@ -12,16 +12,17 @@
 //! also mirrored by the grammar path (`GrammarDiagnostic`) and consumed by the
 //! mobile texlive-wasm provider via `parse_latex_log_cmd`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tokio::io::AsyncReadExt;
+use tokio::sync::watch;
 
 use crate::commands::checked_project_root_and_file;
 use crate::project::Project;
@@ -43,6 +44,102 @@ const COMPILE_TAIL_CAP: usize = 256 * 1024;
 /// How long to keep draining pipes after the child exits or is killed — a
 /// straggling grandchild holding the write end open must not become a hang.
 const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(5);
+
+/// Stable marker string `compile_latex`/`compile_typst` reject with when the
+/// run was cancelled via `compile_cancel`. The frontend keys on it verbatim
+/// (commands reject with the plain Display string) to return the UI to idle
+/// instead of surfacing an error. Mirrored by `COMPILE_CANCELLED` in
+/// `src/commands/compile-runner.ts` — keep the two in sync.
+pub const COMPILE_CANCELLED: &str = "compile-cancelled";
+
+/// Caller-supplied compile ids key a process-global map, so bound them like
+/// AI stream ids: short ASCII only, no metacharacters, no unbounded growth.
+const MAX_COMPILE_ID_LEN: usize = 64;
+
+fn validate_compile_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || id.len() > MAX_COMPILE_ID_LEN
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err("invalid compile id".into());
+    }
+    Ok(())
+}
+
+/// In-flight compiles keyed by the caller-supplied compile id. The watch
+/// sender fans the cancel flag out to every subprocess pass of that compile;
+/// removing it (deregistration) makes any pending wait pend forever, which is
+/// fine — the compile is already over.
+fn active_compiles() -> &'static Mutex<HashMap<String, watch::Sender<bool>>> {
+    static MAP: OnceLock<Mutex<HashMap<String, watch::Sender<bool>>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Deregisters the compile id on drop, so every exit path (success, error,
+/// early `?`) releases the handle and a cancel for a finished compile stays a
+/// quiet no-op instead of poking a stale entry.
+struct CancelRegistration(Option<String>);
+
+impl Drop for CancelRegistration {
+    fn drop(&mut self) {
+        if let Some(id) = self.0.take() {
+            if let Ok(mut map) = active_compiles().lock() {
+                map.remove(&id);
+            }
+        }
+    }
+}
+
+/// Register an optional caller-supplied compile id and hand back the receiver
+/// its subprocess passes select on. `None` id = a legacy caller that never
+/// cancels; the run proceeds with no handle.
+fn register_compile(
+    compile_id: Option<String>,
+) -> Result<(Option<watch::Receiver<bool>>, CancelRegistration), String> {
+    let Some(id) = compile_id else {
+        return Ok((None, CancelRegistration(None)));
+    };
+    validate_compile_id(&id)?;
+    let (tx, rx) = watch::channel(false);
+    let mut map = active_compiles().lock().unwrap();
+    // A duplicate would orphan the first registration's cancel handle.
+    if map.contains_key(&id) {
+        return Err("a compile with this id is already running".into());
+    }
+    map.insert(id.clone(), tx);
+    drop(map);
+    Ok((Some(rx), CancelRegistration(Some(id))))
+}
+
+/// Resolves when the compile's cancel flag fires; pends forever when the run
+/// has no cancel handle (no compileId supplied, or the sender already gone).
+async fn wait_cancelled(rx: &mut Option<watch::Receiver<bool>>) {
+    let Some(rx) = rx else {
+        return std::future::pending().await;
+    };
+    loop {
+        if *rx.borrow() {
+            return;
+        }
+        if rx.changed().await.is_err() {
+            return std::future::pending().await;
+        }
+    }
+}
+
+/// Cancel an in-flight compile by id. Quietly succeeds when the id is not
+/// registered — the compile finishing just before the click is a normal race,
+/// not an error.
+#[tauri::command]
+pub async fn compile_cancel(compile_id: String) -> CmdResult<()> {
+    validate_compile_id(&compile_id)?;
+    if let Some(tx) = active_compiles().lock().unwrap().get(&compile_id) {
+        let _ = tx.send(true);
+    }
+    Ok(())
+}
 
 /// The concrete LaTeX engine to invoke. A strict enum (never a free-form
 /// string) so the flags below are compile-time constants selected by match —
@@ -210,10 +307,14 @@ pub async fn compile_latex(
     app: tauri::AppHandle,
     project: Project,
     options: Option<BuildOptions>,
+    compile_id: Option<String>,
 ) -> CmdResult<CompileResult> {
     let started = Instant::now();
     let (root, root_file) = checked_project_root_and_file(&project)?;
     let opts = options.unwrap_or_default();
+    // Registered for the whole command; the guard deregisters on every exit
+    // path so `compile_cancel` on a finished id stays a quiet no-op.
+    let (cancel, _cancel_registration) = register_compile(compile_id)?;
 
     // Shell-escape lets the document run arbitrary programs during compile, so
     // it's gated on a per-machine trust grant stored OUTSIDE the project (a
@@ -235,6 +336,7 @@ pub async fn compile_latex(
                 opts.synctex,
                 shell_escape,
                 strict_offline(&app, &opts),
+                &cancel,
             )
             .await?
         }
@@ -247,6 +349,7 @@ pub async fn compile_latex(
                     opts.halt_on_error,
                     opts.synctex,
                     shell_escape,
+                    &cancel,
                 )
                 .await?
             }
@@ -259,6 +362,7 @@ pub async fn compile_latex(
                     opts.synctex,
                     shell_escape,
                     None,
+                    &cancel,
                 )
                 .await?
             }
@@ -271,6 +375,7 @@ pub async fn compile_latex(
                     opts.synctex,
                     shell_escape,
                     Some(BibTool::Bibtex),
+                    &cancel,
                 )
                 .await?
             }
@@ -283,6 +388,7 @@ pub async fn compile_latex(
                     opts.synctex,
                     shell_escape,
                     Some(BibTool::Biber),
+                    &cancel,
                 )
                 .await?
             }
@@ -332,12 +438,14 @@ fn system_tex_flags(
 }
 
 /// What a bounded compiler run produced. `status: None` with `timed_out` set
-/// means the deadline killed it; partial output is still captured.
+/// means the deadline killed it; `cancelled` means the user's cancel flag
+/// killed it first. Partial output is still captured either way.
 struct BoundedOutput {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     status: Option<std::process::ExitStatus>,
     timed_out: bool,
+    cancelled: bool,
 }
 
 impl BoundedOutput {
@@ -506,13 +614,16 @@ async fn kill_compile_child(child: &mut tokio::process::Child) {
 /// Spawn a compiler subprocess with piped, head+tail cap-bounded output and a
 /// hard deadline. `Err` is a spawn failure (callers treat it exactly like the
 /// old `Command::output()` spawn error); a timeout comes back as `Ok` with
-/// `timed_out` set so the partial log still reaches the LogsDrawer.
+/// `timed_out` set so the partial log still reaches the LogsDrawer. A fired
+/// `cancel` flag reuses the exact same kill machinery and comes back as `Ok`
+/// with `cancelled` set; the timeout semantics are untouched.
 async fn run_bounded(
     program: &Path,
     args: &[String],
     cwd: &Path,
     timeout: Duration,
     cap: usize,
+    mut cancel: Option<watch::Receiver<bool>>,
 ) -> Result<BoundedOutput, String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args)
@@ -550,15 +661,34 @@ async fn run_bounded(
         .take()
         .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stderr_buf))));
 
-    let (status, timed_out) = match tokio::time::timeout(timeout, child.wait()).await {
-        Ok(Ok(status)) => (Some(status), false),
-        Ok(Err(e)) => {
+    // The select handlers only classify the outcome — `child.wait()` holds a
+    // mutable borrow of `child` for as long as the select's futures live, so
+    // the kill (which needs `&mut child` again) must run after the select.
+    enum WaitOutcome {
+        Exited(std::io::Result<std::process::ExitStatus>),
+        TimedOut,
+        Cancelled,
+    }
+    let outcome = tokio::select! {
+        waited = tokio::time::timeout(timeout, child.wait()) => match waited {
+            Ok(result) => WaitOutcome::Exited(result),
+            Err(_) => WaitOutcome::TimedOut,
+        },
+        _ = wait_cancelled(&mut cancel) => WaitOutcome::Cancelled,
+    };
+    let (status, timed_out, was_cancelled) = match outcome {
+        WaitOutcome::Exited(Ok(status)) => (Some(status), false, false),
+        WaitOutcome::Exited(Err(e)) => {
             kill_compile_child(&mut child).await;
             return Err(format!("failed to wait on {}: {}", program.display(), e));
         }
-        Err(_) => {
+        WaitOutcome::TimedOut => {
             kill_compile_child(&mut child).await;
-            (None, true)
+            (None, true, false)
+        }
+        WaitOutcome::Cancelled => {
+            kill_compile_child(&mut child).await;
+            (None, false, true)
         }
     };
 
@@ -581,6 +711,7 @@ async fn run_bounded(
         stderr,
         status,
         timed_out,
+        cancelled: was_cancelled,
     })
 }
 
@@ -600,6 +731,7 @@ async fn run_system_tex(
     halt_on_error: bool,
     synctex: bool,
     shell_escape: bool,
+    cancel: &Option<watch::Receiver<bool>>,
 ) -> Result<(String, bool), String> {
     let mut accumulated_log = String::new();
 
@@ -627,11 +759,16 @@ async fn run_system_tex(
             root,
             COMPILE_TIMEOUT,
             COMPILE_OUTPUT_CAP,
+            cancel.clone(),
         )
         .await
         {
             Ok(out) => {
                 accumulated_log.push_str(&merge_io(&out.stdout, &out.stderr));
+                // The user asked for the whole build to stop — never fall back.
+                if out.cancelled {
+                    return Err(COMPILE_CANCELLED.into());
+                }
                 // A timeout must NOT fall back to the direct engine — that
                 // would double the worst-case wait for the same document.
                 if out.timed_out {
@@ -675,7 +812,15 @@ async fn run_system_tex(
         .collect();
     bin_args.push(root_file.to_string());
     accumulated_log.push_str(&format!("\n$ {bin_name} {}\n", bin_args.join(" ")));
-    let output = match run_bounded(&bin, &bin_args, root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP).await
+    let output = match run_bounded(
+        &bin,
+        &bin_args,
+        root,
+        COMPILE_TIMEOUT,
+        COMPILE_OUTPUT_CAP,
+        cancel.clone(),
+    )
+    .await
     {
         Ok(out) => out,
         Err(e) => {
@@ -684,6 +829,9 @@ async fn run_system_tex(
         }
     };
     accumulated_log.push_str(&merge_io(&output.stdout, &output.stderr));
+    if output.cancelled {
+        return Err(COMPILE_CANCELLED.into());
+    }
     if output.timed_out {
         accumulated_log.push_str(&latex_timeout_line(bin_name));
         return Ok((accumulated_log, false));
@@ -772,6 +920,7 @@ async fn run_engine_recipe(
     synctex: bool,
     shell_escape: bool,
     bib: Option<BibTool>,
+    cancel: &Option<watch::Receiver<bool>>,
 ) -> Result<(String, bool), String> {
     let recipe = match bib {
         None => BuildRecipe::EngineOnly,
@@ -815,11 +964,16 @@ async fn run_engine_recipe(
             root,
             COMPILE_TIMEOUT,
             COMPILE_OUTPUT_CAP,
+            cancel.clone(),
         )
         .await
         {
             Ok(output) => {
                 log.push_str(&merge_io(&output.stdout, &output.stderr));
+                // A cancel aborts the whole recipe, not just the current pass.
+                if output.cancelled {
+                    return Err(COMPILE_CANCELLED.into());
+                }
                 // A timed-out pass aborts the whole recipe — the best-effort
                 // continue is for missing/failed bib tools, not runaway ones.
                 if output.timed_out {
@@ -892,6 +1046,7 @@ async fn run_tectonic(
     synctex: bool,
     shell_escape: bool,
     strict_offline: bool,
+    cancel: &Option<watch::Receiver<bool>>,
 ) -> Result<(String, bool), String> {
     let tectonic_args = tectonic_args(root_file, synctex, shell_escape, strict_offline);
     // Try the bundled sidecar first.
@@ -910,8 +1065,20 @@ async fn run_tectonic(
                 let mut stderr = CappedBuffer::new(COMPILE_OUTPUT_CAP, COMPILE_TAIL_CAP);
                 let mut code = None;
                 let mut timed_out = false;
+                let mut cancel_rx = cancel.clone();
                 loop {
-                    match tokio::time::timeout_at(deadline, rx.recv()).await {
+                    // Cancellation mirrors the timeout arm's kill exactly, but
+                    // rejects with the stable marker instead of logging.
+                    let event = tokio::select! {
+                        ev = tokio::time::timeout_at(deadline, rx.recv()) => ev,
+                        _ = wait_cancelled(&mut cancel_rx) => {
+                            #[cfg(windows)]
+                            kill_tree_windows(child.pid()).await;
+                            let _ = child.kill();
+                            return Err(COMPILE_CANCELLED.into());
+                        }
+                    };
+                    match event {
                         // The plugin emits line-chunked events with the
                         // newline stripped; re-add it so the merged log keeps
                         // its line structure for the parser.
@@ -969,10 +1136,14 @@ async fn run_tectonic(
         root,
         COMPILE_TIMEOUT,
         COMPILE_OUTPUT_CAP,
+        cancel.clone(),
     )
     .await
     .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
     let mut log = merge_io(&output.stdout, &output.stderr);
+    if output.cancelled {
+        return Err(COMPILE_CANCELLED.into());
+    }
     if output.timed_out {
         log.push_str(&latex_timeout_line("tectonic"));
         return Ok((log, false));
@@ -1040,9 +1211,13 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
 /// intentionally minimal for now; a real impl would walk the structured
 /// `--diagnostic-format=json` output once it stabilizes.
 #[tauri::command]
-pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
+pub async fn compile_typst(
+    project: Project,
+    compile_id: Option<String>,
+) -> CmdResult<CompileResult> {
     let started = Instant::now();
     let (root, root_file) = checked_project_root_and_file(&project)?;
+    let (cancel, _cancel_registration) = register_compile(compile_id)?;
     // Resolve the absolute path on PATH and spawn THAT, not the bare name.
     // Bare `Command::new("typst")` + `current_dir(project)` lets Windows'
     // CreateProcess search the project dir first, so a planted `typst.exe`
@@ -1056,10 +1231,20 @@ pub async fn compile_typst(project: Project) -> CmdResult<CompileResult> {
     let mut log = String::new();
     log.push_str(&format!("$ typst compile {}\n", root_file));
     let args = vec!["compile".to_string(), root_file.clone()];
-    let output = run_bounded(&typst, &args, &root, COMPILE_TIMEOUT, COMPILE_OUTPUT_CAP)
-        .await
-        .map_err(|e| format!("failed to spawn typst: {}", e))?;
+    let output = run_bounded(
+        &typst,
+        &args,
+        &root,
+        COMPILE_TIMEOUT,
+        COMPILE_OUTPUT_CAP,
+        cancel,
+    )
+    .await
+    .map_err(|e| format!("failed to spawn typst: {}", e))?;
     log.push_str(&merge_io(&output.stdout, &output.stderr));
+    if output.cancelled {
+        return Err(COMPILE_CANCELLED.into());
+    }
     let success = if output.timed_out {
         // `error:`-prefixed so parse_typst_log lifts it into a diagnostic.
         log.push_str(&format!(
@@ -1379,6 +1564,7 @@ mod tests {
             &std::env::temp_dir(),
             Duration::from_secs(30),
             COMPILE_OUTPUT_CAP,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1398,6 +1584,7 @@ mod tests {
             &std::env::temp_dir(),
             Duration::from_secs(30),
             8,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1425,6 +1612,7 @@ mod tests {
             &std::env::temp_dir(),
             Duration::from_secs(30),
             32,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1454,6 +1642,7 @@ mod tests {
             &std::env::temp_dir(),
             Duration::from_millis(400),
             COMPILE_OUTPUT_CAP,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1481,6 +1670,7 @@ mod tests {
             &std::env::temp_dir(),
             Duration::from_millis(500),
             COMPILE_OUTPUT_CAP,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1512,9 +1702,95 @@ mod tests {
             &std::env::temp_dir(),
             Duration::from_secs(5),
             COMPILE_OUTPUT_CAP,
+            None,
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn run_bounded_cancel_kills_the_process_and_flags_cancelled() {
+        #[cfg(windows)]
+        let (prog, args) = shell_cmd("ping -n 30 127.0.0.1 > NUL");
+        #[cfg(not(windows))]
+        let (prog, args) = shell_cmd("sleep 30");
+        let (tx, rx) = watch::channel(false);
+        let started = std::time::Instant::now();
+        let cwd = std::env::temp_dir();
+        let task = tokio::spawn(async move {
+            run_bounded(
+                &prog,
+                &args,
+                &cwd,
+                Duration::from_secs(30),
+                COMPILE_OUTPUT_CAP,
+                Some(rx),
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        tx.send(true).expect("the run should still hold its receiver");
+        let out = task
+            .await
+            .expect("task should join")
+            .expect("spawn should succeed");
+        assert!(out.cancelled);
+        assert!(!out.timed_out);
+        assert!(!out.success());
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "the cancel kill must beat the 30s sleeper"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_bounded_with_a_pre_fired_cancel_flag_kills_immediately() {
+        #[cfg(windows)]
+        let (prog, args) = shell_cmd("ping -n 30 127.0.0.1 > NUL");
+        #[cfg(not(windows))]
+        let (prog, args) = shell_cmd("sleep 30");
+        // Cancel raced ahead of the spawn — the run must still notice it.
+        let (tx, rx) = watch::channel(false);
+        let _ = tx.send(true);
+        let out = run_bounded(
+            &prog,
+            &args,
+            &std::env::temp_dir(),
+            Duration::from_secs(30),
+            COMPILE_OUTPUT_CAP,
+            Some(rx),
+        )
+        .await
+        .expect("spawn should succeed");
+        assert!(out.cancelled);
+    }
+
+    #[test]
+    fn compile_id_validation_allows_uuid_shaped_ids_only() {
+        assert!(validate_compile_id("0f2a4c66-1d2e-4f3a-9b8c-7d6e5f4a3b2c").is_ok());
+        assert!(validate_compile_id("build_42").is_ok());
+        assert!(validate_compile_id("").is_err());
+        assert!(validate_compile_id(&"x".repeat(MAX_COMPILE_ID_LEN + 1)).is_err());
+        assert!(validate_compile_id("id with spaces").is_err());
+        assert!(validate_compile_id("../escape").is_err());
+    }
+
+    #[test]
+    fn register_compile_rejects_duplicates_and_deregisters_on_drop() {
+        let id = "test-registration-guard".to_string();
+        let (rx, guard) = register_compile(Some(id.clone())).expect("first registration");
+        assert!(rx.is_some());
+        assert!(register_compile(Some(id.clone())).is_err());
+        drop(guard);
+        // Dropped guard released the slot — the same id registers again.
+        let (_, guard2) = register_compile(Some(id)).expect("re-registration after drop");
+        drop(guard2);
+    }
+
+    #[tokio::test]
+    async fn compile_cancel_on_an_unknown_id_is_a_quiet_no_op() {
+        assert!(compile_cancel("never-registered".into()).await.is_ok());
+        assert!(compile_cancel("bad id!".into()).await.is_err());
     }
 
     #[test]

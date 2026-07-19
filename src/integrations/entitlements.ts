@@ -38,7 +38,12 @@ function warnIfUnknownKey(key: string): void {
 // only the built-in template catalog is granted. `templates.custom.max` is
 // '0' on free — a zero cap grants nothing, hence deliberately absent here
 // (matching the Supabase source, where a numeric '0' reads as not entitled).
-const FREE_ENTITLEMENTS = new Set<EntitlementKey>(["templates.builtin.free"]);
+// Overleaf import is free (repriced 2026-07-16): migration import is free
+// acquisition — the key covers both zip import and the git-bridge clone.
+const FREE_ENTITLEMENTS = new Set<EntitlementKey>([
+  "templates.builtin.free",
+  "integrations.vcs.overleaf_import",
+]);
 
 const freeTierSource: EntitlementSource = {
   current: () => "free",

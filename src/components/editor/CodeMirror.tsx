@@ -46,16 +46,26 @@ interface CodeMirrorProps {
   /** Modal Vim bindings via @replit/codemirror-vim. */
   vimMode?: boolean;
   /**
-   * Visual editing mode (LaTeX): a decoration layer that renders common
-   * constructs over the real source. Edits always hit the source; the layer
-   * never dispatches document changes.
+   * Visual editing mode (LaTeX): a hidden-source WYSIWYG layer — StateField
+   * decorations + atomic ranges over the real source. Markup never renders
+   * inline; edits always hit the source text through normal transactions.
+   * While visual is on, vim is force-suspended (modal bindings and atomic
+   * widget navigation are incoherent together); the vim setting itself is
+   * untouched and restores when visual turns off.
    */
   visualMode?: boolean;
   /**
-   * Raised when the visual layer's scan budget aborts — the host marks the
+   * Raised when the visual layer's parse budget aborts — the host marks the
    * file visual-paused for the session and flips `visualMode` off.
    */
   onVisualPause?: () => void;
+  /**
+   * Raised when a visual-mode widget is activated (click, `$`) — the host
+   * opens the LaTeX edit popover for the construct span.
+   */
+  onVisualPopover?: (intent: { from: number; to: number; kind: string }) => void;
+  /** Resolve a project-relative asset path for visual-mode figure previews. */
+  visualResolveAsset?: (relPath: string) => string | null;
   /**
    * True when an LSP session supplies its own `autocompletion({ override })`
    * via `extraExtensions`. The base `autocompletion()` is then suppressed so
@@ -192,6 +202,8 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   // critical chunk for the default (vim-off) config; it loads only when the
   // user turns vim on.
   let vimFactory: (() => Extension) | null = null;
+  const vimWanted = () =>
+    (props.vimMode ?? false) && !(props.visualMode ?? false);
   const applyVim = async (on: boolean) => {
     if (!on) {
       view?.dispatch({ effects: vimCompartment.reconfigure([]) });
@@ -201,16 +213,20 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
       vimFactory = (await import("@replit/codemirror-vim")).vim;
     }
     // A toggle-off may have landed while the chunk was loading.
-    if (!(props.vimMode ?? false)) return;
+    if (!vimWanted()) return;
     view?.dispatch({ effects: vimCompartment.reconfigure(vimFactory()) });
   };
 
   // Visual mode follows the vim pattern: dynamic-imported on first enable so
-  // the scanner + decoration layer stay off the boot path, swapped through a
+  // the parser + decoration layer stay off the boot path, swapped through a
   // compartment so toggling preserves undo history, cursor, scroll, and the
   // LSP didOpen session (an editorKey remount would throw all four away).
   let visualFactory:
-    | ((cfg: { onPause?: () => void }) => Extension)
+    | ((cfg: {
+        onPause?: () => void;
+        onOpenPopover?: (intent: { from: number; to: number; kind: string }) => void;
+        resolveAsset?: (relPath: string) => string | null;
+      }) => Extension)
     | null = null;
   const applyVisual = async (on: boolean) => {
     if (!on) {
@@ -224,7 +240,11 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
     if (!(props.visualMode ?? false)) return;
     view?.dispatch({
       effects: visualCompartment.reconfigure(
-        visualFactory({ onPause: () => props.onVisualPause?.() }),
+        visualFactory({
+          onPause: () => props.onVisualPause?.(),
+          onOpenPopover: (intent) => props.onVisualPopover?.(intent),
+          resolveAsset: (relPath) => props.visualResolveAsset?.(relPath) ?? null,
+        }),
       ),
     });
   };
@@ -292,10 +312,18 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         // predicate stays authoritative. defaultKeymap ships its own
         // Mod-Enter (insertBlankLine); left in place it fires *alongside*
         // the router's compile dispatch and a stray blank line gets saved
-        // to disk on every keyboard-triggered compile.
+        // to disk on every keyboard-triggered compile. The same collision
+        // exists for the format shortcuts: defaultKeymap's Mod-i
+        // (selectParentSyntax) doubles format.italic and historyKeymap's
+        // Mod-u (undoSelection) doubles format.underline, so both are
+        // filtered too (Mod-b is unbound in CM6, nothing to drop there).
+        // Any new keymap source must not reintroduce Mod-Enter, Mod-i,
+        // or Mod-u bindings.
         keymap.of([
-          ...defaultKeymap.filter((b) => b.key !== "Mod-Enter"),
-          ...historyKeymap,
+          ...defaultKeymap.filter(
+            (b) => b.key !== "Mod-Enter" && b.key !== "Mod-i",
+          ),
+          ...historyKeymap.filter((b) => b.key !== "Mod-u"),
           ...searchKeymap,
         ]),
         baseTheme,
@@ -374,7 +402,7 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   });
 
   createEffect(() => {
-    void applyVim(props.vimMode ?? false);
+    void applyVim(vimWanted());
   });
 
   createEffect(() => {

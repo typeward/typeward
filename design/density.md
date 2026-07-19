@@ -103,6 +103,18 @@ CSS width/height overrides the SVG attrs. The body of `tokens.css` already
 sets `font-size: var(--ui-font-base)` and `line-height: var(--ui-line-base)`
 globally; components only override when they need a different size.
 
+## Interface scale (added 2026-07-16)
+
+The whole density table multiplies by `--ui-scale`: density.css wraps every
+px token in `calc(<px> * var(--ui-scale, 1))`. Settings-store sets the
+variable inline on `<html>` from the persisted `ui.uiScale` percent setting
+(90–150, step 5, default 100 — Settings → Appearance → Density & motion); at
+exactly 100 the property is removed so the stylesheet fallback applies. This
+deliberately relaxes the "no fractional pixels" rule below for non-100
+scales (e.g. 14px × 1.05 = 14.7px) — an accepted tradeoff: modern
+compositors subpixel-render it acceptably, and per-token whole-px snapping
+would make the scale steps uneven across tokens.
+
 ## Best-practice rules (applied to this design system)
 
 - **No fractional pixels.** Every token rounds to a whole pixel. Half-pixels
@@ -124,11 +136,23 @@ globally; components only override when they need a different size.
 | Platform | Default density |
 |---|---|
 | Desktop | Cozy |
-| Tablet (`isTabletViewport()`) | Comfortable |
+| Touch device (`isCoarsePointer()`) | Comfortable |
 | User-set | Persists across viewport changes |
 
-If the user never opens the density picker, mobile auto-selects Comfortable
-on first tablet mount. Once they set a value explicitly, it sticks.
+If the user never opens the density picker, touch devices auto-select
+Comfortable on first mount. Once they set a value explicitly, it sticks.
+
+**Implemented 2026-07-17** (finding #17). The auto-default is keyed on
+pointer coarseness (`isCoarsePointer()`, the `(pointer: coarse)` media
+feature), NOT viewport width — a landscape iPad is 1133–1366 logical px and
+never crosses the 1024px `isTabletViewport()` breakpoint, so a width key
+would leave exactly the devices this default exists for on Cozy.
+Density-was-defaulted state is a localStorage once-flag
+(`typeward.densityAutoApplied`), checked/latched in `settings-store.ts`
+after settings load: a persisted density other than the "cozy" default
+counts as an explicit choice and latches the flag without changing
+anything; on a fine pointer with the untouched default the flag stays
+unset so a later first mount on a touch device still applies.
 
 ## Migration
 

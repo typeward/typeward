@@ -57,3 +57,24 @@ defaults to `/projects` when empty (covers fresh boot, deep-linked settings).
 
 This replaces the current behavior where Settings → back always goes to
 Projects.
+
+## Window contract (tranche 1, 2026-07-16)
+
+- **Window title** mirrors the working context: `<file> — <project> — Typeward`
+  in the editor (file part omitted with no open tab), plain `Typeward`
+  elsewhere. Set from `EditorScreen` via `getCurrentWindow().setTitle`;
+  errors swallowed (title is cosmetic).
+- **Size/position persist** across launches via `tauri-plugin-window-state`
+  (both the main and detached-preview windows, keyed by label). The config
+  default (1440×900) only applies on first run.
+- **Webview zoom hotkeys are ON** (`zoomHotkeysEnabled: true`) — Ctrl/Cmd +/−
+  scales the whole px-based type ramp uniformly; this is the interim
+  WCAG 1.4.4 (200% text) path until a `--ui-scale` setting ships.
+- **macOS menu = stock default with one swap.** The predefined Quit item sends
+  `NSApplication terminate:` directly and would bypass the frontend
+  dirty-buffer guard, so `lib.rs::install_macos_menu` rebuilds Tauri's
+  `Menu::default` verbatim with a custom `Cmd+Q` item that closes windows
+  instead (the guard prompts; app exits once all windows are gone).
+  Dock-icon → Quit still terminates directly (tao exposes no veto hook);
+  autosave + RecoveryDialog backstop that path. The full app-command menu
+  (File/View/Compile mirroring the CommandRegistry) is a later tranche.

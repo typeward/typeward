@@ -13,14 +13,21 @@
 import { createSignal } from "solid-js";
 
 import { describeIpcError } from "~/lib/errors";
+import { recordError } from "~/lib/telemetry";
 
 export type ToastKind = "error" | "info" | "success";
+
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
 
 export interface ToastRequest {
   id: number;
   kind: ToastKind;
   title: string;
   description?: string;
+  action?: ToastAction;
 }
 
 let _seq = 0;
@@ -31,19 +38,42 @@ const [pendingToasts, setPendingToasts] = createSignal<ToastRequest[]>([]);
 
 export { pendingToasts };
 
-function enqueue(kind: ToastKind, title: string, description?: string): void {
+function enqueue(
+  kind: ToastKind,
+  title: string,
+  description?: string,
+  action?: ToastAction,
+): void {
   setPendingToasts((prev) => {
-    const next = [...prev, { id: ++_seq, kind, title, description }];
+    const next = [...prev, { id: ++_seq, kind, title, description, action }];
     return next.length > MAX_PENDING ? next.slice(next.length - MAX_PENDING) : next;
   });
 }
 
-export const notifyError = (title: string, description?: string): void =>
-  enqueue("error", title, description);
-export const notifyInfo = (title: string, description?: string): void =>
-  enqueue("info", title, description);
-export const notifySuccess = (title: string, description?: string): void =>
-  enqueue("success", title, description);
+export const notifyError = (
+  title: string,
+  description?: string,
+  action?: ToastAction,
+): void => {
+  // Mirror every error toast into the local telemetry log so a dismissed toast
+  // is still recoverable from Settings -> Diagnostics.
+  try {
+    recordError("toast-error", title, description);
+  } catch {
+    /* telemetry must never block the toast itself */
+  }
+  enqueue("error", title, description, action);
+};
+export const notifyInfo = (
+  title: string,
+  description?: string,
+  action?: ToastAction,
+): void => enqueue("info", title, description, action);
+export const notifySuccess = (
+  title: string,
+  description?: string,
+  action?: ToastAction,
+): void => enqueue("success", title, description, action);
 
 /** @deprecated use `describeIpcError` from `~/lib/errors`. */
 export const errorText = describeIpcError;

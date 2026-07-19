@@ -184,7 +184,17 @@ export interface CloudFsProvider extends IntegrationProvider {
   delta(rootId: string, cursor: string | undefined): Promise<DeltaResult>;
 }
 
-export type SyncPhase = "idle" | "pulling" | "pushing" | "conflict" | "error";
+export type SyncPhase =
+  | "idle"
+  | "pulling"
+  | "pushing"
+  | "conflict"
+  | "error"
+  /** Network-shaped failure — transient, the engine retries on its own. */
+  | "offline"
+  /** A cloud-bound project whose engine cannot start (credentials or
+   *  entitlement gone) — persistent until the user reconnects. */
+  | "disconnected";
 
 export interface SyncStatus {
   phase: SyncPhase;

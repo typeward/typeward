@@ -3,7 +3,7 @@ import { ArrowLeft, ChevronDown, FolderOpen } from "lucide-solid";
 import type { Component } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
 import { installDismiss } from "~/lib/dismiss";
-import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
+import { handleMenuKeydown, useMenuOpenFocus } from "~/lib/menu-nav";
 import { project } from "~/stores/editor-store";
 import { isTrashed, projects } from "~/stores/projects-store";
 
@@ -22,7 +22,7 @@ export const ProjectSwitcherMenu: Component<{
   const [open, setOpen] = createSignal(false);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
-  useListboxOpenFocus(open, () => rootRef);
+  useMenuOpenFocus(open, () => rootRef);
   const onTrigger = () => setOpen((v) => !v);
 
   const others = () =>
@@ -40,7 +40,7 @@ export const ProjectSwitcherMenu: Component<{
       <button
         type="button"
         onClick={onTrigger}
-        aria-haspopup="listbox"
+        aria-haspopup="menu"
         aria-expanded={open()}
         class="lift flex h-7 items-center gap-1.5 rounded-md px-2.5 hover:bg-[var(--color-control-fill)]"
       >
@@ -54,9 +54,10 @@ export const ProjectSwitcherMenu: Component<{
       </button>
       <Show when={open()}>
         <div
-          role="listbox"
+          role="menu"
+          aria-label="Switch project"
           tabindex={-1}
-          onKeyDown={(e) => handleListboxKeydown(e, rootRef, () => setOpen(false))}
+          onKeyDown={(e) => handleMenuKeydown(e, rootRef, () => setOpen(false))}
           class="glass absolute left-0 top-full z-50 mt-1 w-[260px] rounded-xl"
           style={{
             padding: "var(--ui-pad-section)",
@@ -79,7 +80,7 @@ export const ProjectSwitcherMenu: Component<{
               {(p) => (
                 <button
                   type="button"
-                  role="option"
+                  role="menuitem"
                   tabindex={-1}
                   onClick={() => choose(p.rootPath)}
                   class="lift flex w-full items-center gap-2 rounded-md p-2 text-left hover:bg-[var(--color-control-fill)]"
@@ -100,7 +101,7 @@ export const ProjectSwitcherMenu: Component<{
           <div class="my-1.5 h-px" style={{ background: "var(--color-control-stroke)" }} />
           <button
             type="button"
-            role="option"
+            role="menuitem"
             tabindex={-1}
             onClick={() => {
               setOpen(false);

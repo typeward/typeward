@@ -183,7 +183,10 @@ const OutlineNode: Component<{
             type="button"
             aria-label={isCollapsed() ? "Expand" : "Collapse"}
             onClick={() => props.toggle(key())}
-            class="flex h-4 w-3.5 flex-shrink-0 items-center justify-center text-fg-3"
+            // box-content padding grows the hit box to 24px (upward into the
+            // row, leftward into the indent) without moving the 14px chevron
+            // or colliding with the jump button to its right.
+            class="box-content -my-1 -ml-2.5 flex h-4 w-3.5 flex-shrink-0 items-center justify-center py-1 pl-2.5 text-fg-3"
           >
             <Show when={isCollapsed()} fallback={<ChevronDown size={11} />}>
               <ChevronRight size={11} />

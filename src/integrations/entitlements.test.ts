@@ -10,9 +10,13 @@ import {
 } from "./entitlements";
 import { KNOWN_ENTITLEMENT_KEYS, type EntitlementSource } from "./types";
 
-// The free tier is the core LaTeX editor only (repriced 2026-07-08) — the
-// fallback source must mirror seed.sql's free plan exactly.
-const FREE_GRANTED = new Set<string>(["templates.builtin.free"]);
+// The free tier is the core LaTeX editor only (repriced 2026-07-08) plus
+// Overleaf import (repriced 2026-07-16: free acquisition) — the fallback
+// source must mirror seed.sql's free plan exactly.
+const FREE_GRANTED = new Set<string>([
+  "templates.builtin.free",
+  "integrations.vcs.overleaf_import",
+]);
 
 const proSource: EntitlementSource = {
   current: () => "pro",
@@ -41,7 +45,6 @@ describe("free-tier fallback source", () => {
     expect(hasEntitlement("integrations.references.doi_lookup")).toBe(false);
     expect(hasEntitlement("integrations.vcs.git")).toBe(false);
     expect(hasEntitlement("integrations.vcs.github")).toBe(false);
-    expect(hasEntitlement("integrations.vcs.overleaf_import")).toBe(false);
     expect(hasEntitlement("integrations.ai.ollama")).toBe(false);
     expect(hasEntitlement("integrations.grammar.harper")).toBe(false);
     expect(hasEntitlement("templates.custom.max")).toBe(false);

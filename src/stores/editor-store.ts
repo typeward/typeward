@@ -132,6 +132,18 @@ function activateFileIfOpen(path: string): boolean {
 }
 
 /**
+ * Activate an already-open tab by project-relative path. Quick-open uses this
+ * so hopping between open files keeps cursor/scroll (a goto intent would yank
+ * the caret to line 1); returns false when the file isn't open.
+ */
+export function activateFileByRelPath(relPath: string): boolean {
+  const existing = openFiles().findIndex((f) => f.relPath === relPath);
+  if (existing < 0) return false;
+  setActiveIndex(existing);
+  return true;
+}
+
+/**
  * Mark a file clean (saved) by path, but only if its buffer still holds the
  * exact content that was written. Guards the save race where the user keeps
  * typing during the async write, or switches tabs before it resolves — we
@@ -224,6 +236,30 @@ function renameOpenFile(oldRel: string, newRel: string, newAbs: string): void {
   });
 }
 
+/**
+ * Repoint every open tab under a moved/renamed directory: relPaths under
+ * `oldDirRel` rebase onto `newDirRel`, and absolute paths are rebuilt from
+ * `rootPath` with the same separator convention EditorScreen's joinPath uses
+ * to open files, so tab identity survives the move. Content, dirty flag, and
+ * baseHash are untouched — the move relocated the exact bytes.
+ */
+function remapOpenFilesUnderDir(
+  oldDirRel: string,
+  newDirRel: string,
+  rootPath: string,
+): void {
+  const prefix = `${oldDirRel}/`;
+  const sep = rootPath.includes("\\") ? "\\" : "/";
+  const base = rootPath.endsWith(sep) ? rootPath : rootPath + sep;
+  setOpenFiles((prev) =>
+    prev.map((f) => {
+      if (!f.relPath.startsWith(prefix)) return f;
+      const newRel = newDirRel + f.relPath.slice(oldDirRel.length);
+      return { ...f, relPath: newRel, path: base + newRel };
+    }),
+  );
+}
+
 /** Close whichever tab holds `relPath` (used after deleting a file). No-op if not open. */
 function closeFileByRelPath(relPath: string): void {
   const i = openFiles().findIndex((f) => f.relPath === relPath);
@@ -279,6 +315,7 @@ export {
   pdfScrollTarget,
   pdfVersion,
   project,
+  remapOpenFilesUnderDir,
   renameOpenFile,
   resetCompileState,
   resetTabs,

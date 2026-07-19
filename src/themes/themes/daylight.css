@@ -9,7 +9,7 @@
   --color-bg-base: #f8f4ea;
 
   --color-fg-1: #22211e;
-  --color-fg-2: #6e685f;
+  --color-fg-2: #5b564d; /* was #6e685f — deepened to ~6.3:1 so it separates from fg-3 (4.6:1) */
   --color-fg-3: #756e62; /* was #8e8678 — darkened to 4.6:1 on ivory (AA body) */
   --color-fg-4: #938a7e; /* was #aba193 — darkened to 3.1:1 on ivory (AA UI floor) */
 
@@ -32,6 +32,7 @@
   --color-selection-bg: rgb(183 154 92 / 0.16);
   --color-text-selection: rgb(183 154 92 / 0.45);
   --color-card-bg: rgb(253 251 244 / 0.94);
+  --color-doc-surface: rgb(253 251 244);
   --color-card-bg-soft: rgb(251 248 239 / 0.72);
 
   --color-control-track-off: rgb(34 33 30 / 0.13);

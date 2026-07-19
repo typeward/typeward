@@ -6,6 +6,12 @@ import {
   saveAndCompileActiveProject,
   toggleCommandPalette,
 } from "./actions";
+import {
+  activeFormattingLanguage,
+  applyFormat,
+  supportsFormat,
+  type FormatKind,
+} from "./format-actions";
 import { registerCommand, unregisterCommand } from "./registry";
 import { notifyError, notifySuccess } from "~/lib/toast";
 import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
@@ -25,6 +31,14 @@ import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
 import { editorSettings, setEditorSettings } from "~/stores/settings-store";
 import { toggleFocusMode } from "~/stores/ui-store";
 import { isVisualEligibleFile } from "~/adapters/languages";
+
+// Editor focus is already the `scope: "editor"` gate in the keyboard router;
+// this adds the per-dialect capability check on top (markdown has no
+// underline, and a .bib file takes no prose formatting at all).
+const formatAvailable = (kind: FormatKind): boolean => {
+  const lang = activeFormattingLanguage();
+  return lang !== null && supportsFormat(lang, kind);
+};
 
 /**
  * Commands available regardless of which screen is mounted. The keyboard
@@ -237,7 +251,7 @@ const CORE_COMMANDS: EditorCommand[] = [
   {
     id: "core.toggleVisualMode",
     title: "Toggle Visual Editing",
-    subtitle: "Render LaTeX constructs visually over the source",
+    subtitle: "Edit LaTeX as a formatted document",
     shortcut: "Mod+Shift+V",
     group: "View",
     scope: "global",
@@ -278,7 +292,78 @@ const CORE_COMMANDS: EditorCommand[] = [
       setRequestFeedbackCard("manual");
     },
   },
+  {
+    id: "format.bold",
+    title: "Bold",
+    subtitle: "Wrap the selection in bold, or insert the empty construct",
+    shortcut: "Mod+B",
+    group: "Format",
+    scope: "editor",
+    when: () => formatAvailable("bold"),
+    run: () => {
+      applyFormat("bold");
+    },
+  },
+  {
+    id: "format.italic",
+    title: "Italic",
+    subtitle: "Wrap the selection in italics, or insert the empty construct",
+    shortcut: "Mod+I",
+    group: "Format",
+    scope: "editor",
+    when: () => formatAvailable("italic"),
+    run: () => {
+      applyFormat("italic");
+    },
+  },
+  {
+    id: "format.underline",
+    title: "Underline",
+    subtitle: "Wrap the selection in an underline, or insert the empty construct",
+    shortcut: "Mod+U",
+    group: "Format",
+    scope: "editor",
+    when: () => formatAvailable("underline"),
+    run: () => {
+      applyFormat("underline");
+    },
+  },
 ];
+
+// Palette-only parity with the rest of the FormatToolbar. Deliberately no
+// shortcuts: Mod+M (inline math) collides with macOS window-minimize, and
+// none of the others has an established binding worth spending a chord on.
+const PALETTE_FORMAT_COMMANDS: ReadonlyArray<{
+  kind: FormatKind;
+  title: string;
+  subtitle: string;
+}> = [
+  { kind: "code", title: "Inline Code", subtitle: "Wrap the selection in inline code" },
+  { kind: "heading", title: "Heading", subtitle: "Turn the selection into a heading" },
+  { kind: "list", title: "Bulleted List", subtitle: "Convert selected lines to a bulleted list" },
+  { kind: "orderedList", title: "Numbered List", subtitle: "Convert selected lines to a numbered list" },
+  { kind: "quote", title: "Block Quote", subtitle: "Wrap the selection in a block quote" },
+  { kind: "inlineMath", title: "Insert Inline Math", subtitle: "Insert inline math at the cursor" },
+  { kind: "equation", title: "Insert Equation", subtitle: "Insert a display equation" },
+  { kind: "figure", title: "Insert Figure", subtitle: "Insert a figure block" },
+  { kind: "table", title: "Insert Table", subtitle: "Insert a table skeleton" },
+  { kind: "link", title: "Insert Link", subtitle: "Insert a link" },
+  { kind: "citation", title: "Insert Citation", subtitle: "Insert a citation at the cursor" },
+];
+
+for (const f of PALETTE_FORMAT_COMMANDS) {
+  CORE_COMMANDS.push({
+    id: `format.${f.kind}`,
+    title: f.title,
+    subtitle: f.subtitle,
+    group: "Format",
+    scope: "editor",
+    when: () => formatAvailable(f.kind),
+    run: () => {
+      applyFormat(f.kind);
+    },
+  });
+}
 
 // Dev builds only: exercises the full unhandled-error -> Sentry transport ->
 // CSP pipeline. Tree-shaken out of release bundles.

@@ -5,7 +5,7 @@ import type {
   Project,
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
-import { runCompile, runSyncForward } from "~/commands/compile-runner";
+import { currentCompileId, runCompile, runSyncForward } from "~/commands/compile-runner";
 import { buildOptionsWire, effectiveBuild } from "~/adapters/latex/build-config";
 
 /**
@@ -20,7 +20,12 @@ export const ensureShellEscapeTrust = async (project: Project): Promise<boolean>
   const { ask } = await import("@tauri-apps/plugin-dialog");
   const ok = await ask(
     "This project requests shell-escape, which lets the document run arbitrary programs during compile. Allow it on this machine?",
-    { title: "Allow shell-escape?", kind: "warning" },
+    {
+      title: "Allow shell-escape?",
+      kind: "warning",
+      okLabel: "Allow shell-escape",
+      cancelLabel: "Keep blocked",
+    },
   );
   await ipc
     .shellEscapeTrustSet(project.rootPath, ok ? "granted" : "denied")
@@ -40,9 +45,9 @@ const compile = async (project: Project): Promise<CompileResult> => {
   // Prompt for shell-escape trust the first time; declining compiles without it
   // rather than erroring.
   if (wire.shellEscape && !(await ensureShellEscapeTrust(project))) {
-    return ipc.compileLatex(project, { ...wire, shellEscape: false });
+    return ipc.compileLatex(project, { ...wire, shellEscape: false }, currentCompileId());
   }
-  return ipc.compileLatex(project, wire);
+  return ipc.compileLatex(project, wire, currentCompileId());
 };
 
 /**

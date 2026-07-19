@@ -7,6 +7,7 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import type Token from "markdown-it/lib/token.mjs";
 import type { Accessor, Component } from "solid-js";
 import { createEffect, createMemo, onCleanup } from "solid-js";
+import { fileUrlFromPath, safeRelativePath } from "~/lib/file-url";
 
 interface Props {
   content: Accessor<string>;
@@ -83,32 +84,8 @@ function mathPlugin(md: MarkdownIt): void {
     renderMath(tokens[idx]?.content ?? "", true);
 }
 
-function fileUrlFromPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  const encoded = normalized
-    .split("/")
-    .map((part, index) =>
-      index === 0 && /^[A-Za-z]:$/.test(part) ? part : encodeURIComponent(part),
-    )
-    .join("/");
-  return /^[A-Za-z]:\//.test(normalized) ? `file:///${encoded}` : `file://${encoded}`;
-}
-
-function safeRelativePath(url: string): string | null {
-  const trimmed = url.trim().replace(/\\/g, "/");
-  if (!trimmed || trimmed.startsWith("//") || trimmed.startsWith("/")) return null;
-
-  const normalized = trimmed.replace(/^\.\//, "");
-  const segments = normalized.split("/");
-  if (
-    segments.some(
-      (segment) => segment === "" || segment === "." || segment === ".." || segment.includes("\0"),
-    )
-  ) {
-    return null;
-  }
-  return segments.join("/");
-}
+// Shared with the visual editor's figure widgets — the guarded-relative-
+// asset security posture lives in one module (src/lib/file-url.ts).
 
 function sanitizeLinkUrl(url: string): string | null {
   const trimmed = url.trim();

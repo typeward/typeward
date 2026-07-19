@@ -28,6 +28,7 @@
   --color-topbar-bg: rgb(255 255 255 / 0.78);
   --color-selection-bg: rgb(124 58 237 / 0.12);
   --color-card-bg: rgb(255 255 255 / 0.88);
+  --color-doc-surface: rgb(255 255 255);
   --color-card-bg-soft: rgb(255 255 255 / 0.65);
 
   --color-control-track-off: rgb(15 23 42 / 0.14);
@@ -41,6 +42,11 @@
   --color-accent-1: #7c3aed;
   --color-accent-2: #07809d; /* teal — deepened (was #0891b2) so white label clears 4.6:1 */
   --color-accent-fg: #ffffff; /* violet/teal accents are light enough; keep white (default token is now dark ink) */
+
+  /* Aurora's --accent-text-* lighten-toward-white formula only works on dark
+   * bgs (computes 2.9:1 / 2.6:1 here) — deep violet/teal, both >=4.5:1 on #faf9f6. */
+  --accent-text-1: #6d28d9;
+  --accent-text-2: #0e7490;
 
   --color-glass-soft-fill: rgb(15 23 42 / 0.025);
 

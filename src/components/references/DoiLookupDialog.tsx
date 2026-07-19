@@ -3,6 +3,7 @@ import { Plus } from "lucide-solid";
 import type { Component } from "solid-js";
 import { createSignal, Show } from "solid-js";
 
+import { TextField } from "~/components/forms/TextField";
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { hasEntitlement } from "~/integrations/entitlements";
@@ -100,12 +101,14 @@ export const DoiLookupDialog: Component<DoiLookupDialogProps> = (props) => {
       }
     >
       <div class="flex flex-col gap-3">
-        <input
+        <TextField
+          label="DOI or arXiv id"
+          hideLabel
+          size="lg"
           type="text"
           value={input()}
           onInput={(e) => setInput(e.currentTarget.value)}
           placeholder="10.1145/3290605.3300479 or 2403.04132"
-          class="glass-inset h-10 w-full rounded-md px-3 text-base text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           autofocus
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.isComposing && !busy()) handleAdd();

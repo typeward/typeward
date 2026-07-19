@@ -36,6 +36,8 @@ import {
   setNavigator,
 } from "~/commands/palette-store";
 import { scheduleFeedbackPrompt } from "~/lib/feedback-prompt";
+import { installMenuBridge } from "~/lib/menu-bridge";
+import { installOpenWith } from "~/lib/open-with";
 import { scheduleBootUpdateCheck } from "~/lib/updater";
 import { CommandPalette } from "~/components/CommandPalette";
 import { Toaster } from "~/components/feedback/Toaster";
@@ -201,6 +203,52 @@ const RootRoute: Component = () => {
 const AppShell: Component<{ children?: any }> = (props) => {
   const navigate = useNavigate();
   setNavigator((path: string) => navigate(path));
+
+  // macOS menu "Close Tab" (Cmd+W) fallback: EditorScreen owns the listener
+  // while it's mounted (close tab, else close window); on every other screen
+  // the emit would land with no consumer and Cmd+W would go dead — here it
+  // falls through to the window-close guard. The [data-editor-shell] probe is
+  // the same mount marker the keyboard router scopes on.
+  let unlistenMenuCloseTab: (() => void) | undefined;
+  let menuCloseTabDisposed = false;
+  void (async () => {
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenMenuCloseTab = await listen("menu:close-tab", () => {
+        if (document.querySelector("[data-editor-shell]") !== null) return;
+        void (async () => {
+          try {
+            const { getCurrentWindow } = await import("@tauri-apps/api/window");
+            // close(), not destroy() — onCloseRequested must get its prompt.
+            await getCurrentWindow().close();
+          } catch {
+            /* non-Tauri context */
+          }
+        })();
+      });
+      if (menuCloseTabDisposed) {
+        unlistenMenuCloseTab();
+        unlistenMenuCloseTab = undefined;
+      }
+    } catch {
+      /* non-Tauri context */
+    }
+  })();
+  onCleanup(() => {
+    menuCloseTabDisposed = true;
+    unlistenMenuCloseTab?.();
+  });
+
+  // Native-shell bridges. The menu bridge only ever receives events on macOS
+  // (nothing emits "menu:command" elsewhere), so mounting it unconditionally
+  // is harmless; open-with handles OS "Open with Typeward" file paths from
+  // the single-instance callback and the deferred first-launch emit.
+  const uninstallMenuBridge = installMenuBridge();
+  const uninstallOpenWith = installOpenWith();
+  onCleanup(() => {
+    uninstallMenuBridge();
+    uninstallOpenWith();
+  });
 
   // Suppress the webview's browser context menu (Reload / Inspect) on app
   // chrome; editable surfaces keep it for native cut/copy/paste, and so do

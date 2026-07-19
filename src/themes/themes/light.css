@@ -29,6 +29,7 @@
   --color-selection-bg: rgb(37 99 235 / 0.1);
   --color-text-selection: rgb(37 99 235 / 0.28);
   --color-card-bg: rgb(255 255 255 / 0.95);
+  --color-doc-surface: rgb(255 255 255);
   --color-card-bg-soft: rgb(255 255 255 / 0.75);
 
   --color-control-track-off: rgb(0 0 0 / 0.14);

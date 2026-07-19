@@ -21,6 +21,7 @@ import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { Switch } from "~/components/forms/Switch";
+import { TextField } from "~/components/forms/TextField";
 import { assertEntitlement, hasEntitlement } from "~/integrations/entitlements";
 import type { EntitlementKey } from "~/integrations/types";
 import {
@@ -305,21 +306,27 @@ const ZoteroWebRow: Component = () => {
     >
       <Show when={!isConnected()}>
         <div class="mt-3 flex flex-col gap-2">
-          <div class="flex gap-2">
-            <input
-              type="text"
-              placeholder="User id (numeric)"
-              value={userIdInput()}
-              onInput={(e) => setUserIdInput(e.currentTarget.value)}
-              class="glass-inset h-8 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-            />
-            <input
-              type="password"
-              placeholder="API key"
-              value={apiKeyInput()}
-              onInput={(e) => setApiKeyInput(e.currentTarget.value)}
-              class="glass-inset h-8 flex-[2] rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-            />
+          <div class="flex items-end gap-2">
+            <div class="min-w-0 flex-1">
+              <TextField
+                label="User id"
+                size="sm"
+                type="text"
+                placeholder="e.g. 1234567"
+                value={userIdInput()}
+                onInput={(e) => setUserIdInput(e.currentTarget.value)}
+              />
+            </div>
+            <div class="min-w-0 flex-[2]">
+              <TextField
+                label="API key"
+                size="sm"
+                mono
+                type="password"
+                value={apiKeyInput()}
+                onInput={(e) => setApiKeyInput(e.currentTarget.value)}
+              />
+            </div>
             <Button variant="primary" size="sm" class="h-8" onClick={handleConnect} disabled={busy()}>
               {busy() ? "Testing…" : "Connect"}
             </Button>
@@ -442,13 +449,15 @@ const MendeleyRow: Component = () => {
             <span class="mono">http://localhost:5000/callback</span> — then paste the app
             secret (stored in your OS keyring).
           </div>
-          <input
+          <TextField
+            label="Redirect URL"
+            size="sm"
+            mono
             type="text"
-            placeholder="Redirect URL (must match Mendeley exactly)"
+            placeholder="e.g. http://localhost:5000/callback"
             value={redirectInput()}
             onInput={(e) => setRedirectInput(e.currentTarget.value)}
             onChange={() => persistMendeley()}
-            class="glass-inset h-8 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
           />
           <div class="text-xs text-fg-3">
             App will send:{" "}
@@ -457,14 +466,18 @@ const MendeleyRow: Component = () => {
             </span>
             {" "}— this is what Mendeley must have registered.
           </div>
-          <div class="flex gap-2">
-            <input
-              type="password"
-              placeholder={secretSaved() ? "Secret saved — paste to replace" : "Client secret"}
-              value={secretInput()}
-              onInput={(e) => setSecretInput(e.currentTarget.value)}
-              class="glass-inset h-8 flex-1 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-            />
+          <div class="flex items-end gap-2">
+            <div class="min-w-0 flex-1">
+              <TextField
+                label="Client secret"
+                size="sm"
+                mono
+                type="password"
+                placeholder={secretSaved() ? "Saved — paste to replace" : ""}
+                value={secretInput()}
+                onInput={(e) => setSecretInput(e.currentTarget.value)}
+              />
+            </div>
             <Button
               variant="secondary"
               size="sm"
@@ -615,9 +628,6 @@ function normalizeWebdavUrl(raw: string): string {
   return s;
 }
 
-const WEBDAV_INPUT =
-  "glass-inset h-8 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]";
-
 const WebdavRow: Component = () => {
   const accounts = () =>
     integrationsSettings().cloud.accounts.filter((a) => a.provider === "webdav");
@@ -727,28 +737,34 @@ const WebdavRow: Component = () => {
           </For>
           <Show when={adding()}>
             <div class="flex flex-col gap-2">
-              <input
+              <TextField
+                label="Server URL"
+                size="sm"
                 type="text"
-                placeholder="https://cloud.example.com/remote.php/dav/files/you/"
+                placeholder="e.g. https://cloud.example.com/remote.php/dav/files/you/"
                 value={url()}
                 onInput={(e) => setUrl(e.currentTarget.value)}
-                class={WEBDAV_INPUT}
               />
               <div class="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Username"
-                  value={username()}
-                  onInput={(e) => setUsername(e.currentTarget.value)}
-                  class={`${WEBDAV_INPUT} flex-1`}
-                />
-                <input
-                  type="password"
-                  placeholder="App password"
-                  value={password()}
-                  onInput={(e) => setPassword(e.currentTarget.value)}
-                  class={`${WEBDAV_INPUT} flex-[2] mono`}
-                />
+                <div class="min-w-0 flex-1">
+                  <TextField
+                    label="Username"
+                    size="sm"
+                    type="text"
+                    value={username()}
+                    onInput={(e) => setUsername(e.currentTarget.value)}
+                  />
+                </div>
+                <div class="min-w-0 flex-[2]">
+                  <TextField
+                    label="App password"
+                    size="sm"
+                    mono
+                    type="password"
+                    value={password()}
+                    onInput={(e) => setPassword(e.currentTarget.value)}
+                  />
+                </div>
               </div>
               <label class="flex items-center gap-2 text-xs text-fg-2">
                 <input
@@ -820,20 +836,25 @@ const AuthorIdentityRow: Component = () => {
     >
       <div class="mt-3 flex flex-col gap-2">
         <div class="flex gap-2">
-          <input
-            type="text"
-            placeholder="Name"
-            value={git().authorName ?? ""}
-            onInput={(e) => update({ authorName: e.currentTarget.value || undefined })}
-            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
-          <input
-            type="email"
-            placeholder="you@example.com"
-            value={git().authorEmail ?? ""}
-            onInput={(e) => update({ authorEmail: e.currentTarget.value || undefined })}
-            class="glass-inset h-8 flex-1 rounded-md px-2.5 text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
+          <div class="min-w-0 flex-1">
+            <TextField
+              label="Name"
+              size="sm"
+              type="text"
+              value={git().authorName ?? ""}
+              onInput={(e) => update({ authorName: e.currentTarget.value || undefined })}
+            />
+          </div>
+          <div class="min-w-0 flex-1">
+            <TextField
+              label="Email"
+              size="sm"
+              type="email"
+              placeholder="e.g. you@example.com"
+              value={git().authorEmail ?? ""}
+              onInput={(e) => update({ authorEmail: e.currentTarget.value || undefined })}
+            />
+          </div>
         </div>
       </div>
     </ProviderRow>
@@ -1166,14 +1187,17 @@ const AiProviderRow: Component<{
       }
     >
       <Show when={props.provider.keyringService && !hasKey()}>
-        <div class="mt-3 flex gap-2">
-          <input
-            type="password"
-            placeholder="API key"
-            value={apiKeyInput()}
-            onInput={(e) => setApiKeyInput(e.currentTarget.value)}
-            class="glass-inset h-8 flex-1 rounded-md px-2.5 mono text-sm text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-          />
+        <div class="mt-3 flex items-end gap-2">
+          <div class="min-w-0 flex-1">
+            <TextField
+              label="API key"
+              size="sm"
+              mono
+              type="password"
+              value={apiKeyInput()}
+              onInput={(e) => setApiKeyInput(e.currentTarget.value)}
+            />
+          </div>
           <Button variant="primary" size="sm" class="h-8" onClick={saveKey} disabled={busy()}>
             {busy() ? "Testing…" : "Save"}
           </Button>
@@ -1204,16 +1228,19 @@ const AiProviderRow: Component<{
                   and it's detected automatically — no setup needed.
                 </div>
                 {/* Only useful when the daemon runs somewhere non-default. */}
-                <div class="flex items-center gap-2">
-                  <span class="text-fg-3">Custom URL (optional)</span>
-                  <input
-                    type="text"
-                    value={baseUrlInput()}
-                    onInput={(e) => setBaseUrlInput(e.currentTarget.value)}
-                    onBlur={persistOllamaBaseUrl}
-                    placeholder="http://localhost:11434"
-                    class="glass-inset h-7 flex-1 rounded-md px-2.5 mono text-fg-1 placeholder:text-fg-2 outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-accent-1)]"
-                  />
+                <div class="flex items-end gap-2">
+                  <div class="min-w-0 flex-1">
+                    <TextField
+                      label="Custom URL (optional)"
+                      size="sm"
+                      mono
+                      type="text"
+                      value={baseUrlInput()}
+                      onInput={(e) => setBaseUrlInput(e.currentTarget.value)}
+                      onBlur={persistOllamaBaseUrl}
+                      placeholder="e.g. http://localhost:11434"
+                    />
+                  </div>
                   <Button
                     variant="ghost"
                     size="sm"

@@ -1,6 +1,7 @@
 import Resizable from "corvu/resizable";
 import {
   CheckCircle2,
+  Files,
   ListX,
   Loader2,
   SpellCheck,
@@ -8,7 +9,7 @@ import {
   X as XIcon,
   XCircle,
 } from "lucide-solid";
-import type { Component } from "solid-js";
+import type { Component, JSX } from "solid-js";
 import {
   Index,
   Match,
@@ -31,6 +32,7 @@ import {
   ContextMenuItem,
   createContextMenuState,
 } from "~/components/primitives/ContextMenu";
+import { IconButton } from "~/components/primitives/IconButton";
 import { EditorContextMenu } from "~/components/editor/context-menu/EditorContextMenu";
 import {
   buildEditorMenuContext,
@@ -74,6 +76,8 @@ import {
   cursorCol,
   cursorLine,
   getActiveEditorView,
+  noteActiveEditorFile,
+  restoreEditorPosition,
 } from "~/stores/editor-view-store";
 import {
   requestHistoryPanel_,
@@ -106,27 +110,44 @@ import {
   lspLanguageForFile,
   previewKindForFile,
 } from "~/adapters/languages";
-import { markVisualPaused, visualPaused } from "~/stores/visual-store";
 import {
+  markVisualPaused,
+  requestVisualPopover,
+  visualPaused,
+  visualPopoverIntent,
+} from "~/stores/visual-store";
+import { VisualPopover } from "~/components/editor/visual/VisualPopover";
+import { resolveProjectAsset } from "~/lib/file-url";
+import {
+  centerSplit,
   consolePosition,
   editorLayout,
   focusMode,
   previewDetached,
   previewMode,
   requestLogsTab,
+  revealCompileErrors,
+  setCenterSplit,
   setPreviewMode,
+  setSidebarPx,
+  setTabActionIntent,
+  sidebarPx,
+  tabActionIntent,
   toggleFocusMode,
 } from "~/stores/ui-store";
 import {
   activePane,
   cyclePane,
-  isTabletViewport,
   logsSheetOpen,
+  paneTier,
   setActivePane,
   setLogsSheetOpen,
+  touchAffordances,
 } from "~/stores/viewport-store";
 import {
+  cancelActiveCompile,
   compileActiveProject,
+  compileStartedAt,
   createThreadFromPdfSelection,
   readProjectSource,
   resolveForward,
@@ -136,6 +157,7 @@ import {
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { installSwipeListener } from "~/lib/gestures";
 import { pathToFileUri } from "~/lib/lsp/cm6";
+import { anchoredMenuEvent } from "~/lib/menu-position";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
 
@@ -150,6 +172,16 @@ export const TextShell: Component<{
 }> = (props) => {
   const [leftTab, setLeftTab] = createSignal<LeftTab>("files");
   const [outlineCollapsed, setOutlineCollapsed] = createSignal(false);
+  // Two-pane tier only: the sidebar lives in an overlay drawer. Owned here
+  // (not in TwoPaneLayout) so the sidebar-targeting intents below can raise it.
+  const [filesDrawerOpen, setFilesDrawerOpen] = createSignal(false);
+
+  // Leaving the two-pane tier drops the drawer overlay so a later resize back
+  // into it doesn't reopen a stale drawer (mirrors the logs-sheet reset in
+  // viewport-store).
+  createEffect(() => {
+    if (paneTier() !== "two") setFilesDrawerOpen(false);
+  });
 
   const handleEditorChange = (next: string) => {
     const file = activeFile();
@@ -183,7 +215,10 @@ export const TextShell: Component<{
     const intent = reviewPanelIntent();
     if (!intent) return;
     setLeftTab(intent.panel);
-    if (isTabletViewport()) setActivePane("sidebar");
+    // The sidebar is docked on three panes, an overlay drawer on two, and a
+    // swappable pane on one — the intent must surface it on all three.
+    if (paneTier() === "one") setActivePane("sidebar");
+    else if (paneTier() === "two") setFilesDrawerOpen(true);
     setFocusedThreadId(intent.threadId ?? null);
     setReviewPanelIntent(null);
   });
@@ -192,7 +227,8 @@ export const TextShell: Component<{
   createEffect(() => {
     if (!requestHistoryPanel_()) return;
     setLeftTab("history");
-    if (isTabletViewport()) setActivePane("sidebar");
+    if (paneTier() === "one") setActivePane("sidebar");
+    else if (paneTier() === "two") setFilesDrawerOpen(true);
     setRequestHistoryPanel(false);
   });
 
@@ -229,9 +265,11 @@ export const TextShell: Component<{
 
   const handleSelectFile = (rel: string) => {
     props.onSelectFile(rel);
-    // On tablet, picking a file should swap to the editor pane — keeping the
-    // sidebar mounted would just hide the file the user just opened.
-    if (isTabletViewport()) setActivePane("editor");
+    // On the single-pane tier, picking a file should swap to the editor pane —
+    // keeping the sidebar mounted would just hide the file the user just
+    // opened. The two-pane files drawer closes for the same reason.
+    if (paneTier() === "one") setActivePane("editor");
+    setFilesDrawerOpen(false);
   };
 
   return (
@@ -242,9 +280,42 @@ export const TextShell: Component<{
       {/* Single per-project settings dialog, raised by the sidebar gear, the
           engine pill's menu, and the status-bar build menu. */}
       <ProjectSettingsDialog />
-      <Show
-        when={!isTabletViewport()}
-        fallback={
+      <Switch>
+        <Match when={paneTier() === "three"}>
+          <DesktopLayout
+            leftTab={leftTab()}
+            setLeftTab={setLeftTab}
+            outlineCollapsed={outlineCollapsed()}
+            setOutlineCollapsed={setOutlineCollapsed}
+            onSelectFile={handleSelectFile}
+            onSave={save}
+            onCompile={compile}
+            onEditorChange={handleEditorChange}
+            pdfPath={pdfPath()}
+            previewKind={previewKind()}
+            mdBaseDir={mdBaseDir()}
+            mdTheme={mdTheme()}
+          />
+        </Match>
+        <Match when={paneTier() === "two"}>
+          <TwoPaneLayout
+            leftTab={leftTab()}
+            setLeftTab={setLeftTab}
+            outlineCollapsed={outlineCollapsed()}
+            setOutlineCollapsed={setOutlineCollapsed}
+            onSelectFile={handleSelectFile}
+            onSave={save}
+            onCompile={compile}
+            onEditorChange={handleEditorChange}
+            pdfPath={pdfPath()}
+            previewKind={previewKind()}
+            mdBaseDir={mdBaseDir()}
+            mdTheme={mdTheme()}
+            filesDrawerOpen={filesDrawerOpen()}
+            setFilesDrawerOpen={setFilesDrawerOpen}
+          />
+        </Match>
+        <Match when={paneTier() === "one"}>
           <TabletLayout
             leftTab={leftTab()}
             setLeftTab={setLeftTab}
@@ -259,23 +330,8 @@ export const TextShell: Component<{
             mdBaseDir={mdBaseDir()}
             mdTheme={mdTheme()}
           />
-        }
-      >
-        <DesktopLayout
-          leftTab={leftTab()}
-          setLeftTab={setLeftTab}
-          outlineCollapsed={outlineCollapsed()}
-          setOutlineCollapsed={setOutlineCollapsed}
-          onSelectFile={handleSelectFile}
-          onSave={save}
-          onCompile={compile}
-          onEditorChange={handleEditorChange}
-          pdfPath={pdfPath()}
-          previewKind={previewKind()}
-          mdBaseDir={mdBaseDir()}
-          mdTheme={mdTheme()}
-        />
-      </Show>
+        </Match>
+      </Switch>
     </>
   );
 };
@@ -356,6 +412,10 @@ const PreviewPane: Component<{
             version={pdfVersion()}
             onCompile={props.onCompile}
             compiling={compileState() === "compiling"}
+            onCancelCompile={() => void cancelActiveCompile()}
+            compileStartedAt={compileStartedAt()}
+            stale={compileState() === "error" && props.pdfPath !== null}
+            onShowErrors={revealCompileErrors}
             scrollTarget={pdfScrollTarget()}
             onPageClick={(page, x, y, selectedText) => {
               void syncInverseFromPdfClick(page, x, y, selectedText);
@@ -384,17 +444,44 @@ const DesktopLayout: Component<ShellProps> = (props) => {
 
   // The sidebar's initial width fits the full tab strip (measured by
   // EditorSidebar) so Files / Refs / SCM / Review·n / TODO·n all show without
-  // clipping; the user can still drag from there.
+  // clipping; the user can still drag from there. Once the user HAS dragged,
+  // the persisted width (workspace.sidebarPx) wins over the content fit —
+  // reactive through desiredPx, so the async settings hydrate still applies.
   const [tabsWidth, setTabsWidth] = createSignal<number | undefined>();
+  const clampSidebar = (px: number) => Math.min(400, Math.max(200, px));
+  const fittedWidth = () => {
+    const w = tabsWidth();
+    return w ? Math.max(w + 4, 300) : undefined;
+  };
   const sidebar = createSidebarResize({
     minPx: 200,
     maxPx: 400,
-    defaultPx: 300,
-    desiredPx: () => {
-      const w = tabsWidth();
-      return w ? Math.max(w + 4, 300) : undefined;
-    },
+    defaultPx: sidebarPx() ?? 300,
+    desiredPx: () => sidebarPx() ?? fittedWidth(),
   });
+  // Mirror genuine drags into the persisted signal. corvu echoes programmatic
+  // sizes (initial mount, window-resize reflow) through onSizesChange too, so
+  // a report matching the current target within the hook's own 1px tolerance
+  // is not a drag and must not freeze the content-fit behavior.
+  let resizableEl: HTMLDivElement | undefined;
+  const onSidebarSizesChange = (next: number[]) => {
+    sidebar.onSizesChange(next);
+    const w = resizableEl?.getBoundingClientRect().width ?? 0;
+    if (w <= 0 || next[0] === undefined) return;
+    const px = next[0] * w;
+    const target = clampSidebar(sidebarPx() ?? fittedWidth() ?? 300);
+    if (Math.abs(px - target) > 1) setSidebarPx(Math.round(clampSidebar(px)));
+  };
+
+  // Editor/preview split — one persisted fraction (workspace.centerSplit)
+  // shared by the normal and focus-mode layouts, so entering/leaving focus
+  // (or relaunching) no longer resets the split.
+  const splitSizes = () => [centerSplit(), 1 - centerSplit()];
+  const onSplitSizesChange = (next: number[]) => {
+    if (next[0] === undefined || next[0] <= 0) return;
+    // Round so drag micro-jitter doesn't churn the debounced settings save.
+    setCenterSplit(Math.round(next[0] * 1000) / 1000);
+  };
 
   const editorPane = () => (
     <CenterPane
@@ -420,14 +507,19 @@ const DesktopLayout: Component<ShellProps> = (props) => {
     <div class="relative flex h-full w-full overflow-hidden" data-editor-shell>
       <Switch>
         <Match when={showEditor() && showPreview()}>
-          <Resizable orientation="horizontal" class="flex min-h-0 flex-1 overflow-hidden">
-            <Resizable.Panel initialSize={0.55} minSize={0.3}>
+          <Resizable
+            orientation="horizontal"
+            class="flex min-h-0 flex-1 overflow-hidden"
+            sizes={splitSizes()}
+            onSizesChange={onSplitSizesChange}
+          >
+            <Resizable.Panel minSize={0.3}>
               {editorPane()}
             </Resizable.Panel>
             <Resizable.Handle aria-label="Resize preview" class="group relative w-[6px] shrink-0">
               <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
             </Resizable.Handle>
-            <Resizable.Panel initialSize={0.45} minSize="320px">
+            <Resizable.Panel minSize="320px">
               {previewPane()}
             </Resizable.Panel>
           </Resizable>
@@ -457,12 +549,15 @@ const DesktopLayout: Component<ShellProps> = (props) => {
   return (
     <Show when={!focusMode()} fallback={focusLayout()}>
     <Resizable
-      ref={sidebar.setRef}
+      ref={(el: HTMLDivElement) => {
+        resizableEl = el;
+        sidebar.setRef(el);
+      }}
       orientation="horizontal"
       class="flex h-full w-full overflow-hidden"
       data-editor-shell
       sizes={sidebar.sizes()}
-      onSizesChange={sidebar.onSizesChange}
+      onSizesChange={onSidebarSizesChange}
     >
       {/* min-w-0 zeroes the panel's flex auto-minimum so wide tab content
           (long reference titles, search results) can't grow the pane past its
@@ -492,8 +587,10 @@ const DesktopLayout: Component<ShellProps> = (props) => {
               <Resizable
                 orientation="horizontal"
                 class="flex min-h-0 flex-1 overflow-hidden"
+                sizes={splitSizes()}
+                onSizesChange={onSplitSizesChange}
               >
-                <Resizable.Panel initialSize={0.55} minSize={0.3}>
+                <Resizable.Panel minSize={0.3}>
                   {editorPane()}
                 </Resizable.Panel>
                 <Resizable.Handle
@@ -502,7 +599,7 @@ const DesktopLayout: Component<ShellProps> = (props) => {
                 >
                   <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
                 </Resizable.Handle>
-                <Resizable.Panel initialSize={0.45} minSize="320px">
+                <Resizable.Panel minSize="320px">
                   {previewPane()}
                 </Resizable.Panel>
               </Resizable>
@@ -521,6 +618,199 @@ const DesktopLayout: Component<ShellProps> = (props) => {
         </div>
       </Resizable.Panel>
     </Resizable>
+    </Show>
+  );
+};
+
+// =================================================================
+// Two-pane layout — 800-1023px keeps editor + preview side by side (the
+// compile-check loop needs both); the sidebar becomes an overlay drawer
+// =================================================================
+
+const TwoPaneLayout: Component<
+  ShellProps & {
+    filesDrawerOpen: boolean;
+    setFilesDrawerOpen: (v: boolean) => void;
+  }
+> = (props) => {
+  const showDrawer = () => consolePosition() === "drawer";
+
+  // Same persisted fraction as DesktopLayout (workspace.centerSplit), so
+  // resizing across the 1024px boundary keeps the editor/preview ratio.
+  const splitSizes = () => [centerSplit(), 1 - centerSplit()];
+  const onSplitSizesChange = (next: number[]) => {
+    if (next[0] === undefined || next[0] <= 0) return;
+    setCenterSplit(Math.round(next[0] * 1000) / 1000);
+  };
+
+  const editorPane = () => (
+    <CenterPane
+      onSave={props.onSave}
+      onCompile={props.onCompile}
+      onEditorChange={props.onEditorChange}
+      // In the strip row, not a floating overlay — an absolute toggle sat on
+      // top of the first file tab and blocked its clicks.
+      stripLeading={
+        <IconButton
+          label="Project files"
+          touchTarget
+          data-files-toggle
+          onClick={() => props.setFilesDrawerOpen(true)}
+        >
+          <Files size={touchAffordances() ? 16 : 13} />
+        </IconButton>
+      }
+    />
+  );
+
+  return (
+    <div
+      class="relative flex h-full w-full flex-col overflow-hidden"
+      data-editor-shell
+    >
+      {/* Same modal contract as the tablet LogsSheet: while the files drawer
+          is up, everything behind the scrim leaves the tab order. The strip
+          toggle lives inside this wrapper so it goes inert too — it is the
+          drawer's focus-restore target once inert lifts on close. */}
+      <div
+        class="flex min-h-0 flex-1 flex-col gap-2"
+        aria-hidden={props.filesDrawerOpen}
+        inert={props.filesDrawerOpen}
+      >
+        {/* This tier exists so editor + preview stay visible together — the
+            desktop editorLayout preference deliberately doesn't collapse
+            panes here. A detached preview window still collapses the in-pane
+            copy (it is showing elsewhere). */}
+        <Switch>
+          <Match when={!previewDetached()}>
+            <Resizable
+              orientation="horizontal"
+              class="flex min-h-0 flex-1 overflow-hidden"
+              sizes={splitSizes()}
+              onSizesChange={onSplitSizesChange}
+            >
+              <Resizable.Panel minSize={0.3}>
+                {editorPane()}
+              </Resizable.Panel>
+              <Resizable.Handle
+                aria-label="Resize preview"
+                class="group relative w-[6px] shrink-0"
+              >
+                <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
+              </Resizable.Handle>
+              <Resizable.Panel minSize="320px">
+                <PreviewPane
+                  previewKind={props.previewKind}
+                  pdfPath={props.pdfPath}
+                  mdBaseDir={props.mdBaseDir}
+                  mdTheme={props.mdTheme}
+                  onCompile={props.onCompile}
+                />
+              </Resizable.Panel>
+            </Resizable>
+          </Match>
+          <Match when={previewDetached()}>
+            <div class="min-h-0 flex-1">{editorPane()}</div>
+          </Match>
+        </Switch>
+
+        <Show when={showDrawer() && !focusMode()}>
+          <LogsDrawer />
+        </Show>
+
+      </div>
+
+      <FilesDrawer
+        open={props.filesDrawerOpen}
+        onClose={() => props.setFilesDrawerOpen(false)}
+        leftTab={props.leftTab}
+        setLeftTab={props.setLeftTab}
+        outlineCollapsed={props.outlineCollapsed}
+        setOutlineCollapsed={props.setOutlineCollapsed}
+        onSelectFile={props.onSelectFile}
+      />
+    </div>
+  );
+};
+
+// =================================================================
+// FilesDrawer — left overlay variant of the docked sidebar for the
+// two-pane tier (same modal shape as LogsSheet below)
+// =================================================================
+
+const FilesDrawer: Component<{
+  open: boolean;
+  onClose: () => void;
+  leftTab: LeftTab;
+  setLeftTab: (t: LeftTab) => void;
+  outlineCollapsed: boolean;
+  setOutlineCollapsed: (fn: (v: boolean) => boolean) => void;
+  onSelectFile: (relPath: string) => void;
+}> = (props) => {
+  let drawerRef: HTMLDivElement | undefined;
+  // Escape closes the drawer for keyboard users.
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && props.open) {
+      e.stopPropagation();
+      props.onClose();
+    }
+  };
+  document.addEventListener("keydown", onKeyDown);
+  onCleanup(() => document.removeEventListener("keydown", onKeyDown));
+  // Modal focus contract copied from LogsSheet: focus the first sidebar tab
+  // on open; on close, hand focus back to the floating toggle (looked up by
+  // its aria-label; the drawer and the toggle live in different components) —
+  // but only when focus is loose, so an outside tap that focused something
+  // else keeps its target.
+  let wasOpen = false;
+  createEffect(() => {
+    if (!props.open) {
+      if (wasOpen) {
+        const active = document.activeElement;
+        const focusIsLoose =
+          active === document.body ||
+          active === null ||
+          (drawerRef instanceof HTMLElement && drawerRef.contains(active));
+        if (focusIsLoose) {
+          // Stable hook rather than the accessible name (same rationale as
+          // the logs toggle).
+          document
+            .querySelector<HTMLElement>("[data-files-toggle]")
+            ?.focus();
+        }
+      }
+      wasOpen = false;
+      return;
+    }
+    wasOpen = true;
+    requestAnimationFrame(() => {
+      drawerRef?.querySelector<HTMLElement>('[role="tab"]')?.focus();
+    });
+  });
+  return (
+    <Show when={props.open}>
+      {/* Backdrop dims the panes behind the drawer; tapping closes it. */}
+      <button
+        type="button"
+        aria-label="Close project files"
+        onClick={() => props.onClose()}
+        class="absolute inset-0 z-30 bg-[var(--color-overlay-scrim)] backdrop-blur-[1px]"
+      />
+      <div
+        ref={drawerRef}
+        class="absolute inset-y-2 left-2 z-40 flex w-[300px] max-w-[75vw] flex-col overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Project files"
+      >
+        <EditorSidebar
+          tab={props.leftTab}
+          setTab={props.setLeftTab}
+          outlineCollapsed={props.outlineCollapsed}
+          setOutlineCollapsed={props.setOutlineCollapsed}
+          onSelectFile={props.onSelectFile}
+        />
+      </div>
     </Show>
   );
 };
@@ -546,7 +836,14 @@ const TabletLayout: Component<ShellProps> = (props) => {
       class="relative flex h-full w-full flex-col gap-2 overflow-hidden"
       data-editor-shell
     >
-      <div class="min-h-0 flex-1 px-2">
+      <div
+        class="min-h-0 flex-1 px-2"
+        aria-hidden={logsSheetOpen()}
+        // The LogsSheet scrim only dims this pane visually; without inert its
+        // editor and buttons would stay in the tab order behind the modal
+        // overlay (aria-hidden + focusable is a WCAG failure).
+        inert={logsSheetOpen()}
+      >
         <Switch>
           <Match when={activePane() === "sidebar"}>
             <EditorSidebar
@@ -576,7 +873,12 @@ const TabletLayout: Component<ShellProps> = (props) => {
         </Switch>
       </div>
 
-      <PaneSwitcher />
+      {/* The sheet is aria-modal, so the switcher must leave the tab order
+          with the pane — the focus-restore target (the logs toggle) regains
+          focusability before the restore effect runs (inert lifts on close). */}
+      <div inert={logsSheetOpen()} aria-hidden={logsSheetOpen()}>
+        <PaneSwitcher />
+      </div>
       <LogsSheet />
     </div>
   );
@@ -587,6 +889,7 @@ const TabletLayout: Component<ShellProps> = (props) => {
 // =================================================================
 
 const LogsSheet: Component = () => {
+  let sheetRef: HTMLDivElement | undefined;
   // Escape closes the sheet for keyboard-attached tablets.
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Escape" && logsSheetOpen()) {
@@ -596,6 +899,38 @@ const LogsSheet: Component = () => {
   };
   document.addEventListener("keydown", onKeyDown);
   onCleanup(() => document.removeEventListener("keydown", onKeyDown));
+  // Modal focus contract (same shape as useListboxOpenFocus): move focus to
+  // the first log tab once the sheet mounts — without this a keyboard user
+  // stays "behind" the dialog. On close, hand focus back to the PaneSwitcher
+  // logs toggle (looked up by its aria-label; the sheet and the toggle live
+  // in different components) — but only when focus is loose (fell to <body>
+  // with the unmount or is still inside the detached sheet), so an outside
+  // tap that focused something else keeps its target.
+  let wasOpen = false;
+  createEffect(() => {
+    if (!logsSheetOpen()) {
+      if (wasOpen) {
+        const active = document.activeElement;
+        const focusIsLoose =
+          active === document.body ||
+          active === null ||
+          (sheetRef instanceof HTMLElement && sheetRef.contains(active));
+        if (focusIsLoose) {
+          // Stable hook, not the aria-label: the label carries a dynamic
+          // error count in exactly the compile-failed flow this serves.
+          document
+            .querySelector<HTMLElement>("[data-logs-toggle]")
+            ?.focus();
+        }
+      }
+      wasOpen = false;
+      return;
+    }
+    wasOpen = true;
+    requestAnimationFrame(() => {
+      sheetRef?.querySelector<HTMLElement>('[role="tab"]')?.focus();
+    });
+  });
   return (
     <Show when={logsSheetOpen()}>
       {/* Backdrop dims the pane behind the sheet; tapping closes it. */}
@@ -606,8 +941,10 @@ const LogsSheet: Component = () => {
         class="absolute inset-0 z-30 bg-[var(--color-overlay-scrim)] backdrop-blur-[1px]"
       />
       <div
+        ref={sheetRef}
         class="absolute inset-x-2 bottom-2 z-40 flex max-h-[55vh] flex-col overflow-hidden rounded-xl"
         role="dialog"
+        aria-modal="true"
         aria-label="Logs"
       >
         <LogsDrawer />
@@ -624,9 +961,15 @@ const CenterPane: Component<{
   onSave: () => void;
   onCompile: () => void;
   onEditorChange: (v: string) => void;
+  /** Rendered before the tabs in the strip row (the two-pane tier's files
+   *  toggle — a floating overlay would sit on top of the first tab). */
+  stripLeading?: JSX.Element;
 }> = (props) => {
-  const tabHeight = () => (isTabletViewport() ? "h-12" : "h-9");
-  const tabRowHeight = () => (isTabletViewport() ? "h-11" : "h-7");
+  // Tap-target bumps key on pointer coarseness, not viewport width — a
+  // narrow mouse-driven window keeps desktop sizes, a landscape tablet gets
+  // the 44px targets.
+  const tabHeight = () => (touchAffordances() ? "h-12" : "h-9");
+  const tabRowHeight = () => (touchAffordances() ? "h-11" : "h-7");
 
   // Key the editor on more than the file path: the keyed <Show> reads sessions
   // and the grammar setting untracked, so an LSP handshake that completes after
@@ -702,6 +1045,27 @@ const CenterPane: Component<{
     }
   };
 
+  // editor.closeTab / nextTab / prevTab (palette, Mod+W, Ctrl+Tab, macOS File
+  // menu) arrive as one-shot intents so close funnels through the same
+  // dirty-confirm as the tab strip's own close buttons. Any intent raised
+  // while no CenterPane was mounted (preview-only layout, tablet pane
+  // switched away) is dropped at mount — honoring it minutes later would
+  // close a tab the user no longer means.
+  setTabActionIntent(null);
+  createEffect(() => {
+    const intent = tabActionIntent();
+    if (!intent) return;
+    setTabActionIntent(null);
+    const count = openFiles().length;
+    if (count === 0) return;
+    if (intent.action === "close") {
+      void requestCloseFile(activeIndex());
+    } else {
+      const delta = intent.action === "next" ? 1 : -1;
+      setActiveIndex((activeIndex() + delta + count) % count);
+    }
+  });
+
   // Right-click menu over the editor surface. Only opens when the click landed
   // on CodeMirror's `.cm-content` (App.tsx no longer excludes it from native-
   // menu suppression, so a non-`.cm-content` target falls through to that
@@ -716,6 +1080,22 @@ const CenterPane: Component<{
     const view = getActiveEditorView();
     const f = activeFile();
     if (!view || !f) return;
+    // Keyboard-delivered contextmenu events carry no usable position — anchor
+    // at the caret instead of the window corner (menu-position's element-rect
+    // fallback would put it at the pane edge, far from the selection).
+    const keyboardLike =
+      (e.clientX === 0 && e.clientY === 0) || (e.detail === 0 && e.button !== 2);
+    if (keyboardLike) {
+      const caret = view.coordsAtPos(view.state.selection.main.head);
+      if (caret) {
+        e.preventDefault();
+        editorMenu.openAt(
+          new MouseEvent("contextmenu", { clientX: caret.left, clientY: caret.bottom }),
+          buildEditorMenuContext(view, f.path, f.relPath),
+        );
+        return;
+      }
+    }
     editorMenu.openAt(e, buildEditorMenuContext(view, f.path, f.relPath));
   };
 
@@ -723,6 +1103,15 @@ const CenterPane: Component<{
     <div class="glass flex h-full flex-col overflow-hidden rounded-xl">
       {/* File tabs strip — hidden in focus mode along with the toolbar. */}
       <Show when={!focusMode()}>
+      <div class={`flex ${tabHeight()} flex-shrink-0 items-center border-b border-glass-stroke`}>
+      <Show when={props.stripLeading}>
+        {/* Leading slot sits OUTSIDE the tablist (a non-tab inside role=
+            tablist would break the pattern) but inside the strip row so it
+            occupies real layout space instead of overlaying the first tab. */}
+        <div class="flex flex-shrink-0 items-center border-r border-glass-stroke px-1.5">
+          {props.stripLeading}
+        </div>
+      </Show>
       <div
         role="tablist"
         aria-label="Open files"
@@ -743,7 +1132,7 @@ const CenterPane: Component<{
             e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]');
           tabs[next]?.focus();
         }}
-        class={`flex ${tabHeight()} flex-shrink-0 items-center gap-0.5 overflow-x-auto border-b border-glass-stroke px-2 scroll`}
+        class="flex h-full min-w-0 flex-1 items-center gap-0.5 overflow-x-auto px-2 scroll"
       >
         <Show
           when={openFiles().length > 0}
@@ -758,9 +1147,14 @@ const CenterPane: Component<{
                 <div
                   role="tab"
                   aria-selected={active()}
+                  // The dirty marker is a color-only dot — the accname must
+                  // carry the unsaved state for screen readers (WCAG 1.4.1).
+                  aria-label={
+                    f().dirty ? `${f().relPath}, unsaved changes` : f().relPath
+                  }
                   tabIndex={active() ? 0 : -1}
                   onClick={() => setActiveIndex(i)}
-                  onContextMenu={(e) => tabMenu.openAt(e, i)}
+                  onContextMenu={(e) => tabMenu.openAt(anchoredMenuEvent(e), i)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
@@ -795,11 +1189,11 @@ const CenterPane: Component<{
                       void requestCloseFile(i);
                     }}
                     class={`-mr-1 flex items-center justify-center rounded opacity-60 hover:bg-[var(--color-control-fill-hover)] hover:opacity-100 ${
-                      isTabletViewport() ? "h-11 w-11" : "h-6 w-6"
+                      touchAffordances() ? "h-11 w-11" : "h-6 w-6"
                     }`}
                     aria-label={`Close ${f().relPath}`}
                   >
-                    <XIcon size={isTabletViewport() ? 16 : 12} />
+                    <XIcon size={touchAffordances() ? 16 : 12} />
                   </button>
                 </div>
               );
@@ -808,6 +1202,7 @@ const CenterPane: Component<{
         </Show>
         {/* Save + Compile buttons were removed 2026-05-15. Save is on Mod+S;
             Compile is the PDF panel's Recompile button. */}
+      </div>
       </div>
       </Show>
 
@@ -830,6 +1225,9 @@ const CenterPane: Component<{
         >
           {(_key) => {
             const f = activeFile()!;
+            // Stamp the mounted file for the position stash — the cleanup-time
+            // stash (editor-view-store) reads it while the old view is alive.
+            noteActiveEditorFile(f.path);
             const lang = languageForFile(f.relPath);
             const lspLang = lspLanguageForFile(f.relPath);
             const lspSession = lspLang ? findSession(lspLang) : undefined;
@@ -880,6 +1278,14 @@ const CenterPane: Component<{
               if (!v) return;
               syncThreadsToView(v, threads, f.relPath, activeFile()?.content ?? f.content);
             });
+            // The document surface needs word-processor geometry: no gutter,
+            // no active-line wash, always soft-wrapped. Forced at the prop
+            // level (the compartments already exist) so the user's source-mode
+            // preferences survive untouched underneath.
+            const visualOn = () =>
+              editorSettings().visualModeLatex &&
+              isVisualEligibleFile(f.relPath) &&
+              !visualPaused(f.relPath);
             return (
               <CodeMirror
                 value={f.content}
@@ -887,22 +1293,37 @@ const CenterPane: Component<{
                 language={lang}
                 fontSize={editorSettings().fontSize}
                 lineHeight={LINE_HEIGHT_VALUES[editorSettings().lineHeight]}
-                lineWrap={editorSettings().lineWrap}
-                lineNumbers={editorSettings().lineNumbers}
-                highlightActiveLine={editorSettings().highlightActiveLine}
+                lineWrap={visualOn() || editorSettings().lineWrap}
+                lineNumbers={!visualOn() && editorSettings().lineNumbers}
+                highlightActiveLine={
+                  !visualOn() && editorSettings().highlightActiveLine
+                }
                 autocomplete={editorSettings().autocomplete}
                 bracketMatching={editorSettings().bracketMatching}
                 autoCloseBrackets={editorSettings().autoCloseBrackets}
                 tabSize={editorSettings().tabSize}
                 vimMode={editorSettings().vimMode}
-                visualMode={
-                  editorSettings().visualModeLatex &&
-                  isVisualEligibleFile(f.relPath) &&
-                  !visualPaused(f.relPath)
-                }
+                visualMode={visualOn()}
                 onVisualPause={() => markVisualPaused(f.relPath)}
+                onVisualPopover={requestVisualPopover}
+                visualResolveAsset={(rel) => {
+                  // \includegraphics paths resolve against the project root
+                  // (the compiler's working directory).
+                  const root = f.path.slice(
+                    0,
+                    Math.max(0, f.path.length - f.relPath.length),
+                  );
+                  return resolveProjectAsset(root, rel);
+                }}
                 lspActive={!!lspSession}
-                onReady={setReviewView}
+                onReady={(v) => {
+                  // The keyed remount (LSP attach, grammar toggle) rebuilds
+                  // CM6 state — losing undo history there is accepted, losing
+                  // the cursor + scroll position is not. No-op on tab switch:
+                  // the stash only matches a same-file remount.
+                  restoreEditorPosition(v, f.path);
+                  setReviewView(v);
+                }}
                 extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
               />
             );
@@ -912,6 +1333,12 @@ const CenterPane: Component<{
 
       <Show when={!focusMode()}>
         <StatusBar />
+      </Show>
+
+      {/* The visual-mode edit popover — the one surface where LaTeX source
+          is meant to appear while visual editing. */}
+      <Show when={visualPopoverIntent()}>
+        <VisualPopover />
       </Show>
 
       <Show when={tabMenu.menu()}>
@@ -1022,27 +1449,50 @@ const GrammarProblemsIndicator: Component = () => {
   );
 };
 
-const CompileIndicator: Component = () => (
-  <Show when={lastResult()}>
-    <span
-      class={`inline-flex items-center gap-1 ${
-        compileState() === "ok"
-          ? "text-[var(--color-ok)]"
-          : compileState() === "error"
-            ? "text-[var(--color-err)]"
-            : "text-fg-3"
-      }`}
-    >
-      <Show when={compileState() === "ok"}>
-        <CheckCircle2 size={12} />
-      </Show>
-      <Show when={compileState() === "error"}>
-        <XCircle size={12} />
-      </Show>
-      <Show when={compileState() === "compiling"}>
-        <Loader2 size={12} class="animate-spin" />
-      </Show>
-      {lastResult()!.durationMs}ms
-    </span>
-  </Show>
-);
+const CompileIndicator: Component = () => {
+  // Error → jump to the Errors console (same intent as the grammar indicator
+  // above); otherwise re-run the compile — the orchestrator's compiling-guard
+  // absorbs clicks while a build is already running.
+  const onClick = () => {
+    if (compileState() === "error") revealCompileErrors();
+    else void compileActiveProject();
+  };
+  return (
+    <Show when={lastResult()}>
+      <button
+        type="button"
+        onClick={onClick}
+        title={
+          compileState() === "error" ? "Show compile errors" : "Compile project"
+        }
+        // Content alone would name this "842ms, button" — state and action
+        // live in icon + color, which screen readers can't see.
+        aria-label={
+          compileState() === "error"
+            ? "Compile failed — show errors"
+            : compileState() === "compiling"
+              ? "Compiling"
+              : `Compiled in ${lastResult()!.durationMs}ms — recompile`
+        }
+        class={`lift inline-flex items-center gap-1 ${
+          compileState() === "ok"
+            ? "text-[var(--color-ok)]"
+            : compileState() === "error"
+              ? "text-[var(--color-err)]"
+              : "text-fg-3"
+        }`}
+      >
+        <Show when={compileState() === "ok"}>
+          <CheckCircle2 size={12} />
+        </Show>
+        <Show when={compileState() === "error"}>
+          <XCircle size={12} />
+        </Show>
+        <Show when={compileState() === "compiling"}>
+          <Loader2 size={12} class="animate-spin" />
+        </Show>
+        {lastResult()!.durationMs}ms
+      </button>
+    </Show>
+  );
+};

@@ -12,7 +12,7 @@ const h = vi.hoisted(() => ({
   historyRecord: vi.fn(),
   synctexForward: vi.fn(),
   synctexInverse: vi.fn(),
-  notifyInfo: vi.fn(),
+  notifyError: vi.fn(),
   notifyLocalSave: vi.fn(),
   recordError: vi.fn(),
   suffixWithConflict: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock("~/ipc", () => ({
   synctexForward: h.synctexForward,
   synctexInverse: h.synctexInverse,
 }));
-vi.mock("~/lib/toast", () => ({ notifyInfo: h.notifyInfo }));
+vi.mock("~/lib/toast", () => ({ notifyError: h.notifyError }));
 vi.mock("~/lib/hash", () => ({ sha256Hex: h.sha256Hex }));
 vi.mock("~/integrations/cloud/init", () => ({ notifyLocalSave: h.notifyLocalSave }));
 vi.mock("~/integrations/cloud/core", () => ({ suffixWithConflict: h.suffixWithConflict }));
@@ -227,7 +227,7 @@ describe("save-after-pull conflict guard", () => {
       "main.tex",
       "buffer content",
     ]);
-    expect(h.notifyInfo).toHaveBeenCalledTimes(1);
+    expect(h.notifyError).toHaveBeenCalledTimes(1);
     expect(h.notifyLocalSave).toHaveBeenCalledWith("/A", ["main.tex"]);
   });
 
@@ -241,7 +241,7 @@ describe("save-after-pull conflict guard", () => {
 
     expect(h.readProjectTextFile).toHaveBeenCalledTimes(1);
     expect(h.suffixWithConflict).not.toHaveBeenCalled();
-    expect(h.notifyInfo).not.toHaveBeenCalled();
+    expect(h.notifyError).not.toHaveBeenCalled();
     // Only the canonical write happens.
     expect(h.writeProjectTextFile).toHaveBeenCalledTimes(1);
     expect(h.writeProjectTextFile).toHaveBeenCalledWith("/A", "main.tex", "edited buffer");

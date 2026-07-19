@@ -24,8 +24,9 @@ a:focus-visible,
 [role="button"]:focus-visible,
 [role="tab"]:focus-visible,
 [role="option"]:focus-visible,
+[role="separator"]:focus-visible,
 select:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--color-accent-1) 90%, transparent);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 
@@ -38,10 +39,13 @@ select:focus-visible {
   border: 1px solid var(--color-glass-stroke);
   box-shadow: var(--shadow-glass-inset), var(--shadow-glass-drop);
   /*
-   * Isolate each glass surface to its own compositing layer so the
+   * Isolate each glass surface into its own stacking context so the
    * backdrop-filter doesn't bleed into adjacent icon/text rendering.
+   * `isolation: isolate` gives the same containment as the previous
+   * `will-change: transform` without permanently pinning a compositor
+   * layer per surface (a real cost on WebKitGTK).
    */
-  will-change: transform;
+  isolation: isolate;
 }
 
 .glass-soft {
@@ -101,17 +105,33 @@ select:focus-visible {
     box-shadow 200ms ease-out;
 }
 
-.lift:hover {
+.lift:hover:not(:disabled) {
   filter: brightness(1.18);
+}
+
+/* Pressed feedback — after the hover rule so the active dim wins mid-press. */
+.lift:active:not(:disabled) {
+  filter: brightness(0.94);
 }
 
 /* Brightness alone is imperceptible on Daylight's near-black accent fill —
  * layer an accent-fg wash over the gradient so primaries always respond. */
-.lift.accent-grad:hover {
+.lift.accent-grad:hover:not(:disabled) {
   background-image:
     linear-gradient(
       color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
       color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+    ),
+    linear-gradient(135deg, var(--color-accent-1) 0%, var(--color-accent-2) 100%);
+}
+
+/* Pressed needs the same wash treatment, stronger, after hover so it wins
+ * mid-press — brightness(0.94) alone is invisible on the near-black fill. */
+.lift.accent-grad:active:not(:disabled) {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-accent-fg) 18%, transparent),
+      color-mix(in srgb, var(--color-accent-fg) 18%, transparent)
     ),
     linear-gradient(135deg, var(--color-accent-1) 0%, var(--color-accent-2) 100%);
 }
@@ -315,10 +335,17 @@ body {
 :root[data-accent-gradient="off"] .side-active::before {
   background: var(--color-accent-1);
 }
-:root[data-accent-gradient="off"] .lift.accent-grad:hover {
+:root[data-accent-gradient="off"] .lift.accent-grad:hover:not(:disabled) {
   background-image: linear-gradient(
     color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
     color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+  );
+  background-color: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .lift.accent-grad:active:not(:disabled) {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-accent-fg) 18%, transparent),
+    color-mix(in srgb, var(--color-accent-fg) 18%, transparent)
   );
   background-color: var(--color-accent-1);
 }
@@ -666,9 +693,10 @@ body {
 }
 
 /* Four families (see src/lib/grammar/kinds.ts — the single source): each gets
- * a colored underline plus a faint same-hue wash, Grammarly-style. Spelling and
- * grammar carry the firmer wavy line; the advisory style/misc families use a
- * dashed line. Family classes track kinds.ts's KIND_TO_FAMILY map. */
+ * a colored underline plus a faint same-hue wash, Grammarly-style. Line style
+ * doubles as a hue-independent cue (WCAG 1.4.1): firm tier = spelling wavy vs
+ * grammar double; advisory tier = style dashed vs misc dotted. Family classes
+ * track kinds.ts's KIND_TO_FAMILY map. */
 
 /* Spelling family (red): misspellings, typos. */
 .cm-lintRange.cm-lint-spelling,
@@ -686,7 +714,7 @@ body {
 .cm-lintRange.cm-lint-boundaryerror,
 .cm-lintRange.cm-lint-capitalization,
 .cm-lintRange.cm-lint-punctuation {
-  text-decoration: underline wavy var(--color-warn);
+  text-decoration: underline double var(--color-warn);
   background: color-mix(in srgb, var(--color-warn) 12%, transparent);
   border-radius: 2px;
 }
@@ -709,7 +737,7 @@ body {
 .cm-lintRange.cm-lint-nonstandard,
 .cm-lintRange.cm-lint-regionalism,
 .cm-lintRange.cm-lint-usage {
-  text-decoration: underline dashed var(--color-info);
+  text-decoration: underline dotted var(--color-info);
   background: color-mix(in srgb, var(--color-info) 12%, transparent);
   border-radius: 2px;
 }
@@ -741,7 +769,7 @@ body {
 .cm-tooltip.cm-tooltip-lint {
   background: var(--color-popover-bg);
   border: 1px solid var(--color-glass-stroke-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: var(--shadow-glass-drop);
   padding: 0;
   max-width: 340px;
@@ -766,4 +794,24 @@ body {
 }
 .cm-tooltip-lint .cm-diagnosticAction:hover {
   background: var(--color-control-fill-hover);
+}
+
+/* --- Windows High Contrast (forced-colors) safety net ---
+ * WHCM strips backgrounds, so states that read via background wash alone
+ * disappear. Give selection/current a non-color cue that survives. This is a
+ * safety net, not a theme — do NOT set forced-color-adjust globally, and
+ * ::selection keeps its forced default. */
+@media (forced-colors: active) {
+  [aria-selected="true"],
+  [aria-current="page"],
+  [aria-current="true"] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+  /* The 2px accent bar is a background gradient — repaint it in a system
+   * color and exempt it so WHCM doesn't strip it entirely. */
+  .side-active::before {
+    background: SelectedItem;
+    forced-color-adjust: none;
+  }
 }

@@ -39,7 +39,7 @@ export function previewKindForFile(relPath: string): "markdown" | "pdf" {
 /**
  * Files the visual editor mode can render: LaTeX, and specifically `.tex` —
  * `.bib` shares the CM language but none of the visual constructs, so
- * scanning it buys nothing. Typst is deferred (plan 63 §2).
+ * parsing it buys nothing. Typst is deferred.
  */
 export function isVisualEligibleFile(relPath: string): boolean {
   return (

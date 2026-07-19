@@ -236,6 +236,31 @@ export const revealProjectPath = (
 ): Promise<void> => invoke("reveal_project_path", { projectRoot, relPath });
 
 /**
+ * Copy OS-absolute files (drag-drop / file picker) into a project directory
+ * (`""` = project root). Dropped/picked paths sit outside the fs plugin's
+ * runtime scope, so the copy happens in Rust. Collisions auto-suffix " (2)";
+ * returns the created rel paths.
+ */
+export const importFilesIntoProject = (
+  projectRoot: string,
+  targetRelDir: string,
+  sourcePaths: string[],
+): Promise<string[]> =>
+  invoke("import_files_into_project", { projectRoot, targetRelDir, sourcePaths });
+
+/**
+ * Move a project-relative file or directory into another project directory
+ * (`""` = project root), keeping the leaf name. Never overwrites; returns the
+ * new rel path.
+ */
+export const moveProjectPath = (
+  projectRoot: string,
+  fromRel: string,
+  toRelDir: string,
+): Promise<string> =>
+  invoke("move_project_path", { projectRoot, fromRel, toRelDir });
+
+/**
  * Reuse the Rust LaTeX log parser from frontend compile paths (WASM engine).
  * Keeps diagnostic shape identical across engines without a TS duplicate.
  */
@@ -272,10 +297,12 @@ export interface BuildOptionsWire {
 export const compileLatex = async (
   project: Project,
   options: BuildOptionsWire,
+  compileId?: string,
 ): Promise<CompileResult> => {
   const result = await invoke<BackendCompileResult>("compile_latex", {
     project,
     options,
+    compileId,
   });
   return {
     ok: result.ok,
@@ -302,8 +329,14 @@ export const shellEscapeTrustSet = (
   grant: "granted" | "denied",
 ): Promise<void> => invoke("shell_escape_trust_set", { projectRoot, grant });
 
-export const compileTypst = async (project: Project): Promise<CompileResult> => {
-  const result = await invoke<BackendCompileResult>("compile_typst", { project });
+export const compileTypst = async (
+  project: Project,
+  compileId?: string,
+): Promise<CompileResult> => {
+  const result = await invoke<BackendCompileResult>("compile_typst", {
+    project,
+    compileId,
+  });
   return {
     ok: result.ok,
     outputPath: result.outputPath,
@@ -312,6 +345,15 @@ export const compileTypst = async (project: Project): Promise<CompileResult> => 
     durationMs: result.durationMs,
   };
 };
+
+/**
+ * Kill an in-flight compile's process tree. Quietly succeeds when the id is
+ * no longer registered (the compile finished first — a normal race). The
+ * cancelled compile IPC itself rejects with the stable marker string exported
+ * as `COMPILE_CANCELLED` from `~/commands/compile-runner`.
+ */
+export const compileCancel = (compileId: string): Promise<void> =>
+  invoke("compile_cancel", { compileId });
 
 // ----- SyncTeX -------------------------------------------------------------
 
@@ -424,6 +466,9 @@ export interface PrivacySettings {
 
 export interface UiSettings {
   density: string; // "compact" | "cozy" | "comfortable"
+  /** Interface scale in percent (90–150, step 5). Optional: settings.json
+   *  files predating the field lack it; absent = 100. */
+  uiScale?: number;
   animations: boolean;
   ambientLights: boolean;
   accentGradient: boolean;
@@ -448,6 +493,17 @@ export interface WorkspaceSettings {
   statsCards: string[];
   /** User-defined library spaces catalog (order = display order). */
   spaces: SpaceDef[];
+  /** Editor pane layout ("split" | "editor" | "preview"). Optional:
+   *  settings.json files predating the field lack it; absent = "split". */
+  editorLayout?: string;
+  /** Console dock ("drawer" | "pdf-tab"). Optional; absent = "pdf-tab". */
+  consolePosition?: string;
+  /** Sidebar width in px once the user drags the handle; null/absent = keep
+   *  auto-fitting the tab strip. */
+  sidebarPx?: number | null;
+  /** Editor panel's fraction of the editor/preview split. Optional; absent
+   *  = 0.55. */
+  centerSplit?: number;
 }
 
 /** A library "space" — a named, tinted grouping. `tint` is a palette id. */
@@ -1015,3 +1071,10 @@ export interface SystemInfo {
 
 export const collectSystemInfo = (): Promise<SystemInfo> =>
   invoke("collect_system_info");
+
+/**
+ * Clear a stored shell-escape DENIAL so the trust prompt can run again — the
+ * reverse path for "Blocked on this machine". A stored grant is untouched.
+ */
+export const trustClearShellEscape = (projectRoot: string): Promise<void> =>
+  invoke("trust_clear_shell_escape", { projectRoot });

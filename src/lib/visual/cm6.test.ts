@@ -1,193 +1,330 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { history, redoDepth, undo, undoDepth } from "@codemirror/commands";
-import { foldedRanges } from "@codemirror/language";
+import { history, undo, undoDepth } from "@codemirror/commands";
 import { Compartment } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+
+import { guardCommandsForTests as cmd } from "./edit-guards";
 import { visualExtension } from "./cm6";
 
-const tick = () => new Promise<void>((resolve) => queueMicrotask(resolve));
-
-function makeView(doc: string, extensions = [visualExtension()]): EditorView {
-  return new EditorView({ doc, extensions, parent: document.body });
-}
-
-function foldCount(view: EditorView): number {
-  let count = 0;
-  foldedRanges(view.state).between(0, view.state.doc.length, () => {
-    count++;
+function makeView(doc: string, cfg = {}): EditorView {
+  // history() mirrors the host component (undo coherence is part of the
+  // contract under test).
+  return new EditorView({
+    doc,
+    extensions: [history(), visualExtension(cfg)],
+    parent: document.body,
   });
-  return count;
 }
+
+const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("visual cm6: reveal-on-cursor", () => {
-  const doc = "hello \\textbf{bold} world";
+const ARTICLE = [
+  "\\documentclass[12pt]{article}",
+  "\\usepackage{amsmath}",
+  "\\begin{document}",
+  "\\section{Intro}",
+  "Hello \\textbf{bold} world with \\cite{knuth84}.",
+  "",
+  "\\begin{itemize}",
+  "\\item First",
+  "\\item Second",
+  "\\end{itemize}",
+  "\\end{document}",
+  "",
+].join("\n");
 
-  it("hides wrapper tokens, reveals them when the selection enters, re-hides on leave", () => {
-    const view = makeView(doc);
-    // Hidden while the cursor (initially 0) is outside the construct.
-    expect(view.contentDOM.textContent).not.toContain("\\textbf{");
-    expect(view.contentDOM.textContent).toContain("bold");
-    expect(view.contentDOM.querySelector(".cm-vis-bold")).not.toBeNull();
-
-    // Selection inside the argument (the SyncTeX/goto path dispatches the
-    // same kind of transaction) → plain source.
-    view.dispatch({ selection: { anchor: doc.indexOf("bold") + 1 } });
-    expect(view.contentDOM.textContent).toContain("\\textbf{");
-
-    // Leaving the construct hides the wrappers again.
-    view.dispatch({ selection: { anchor: 0 } });
-    expect(view.contentDOM.textContent).not.toContain("\\textbf{");
+describe("visual cm6: never-reveal", () => {
+  it("renders no markup anywhere in the content DOM", () => {
+    const view = makeView(ARTICLE);
+    const text = view.contentDOM.textContent ?? "";
+    expect(text).not.toContain("\\section");
+    expect(text).not.toContain("\\textbf");
+    expect(text).not.toContain("\\begin");
+    expect(text).not.toContain("\\documentclass");
+    expect(text).toContain("Intro");
+    expect(text).toContain("bold");
+    expect(text).toContain("First");
     view.destroy();
   });
 
-  it("reveals on touch-inclusive boundaries", () => {
-    const view = makeView(doc);
-    const from = doc.indexOf("\\textbf");
-    view.dispatch({ selection: { anchor: from } });
-    expect(view.contentDOM.textContent).toContain("\\textbf{");
+  it("keeps markup hidden when the selection enters a construct (anti-v1)", () => {
+    const view = makeView(ARTICLE);
+    const boldAt = ARTICLE.indexOf("bold");
+    view.dispatch({ selection: { anchor: boldAt + 2 } });
+    const text = view.contentDOM.textContent ?? "";
+    expect(text).not.toContain("\\textbf");
+    expect(text).not.toContain("{");
     view.destroy();
   });
 
-  it("styles pills and comments without hiding their text", () => {
-    // Leading text keeps the mount cursor (0) from touch-revealing the pill.
-    const view = makeView("see \\cite{k} % note");
-    expect(view.contentDOM.textContent).not.toContain("\\cite{");
-    expect(view.contentDOM.querySelector(".cm-vis-pill")?.textContent).toBe("k");
-    expect(view.contentDOM.querySelector(".cm-vis-comment")?.textContent).toBe(
-      "% note",
+  it("renders structural furniture: heading mark, pill chip, item markers, preamble chip", () => {
+    const view = makeView(ARTICLE);
+    expect(view.contentDOM.querySelector(".cm-vis-h1")?.textContent).toBe("Intro");
+    expect(view.contentDOM.querySelector(".cm-vis-pill")?.textContent).toBe(
+      "knuth84",
     );
+    const markers = view.contentDOM.querySelectorAll(".cm-vis-marker");
+    expect(markers.length).toBe(2);
+    expect(
+      view.contentDOM.querySelector(".cm-vis-preamble")?.textContent,
+    ).toContain("article");
     view.destroy();
   });
 
-  it("replaces \\item with a marker widget", () => {
+  it("renders math environments as KaTeX blocks, not source", () => {
     const view = makeView(
-      "\\begin{enumerate}\n\\item one\n\\item two\n\\end{enumerate}\n",
+      "Before\n\n\\begin{align}\na &= b \\\\\nc &= d\n\\end{align}\n\nAfter\n",
     );
-    const markers = view.contentDOM.querySelectorAll(".cm-vis-item-marker");
-    expect([...markers].map((m) => m.textContent)).toEqual(["1. ", "2. "]);
+    const block = view.contentDOM.querySelector(".cm-vis-math-block");
+    expect(block).not.toBeNull();
+    expect(block?.querySelector(".katex")).not.toBeNull();
+    expect(view.contentDOM.textContent).not.toContain("a &= b");
+    expect(view.contentDOM.textContent).toContain("Before");
+    view.destroy();
+  });
+
+  it("renders inline math via KaTeX and unknown environments as cards", () => {
+    const view = makeView(
+      "Euler: $e^2$ here.\n\n\\begin{mysterybox}\nopaque interior\n\\end{mysterybox}\n",
+    );
+    const inline = view.contentDOM.querySelector(".cm-vis-math-inline");
+    expect(inline?.querySelector(".katex")).not.toBeNull();
+    expect(view.contentDOM.textContent).not.toContain("$e^2$");
+    // The card shows the env NAME as its badge; the body stays hidden.
+    expect(
+      view.contentDOM.querySelector(".cm-vis-card-badge")?.textContent,
+    ).toBe("mysterybox");
+    expect(view.contentDOM.textContent).not.toContain("opaque interior");
     view.destroy();
   });
 });
 
-describe("visual cm6: preamble fold", () => {
-  const doc = [
-    "\\documentclass{article}",
-    "\\usepackage{amsmath}",
-    "\\begin{document}",
-    "Body text.",
-    "\\end{document}",
-    "",
-  ].join("\n");
-
-  it("folds the preamble once on mount", async () => {
-    const view = makeView(doc);
-    await tick();
-    expect(foldCount(view)).toBe(1);
-    // The chip renders in place of the folded lines.
-    expect(view.contentDOM.querySelector(".cm-vis-preamble-chip")).not.toBeNull();
-    expect(view.contentDOM.textContent).not.toContain("amsmath");
-    expect(view.contentDOM.textContent).toContain("Body text.");
-    view.destroy();
-  });
-
-  it("unfolds when a selection lands inside it (goto path) and stays unfolded", async () => {
-    const view = makeView(doc);
-    await tick();
-    expect(foldCount(view)).toBe(1);
-    view.dispatch({ selection: { anchor: doc.indexOf("amsmath") } });
-    await tick();
-    expect(foldCount(view)).toBe(0);
-    expect(view.contentDOM.textContent).toContain("amsmath");
-    // Later selection churn doesn't refold.
-    view.dispatch({ selection: { anchor: doc.indexOf("Body") } });
-    await tick();
-    expect(foldCount(view)).toBe(0);
-    view.destroy();
-  });
-
-  it("unfolds on chip click and stays unfolded for the mount", async () => {
-    const view = makeView(doc);
-    await tick();
-    const chip = view.contentDOM.querySelector<HTMLElement>(
-      ".cm-vis-preamble-chip",
+describe("visual cm6: tables and figures", () => {
+  it("renders a simple tabular as a formatted table", () => {
+    const view = makeView(
+      "Text\n\n\\begin{table}\n\\begin{tabular}{ll}\nName & Value \\\\\nAlpha & 1 \\\\\n\\end{tabular}\n\\caption{My data}\n\\end{table}\n",
     );
-    expect(chip).not.toBeNull();
-    chip!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await tick();
-    expect(foldCount(view)).toBe(0);
-    view.dispatch({ selection: { anchor: doc.indexOf("Body") } });
-    await tick();
-    expect(foldCount(view)).toBe(0);
+    const table = view.contentDOM.querySelector(".cm-vis-table");
+    expect(table).not.toBeNull();
+    expect(table?.querySelectorAll("tr").length).toBe(2);
+    expect(table?.textContent).toContain("Alpha");
+    expect(table?.textContent).toContain("My data");
+    expect(view.contentDOM.textContent).not.toContain("\\begin");
     view.destroy();
   });
 
-  it("gives fragment files (no \\begin{document}) no chip", async () => {
-    const view = makeView("\\section{Chapter}\nText \\textbf{x}\n");
-    await tick();
-    expect(foldCount(view)).toBe(0);
-    // Every other construct still renders (the heading at 0 is revealed by
-    // the mount cursor touching it — assert on the bold span instead).
-    expect(view.contentDOM.querySelector(".cm-vis-bold")).not.toBeNull();
+  it("renders figures as placeholder previews with captions", () => {
+    const view = makeView(
+      "Text\n\n\\begin{figure}\n\\includegraphics[width=0.8\\linewidth]{plots/result.png}\n\\caption{The result}\n\\end{figure}\n",
+    );
+    const fig = view.contentDOM.querySelector(".cm-vis-figure");
+    expect(fig).not.toBeNull();
+    // No resolveAsset configured → placeholder naming the file.
+    expect(fig?.textContent).toContain("plots/result.png");
+    expect(fig?.textContent).toContain("The result");
+    expect(view.contentDOM.textContent).not.toContain("\\includegraphics");
     view.destroy();
   });
 });
 
-describe("visual cm6: compartment toggle round-trip", () => {
-  it("never changes the document text and preserves cursor + undo depth", async () => {
-    const comp = new Compartment();
-    const base = "\\documentclass{a}\n\\begin{document}\n\\textbf{b}\n\\end{document}\n";
+describe("visual cm6: zero-corruption", () => {
+  it("mount, interaction, and unmount never change the document", () => {
+    const compartment = new Compartment();
     const view = new EditorView({
-      doc: base,
-      extensions: [history(), comp.of([])],
+      doc: ARTICLE,
+      extensions: [compartment.of(visualExtension())],
       parent: document.body,
     });
-    const insertAt = base.indexOf("\\textbf");
+    view.dispatch({ selection: { anchor: ARTICLE.indexOf("bold") } });
+    view.dispatch({ selection: { anchor: 0 } });
+    view.dispatch({ effects: compartment.reconfigure([]) });
+    view.dispatch({ effects: compartment.reconfigure(visualExtension()) });
+    expect(view.state.doc.toString()).toBe(ARTICLE);
+    view.destroy();
+  });
+
+  it("typing inside a heading title edits only the title", () => {
+    const view = makeView(ARTICLE);
+    const titleAt = ARTICLE.indexOf("Intro");
     view.dispatch({
-      changes: { from: insertAt, insert: "typed " },
-      selection: { anchor: insertAt + 6 },
+      changes: { from: titleAt, insert: "My " },
+      userEvent: "input.type",
     });
-    const withEdit = view.state.doc.toString();
-    expect(undoDepth(view.state)).toBe(1);
-
-    // Source → Visual.
-    view.dispatch({ effects: comp.reconfigure(visualExtension()) });
-    await tick();
-    expect(view.state.doc.toString()).toBe(withEdit);
-    expect(view.state.selection.main.head).toBe(insertAt + 6);
-    expect(undoDepth(view.state)).toBe(1);
-
-    // Visual → Source.
-    view.dispatch({ effects: comp.reconfigure([]) });
-    await tick();
-    expect(view.state.doc.toString()).toBe(withEdit);
-    expect(view.state.selection.main.head).toBe(insertAt + 6);
-    expect(undoDepth(view.state)).toBe(1);
-    expect(redoDepth(view.state)).toBe(0);
-
-    // The undo recorded before the toggles still applies cleanly.
-    undo(view);
-    expect(view.state.doc.toString()).toBe(base);
+    expect(view.state.doc.toString()).toContain("\\section{My Intro}");
+    expect(view.contentDOM.textContent).not.toContain("\\section");
     view.destroy();
   });
 });
 
-describe("visual cm6: budget abort → visual-paused", () => {
-  it("clears all layer decorations and raises onPause once", async () => {
-    let pauses = 0;
-    let t = 0;
-    const doc = `\\textbf{bold} ${"y".repeat(4000)}`;
-    const view = makeView(doc, [
-      visualExtension({ now: () => (t += 100), onPause: () => pauses++ }),
-    ]);
+describe("visual cm6: closure filter", () => {
+  it("preserves wrapper pairs when a deletion covers only one half", () => {
+    const doc = "aa \\textbf{bold} zz";
+    const view = makeView(doc);
+    // User deletion from before the construct into the content: the hidden
+    // "\\textbf{" must survive; only visible chars go.
+    view.dispatch({
+      changes: { from: 0, to: doc.indexOf("ld") },
+      userEvent: "delete.selection",
+    });
+    const out = view.state.doc.toString();
+    expect(out).toBe("\\textbf{ld} zz");
+    view.destroy();
+  });
+
+  it("deletes a fully-covered construct whole", () => {
+    const doc = "aa \\textbf{bold} zz";
+    const view = makeView(doc);
+    view.dispatch({
+      changes: { from: 0, to: doc.indexOf(" zz") },
+      userEvent: "delete.selection",
+    });
+    expect(view.state.doc.toString()).toBe(" zz");
+    view.destroy();
+  });
+
+  it("relocates a user insertion out of a hidden wrapper", () => {
+    const doc = "aa \\textbf{bold} zz";
+    const view = makeView(doc);
+    const inside = doc.indexOf("\\textbf{") + 3;
+    view.dispatch({
+      changes: { from: inside, insert: "X" },
+      userEvent: "input.type",
+    });
+    const out = view.state.doc.toString();
+    expect(out).toContain("\\textbf{");
+    expect(out).not.toContain("\\teXxtbf");
+    expect(out).not.toContain("\\texXtbf");
+    view.destroy();
+  });
+
+  it("snaps a programmatic selection out of hidden markup", () => {
+    const doc = "aa \\textbf{bold} zz";
+    const view = makeView(doc);
+    const inside = doc.indexOf("\\textbf{") + 4;
+    view.dispatch({ selection: { anchor: inside } });
+    const head = view.state.selection.main.head;
+    const open = doc.indexOf("\\textbf{");
+    const contentFrom = open + "\\textbf{".length;
+    expect(head === open || head === contentFrom).toBe(true);
+    view.destroy();
+  });
+});
+
+describe("visual cm6: keymap semantics", () => {
+  it("Backspace on an empty heading deletes the whole construct", () => {
+    const doc = "\\section{}\nText after\n";
+    const view = makeView(doc);
+    view.dispatch({ selection: { anchor: "\\section{".length } });
+    expect(cmd.backspace(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("Text after\n");
+    view.destroy();
+  });
+
+  it("Backspace at the start of a non-empty title unwraps the heading", () => {
+    const doc = "\\section{Intro}\nBody\n";
+    const view = makeView(doc);
+    view.dispatch({ selection: { anchor: "\\section{".length } });
+    expect(cmd.backspace(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("Intro\nBody\n");
+    view.destroy();
+  });
+
+  it("Backspace after a widget selects it first, then deletes it", () => {
+    const doc = "see \\cite{knuth84} end";
+    const view = makeView(doc);
+    const after = doc.indexOf("}") + 1;
+    view.dispatch({ selection: { anchor: after } });
+    expect(cmd.backspace(view)).toBe(true);
+    const sel = view.state.selection.main;
+    expect(sel.from).toBe(doc.indexOf("\\cite"));
+    expect(sel.to).toBe(after);
+    expect(view.state.doc.toString()).toBe(doc);
+    // Second press: the selection is non-empty → default selection delete,
+    // which the closure filter turns into a whole-construct removal.
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to },
+      userEvent: "delete.selection",
+    });
+    expect(view.state.doc.toString()).toBe("see  end");
+    view.destroy();
+  });
+
+  it("Backspace merges an item into the previous one by removing the marker", () => {
+    const doc = "\\begin{itemize}\n\\item First\n\\item Second\n\\end{itemize}\n";
+    const view = makeView(doc);
+    const secondMarker = doc.indexOf("\\item Second");
+    view.dispatch({ selection: { anchor: secondMarker + "\\item ".length } });
+    expect(cmd.backspace(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "\\begin{itemize}\n\\item First\nSecond\n\\end{itemize}\n",
+    );
+    view.destroy();
+  });
+
+  it("Enter in a paragraph starts a new paragraph (blank-line separator)", () => {
+    const doc = "One two\n";
+    const view = makeView(doc);
+    view.dispatch({ selection: { anchor: 3 } });
+    expect(cmd.enter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("One\n\n two\n");
+    view.destroy();
+  });
+
+  it("Enter inside a list item splits it into a new item", () => {
+    const doc = "\\begin{itemize}\n\\item First long\n\\end{itemize}\n";
+    const view = makeView(doc);
+    const at = doc.indexOf("First") + "First".length;
+    view.dispatch({ selection: { anchor: at } });
+    expect(cmd.enter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe(
+      "\\begin{itemize}\n\\item First\n\\item  long\n\\end{itemize}\n",
+    );
+    view.destroy();
+  });
+
+  it("Enter mid-title splits the heading in two", () => {
+    const doc = "\\section{One Two}\nBody\n";
+    const view = makeView(doc);
+    const at = doc.indexOf("One Two") + 3;
+    view.dispatch({ selection: { anchor: at } });
+    expect(cmd.enter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("\\section{One}\n\\section{ Two}\nBody\n");
+    view.destroy();
+  });
+
+  it("Shift+Enter inserts a hard line break", () => {
+    const doc = "One two\n";
+    const view = makeView(doc);
+    view.dispatch({ selection: { anchor: 3 } });
+    expect(cmd.shiftEnter(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("One\\\\\n two\n");
+    view.destroy();
+  });
+
+  it("keeps structural deletions as single undo steps", () => {
+    const doc = "\\section{}\nText\n";
+    const view = makeView(doc);
+    view.dispatch({ selection: { anchor: "\\section{".length } });
+    cmd.backspace(view);
+    expect(view.state.doc.toString()).toBe("Text\n");
+    expect(undoDepth(view.state)).toBeGreaterThan(0);
+    undo(view);
+    expect(view.state.doc.toString()).toBe(doc);
+    view.destroy();
+  });
+});
+
+describe("visual cm6: maintenance", () => {
+  it("pauses oversized files instead of rendering them", async () => {
+    let paused = false;
+    const big = "x".repeat(25_000); // single line beyond MAX_LINE_LENGTH
+    const view = makeView(big, { onPause: () => (paused = true) });
     await tick();
-    expect(pauses).toBe(1);
-    // Paused = pure source rendering: nothing hidden, nothing styled.
-    expect(view.contentDOM.textContent).toContain("\\textbf{");
-    expect(view.contentDOM.querySelector(".cm-vis-bold")).toBeNull();
+    expect(paused).toBe(true);
     view.destroy();
   });
 });

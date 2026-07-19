@@ -2,6 +2,7 @@ import { createEffect, createRoot, on } from "solid-js";
 import type { Project } from "~/adapters/types";
 import { saveOpenFile } from "~/commands/actions";
 import * as ipc from "~/ipc";
+import { formatShortcutForDisplay } from "~/lib/shortcuts";
 import { notifyError } from "~/lib/toast";
 import { recordError } from "~/lib/telemetry";
 import { activeFile, project, type OpenFile } from "~/stores/editor-store";
@@ -64,7 +65,7 @@ export function setupAutosave(): void {
             toastedFailures.add(key);
             notifyError(
               "Autosave failed",
-              `Could not save "${s.file.relPath}". Save manually with Ctrl+S.`,
+              `Could not save "${s.file.relPath}". Save manually with ${formatShortcutForDisplay("Mod+S")}.`,
             );
           }
         }

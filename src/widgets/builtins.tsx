@@ -523,7 +523,7 @@ const ActivityGraphWidget: Component = () => {
       onClick={() => setActivityMode(p.mode)}
       aria-label={p.label}
       title={p.label}
-      class={`flex h-5 w-5 items-center justify-center rounded ${
+      class={`flex h-6 w-6 items-center justify-center rounded ${
         activityMode() === p.mode
           ? "bg-[var(--color-selection-bg)] text-fg-1"
           : "text-fg-3 hover:bg-[var(--color-control-fill)]"

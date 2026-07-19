@@ -131,7 +131,7 @@ export const NotificationsPanel: Component<{
                   type="button"
                   onClick={() => dismiss(n.id)}
                   aria-label="Dismiss"
-                  class="lift flex h-5 w-5 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)]"
+                  class="lift flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)]"
                 >
                   <XIcon size={10} class="text-fg-3" />
                 </button>

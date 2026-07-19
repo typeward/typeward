@@ -167,6 +167,24 @@ function remapThreadFile(oldRel: string, newRel: string): void {
   if (changed) scheduleSave();
 }
 
+/**
+ * Directory-prefix sibling of {@link remapThreadFile}: repoint every thread
+ * under a moved/renamed directory. Offsets are unchanged — the move relocated
+ * the exact bytes.
+ */
+function remapThreadDir(oldDirRel: string, newDirRel: string): void {
+  const prefix = `${oldDirRel}/`;
+  let changed = false;
+  setAllThreads((prev) =>
+    prev.map((t) => {
+      if (!t.fileRelPath.startsWith(prefix)) return t;
+      changed = true;
+      return { ...t, fileRelPath: newDirRel + t.fileRelPath.slice(oldDirRel.length) };
+    }),
+  );
+  if (changed) scheduleSave();
+}
+
 function updateThreadOffsets(
   fileRelPath: string,
   updates: Array<{ id: string; fromOffset: number; toOffset: number; anchorText: string }>,
@@ -344,6 +362,7 @@ export {
   reopenThreadById,
   removeThread,
   reanchorThreadById,
+  remapThreadDir,
   remapThreadFile,
   updateThreadOffsets,
   loadThreads,

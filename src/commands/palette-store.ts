@@ -1,6 +1,8 @@
 import { createSignal } from "solid-js";
 
 import type { ChatMessage } from "~/integrations/types";
+import { registerCommand } from "./registry";
+import { project } from "~/stores/editor-store";
 
 /**
  * Command palette open-state lives in module scope so any action can flip it
@@ -8,6 +10,36 @@ import type { ChatMessage } from "~/integrations/types";
  * once at the App root.
  */
 const [paletteOpen, setPaletteOpenInternal] = createSignal(false);
+
+/**
+ * One-shot query the palette adopts on its next open (quick-open prefills
+ * "file:"). Non-reactive on purpose — the palette consumes it inside its
+ * open effect; `paletteSeedGeneration` only exists so seeding an
+ * ALREADY-open palette still re-runs that consumption.
+ */
+let pendingSeedQuery: string | null = null;
+const [paletteSeedGeneration, setPaletteSeedGeneration] = createSignal(0);
+
+/**
+ * MRU of command ids the user ran FROM the palette (not keyboard shortcuts —
+ * recents exist to shortcut repeat palette trips). Persisted so the
+ * "Recently used" group survives restarts.
+ */
+const RECENTS_KEY = "typeward.palette-recents";
+const RECENTS_MAX = 8;
+
+function loadRecents(): string[] {
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string").slice(0, RECENTS_MAX)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+const [recentCommandIds, setRecentCommandIds] = createSignal<string[]>(loadRecents());
 
 /**
  * Signal-flagged "please open the new-project dialog" intent. ProjectsScreen
@@ -100,6 +132,8 @@ const [requestFeedbackCard, setRequestFeedbackCardInternal] =
 let navigator: ((path: string) => void) | null = null;
 
 export const paletteOpen_ = paletteOpen;
+export const paletteSeedGeneration_ = paletteSeedGeneration;
+export const recentCommandIds_ = recentCommandIds;
 export const requestNewProject_ = requestNewProject;
 export const requestSaveTemplate_ = requestSaveTemplate;
 export const requestProDialog_ = requestProDialog;
@@ -112,6 +146,60 @@ export const togglePalette = () =>
   setPaletteOpenInternal((v) => !v);
 
 export const setPaletteOpen = (v: boolean) => setPaletteOpenInternal(v);
+
+/**
+ * Open the palette with a prefilled query. The generation bump fires first so
+ * an already-open palette (whose open state won't change) still adopts the
+ * seed via its generation effect; on a fresh open the palette's open effect
+ * consumes the pending value before that effect sees it.
+ */
+export const openPaletteWithQuery = (query: string) => {
+  pendingSeedQuery = query;
+  setPaletteSeedGeneration((n) => n + 1);
+  setPaletteOpenInternal(true);
+};
+
+/** Consume the pending seed query (one-shot). `null` = nothing seeded. */
+export const takePaletteSeedQuery = (): string | null => {
+  const q = pendingSeedQuery;
+  pendingSeedQuery = null;
+  return q;
+};
+
+/** Move a palette-dispatched command to the front of the recents MRU. */
+export const noteRecentCommand = (id: string): void => {
+  const next = [id, ...recentCommandIds().filter((x) => x !== id)].slice(
+    0,
+    RECENTS_MAX,
+  );
+  setRecentCommandIds(next);
+  try {
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+  } catch {
+    // Storage full/unavailable — recents just won't survive this session.
+  }
+};
+
+// Registered here rather than boot.ts: quick-open is palette behavior (it IS
+// the palette in file mode), and the registry auto-binds the shortcut through
+// the global keyboard router either way.
+registerCommand({
+  id: "core.quickOpen",
+  title: "Go to file",
+  subtitle: "Jump to any text file in the open project",
+  shortcut: "Mod+P",
+  group: "Navigation",
+  scope: "global",
+  // project() outlives the editor screen (it isn't cleared on navigate), so
+  // gate on the editor actually being mounted — a goto intent raised from the
+  // Projects/Settings screens has no consumer and would apply on a later
+  // mount as a stale surprise. Same marker the keyboard router scopes on.
+  when: () =>
+    project() !== null && document.querySelector("[data-editor-shell]") !== null,
+  run: () => {
+    openPaletteWithQuery("file:");
+  },
+});
 
 export const setRequestNewProject = (v: boolean) =>
   setRequestNewProjectInternal(v);

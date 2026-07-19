@@ -16,6 +16,20 @@ stylized brand themes with glow + drops). **Daylight is the app default.**
 | **Light** | basic | light | — | Plain neutral light: white surfaces, gray chrome, near-flat blue accent. Flat — glow + drop shadows forced off |
 | **Dark** | basic | dark | — | Plain neutral dark: `#1e1e1e` surfaces, light-blue accent, VS Code syntax. Flat — glow + drop shadows forced off |
 
+**System option (added 2026-07-16).** The theme picker's Styled group leads
+with a "System" tile (diagonal split previewing both halves) that follows the
+OS appearance: it resolves to **Daylight** when the OS is light and
+**Lamplight** when dark, live via a `matchMedia("(prefers-color-scheme:
+dark)")` change listener — the app re-tints without a restart when the OS
+flips. "System" is a persisted *setting*, not a theme: `theme-store.ts` keeps
+the choice in `themeSetting` while the exported `theme()` — and therefore
+`<html data-theme>`, `isDarkTheme`, `LIGHT_THEMES` consumers, and the Settings
+swatch probes — always carries the resolved concrete theme.
+`public/boot-theme.js` re-implements the same resolution for the pre-bundle
+splash (lockstep site), and "system" is NOT a valid custom-theme `base`
+(`BUILTIN_BASES` in `themes.rs` is unchanged). **The app default remains
+Daylight** — System is opt-in, per the documented product decision above.
+
 **Glow + drop shadows are a category behavior, not a token.** The
 `data-glow="on"|off"` attribute on `<html>` is derived in `ui-store.ts` from
 the theme category and the Appearance → Glow toggle: styled themes honor the

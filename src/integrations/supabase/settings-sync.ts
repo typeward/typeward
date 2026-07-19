@@ -75,12 +75,22 @@ export const SETTINGS_SYNC_DENYLIST: ReadonlySet<string> = new Set([
   "privacy",
   // References a theme JSON in this machine's <app_data>/themes/.
   "ui.activeCustomTheme",
+  // Interface scale compensates for the physical display (DPI, size, viewing
+  // distance) — 150% on a small high-DPI laptop is wrong on a 4K desktop.
+  // Device-local, like the window-geometry category below.
+  "ui.uiScale",
   // The sync toggle itself — governs THIS device's participation.
   "sync.syncSettings",
+  // Window geometry/layout — the pre-declared device-local category: pane
+  // sizes and docking track this machine's screen, not the account.
+  "workspace.editorLayout",
+  "workspace.consolePosition",
+  "workspace.sidebarPx",
+  "workspace.centerSplit",
 ]);
-// Window geometry/layout and recent-file lists are pre-declared device-local
-// categories, but nothing in settings.json carries them today (panel state
-// lives in localStorage) — if such a field ever lands, it belongs above.
+// Recent-file lists remain a pre-declared device-local category, but nothing
+// in settings.json carries them today (panel state lives in localStorage) —
+// if such a field ever lands, it belongs above.
 
 export function syncedSettingKeys(): string[] {
   return PERSISTED_SETTING_KEYS.filter((k) => !SETTINGS_SYNC_DENYLIST.has(k));

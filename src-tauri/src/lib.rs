@@ -39,13 +39,29 @@ pub fn run() {
     // watchers/autosave/sync engines over the same data — the shared cursor,
     // sync-state.json, snapshots, and settings.json all assume one writer.
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        use tauri::Manager;
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+        use tauri::{Emitter, Manager};
         if let Some(win) = app.webview_windows().values().next() {
             let _ = win.unminimize();
             let _ = win.set_focus();
         }
+        // "Open with Typeward" on a running instance lands here: the second
+        // launch's full argv (argv[0] = the exe path, hence skip), with its
+        // cwd anchoring relative paths. Emitted after the focus above so the
+        // window is frontmost when the frontend navigates.
+        if let Some(path) =
+            first_open_with_path(args.into_iter().skip(1), Some(std::path::Path::new(&cwd)))
+        {
+            let _ = app.emit_to("main", "open-with:path", path);
+        }
     }));
+
+    // Window-state must register before the config windows are created, or the
+    // main window paints at the tauri.conf.json defaults and only then jumps to
+    // its restored geometry. Restore/save are automatic Rust-side hooks — no JS
+    // API is used, so no capability permission entry is needed.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
 
     let builder = builder
         .plugin(tauri_plugin_shell::init())
@@ -65,14 +81,28 @@ pub fn run() {
     let builder = builder
         .setup(|app| {
             telemetry::install(app.handle());
+            #[cfg(target_os = "macos")]
+            install_macos_menu(app)?;
             // Seed the project trust boundary (project.rs) from the configured
             // projects root before the webview can issue any IPC, so file IO /
             // compile / git can be gated to the projects area.
             let loaded = settings::load(app.handle()).ok();
-            let projects_root = loaded
+            #[allow(unused_mut)]
+            let mut projects_root = loaded
                 .as_ref()
                 .map(|s| std::path::PathBuf::from(&s.projects_root))
                 .unwrap_or_else(settings::default_projects_root);
+            // Mobile has no Documents dir (dirs::document_dir() is None), so
+            // the default degrades to a RELATIVE "Typeward" — useless as a
+            // trust root and unwritable from an app sandbox cwd. Anchor it in
+            // the app's own data dir instead.
+            #[cfg(mobile)]
+            if projects_root.is_relative() {
+                use tauri::Manager;
+                if let Ok(data) = app.path().app_data_dir() {
+                    projects_root = data.join("Projects");
+                }
+            }
             let _ = std::fs::create_dir_all(&projects_root);
             project::set_projects_root(&projects_root);
             // The capabilities grant plugin-fs only the DEFAULT projects root
@@ -86,6 +116,54 @@ pub fn run() {
                     .as_ref()
                     .and_then(|s| s.integrations.ai.ollama_base_url.as_deref()),
             );
+            // tauri.conf.json's backgroundColor is a static compile-time value
+            // (Daylight cream), but the theme is per-user runtime state — dark
+            // theme users would get a light flash between window creation and
+            // the boot splash re-tint. Repaint the native background from the
+            // persisted theme here, before first paint. Cosmetic: errors are
+            // swallowed.
+            #[cfg(desktop)]
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    let theme = loaded.as_ref().map(|s| s.theme.as_str()).unwrap_or("daylight");
+                    let theme = if theme == "system" {
+                        match win.theme() {
+                            Ok(tauri::Theme::Dark) => "lamplight",
+                            _ => "daylight",
+                        }
+                    } else {
+                        theme
+                    };
+                    let bg: tauri::webview::Color = match theme {
+                        "lamplight" => (0x0D, 0x0C, 0x0A).into(),
+                        "aurora" => (0x0A, 0x0B, 0x0F).into(),
+                        "paper" => (0xFA, 0xF9, 0xF6).into(),
+                        "dark" => (0x1E, 0x1E, 0x1E).into(),
+                        "light" => (0xFF, 0xFF, 0xFF).into(),
+                        _ => (0xF8, 0xF4, 0xEA).into(),
+                    };
+                    let _ = win.set_background_color(Some(bg));
+                }
+            }
+            // First-launch "Open with Typeward": the OS passes the file as a
+            // plain argv entry. The frontend listener mounts during boot, so
+            // the emit is deferred a beat off the setup path; if the webview
+            // takes longer than the delay the event is lost — acceptable v1
+            // (follow-up: an ack handshake where the frontend pulls the
+            // pending path instead of racing this emit).
+            #[cfg(desktop)]
+            if let Some(path) = first_open_with_path(
+                std::env::args().skip(1),
+                std::env::current_dir().ok().as_deref(),
+            ) {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    let _ = handle.emit_to("main", "open-with:path", path);
+                });
+            }
             Ok(())
         })
         .manage(watcher::WatcherManager::default())
@@ -127,9 +205,12 @@ pub fn run() {
         commands::delete_project_path,
         commands::create_project_dir,
         commands::duplicate_project_file,
+        commands::import_files_into_project,
+        commands::move_project_path,
         commands::reveal_project_path,
         trust::shell_escape_trust_get,
         trust::shell_escape_trust_set,
+        trust::trust_clear_shell_escape,
         todo_scan::scan_project_todos,
         commands::read_project_text_file,
         commands::read_project_binary_file,
@@ -138,6 +219,7 @@ pub fn run() {
         compile::parse_latex_log_cmd,
         compile::compile_latex,
         compile::compile_typst,
+        compile::compile_cancel,
         #[cfg(desktop)]
         synctex::synctex_forward,
         #[cfg(desktop)]
@@ -250,8 +332,297 @@ pub fn run() {
             }
             commands(invoke)
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|_app_handle, _event| {
+            // macOS delivers Finder/document opens via Apple Events — never
+            // argv — so the bundle.fileAssociations registration is inert
+            // there without this handler. Windows/Linux opens arrive through
+            // argv (first launch + the single-instance plugin) instead.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &_event {
+                use tauri::Emitter;
+                if let Some(path) = urls
+                    .iter()
+                    .filter_map(|u| u.to_file_path().ok())
+                    .find(|p| p.is_file())
+                {
+                    let _ = _app_handle.emit_to(
+                        "main",
+                        "open-with:path",
+                        path.to_string_lossy().into_owned(),
+                    );
+                }
+            }
+        });
+}
+
+/// macOS: swap the stock menu's Quit for one that respects the dirty guard.
+///
+/// The default menu's Quit item sends `NSApplication terminate:` directly
+/// (muda `PredefinedMenuItemType::Quit`), and tao implements no
+/// `applicationShouldTerminate:` veto — so Cmd+Q never surfaces as a Tauri
+/// event the frontend's `onCloseRequested` dirty-buffer guard could intercept,
+/// and unsaved edits would vanish. Rebuilding `Menu::default` verbatim with a
+/// custom Quit item routes Cmd+Q through `window.close()` instead: the guard
+/// gets its prompt, and once every window is destroyed the app exits normally.
+/// (Dock-icon → Quit still terminates directly; tao exposes no hook for it —
+/// autosave snapshots + RecoveryDialog remain the backstop there.)
+///
+/// The menu also carries the app's command surface: items whose ids are
+/// frontend CommandRegistry ids (dotted) are forwarded over the
+/// "menu:command" event and dispatched by src/lib/menu-bridge.ts, so menu,
+/// palette, and shortcuts share one command definition.
+#[cfg(target_os = "macos")]
+fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{
+        AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
+        WINDOW_SUBMENU_ID,
+    };
+
+    let handle = app.handle();
+    let pkg = handle.package_info();
+    let about = AboutMetadata {
+        name: Some(pkg.name.clone()),
+        version: Some(pkg.version.to_string()),
+        ..Default::default()
+    };
+    let quit = MenuItem::with_id(
+        handle,
+        "quit",
+        format!("Quit {}", pkg.name),
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+    let app_menu = Submenu::with_items(
+        handle,
+        pkg.name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(handle, None, Some(about))?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::services(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::hide(handle, None)?,
+            &PredefinedMenuItem::hide_others(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &quit,
+        ],
+    )?;
+    // The predefined close_window would claim Cmd+W at the NSMenu level and
+    // close the whole window on a muscle-memory "close tab". Split it: Close
+    // Tab takes Cmd+W (routed to the frontend, which falls back to a window
+    // close when no tab is open), Close Window moves to Shift+Cmd+W —
+    // the browser convention users already know.
+    let close_tab = MenuItem::with_id(
+        handle,
+        "close-tab",
+        "Close Tab",
+        true,
+        Some("CmdOrCtrl+W"),
+    )?;
+    let close_window = MenuItem::with_id(
+        handle,
+        "close-window",
+        "Close Window",
+        true,
+        Some("CmdOrCtrl+Shift+W"),
+    )?;
+    // App-command items. Each dotted id below is a frontend CommandRegistry id
+    // (or one of the two bridge-resolved aliases, noted at the Compile menu)
+    // forwarded verbatim by the fallthrough arm in on_menu_event and dispatched
+    // through the registry by src/lib/menu-bridge.ts — menu, palette, and
+    // shortcuts share one command definition so they can't drift. The id list
+    // is mirrored there as MENU_COMMAND_IDS (cross-referenced both ways).
+    // Every accelerator here duplicates a webview shortcut the keyboard router
+    // already binds: on macOS the NSMenu key equivalent swallows the keystroke
+    // before the webview ever sees it, so for these keys the menu path
+    // REPLACES the router path rather than double-firing.
+    let new_project = MenuItem::with_id(
+        handle,
+        "core.newProject",
+        "New Project",
+        true,
+        Some("CmdOrCtrl+N"),
+    )?;
+    let save = MenuItem::with_id(handle, "core.save", "Save", true, Some("CmdOrCtrl+S"))?;
+    let file_menu = Submenu::with_items(
+        handle,
+        "File",
+        true,
+        &[
+            &new_project,
+            &save,
+            &PredefinedMenuItem::separator(handle)?,
+            &close_tab,
+            &close_window,
+        ],
+    )?;
+    let edit_menu = Submenu::with_items(
+        handle,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(handle, None)?,
+            &PredefinedMenuItem::redo(handle, None)?,
+            &PredefinedMenuItem::separator(handle)?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
+        ],
+    )?;
+    let focus_mode = MenuItem::with_id(
+        handle,
+        "core.toggleFocusMode",
+        "Focus Mode",
+        true,
+        Some("CmdOrCtrl+Shift+F"),
+    )?;
+    let view_menu = Submenu::with_items(
+        handle,
+        "View",
+        true,
+        &[&focus_mode, &PredefinedMenuItem::fullscreen(handle, None)?],
+    )?;
+    // "editor.compile" / "editor.stopCompile" are the two bridge-resolved
+    // aliases rather than literal registry ids: compile registers per-format
+    // (latex.compile / typst.compile — only the open project's adapter is
+    // live) and stop-compile has no palette command at all, so menu-bridge.ts
+    // maps them. "latex.syncForward" IS the literal registry id; in a Typst
+    // project it's unregistered and the click is a silent no-op — the correct
+    // menu behavior for an inapplicable action. muda's return-key token is
+    // "Enter", not "Return"; an unknown token would SILENTLY drop the
+    // accelerator (MenuItem::with_id swallows accelerator parse errors).
+    let compile = MenuItem::with_id(
+        handle,
+        "editor.compile",
+        "Compile",
+        true,
+        Some("CmdOrCtrl+Enter"),
+    )?;
+    let stop_compile =
+        MenuItem::with_id(handle, "editor.stopCompile", "Stop Compile", true, None::<&str>)?;
+    let jump_to_pdf = MenuItem::with_id(
+        handle,
+        "latex.syncForward",
+        "Jump to PDF",
+        true,
+        Some("CmdOrCtrl+J"),
+    )?;
+    let compile_menu = Submenu::with_items(
+        handle,
+        "Compile",
+        true,
+        &[&compile, &stop_compile, &jump_to_pdf],
+    )?;
+    // The magic IDs mark these as NSApp's windowsMenu / helpMenu (Tauri wires
+    // them by ID), which is what makes the Window list + Help search work.
+    // No close_window here anymore — its Cmd+W accelerator would collide with
+    // File > Close Tab (two NSMenu items on one key equivalent), and File >
+    // Close Window covers the action.
+    let window_menu = Submenu::with_id_and_items(
+        handle,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
+        ],
+    )?;
+    let help_menu = Submenu::with_id_and_items(handle, HELP_SUBMENU_ID, "Help", true, &[])?;
+    let menu = Menu::with_items(
+        handle,
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &compile_menu,
+            &window_menu,
+            &help_menu,
+        ],
+    )?;
+    app.set_menu(menu)?;
+    app.on_menu_event(|handle, event| {
+        use tauri::{Emitter, Manager};
+        // Menu accelerators are app-global: resolve the FOCUSED window so
+        // Cmd+W over the detached preview closes the preview, not an editor
+        // tab in the background main window.
+        let focused = handle
+            .webview_windows()
+            .into_values()
+            .find(|w| w.is_focused().unwrap_or(false));
+        match event.id().0.as_str() {
+            "quit" => {
+                // close() (not destroy) so the main window's frontend guard can
+                // prompt; a confirmed close destroys it, and with no windows left
+                // the app exits on its own.
+                for (_, window) in handle.webview_windows() {
+                    let _ = window.close();
+                }
+            }
+            // The frontend decides what Cmd+W means in the MAIN window: close
+            // the active editor tab if one exists, else fall through to the
+            // window-close guard. Any other focused window just closes.
+            "close-tab" => match focused {
+                Some(w) if w.label() != "main" => {
+                    let _ = w.close();
+                }
+                _ => {
+                    let _ = handle.emit_to("main", "menu:close-tab", ());
+                }
+            },
+            // Same close() (not destroy) path as Quit — the dirty-buffer
+            // guard must get its prompt when the main window is the target.
+            "close-window" => {
+                let target = focused.or_else(|| handle.get_webview_window("main"));
+                if let Some(w) = target {
+                    let _ = w.close();
+                }
+            }
+            // Any dotted id is a frontend CommandRegistry id (or a
+            // menu-bridge alias) — forward it verbatim so the registry stays
+            // the single dispatch authority (src/lib/menu-bridge.ts listens
+            // for this event and runs the command through the same gated
+            // path as the palette). ALWAYS to "main": the CommandRegistry
+            // only lives in the main webview — the detached preview never
+            // mounts the bridge, so focused-window targeting would drop every
+            // command while the preview is frontmost. (Focused-window
+            // resolution stays correct for close-tab/close-window above.)
+            id if id.contains('.') => {
+                let _ = handle.emit_to("main", "menu:command", id);
+            }
+            _ => {}
+        }
+    });
+    Ok(())
+}
+
+/// First existing file path in a launch argv tail ("Open with Typeward").
+/// Args arrive OS-quoted, so each entry is already one whole path; flags are
+/// skipped rather than stopping the scan because wrappers/dev runners prepend
+/// their own switches. The `is_file` probe is what keeps a random non-path
+/// argument from being emitted as an open request.
+#[cfg(desktop)]
+/// `base_dir` anchors relative argv entries: the SECOND launch's cwd for the
+/// single-instance path (the plugin hands it over), this process's cwd for
+/// first launch. Probing relative paths against the wrong cwd either loses
+/// the open or, worse, matches a same-named file in the first instance's cwd.
+fn first_open_with_path<I: Iterator<Item = String>>(
+    args: I,
+    base_dir: Option<&std::path::Path>,
+) -> Option<String> {
+    args.filter(|a| !a.starts_with('-')).find_map(|a| {
+        let p = std::path::Path::new(&a);
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base_dir?.join(p)
+        };
+        abs.is_file().then(|| abs.to_string_lossy().into_owned())
+    })
 }
 
 /// Grant plugin-fs the configured projects root at runtime. The static

@@ -8,29 +8,39 @@ import { isPreviewWindow } from "~/lib/window-role";
 import {
   ACCENTS,
   type Accent,
-  THEMES,
-  type Theme,
+  THEME_SETTINGS,
+  type ThemeSetting,
   accent,
   setAccent,
   setTheme,
-  theme,
+  themeSetting,
 } from "~/themes/theme-store";
 import {
   accentGradient,
   activeCustomTheme,
   ambientLights,
   animations,
+  centerSplit,
+  type ConsolePosition,
+  consolePosition,
   customThemesEnabled,
   type Density,
   density,
+  type EditorLayout,
+  editorLayout,
   glowEffects,
   setAccentGradient,
   setActiveCustomTheme,
   setAmbientLights,
   setAnimations,
+  setCenterSplit,
+  setConsolePosition,
   setCustomThemesEnabled,
   setDensity,
+  setEditorLayout,
   setGlowEffects,
+  setSidebarPx,
+  sidebarPx,
 } from "~/stores/ui-store";
 import {
   coerceSpaceTint,
@@ -59,6 +69,7 @@ import {
   statsCards,
   widgetEnabled,
 } from "~/stores/workspace-store";
+import { isCoarsePointer } from "~/stores/viewport-store";
 
 export type CompileEngine = "system-tex" | "tectonic" | "texlive-wasm";
 
@@ -114,7 +125,7 @@ export interface EditorSettings {
   pdfDefaultZoom: number;
   /** Invert the PDF (dark-mode reading) when a dark theme is active. */
   pdfInvertDark: boolean;
-  /** Visual editing mode for LaTeX (.tex) — decorations over the source. */
+  /** Visual editing mode for LaTeX (.tex) — hidden-source WYSIWYG layer. */
   visualModeLatex: boolean;
 }
 
@@ -149,6 +160,14 @@ function clampNumber(raw: number, min: number, max: number, fallback: number): n
   return typeof raw === "number" && Number.isFinite(raw)
     ? Math.min(max, Math.max(min, raw))
     : fallback;
+}
+
+/** Snap the interface scale onto the picker's 90–150 step-5 grid; anything
+ * non-numeric lands back on 100 (the stylesheet default). */
+function coerceUiScale(raw: number): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return 100;
+  const clamped = Math.min(150, Math.max(90, raw));
+  return Math.round(clamped / 5) * 5;
 }
 
 const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
@@ -203,6 +222,10 @@ const [installId, setInstallId] = createSignal<string | undefined>(undefined);
 export function noteInstallId(id: string | null | undefined): void {
   if (id) setInstallId(id);
 }
+// Interface scale in percent (100 = 1.0). density.css wraps its px tokens in
+// calc(<px> * var(--ui-scale, 1)); this store owns setting the variable on
+// <html> (see the effect below the FIELDS list).
+const [uiScale, setUiScale] = createSignal<number>(100);
 const [settingsLoaded, setSettingsLoaded] = createSignal<boolean>(false);
 
 /**
@@ -244,15 +267,17 @@ function field<T>(spec: {
 }
 
 const FIELDS: FieldSpec[] = [
-  field<Theme>({
+  // Persists the theme SETTING — "system" stays "system" on disk; only the
+  // <html data-theme> attribute carries the resolved concrete theme.
+  field<ThemeSetting>({
     key: "theme",
-    read: (s) => s.theme as Theme,
-    value: theme,
+    read: (s) => s.theme as ThemeSetting,
+    value: themeSetting,
     apply: setTheme,
     write: (out, v) => {
       out.theme = v;
     },
-    validate: (raw) => validEnum<Theme>(raw, THEMES, "daylight"),
+    validate: (raw) => validEnum<ThemeSetting>(raw, THEME_SETTINGS, "daylight"),
   }),
   field<Accent>({
     key: "accent",
@@ -329,6 +354,16 @@ const FIELDS: FieldSpec[] = [
       out.ui.density = v;
     },
     validate: (raw) => validEnum<Density>(raw, ["compact", "cozy", "comfortable"], "cozy"),
+  }),
+  field<number>({
+    key: "ui.uiScale",
+    read: (s) => s.ui.uiScale ?? 100,
+    value: uiScale,
+    apply: setUiScale,
+    write: (out, v) => {
+      out.ui.uiScale = v;
+    },
+    validate: coerceUiScale,
   }),
   field<boolean>({
     key: "ui.animations",
@@ -507,6 +542,57 @@ const FIELDS: FieldSpec[] = [
         )
         .map((sp) => ({ id: sp.id, name: sp.name, tint: coerceSpaceTint(sp.tint) })),
   }),
+  // Editor pane geometry (audit #41): layout mode, console dock, sidebar
+  // width, and the editor/preview split fraction survive a relaunch instead
+  // of resetting to the Phase-E in-memory defaults.
+  field<EditorLayout>({
+    key: "workspace.editorLayout",
+    read: (s) => (s.workspace.editorLayout ?? "split") as EditorLayout,
+    value: editorLayout,
+    apply: setEditorLayout,
+    write: (out, v) => {
+      out.workspace.editorLayout = v;
+    },
+    validate: (raw) =>
+      validEnum<EditorLayout>(raw, ["split", "editor", "preview"], "split"),
+  }),
+  field<ConsolePosition>({
+    key: "workspace.consolePosition",
+    read: (s) => (s.workspace.consolePosition ?? "pdf-tab") as ConsolePosition,
+    value: consolePosition,
+    apply: setConsolePosition,
+    write: (out, v) => {
+      out.workspace.consolePosition = v;
+    },
+    validate: (raw) =>
+      validEnum<ConsolePosition>(raw, ["drawer", "pdf-tab"], "pdf-tab"),
+  }),
+  // Nullable on purpose: null = the user never dragged the handle, so the
+  // sidebar keeps auto-fitting its tab strip (createSidebarResize desiredPx).
+  field<number | null>({
+    key: "workspace.sidebarPx",
+    read: (s) => s.workspace.sidebarPx ?? null,
+    value: sidebarPx,
+    apply: setSidebarPx,
+    write: (out, v) => {
+      out.workspace.sidebarPx = v;
+    },
+    validate: (raw) =>
+      raw == null ? null : Math.round(clampNumber(raw, 200, 400, 300)),
+  }),
+  // Editor panel's fraction of the editor/preview split. The 0.3 floor
+  // mirrors the panel's corvu minSize; the preview's 320px min re-clamps at
+  // runtime, so the bound here only has to keep the value sane.
+  field<number>({
+    key: "workspace.centerSplit",
+    read: (s) => s.workspace.centerSplit ?? 0.55,
+    value: centerSplit,
+    apply: setCenterSplit,
+    write: (out, v) => {
+      out.workspace.centerSplit = v;
+    },
+    validate: (raw) => clampNumber(raw, 0.3, 0.8, 0.55),
+  }),
   // integrations merges over defaults so a settings.json predating a provider
   // still gets its default block.
   {
@@ -579,6 +665,79 @@ const FIELDS: FieldSpec[] = [
     },
   }),
 ];
+
+// --ui-scale multiplies the density px tokens (density.css wraps each one in
+// calc). At exactly 100 the property is removed so the stylesheet fallback
+// (var(--ui-scale, 1)) applies untouched. Same document guard + page-lifetime
+// root as ui-store's attribute effects.
+if (typeof document !== "undefined") {
+  createRoot(() => {
+    createEffect(() => {
+      const scale = uiScale();
+      const style = document.documentElement.style;
+      if (scale === 100) {
+        style.removeProperty("--ui-scale");
+      } else {
+        style.setProperty("--ui-scale", String(scale / 100));
+      }
+    });
+  });
+}
+
+// Once-flag for the density auto-default (design/density.md "Default per
+// platform"): coarse-pointer devices start Comfortable, but only when the
+// user has never chosen a density. There is no "was this explicit?" bit in
+// settings.json, so a persisted value that differs from the "cozy" default
+// counts as an explicit choice and just latches the flag.
+const DENSITY_AUTO_APPLIED_KEY = "typeward.densityAutoApplied";
+
+/**
+ * An EXPLICIT density selection (Settings picker) permanently opts this
+ * device out of the coarse-pointer auto-default — including choosing "cozy":
+ * without the latch, an explicit cozy is indistinguishable from the untouched
+ * default and a later first-coarse-mount (or a synced cozy landing from
+ * another device) would override it to comfortable.
+ */
+export function latchDensityChoice(): void {
+  if (typeof window === "undefined" || isPreviewWindow) return;
+  try {
+    window.localStorage.setItem(DENSITY_AUTO_APPLIED_KEY, "1");
+  } catch {
+    // Full/blocked storage: worst case the auto-default check reruns.
+  }
+}
+
+function maybeAutoDefaultDensity(): void {
+  // The preview window never persists settings and shares this localStorage
+  // origin — latching the flag there would starve the main window's pass.
+  if (typeof window === "undefined" || isPreviewWindow) return;
+  try {
+    if (window.localStorage.getItem(DENSITY_AUTO_APPLIED_KEY) !== null) return;
+  } catch {
+    // Without the once-guard readable, applying would repeat every launch
+    // and clobber a later explicit "cozy" — skip entirely.
+    return;
+  }
+  const latch = () => {
+    try {
+      window.localStorage.setItem(DENSITY_AUTO_APPLIED_KEY, "1");
+    } catch {
+      // Full/blocked storage: worst case the check reruns next launch.
+    }
+  };
+  if (density() !== "cozy") {
+    latch();
+    return;
+  }
+  // Keyed on pointer coarseness, not viewport width — a landscape iPad is
+  // 1133-1366 logical px and would never cross the 1024 width breakpoint.
+  if (isCoarsePointer()) {
+    setDensity("comfortable");
+    latch();
+  }
+  // Fine pointer + untouched default: leave the flag unset so a first mount
+  // on a touch device can still apply.
+}
 
 /**
  * Pure builder for the persisted object — exported so a roundtrip test can
@@ -667,6 +826,9 @@ createRoot(() => {
       // On mobile first-boot, force the WASM engine since there's no system TeX.
       if (isTauriMobile()) setCompileEngine("texlive-wasm");
     } finally {
+      // After hydrate but before the persistence effect arms, so an applied
+      // Comfortable lands in settings.json like any other change.
+      maybeAutoDefaultDensity();
       setSettingsLoaded(true);
     }
   })();
@@ -798,6 +960,7 @@ export {
   settingsLoaded,
   shareCrashReports,
   syncSettingsEnabled,
+  uiScale,
   updatesCheckAutomatically,
   setCompileEngine,
   setEditorSettings,
@@ -808,5 +971,6 @@ export {
   setProjectsRoot,
   setShareCrashReports,
   setSyncSettingsEnabled,
+  setUiScale,
   setUpdatesCheckAutomatically,
 };
