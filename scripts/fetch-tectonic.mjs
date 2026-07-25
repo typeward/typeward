@@ -11,6 +11,14 @@
 // already-present file is re-verified rather than trusted. Bump
 // TECTONIC_VERSION together with BOTH digests per platform (compute them from
 // the release assets — never copy them from an unverified source).
+//
+// Windows on ARM: upstream ships NO aarch64-pc-windows-msvc build (0.15.0 has
+// only x86_64 Windows assets). Windows 11 on ARM runs x64 binaries under its
+// built-in emulation, so the `win32:arm64` entry deliberately downloads the
+// x86_64 archive and installs it under the aarch64 target-triple name that
+// Tauri's `externalBin` resolves for an ARM64 build — same archive, same
+// digests as win32:x64, it just runs emulated. (The desktop release matrix has
+// no Windows/arm64 leg; this only unblocks local ARM64 dev builds.)
 
 import { createWriteStream } from "node:fs";
 import { mkdir, rm, chmod, readdir, rename, readFile } from "node:fs/promises";
@@ -39,6 +47,17 @@ export const PLATFORMS = {
   // already-present-file check re-verifies).
   "win32:x64": {
     triple: "x86_64-pc-windows-msvc",
+    archive: `tectonic-${TECTONIC_VERSION}-x86_64-pc-windows-msvc.zip`,
+    ext: "zip",
+    exe: "tectonic.exe",
+    archiveSha256: "1d6bb76f049c8a3774f6e9d66e4b04e1a8c3dcb37527b6b41b7e894328e7bf29",
+    exeSha256: "6760c6368d3219c687eb1811e55379af9526fbd97e97fa954968267f5241deb9",
+  },
+  // No native Windows/arm64 Tectonic exists upstream — ship the x86_64 build
+  // under the aarch64 triple name and let Windows-on-ARM emulation run it. See
+  // the header note. Same archive + digests as win32:x64 above.
+  "win32:arm64": {
+    triple: "aarch64-pc-windows-msvc",
     archive: `tectonic-${TECTONIC_VERSION}-x86_64-pc-windows-msvc.zip`,
     ext: "zip",
     exe: "tectonic.exe",
