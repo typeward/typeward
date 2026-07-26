@@ -9,12 +9,21 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   readFile: vi.fn(async () => new TextEncoder().encode("local changed")),
   readTextFile: vi.fn(async () => ""),
   remove: vi.fn(async () => {}),
+  rename: vi.fn(async () => {}),
   stat: vi.fn(async () => ({ mtime: new Date(0) })),
   writeFile: vi.fn(async () => {}),
   writeTextFile: vi.fn(async () => {}),
 }));
 
-import { exists, readTextFile, remove, stat, writeFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import {
+  exists,
+  readTextFile,
+  remove,
+  rename,
+  stat,
+  writeFile,
+  writeTextFile,
+} from "@tauri-apps/plugin-fs";
 import type {
   CloudFsProvider,
   DeltaResult,
@@ -243,8 +252,20 @@ describe("SyncEngine pull cursor safety", () => {
     vi.clearAllMocks();
   });
 
+  // A persisted cursor is content -> temp (writeTextFile) then rename -> cursor.
+  // Reconstruct [finalPath, value] pairs from each committed rename so the
+  // assertions can check both the destination and the value.
   const cursorWrites = () =>
-    vi.mocked(writeTextFile).mock.calls.filter(([p]) => String(p).endsWith("cursor"));
+    vi
+      .mocked(rename)
+      .mock.calls.filter(([, dst]) => String(dst).endsWith("cursor"))
+      .map(([tmp, dst]) => {
+        const w = vi
+          .mocked(writeTextFile)
+          .mock.calls.filter(([p]) => String(p) === String(tmp))
+          .at(-1);
+        return [String(dst), w ? String(w[1]) : undefined];
+      });
 
   it("does not advance the cursor when applying a change fails", async () => {
     const page: DeltaResult = {
@@ -407,16 +428,39 @@ describe("SyncEngine pull salvage", () => {
     vi.clearAllMocks();
   });
 
+  // A persisted cursor is content -> temp (writeTextFile) then rename -> cursor.
+  // Reconstruct [finalPath, value] pairs from each committed rename so the
+  // assertions can check both the destination and the value.
   const cursorWrites = () =>
-    vi.mocked(writeTextFile).mock.calls.filter(([p]) => String(p).endsWith("cursor"));
+    vi
+      .mocked(rename)
+      .mock.calls.filter(([, dst]) => String(dst).endsWith("cursor"))
+      .map(([tmp, dst]) => {
+        const w = vi
+          .mocked(writeTextFile)
+          .mock.calls.filter(([p]) => String(p) === String(tmp))
+          .at(-1);
+        return [String(dst), w ? String(w[1]) : undefined];
+      });
   const lastSyncStateWrite = () => {
-    const writes = vi
+    // A persisted manifest is content -> temp (writeTextFile) then rename ->
+    // sync-state.json. Find the last committed rename, then read the content
+    // that was written to its temp source.
+    const commit = vi
+      .mocked(rename)
+      .mock.calls.filter(([, dst]) => String(dst).endsWith("sync-state.json"))
+      .at(-1);
+    if (!commit) return undefined;
+    const tmp = String(commit[0]);
+    const write = vi
       .mocked(writeTextFile)
-      .mock.calls.filter(([p]) => String(p).endsWith("sync-state.json"));
-    const last = writes.at(-1);
-    return last ? (JSON.parse(String(last[1])) as {
-      pendingRetries?: Record<string, { relPath: string; reason: string }>;
-    }) : undefined;
+      .mock.calls.filter(([p]) => String(p) === tmp)
+      .at(-1);
+    return write
+      ? (JSON.parse(String(write[1])) as {
+          pendingRetries?: Record<string, { relPath: string; reason: string }>;
+        })
+      : undefined;
   };
 
   it("salvages a poison page after repeated failures and retries the entry on later polls", async () => {

@@ -37,6 +37,12 @@
       ]
     },
     {
+      "identifier": "fs:allow-rename",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
       "identifier": "fs:allow-read-dir",
       "allow": [
         { "path": "$DOCUMENT/Typeward/**" },

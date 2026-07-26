@@ -651,9 +651,25 @@ pub fn load(app_handle: &tauri::AppHandle) -> Result<Settings, SettingsError> {
     if !path.exists() {
         return Ok(Settings::default());
     }
-    let bytes = fs::read(path)?;
-    let settings: Settings = serde_json::from_slice(&bytes)?;
-    Ok(sanitize_loaded_settings(settings))
+    let bytes = fs::read(&path)?;
+    match serde_json::from_slice::<Settings>(&bytes) {
+        Ok(settings) => Ok(sanitize_loaded_settings(settings)),
+        Err(e) => {
+            // Corrupt settings.json (partial/torn write, disk glitch, bad hand
+            // edit). Preserve the original bytes as a `.corrupt` sibling BEFORE
+            // returning defaults — otherwise the next save() overwrites and
+            // permanently destroys the user's real settings. Booting with
+            // defaults keeps the app usable; the backup makes it recoverable
+            // and non-silent.
+            let backup = path.with_file_name("settings.json.corrupt");
+            let _ = fs::rename(&path, &backup);
+            eprintln!(
+                "[settings] settings.json was unreadable ({e}); backed up to {} and reset to defaults.",
+                backup.display()
+            );
+            Ok(Settings::default())
+        }
+    }
 }
 
 pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), SettingsError> {
