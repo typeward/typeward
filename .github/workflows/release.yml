@@ -121,7 +121,8 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to an explicit version for reproducible CI — bump deliberately.
+          toolchain: "1.96.0"
           targets: ${{ matrix.target }}
 
       - name: Cargo cache

@@ -82,7 +82,6 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact: typeward-windows-x64
             paths: |
-              app/src-tauri/target/release/bundle/msi/*.msi
               app/src-tauri/target/release/bundle/nsis/*.exe
           - label: Linux (x64)
             runner: ubuntu-24.04
@@ -147,7 +146,8 @@ jobs:
         if: steps.gate.outputs.build == 'true'
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to an explicit version for reproducible CI — bump deliberately.
+          toolchain: "1.96.0"
           targets: ${{ matrix.target }}
 
       - name: Cargo cache
