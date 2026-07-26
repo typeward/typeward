@@ -85,6 +85,28 @@ describe("scrubPaths — egress path scrubber (TW-S2-05)", () => {
     expect(scrubPaths("open /Users/marek/proj/main.tex")).not.toContain("marek");
   });
 
+  it("removes the surname from home paths whose username contains a space", async () => {
+    const { scrubPaths } = await load();
+    expect(
+      scrubPaths("read C:\\Users\\First Last\\Documents\\main.tex"),
+    ).not.toContain("Last");
+    expect(scrubPaths("open /Users/First Last/proj/main.tex")).not.toContain(
+      "Last",
+    );
+  });
+
+  it("collapses non-home POSIX absolute paths to a basename, but not URLs", async () => {
+    const { scrubPaths } = await load();
+    const out = scrubPaths("spawn /opt/homebrew/bin/pandoc failed");
+    expect(out).toContain("pandoc");
+    expect(out).not.toContain("homebrew");
+    // an already-collapsed home path keeps its structure
+    expect(scrubPaths("~/proj/main.tex")).toBe("~/proj/main.tex");
+    expect(scrubPaths("GET https://export.arxiv.org/api/query")).toBe(
+      "GET https://export.arxiv.org/api/query",
+    );
+  });
+
   it("reduces a space-free Windows absolute path to its basename", async () => {
     const { scrubPaths } = await load();
     const out = scrubPaths("spawn C:\\tools\\bin\\pandoc.exe failed");
