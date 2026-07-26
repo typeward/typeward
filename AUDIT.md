@@ -877,3 +877,47 @@ items are marked NEEDS-PLATFORM-VERIFY.
   Intel Mac (can't build/sign macOS from the dev host).
 - **TW-S2-04 (Harper/burn bloat) — DECLINED by owner; left as-is** (grammar stays
   always-compiled). Revisit before the first signed release if installer size matters.
+
+---
+
+## Review pass — self-review of the remediation diff (2026-07-26)
+
+An 11-unit adversarial review of `git diff c2c19ba..HEAD` (find → verify) surfaced
+10 issues, 1 rejected. It caught real regressions in the fixes above. All fixed:
+
+- **[S2] settings.rs corrupt-backup ignored `fs::rename` failure.** If the rename to
+  `settings.json.corrupt` failed (e.g. a Windows sharing violation) the code still
+  returned defaults, so the next `save()` overwrote the real file — the exact loss the
+  fix promised to prevent. Now returns `Err` when the backup fails, so nothing overwrites.
+- **[S2] scrubPaths leaked the surname on spaced usernames.** `C:\Users\First Last\…`
+  collapsed to `~ Last\…`, shipping "Last" to Sentry. Username segment now allows spaces
+  (bounded by the separator). +test.
+- **[S2] scrubPaths didn't collapse non-home POSIX paths** (broke the "scrubbed" consent
+  promise on macOS/Linux). Added a URL-safe POSIX basename rule (no lookbehind — WebKit/JSC
+  got lookbehind only in Safari 16.4, below the macOS 12+/WebKitGTK floor and the safari13
+  build target; uses a captured preceding char instead). +test. Also scrub stack-frame
+  filenames + string breadcrumb `data`.
+- **[S2] macOS Intel leg collided with the arm64 updater bundle.** Both legs emit
+  `Typeward.app.tar.gz` (Tauri names it after productName, no arch), which would collapse
+  at flatten and misclassify in `latest.json` (Apple-Silicon auto-updating to the Intel
+  bundle) once the updater goes live. Added a per-leg rename to `…_<target>.app.tar.gz`
+  before flatten; `platformKey` maps both correctly. NEEDS-VERIFY on a signed macOS build.
+- **[S3] Annotated-PDF size cap** moved before the synctex loop (was after up to 500 spawns).
+- **[S3] synctex `forward`/`inverse` → `pub(crate)`** + a doc note: they now use
+  `block_on` and must run under `spawn_blocking` (footgun hardening; no live bug — all
+  callers already do).
+- **[S3] AI stream `read_timeout` 120s → 300s** so a reasoning model's pre-first-token
+  silence (o-series / slow local Ollama) isn't truncated.
+
+**Accepted / documented (not code-changed):**
+- **[S3] The preview window inherits the global CSP's `asset:` img-src.** Tauri v2 has no
+  per-window CSP or per-window asset scope, so the detached (untrusted) preview window can
+  `<img src="http://asset.localhost/…">` any file under the asset scope. Accepted as
+  defense-in-depth only: exploiting it needs a preview-webview XSS (PDF.js renders to
+  canvas, not script), exfil is blocked (connect-src has no `asset:`; cross-origin canvas
+  is tainted), and the preview already sits on the app-global fs runtime-scope floor that
+  grants an equivalent read given XSS — so no new primitive. Revisit if Tauri gains
+  per-window CSP.
+
+**Rejected (1):** the atomicWriteText Windows rename concern — correctly, it's a net
+improvement (the old truncate-write was equally lock-susceptible; no data loss).
