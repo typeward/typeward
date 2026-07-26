@@ -261,6 +261,26 @@ jobs:
           projectPath: app
           args: ${{ steps.sign.outputs.updater == 'true' && format('--config {0}/updater.overlay.json', runner.temp) || '' }}
 
+      # Both macOS legs emit bundle/macos/Typeward.app.tar.gz (Tauri names the
+      # updater bundle after productName only — no arch, unlike the dmg). Without
+      # this, the publish job's flatten (cp into one dir) would collapse the two
+      # into one file and build-latest-json would map the survivor to
+      # darwin-aarch64, so Apple-Silicon users would auto-update to the Intel
+      # bundle and Intel users would get no entry. Tag each with the target so
+      # both survive and platformKey classifies them (it matches x86_64/aarch64).
+      # No-op when the updater is dormant (no .app.tar.gz produced).
+      - name: Disambiguate macOS updater bundle by arch
+        if: matrix.os == 'macos'
+        shell: bash
+        working-directory: app/src-tauri/target/release/bundle/macos
+        run: |
+          shopt -s nullglob
+          for f in *.app.tar.gz; do
+            base="${f%.app.tar.gz}"
+            mv "$f" "${base}_${{ matrix.target }}.app.tar.gz"
+            [ -f "$f.sig" ] && mv "$f.sig" "${base}_${{ matrix.target }}.app.tar.gz.sig"
+          done
+
       # Installers + updater bundles + their .sig signatures. Per-OS globs that
       # don't match (a leg only builds its own OS's targets) are ignored. The
       # raw .app directory is intentionally excluded — only the .app.tar.gz
