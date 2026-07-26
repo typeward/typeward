@@ -76,6 +76,14 @@ jobs:
             paths: |
               app/src-tauri/target/release/bundle/dmg/*.dmg
               app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+          - label: macOS (Intel)
+            runner: macos-13
+            os: macos
+            target: x86_64-apple-darwin
+            artifact: typeward-macos-x64
+            paths: |
+              app/src-tauri/target/release/bundle/dmg/*.dmg
+              app/src-tauri/target/release/bundle/macos/*.app.tar.gz
           - label: Windows (x64)
             runner: windows-latest
             os: windows

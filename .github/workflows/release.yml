@@ -70,6 +70,10 @@ jobs:
             runner: macos-latest
             os: macos
             target: aarch64-apple-darwin
+          - label: macOS (Intel)
+            runner: macos-13
+            os: macos
+            target: x86_64-apple-darwin
           - label: Windows (x64)
             runner: windows-latest
             os: windows
@@ -264,7 +268,7 @@ jobs:
       - name: Collect artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-bundle-${{ matrix.os }}
+          name: release-bundle-${{ matrix.target }}
           if-no-files-found: ignore
           retention-days: 7
           path: |
@@ -338,6 +342,7 @@ jobs:
           }
           copy_one 'Typeward_*_x64-setup.exe' 'Typeward-windows-x64-setup.exe'
           copy_one 'Typeward_*_aarch64.dmg'   'Typeward-macos-aarch64.dmg'
+          copy_one 'Typeward_*_x64.dmg'        'Typeward-macos-x64.dmg'
           copy_one 'Typeward_*_amd64.AppImage' 'Typeward-linux-x86_64.AppImage'
           copy_one 'Typeward_*_amd64.deb'      'Typeward-linux-amd64.deb'
           echo "Assets:"; ls -1
