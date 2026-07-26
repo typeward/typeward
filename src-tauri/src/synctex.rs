@@ -27,8 +27,13 @@ const SYNCTEX_OUTPUT_CAP: usize = 1024 * 1024;
 /// Run the `which`-resolved synctex CLI through the shared bounded runner
 /// (deadline + process-tree kill + capped capture + stdin=null). Returns the
 /// stdout text on success, or `None` on timeout / non-zero exit — the same
-/// graceful "no sync" the callers already expect. Called from `spawn_blocking`
-/// contexts, so it drives the async runner via the current runtime handle.
+/// graceful "no sync" the callers already expect.
+///
+/// MUST be called from a blocking thread (a `spawn_blocking` closure), never a
+/// tokio runtime worker/async task: `Handle::current().block_on` panics with
+/// "Cannot start a runtime from within a runtime" if called from async context.
+/// All callers (`forward`/`inverse`, and via them the synctex commands +
+/// annotated export) already run inside `spawn_blocking`; keep it that way.
 fn run_synctex_bounded(
     synctex: &Path,
     args: &[String],
@@ -70,7 +75,7 @@ pub struct InverseLocation {
 ///
 /// Returns the FIRST result block (synctex CLI may emit several for a
 /// single query — they typically represent close-by hbox/vbox candidates).
-pub fn forward(
+pub(crate) fn forward(
     pdf_path: &Path,
     source_file: &Path,
     line: u32,
@@ -113,7 +118,7 @@ pub(crate) fn forward_with(
 
 /// Inverse search: PDF page+coordinates → source position. `x` and `y`
 /// are in PDF points (top-left origin).
-pub fn inverse(
+pub(crate) fn inverse(
     pdf_path: &Path,
     page: u32,
     x: f64,

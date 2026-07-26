@@ -76,6 +76,18 @@ fn run(
         return Err("compiled PDF not found — build the project first".into());
     };
 
+    // Bound the PDF parse UP FRONT — before any synctex work — so an oversized
+    // planted .pdf is rejected without first spawning up to 500 synctex
+    // processes. lopdf reads the whole file into memory.
+    let pdf_size = std::fs::metadata(&pdf).map_err(|e| e.to_string())?.len();
+    if pdf_size > MAX_PDF_BYTES {
+        return Err(format!(
+            "PDF is too large to annotate ({} MiB; limit {} MiB)",
+            pdf_size / (1024 * 1024),
+            MAX_PDF_BYTES / (1024 * 1024)
+        ));
+    }
+
     // Resolve synctex ONCE, not per annotation (a review-heavy export otherwise
     // PATH-scans up to 500×). If it isn't installed every annotation would skip
     // for the same reason, so surface that as one actionable error instead of an
@@ -118,15 +130,6 @@ fn run(
         }
     }
 
-    // Bound the PDF parse before lopdf reads the whole file into memory.
-    let pdf_size = std::fs::metadata(&pdf).map_err(|e| e.to_string())?.len();
-    if pdf_size > MAX_PDF_BYTES {
-        return Err(format!(
-            "PDF is too large to annotate ({} MiB; limit {} MiB)",
-            pdf_size / (1024 * 1024),
-            MAX_PDF_BYTES / (1024 * 1024)
-        ));
-    }
     let mut doc = Document::load(&pdf).map_err(|e| format!("failed to read PDF: {e}"))?;
     let pages = doc.get_pages();
     let mut annotated: u32 = 0;

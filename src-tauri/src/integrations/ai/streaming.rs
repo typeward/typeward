@@ -129,9 +129,12 @@ fn stream_client() -> &'static reqwest::Client {
             // A per-read (idle) timeout instead bounds the gap BETWEEN chunks, so
             // an allowlisted-but-misbehaving endpoint that completes the TLS
             // handshake then withholds/trickles bytes can't pin the spawned task
-            // and pooled connection open indefinitely; a legitimate model that
-            // pauses between tokens stays well under 120s.
-            .read_timeout(std::time::Duration::from_secs(120))
+            // and pooled connection open indefinitely. reqwest's read_timeout
+            // also covers time-to-first-byte, so this must clear a reasoning
+            // model's pre-first-token silence (o-series high-effort, a slow local
+            // Ollama on CPU) — 300s is generous for that while still bounding a
+            // full stall. Providers that emit keep-alive/ping events reset it.
+            .read_timeout(std::time::Duration::from_secs(300))
             .build()
             .expect("ai stream client init")
     })
