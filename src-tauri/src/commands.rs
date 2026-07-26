@@ -1169,10 +1169,10 @@ mod tests {
         std::fs::write(outside.join("fig.png"), b"png").unwrap();
         let src = outside.join("fig.png").to_string_lossy().into_owned();
 
-        let first = import_files_op(&root, "", &[src.clone()]).unwrap();
+        let first = import_files_op(&root, "", std::slice::from_ref(&src)).unwrap();
         assert_eq!(first, vec!["fig.png".to_string()]);
         // Into a not-yet-existing subdir (created on demand).
-        let second = import_files_op(&root, "assets", &[src.clone()]).unwrap();
+        let second = import_files_op(&root, "assets", std::slice::from_ref(&src)).unwrap();
         assert_eq!(second, vec!["assets/fig.png".to_string()]);
         // Collision auto-suffixes " (2)" before the extension.
         let third = import_files_op(&root, "assets", &[src]).unwrap();
@@ -1203,7 +1203,7 @@ mod tests {
         // Protected target dirs are refused.
         std::fs::write(outside.join("ok.tex"), "x").unwrap();
         let ok_src = outside.join("ok.tex").to_string_lossy().into_owned();
-        assert!(import_files_op(&root, ".typeward", &[ok_src.clone()]).is_err());
+        assert!(import_files_op(&root, ".typeward", std::slice::from_ref(&ok_src)).is_err());
         // Traversal in the target dir is refused.
         assert!(import_files_op(&root, "../outside", &[ok_src]).is_err());
     }

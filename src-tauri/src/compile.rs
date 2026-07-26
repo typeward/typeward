@@ -991,6 +991,9 @@ fn recipe_passes(
 /// tracks the last engine pass's success (paired with the pdf-exists check in
 /// `compile_latex`). Resolves each program to its absolute path via `which`,
 /// mirroring `run_system_tex`, and spawns that with `current_dir(root)`.
+// Recipe assembly threads the build knobs positionally; a params struct here
+// would just relocate the same fields without improving the call site.
+#[allow(clippy::too_many_arguments)]
 async fn run_engine_recipe(
     root_file: &str,
     root: &Path,
