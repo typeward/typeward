@@ -126,6 +126,12 @@ fn stream_client() -> &'static reqwest::Client {
             .pool_idle_timeout(Some(std::time::Duration::from_secs(90)))
             // Deliberately no total `.timeout()`: streams are long-lived and a
             // whole-request deadline would kill slow chat completions mid-flight.
+            // A per-read (idle) timeout instead bounds the gap BETWEEN chunks, so
+            // an allowlisted-but-misbehaving endpoint that completes the TLS
+            // handshake then withholds/trickles bytes can't pin the spawned task
+            // and pooled connection open indefinitely; a legitimate model that
+            // pauses between tokens stays well under 120s.
+            .read_timeout(std::time::Duration::from_secs(120))
             .build()
             .expect("ai stream client init")
     })
