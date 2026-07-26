@@ -751,3 +751,106 @@ Expose `run_bounded` as `pub(crate)`; route pandoc export + `--version` probe th
 - `TW-S3-13` (duplicate crates): mostly transitive; documented, low-value to force.
 - `TW-S3-17` `TW-S3-18` updater flush + prerelease channel: implement (updater is dormant, so unverifiable at runtime — mark NEEDS-VERIFY).
 - `TW-S3-04` (i18n/RTL): large product decision — **deferred**, documented.
+
+---
+
+## Phase 3 & 4 — Remediation status
+
+Branch `fix/tectonic-win-arm64-sidecar`. 13 atomic commits. Every code batch verified
+with `tsc --noEmit`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and
+`vitest run` (full suite: **581 frontend + 257 Rust tests green**; baseline was 6 red).
+`cargo tauri build` was NOT run (slow/uncertain on this Windows-ARM host) — bundle-level
+items are marked NEEDS-PLATFORM-VERIFY.
+
+### Fixed (29)
+
+| ID | Sev | Commit |
+|---|---|---|
+| TW-S1-01 tests.yml gate non-functional | S1 | 9f6e47c + 49f4be0 |
+| TW-S1-02 crash-restore stale editor | S1 | ce19bf7 |
+| TW-S1-03 theme-store localStorage (Node 22+) | S1 | 9f6e47c |
+| TW-S1-04 fetch-tectonic test parse failure | S1 | 9f6e47c |
+| TW-S2-01 sync cursor/state torn write | S2 | 4141d37 |
+| TW-S2-05 Sentry egress unscrubbed | S2 | d257d90 |
+| TW-S2-06 / 08 / 23 / 31 export_pandoc unbounded spawn (+tests) | S2 | 59b5312 |
+| TW-S2-09 corrupt settings silent reset | S2 | 4141d37 |
+| TW-S2-10 AI convos don't reload on project switch | S2 | ff4e6f2 |
+| TW-S3-06 / 16 synctex unbounded + 500× PATH scan | S3 | 59b5312 |
+| TW-S3-09 clippy not in CI | S3 | 49f4be0 |
+| TW-S3-10 toolchain unpinned / not --locked | S3 | 49f4be0 |
+| TW-S3-14 stale sentry-pin rationale | S3 | c9c446e |
+| TW-S3-15 broadcast emits leak to preview window | S3 | d257d90 |
+| TW-S3-19 build.yml stale MSI glob | S3 | 49f4be0 |
+| TW-S3-22 history read races the writer | S3 | 4141d37 |
+| TW-S3-24 AI stream no read timeout | S3 | 59b5312 |
+| TW-S3-25 arXiv fallback over http | S3 | d257d90 |
+| TW-S3-26 annotated-PDF unbounded lopdf parse | S3 | 59b5312 |
+| TW-S3-27 linkify-it ReDoS | S3 | c9c446e |
+| TW-S3-28 DOMPurify advisory | S3 | c9c446e |
+| TW-S3-29 export spinner on all rows | S3 | ff4e6f2 |
+| TW-S3-01 desktop-only exports shown on mobile | S3 | ff4e6f2 |
+| TW-S3-02 boot splash ignores reduced-motion | S3 | 85a6675 |
+| TW-S3-11 copy-path via navigator.clipboard | S3 | ff4e6f2 |
+| clippy warnings (sort_by_key ×3, from_ref ×3, too_many_args) | S3 | 49f4be0 |
+
+### Proposed — need a decision or a platform I can't build here (7)
+
+- **TW-S2-02 / TW-S2-07 — no macOS Intel / universal build.** Add an
+  `x86_64-apple-darwin` leg (or `universal-apple-darwin`) to `release.yml`/`build.yml`.
+  Mechanical, but I can't build/sign macOS here → NEEDS-PLATFORM-VERIFY. Decision:
+  ship universal (bigger, one artifact) vs a separate Intel dmg.
+- **TW-S2-03 — local images use raw `file://`** (broken on WKWebView/WebKitGTK, and
+  WebView2 blocks `file://` from the app origin too). Correct fix = enable Tauri's
+  asset protocol + `convertFileSrc` + CSP `img-src asset:` (+ `http://asset.localhost`
+  on Windows) + a runtime asset-scope grant for the moved projects root. Touches the
+  CSP/security surface and is unverifiable on this host — I did not apply it blind.
+  Recommended and low-code once verifiable on macOS/Linux.
+- **TW-S2-04 — Harper grammar drags the whole `burn` ML stack** into every desktop
+  binary though grammar is Pro-gated and off by default. Removing it is a feature/dep
+  change that can break grammar; options: feature-gate `harper` behind a cargo feature,
+  or accept the size. Needs a size/functionality decision + build verification.
+- **TW-S3-21 — release `opt-level = "s"`.** Size-vs-speed tradeoff for the CPU-bound
+  in-process work (harper, lopdf, sha256). Bumping to `2`/`3` speeds those up but grows
+  the installer. Owner's call; I did not flip it blind.
+- **TW-S3-17 — updater relaunch doesn't flush dirty buffers.** Updater is dormant
+  (no pubkey), so unverifiable at runtime; implement + NEEDS-VERIFY when keys land.
+- **TW-S3-18 — prerelease tags feed the stable updater channel.** Release-logic change
+  in `bump-version.mjs`/`build-latest-json.mjs`; low urgency while the updater is dormant.
+- **TW-S3-20 — FileTree re-reads every expanded dir on each fs event.** Perf refactor
+  (incremental/scoped refresh); moderate, no correctness bug.
+
+### Deferred — low value or churn outweighs benefit (documented)
+
+- **TW-S3-03** synctex inverse-search dblclick → pointer/tap (a11y; touch-handling
+  change, low incidence on desktop).
+- **TW-S3-04** i18n / RTL — no i18n layer at all; a large product decision, not a bug.
+- **TW-S3-05** `history_record` reads settings.json/project.json on the throttled save
+  path. The file read+hash is already skipped by the existing index fast-path; the
+  residual is 3 small JSON reads and the lazy fix needs a closure refactor across ~15
+  test call-sites. Minor perf; recommended follow-up.
+- **TW-S3-07** dead `history_list` command/wrapper — removing it orphans the
+  heavily-tested `list_in_store` and creates a `dead_code` lint in non-test builds.
+- **TW-S3-08** three near-duplicate char-boundary truncation helpers — pure cleanup,
+  no bug; consolidate into one util when convenient.
+- **TW-S3-12** selection/accent tokens rely on `color-mix()` (PLAUSIBLE — needs a check
+  on the oldest supported WebKitGTK; add a fallback if it's missing there).
+- **TW-S3-13** duplicate crate versions (zip ×4, windows-sys ×5, etc.) — almost all
+  transitive; not forceable without upstream bumps. Documented.
+- **TW-S3-30** add a regression test for the destructive `resolve.ts` keep-mine branch
+  (recommended; the code is correct, the coverage is the gap).
+
+### Remaining risks, ranked
+
+1. **Local images broken on macOS/Linux (and likely Windows)** — TW-S2-03. Most
+   user-visible open item; fix is understood but needs device verification.
+2. **No Intel macOS build** — TW-S2-02/07. Excludes Intel Macs from the stated macOS 12+
+   target until the release matrix gains the leg.
+3. **Installer bloat from `burn`** — TW-S2-04. Ships a large ML stack for an off-by-default
+   Pro feature.
+4. Everything else is S3 polish/perf with no correctness or security exposure.
+
+### Highest-leverage follow-ups
+
+1. Verify + land TW-S2-03 (asset protocol) on a Mac/Linux box — restores figures everywhere.
+2. Add the macOS Intel/universal release leg (TW-S2-02/07).
+3. Decide on Harper/`burn` feature-gating (TW-S2-04) before the first signed release.
