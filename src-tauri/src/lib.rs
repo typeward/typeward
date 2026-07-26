@@ -633,8 +633,14 @@ fn first_open_with_path<I: Iterator<Item = String>>(
 /// again from `save_settings` when it changes, so the move takes effect without
 /// a restart.
 pub(crate) fn grant_projects_root_fs_scope(app: &tauri::AppHandle, root: &std::path::Path) {
+    use tauri::Manager;
     use tauri_plugin_fs::FsExt;
     // The only failure mode is a path that can't be turned into a glob pattern;
     // the static capability scope still covers the default root in that case.
     let _ = app.fs_scope().allow_directory(root, true);
+    // The asset protocol serves local figures (.md preview + visual-editor
+    // images) to the webview as subresources via convertFileSrc; widen its scope
+    // to the configured root too so a moved projects root keeps rendering images
+    // (mirrors fs_scope; the static assetProtocol scope covers the default root).
+    let _ = app.asset_protocol_scope().allow_directory(root, true);
 }
