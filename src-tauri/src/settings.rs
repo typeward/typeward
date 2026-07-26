@@ -658,16 +658,27 @@ pub fn load(app_handle: &tauri::AppHandle) -> Result<Settings, SettingsError> {
             // Corrupt settings.json (partial/torn write, disk glitch, bad hand
             // edit). Preserve the original bytes as a `.corrupt` sibling BEFORE
             // returning defaults — otherwise the next save() overwrites and
-            // permanently destroys the user's real settings. Booting with
-            // defaults keeps the app usable; the backup makes it recoverable
-            // and non-silent.
+            // permanently destroys the user's real settings. Only degrade to
+            // defaults once the backup actually succeeded; if the rename fails
+            // (e.g. a transient Windows sharing violation from AV/indexer),
+            // propagate the error and keep the pre-fix behaviour so nothing
+            // overwrites the still-present real file.
             let backup = path.with_file_name("settings.json.corrupt");
-            let _ = fs::rename(&path, &backup);
-            eprintln!(
-                "[settings] settings.json was unreadable ({e}); backed up to {} and reset to defaults.",
-                backup.display()
-            );
-            Ok(Settings::default())
+            match fs::rename(&path, &backup) {
+                Ok(()) => {
+                    eprintln!(
+                        "[settings] settings.json was unreadable ({e}); backed up to {} and reset to defaults.",
+                        backup.display()
+                    );
+                    Ok(Settings::default())
+                }
+                Err(rename_err) => {
+                    eprintln!(
+                        "[settings] settings.json was unreadable ({e}) and could not be backed up ({rename_err}); refusing to reset."
+                    );
+                    Err(e.into())
+                }
+            }
         }
     }
 }
