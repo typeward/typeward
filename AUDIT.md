@@ -854,3 +854,26 @@ items are marked NEEDS-PLATFORM-VERIFY.
 1. Verify + land TW-S2-03 (asset protocol) on a Mac/Linux box — restores figures everywhere.
 2. Add the macOS Intel/universal release leg (TW-S2-02/07).
 3. Decide on Harper/`burn` feature-gating (TW-S2-04) before the first signed release.
+
+---
+
+## Update — after owner decisions (2026-07-26)
+
+- **TW-S2-03 (local images) — IMPLEMENTED, NEEDS-PLATFORM-VERIFY.** Enabled Tauri's
+  asset protocol: `app.security.assetProtocol` in tauri.conf.json (scope
+  `$DOCUMENT/Typeward/**`) + the `protocol-asset` cargo feature; `fileUrlFromPath`
+  now returns `convertFileSrc(absPath)` (with a `file://` fallback outside a Tauri
+  webview for tests); CSP `img-src` gained `asset: http://asset.localhost`; and
+  `grant_projects_root_fs_scope` also widens the asset-protocol scope to the
+  configured (possibly moved) projects root. **Verify** figures render in the `.md`
+  preview and visual editor on macOS (WKWebView), Linux (WebKitGTK) and Windows
+  (WebView2) — see CHECKLIST.md. The `file:` token stays in the CSP only for the
+  test fallback path.
+- **TW-S2-02 / TW-S2-07 (macOS Intel) — IMPLEMENTED, NEEDS-PLATFORM-VERIFY.** Added a
+  separate `x86_64-apple-darwin` leg (runner `macos-13`) to `build.yml` and
+  `release.yml`. To avoid an artifact-name collision between the two macOS legs,
+  release.yml now names the per-leg artifact `release-bundle-<target>` and adds a
+  stable `Typeward-macos-x64.dmg` copy. **Verify** the Intel dmg builds + runs on an
+  Intel Mac (can't build/sign macOS from the dev host).
+- **TW-S2-04 (Harper/burn bloat) — DECLINED by owner; left as-is** (grammar stays
+  always-compiled). Revisit before the first signed release if installer size matters.
