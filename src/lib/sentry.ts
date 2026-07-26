@@ -11,6 +11,33 @@ const DSN =
 let initialized = false;
 
 /**
+ * Redact absolute filesystem paths that would carry the user's identity before
+ * an event leaves the machine — the frontend mirror of the Rust submission
+ * scrubber (diagnostics.rs). Home directories collapse to `~`; other Windows
+ * paths collapse to their basename. The "Share crash reports" consent promises
+ * scrubbed reports, so error messages / breadcrumbs (which routinely embed IPC
+ * paths) must not ship raw. URL-safe: the drive-letter form can't match http
+ * URLs, and the home patterns only touch `Users`/`home` segments.
+ */
+export function scrubPaths(s: string): string {
+  return s
+    .replace(/[A-Za-z]:[\\/]Users[\\/][^\\/\s"']+/gi, "~")
+    .replace(/\/(?:Users|home)\/[^/\s"']+/g, "~")
+    .replace(/[A-Za-z]:[\\/](?:[^\\/\s"']+[\\/])+([^\\/\s"']+)/g, "$1");
+}
+
+function scrubEvent(event: Sentry.ErrorEvent): Sentry.ErrorEvent {
+  if (event.message) event.message = scrubPaths(event.message);
+  for (const ex of event.exception?.values ?? []) {
+    if (ex.value) ex.value = scrubPaths(ex.value);
+  }
+  for (const bc of event.breadcrumbs ?? []) {
+    if (bc.message) bc.message = scrubPaths(bc.message);
+  }
+  return event;
+}
+
+/**
  * Crash/error reporting via Sentry. This module is loaded ONLY through a
  * dynamic import (see sentry-gate.ts): a static entry import would blow the
  * check-bundle-shape boot-path ceiling. The ingest host must stay
@@ -26,6 +53,10 @@ export function initSentry(): void {
     // Errors only, deliberately: the "Share crash reports" opt-in consents to
     // crash/error reports and nothing broader. Don't add tracing, session
     // replay, or log forwarding without widening that consent copy first.
+    sendDefaultPii: false,
+    // Scrub absolute filesystem paths (identity) before egress, matching the
+    // Rust submission scrubber and the consent copy's "scrubbed" promise.
+    beforeSend: scrubEvent,
   });
 }
 

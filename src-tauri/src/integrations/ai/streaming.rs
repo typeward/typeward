@@ -206,7 +206,7 @@ async fn ai_stream_start_inner(
             }),
         };
         if let Some(event) = final_event {
-            let _ = app_for_task.emit(&event_name(&stream_id), event);
+            let _ = app_for_task.emit_to(crate::ipc_guard::MAIN_LABEL, &event_name(&stream_id), event);
         }
     });
 
@@ -342,7 +342,7 @@ fn emit_delta(app: &AppHandle, stream_id: &str, delta: &str) {
         delta: Some(delta.to_string()),
         error: None,
     };
-    let _ = app.emit(&event_name(stream_id), payload);
+    let _ = app.emit_to(crate::ipc_guard::MAIN_LABEL, &event_name(stream_id), payload);
 }
 
 /// Decode a raw transport chunk whose boundaries need not align with

@@ -146,7 +146,8 @@ fn watch_project_impl(
                     kind: last_kind,
                     paths,
                 };
-                if let Err(e) = emit_app.emit(&event_name, payload) {
+                if let Err(e) = emit_app.emit_to(crate::ipc_guard::MAIN_LABEL, &event_name, payload)
+                {
                     eprintln!("[watcher:{}] emit failed: {}", log_id, e);
                 }
             }

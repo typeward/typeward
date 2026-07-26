@@ -92,7 +92,7 @@ async function lookupArxiv(arxivId: string): Promise<LookupResult> {
 }
 
 async function lookupArxivAtom(arxivId: string): Promise<LookupResult> {
-  const url = `http://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`;
+  const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(arxivId)}`;
   const res = await httpRequest({ method: "GET", url, headers: { Accept: "application/atom+xml" } });
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`arXiv lookup failed (status ${res.status}): ${arxivId}`);
