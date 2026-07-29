@@ -1,0 +1,8 @@
+# Pin the Rust toolchain so a release rebuilt from the same tag uses the same
+# compiler (CI previously floated on the moving `stable` channel). 1.94.1 is the
+# version this codebase — including harper-core 2.7 without the old vendor patch
+# — is verified to build on. Bumping is a deliberate, separate step (re-run
+# clippy + tests on the new compiler first).
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]

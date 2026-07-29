@@ -59,7 +59,9 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: |
+            app/package-lock.json
+            texlive-wasm/package-lock.json
 
       - name: Build texlive-wasm sibling
         working-directory: texlive-wasm
@@ -159,8 +161,20 @@ jobs:
           cargo audit "${IGNORES[@]}"
 
   rust:
-    name: Cargo tests
-    runs-on: ubuntu-24.04
+    # Test on Linux AND Windows: cfg(windows)-gated paths (the compile
+    # tree-kill via taskkill, credential blob chunking, path handling) never
+    # even compiled in per-PR CI before, so a Windows-only break surfaced only
+    # at release time.
+    name: Cargo tests (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-24.04
+          - os: windows
+            runner: windows-latest
     steps:
       - name: Checkout app
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -170,14 +184,19 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to match src-tauri/rust-toolchain.toml; rustfmt + clippy for
+          # the static-analysis gates below.
+          toolchain: '1.94.1'
+          components: rustfmt, clippy
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: app/src-tauri -> target
+          key: ${{ matrix.os }}
 
       - name: Install Linux system deps
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -203,9 +222,18 @@ jobs:
         run: npm run fetch:tectonic
 
       - name: Symlink Tectonic for the gnu triple
+        if: matrix.os == 'linux'
         run: |
           cd app/src-tauri/binaries
           ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
+      - name: Rustfmt
+        if: matrix.os == 'linux'
+        run: cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+
+      - name: Clippy
+        if: matrix.os == 'linux'
+        run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: Cargo test
         run: cargo test --manifest-path app/src-tauri/Cargo.toml

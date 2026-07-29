@@ -141,13 +141,16 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: app/package-lock.json
+          cache-dependency-path: |
+            app/package-lock.json
+            texlive-wasm/package-lock.json
 
       - name: Set up Rust
         if: steps.gate.outputs.build == 'true'
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to match src-tauri/rust-toolchain.toml (reproducible builds).
+          toolchain: '1.94.1'
           targets: ${{ matrix.target }}
 
       - name: Cargo cache
