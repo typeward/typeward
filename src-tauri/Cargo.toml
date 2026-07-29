@@ -69,9 +69,12 @@ lopdf = { version = "0.43", default-features = false }
 # Grammar — Phase 5 (upgraded to Harper 2.x for E6). Rust-native, runs
 # in-process, zero network. `harper-tex` / `harper-typst` are Harper's
 # first-party format parsers so LaTeX/Typst markup is skipped, not linted.
-harper-core = "2.5"
-harper-tex = "2.5"
-harper-typst = "2.5"
+# 2.7.0 builds cleanly on current stable rustc (their CI tracks it and fixed
+# the rustc-1.97 clippy warnings), so the vendor/harper-core patch that worked
+# around the 2.5.0 E0308 build break is gone — see the removed [patch] note.
+harper-core = "2.7"
+harper-tex = "2.7"
+harper-typst = "2.7"
 
 # WebDAV cloud provider. quick-xml is non-validating (immune to XXE /
 # entity-expansion by construction) so it can parse attacker-controlled
@@ -112,18 +115,6 @@ trash = "5"
 # in the transitive graph, so this adds no new compile weight.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-# harper-core 2.5.0 (the latest published release, and current `master`) fails
-# to compile on rustc >= ~1.93: three lint rules call `then_kind_any` /
-# `then_kind_any_but_not` with a bare `&[fn_a, fn_b, fn_c]` array of distinct
-# fn-item types, which newer rustc no longer unifies into the generic
-# `&'static [F]` parameter (E0308). Upstream already fixed the same class of
-# call elsewhere (e.g. `soon_to_be.rs` casts `as fn(&TokenKind) -> bool`) but
-# missed these three. We vendor a copy carrying only that fix (tests/benches
-# stripped) until a fixed harper-core is published, then this block + the
-# vendor/ dir can be deleted and the crates.io release used directly.
-[patch.crates-io]
-harper-core = { path = "vendor/harper-core" }
 
 [profile.release]
 panic = "abort"
