@@ -212,7 +212,16 @@ function restoreFileContent(file: OpenFile): void {
     const i = prev.findIndex((f) => f.path === file.path);
     if (i < 0) return [...prev, { ...file, dirty: true }];
     const next = prev.slice();
-    next[i] = { ...next[i], content: file.content, dirty: true };
+    // Bump adoptGeneration so the already-mounted CodeMirror remounts and
+    // adopts the recovered bytes — `text-shell` keys the editor on it. Without
+    // this, crash recovery updated the store but the live view kept showing the
+    // stale disk content and the next edit/save overwrote the recovery.
+    next[i] = {
+      ...next[i],
+      content: file.content,
+      dirty: true,
+      adoptGeneration: (next[i].adoptGeneration ?? 0) + 1,
+    };
     return next;
   });
   if (activeIndex() < 0) setActiveIndex(0);

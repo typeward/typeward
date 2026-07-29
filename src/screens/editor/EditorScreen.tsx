@@ -362,20 +362,17 @@ const EditorScreen: Component = () => {
       }
     })();
   };
-  createEffect(() => {
+  // Derive the title through a memo so the setTitle IPC fires only when the
+  // string actually changes — `activeFile()` re-derives on every keystroke
+  // (the buffer content lives in it), and calling setTitle per keystroke is a
+  // needless IPC round-trip.
+  const windowTitle = createMemo(() => {
     const p = project();
-    const f = activeFile();
-    if (!p) {
-      setWindowTitle("Typeward");
-      return;
-    }
-    const fileName = f?.relPath.split(/[\\/]/).pop();
-    setWindowTitle(
-      fileName
-        ? `${fileName} — ${p.name} — Typeward`
-        : `${p.name} — Typeward`,
-    );
+    if (!p) return "Typeward";
+    const fileName = activeFile()?.relPath.split(/[\\/]/).pop();
+    return fileName ? `${fileName} — ${p.name} — Typeward` : `${p.name} — Typeward`;
   });
+  createEffect(() => setWindowTitle(windowTitle()));
   onCleanup(() => setWindowTitle("Typeward"));
 
   const openFile = async (

@@ -29,16 +29,22 @@ const todos = createRoot(() => {
     },
     async ([root]) => {
       try {
-        return await ipc.scanProjectTodos(root);
+        // Tag with the root so a project switch can't surface the previous
+        // project's markers during the in-flight rescan (createResource keeps
+        // the last resolved value while refetching).
+        return { root, items: await ipc.scanProjectTodos(root) };
       } catch {
-        return [] as ipc.TodoItem[];
+        return { root, items: [] as ipc.TodoItem[] };
       }
     },
-    { initialValue: [] as ipc.TodoItem[] },
+    { initialValue: { root: null as string | null, items: [] as ipc.TodoItem[] } },
   );
   return res;
 });
 
-export const scannedTodos = (): ipc.TodoItem[] => todos() ?? [];
+export const scannedTodos = (): ipc.TodoItem[] => {
+  const snapshot = todos();
+  return snapshot && snapshot.root === project()?.rootPath ? snapshot.items : [];
+};
 export const todoCount = (): number =>
   scannedTodos().length + openTodoThreadCount();
