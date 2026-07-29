@@ -9,12 +9,19 @@
 //! When the CLI isn't on PATH we return `Ok(None)` so the frontend can
 //! quietly disable sync features instead of erroring.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::project;
+
+/// A synctex lookup is a single indexed seek — seconds at worst on a big
+/// `.synctex.gz`. `export_annotated` drives up to 500 of these in a row over
+/// project data an attacker can shape, so each one is bounded rather than
+/// trusted to return.
+const SYNCTEX_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForwardLocation {
@@ -53,13 +60,19 @@ pub fn forward(
     // synctex view -i <line>:<col>:<file> -o <pdf>. Spawn the absolute path,
     // not the bare name, so the binary is never resolved from a current dir.
     let input = format!("{line}:1:{}", source_file.display());
-    let output = Command::new(&synctex)
-        .args(["view", "-i", &input, "-o"])
-        .arg(pdf_path)
-        .output()
+    let args: Vec<&OsStr> = vec![
+        OsStr::new("view"),
+        OsStr::new("-i"),
+        OsStr::new(&input),
+        OsStr::new("-o"),
+        pdf_path.as_os_str(),
+    ];
+    let output = crate::proc::run_bounded_sync(&synctex, &args, None, SYNCTEX_TIMEOUT)
         .map_err(|e| format!("synctex spawn failed: {e}"))?;
 
-    if !output.status.success() {
+    // A killed-on-deadline run has no usable answer; degrade to "no sync"
+    // exactly like a non-zero exit rather than failing the whole export.
+    if output.timed_out || !output.success() {
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout);
@@ -84,12 +97,11 @@ pub fn inverse(
     // synctex edit -o <page>:<x>:<y>:<pdf>. Spawn the absolute path, not the
     // bare name, so the binary is never resolved from a current dir.
     let arg = format!("{page}:{x}:{y}:{}", pdf_path.display());
-    let output = Command::new(&synctex)
-        .args(["edit", "-o", &arg])
-        .output()
+    let args: Vec<&OsStr> = vec![OsStr::new("edit"), OsStr::new("-o"), OsStr::new(&arg)];
+    let output = crate::proc::run_bounded_sync(&synctex, &args, None, SYNCTEX_TIMEOUT)
         .map_err(|e| format!("synctex spawn failed: {e}"))?;
 
-    if !output.status.success() {
+    if output.timed_out || !output.success() {
         return Ok(None);
     }
     let text = String::from_utf8_lossy(&output.stdout);

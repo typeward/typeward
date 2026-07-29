@@ -87,6 +87,8 @@ fn run(
         // Bound the per-annotation synctex spawns — review threads come from a
         // project-local sidecar a cloned repo could ship with thousands of
         // entries (mirrors todo_scan's caps). Excess is reported, not silent.
+        // The COUNT is capped here; each individual spawn is separately
+        // deadline-bounded inside synctex::forward (see proc::run_bounded_sync).
         if idx >= MAX_ANNOTATIONS {
             skipped.push(skip(ann, "annotation limit reached (max 500)"));
             continue;

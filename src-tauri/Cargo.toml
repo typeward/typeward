@@ -69,9 +69,8 @@ lopdf = { version = "0.43", default-features = false }
 # Grammar — Phase 5 (upgraded to Harper 2.x for E6). Rust-native, runs
 # in-process, zero network. `harper-tex` / `harper-typst` are Harper's
 # first-party format parsers so LaTeX/Typst markup is skipped, not linted.
-# 2.7.0 builds cleanly on current stable rustc (their CI tracks it and fixed
-# the rustc-1.97 clippy warnings), so the vendor/harper-core patch that worked
-# around the 2.5.0 E0308 build break is gone — see the removed [patch] note.
+# harper-core is still [patch]ed to a vendored copy (see the block below the
+# deps): 2.7.0 did NOT fix the rustc E0308 build break that 2.5.0 had.
 harper-core = "2.7"
 harper-tex = "2.7"
 harper-typst = "2.7"
@@ -115,6 +114,19 @@ trash = "5"
 # in the transitive graph, so this adds no new compile weight.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# harper-core 2.7.0 (like 2.5.0 before it) does not compile on rustc >= ~1.93:
+# lint rules pass a bare `&[fn_a, fn_b, fn_c]` array of distinct fn-item types to
+# `then_kind_any` / `then_kind_any_but_not`, which newer rustc no longer unifies
+# into the generic `&'static [F]` parameter (E0308: for_free_of_charge.rs,
+# in_demand_in_depth.rs, naked_eye.rs). Upstream already uses the fix elsewhere
+# (`soon_to_be.rs` casts the first element `as fn(&TokenKind) -> bool`, which
+# coerces the whole array) but still misses these. We vendor a copy of 2.7.0
+# carrying only that cast (tests/benches stripped). Re-check on the next harper
+# release: if it builds clean from crates.io on the pinned toolchain, delete this
+# block and vendor/. (Verified 2026-07-29: 2.7.0 still needs it on rustc 1.94.1.)
+[patch.crates-io]
+harper-core = { path = "vendor/harper-core" }
 
 [profile.release]
 panic = "abort"

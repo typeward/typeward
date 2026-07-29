@@ -1,11 +1,9 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
-use serde::Serialize;
+use std::path::PathBuf;
 
 /// Result of probing the user's PATH for TeX-related binaries. Frontend
 /// onboarding renders one card per engine and shows the first version line.
-#[derive(Debug, Clone, Serialize)]
+#[cfg(desktop)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TexEngine {
     pub name: String,
@@ -14,7 +12,8 @@ pub struct TexEngine {
     pub installed: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[cfg(desktop)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineProbe {
     pub engines: Vec<TexEngine>,
@@ -33,10 +32,12 @@ pub fn resolve_program(name: &str) -> Result<PathBuf, String> {
     which::which(name).map_err(|_| format!("`{name}` was not found on PATH"))
 }
 
+#[cfg(desktop)]
 const ENGINES: &[&str] = &[
     "pdflatex", "xelatex", "lualatex", "latexmk", "tectonic", "typst", "pandoc",
 ];
 
+#[cfg(desktop)]
 pub fn probe() -> EngineProbe {
     let engines: Vec<TexEngine> = ENGINES.iter().map(|&name| probe_one(name)).collect();
     let any_latex_available = engines.iter().any(|e| {
@@ -48,6 +49,7 @@ pub fn probe() -> EngineProbe {
     }
 }
 
+#[cfg(desktop)]
 fn probe_one(name: &str) -> TexEngine {
     let resolved = resolve_program(name).ok();
     let path = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
@@ -60,7 +62,10 @@ fn probe_one(name: &str) -> TexEngine {
     }
 }
 
-fn run_version(name: &str, exe: &Path) -> Option<String> {
+#[cfg(desktop)]
+fn run_version(name: &str, exe: &std::path::Path) -> Option<String> {
+    use std::process::Command;
+
     let flag = match name {
         "tectonic" => "--version",
         "typst" => "--version",

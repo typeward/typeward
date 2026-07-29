@@ -4,9 +4,20 @@
 //! (same convention as `export_project_zip`); the frontend copies the bytes to
 //! the user's chosen destination through the dialog-scoped fs plugin, so no new
 //! arbitrary-destination write primitive is introduced.
+//!
+//! The HTML export is deliberately NOT self-contained: `--embed-resources`
+//! would let an untrusted document have pandoc fetch and inline arbitrary
+//! remote URLs and local files at export time, which is an egress + local-file
+//! read channel outside the app's outbound allowlist. Portability of the
+//! single file is traded away for not handing project content that reach.
+//!
+//! Pandoc runs over attacker-influenceable input (its LaTeX reader expands
+//! macros and follows `\input`), so the spawn goes through the compile crate's
+//! bounded runner — deadline, process-tree kill, capped capture — rather than
+//! a raw `Command::output()`.
 
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
 
 use crate::project::{Project, ProjectFormat};
 
@@ -14,16 +25,19 @@ use crate::project::{Project, ProjectFormat};
 /// (which is also what lands in telemetry).
 const MAX_STDERR_BYTES: usize = 4096;
 
+/// Generous but finite: a book-length conversion is minutes, an expansion loop
+/// is forever.
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The `--version` probe answers immediately or something is wrong.
+const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[tauri::command]
 pub async fn export_pandoc(project: Project, format: String) -> Result<String, String> {
-    // Off the event-loop thread: `which` PATH-scans and pandoc can run for
-    // several seconds on a large document.
-    tokio::task::spawn_blocking(move || run(project, &format))
-        .await
-        .map_err(|e| e.to_string())?
+    run(project, &format).await
 }
 
-fn run(project: Project, format: &str) -> Result<String, String> {
+async fn run(project: Project, format: &str) -> Result<String, String> {
     let to = match format {
         "docx" => "docx",
         "html" => "html",
@@ -39,7 +53,7 @@ fn run(project: Project, format: &str) -> Result<String, String> {
     let from = match project.format {
         ProjectFormat::Latex => "latex",
         ProjectFormat::Typst => {
-            require_pandoc_typst(&pandoc)?;
+            require_pandoc_typst(&pandoc).await?;
             "typst"
         }
     };
@@ -52,23 +66,27 @@ fn run(project: Project, format: &str) -> Result<String, String> {
     // relative `\input`/`\includegraphics`/image paths resolve, while the
     // program itself is never resolved from the (untrusted) project dir. The
     // root file is validated (leading-dash guard) so it can't inject a flag.
-    let mut cmd = Command::new(&pandoc);
-    cmd.current_dir(&root)
-        .arg("-f")
-        .arg(from)
-        .arg("-t")
-        .arg(to)
-        .arg("--standalone");
-    if to == "html" {
-        // Inline CSS/images so the exported file is a single portable document.
-        cmd.arg("--embed-resources");
-    }
-    cmd.arg("-o").arg(&out).arg(&root_file);
+    let args: Vec<String> = vec![
+        "-f".into(),
+        from.into(),
+        "-t".into(),
+        to.into(),
+        "--standalone".into(),
+        "-o".into(),
+        out.to_string_lossy().into_owned(),
+        root_file.clone(),
+    ];
 
-    let output = cmd
-        .output()
+    let output = crate::compile::run_bounded_external(&pandoc, &args, &root, EXPORT_TIMEOUT)
+        .await
         .map_err(|e| format!("pandoc spawn failed: {e}"))?;
-    if !output.status.success() {
+    if output.timed_out {
+        return Err(format!(
+            "pandoc export timed out after {} minutes — the document may expand without end",
+            EXPORT_TIMEOUT.as_secs() / 60
+        ));
+    }
+    if !output.success() {
         let stderr = cap(&String::from_utf8_lossy(&output.stderr), MAX_STDERR_BYTES);
         return Err(format!("pandoc export failed: {stderr}"));
     }
@@ -79,11 +97,16 @@ fn run(project: Project, format: &str) -> Result<String, String> {
 /// Pandoc gained the Typst reader in 3.1.12. Reject older builds with an
 /// actionable message rather than letting pandoc emit an opaque
 /// "unknown input format typst".
-fn require_pandoc_typst(pandoc: &Path) -> Result<(), String> {
-    let output = Command::new(pandoc)
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("pandoc spawn failed: {e}"))?;
+async fn require_pandoc_typst(pandoc: &Path) -> Result<(), String> {
+    let cwd = pandoc.parent().unwrap_or(Path::new("."));
+    let output = crate::compile::run_bounded_external(
+        pandoc,
+        &["--version".to_string()],
+        cwd,
+        VERSION_PROBE_TIMEOUT,
+    )
+    .await
+    .map_err(|e| format!("pandoc spawn failed: {e}"))?;
     let text = String::from_utf8_lossy(&output.stdout);
     let ver = text
         .lines()
