@@ -12,8 +12,9 @@ deferred are not re-flagged here.
 - **Backend**: `src-tauri/src/` — Rust, ~17.6k LOC, **113 `#[tauri::command]`s** across 23 files.
   IPC facade in `commands.rs` (37), then `git.rs` (13), `webdav.rs` (6), `history.rs` (6),
   `grammar/mod.rs` (6), `credentials.rs` (5), `compile.rs` (5), rest smaller.
-- **Vendored**: `src-tauri/vendor/harper-core` — patched copy of harper-core 2.5.0 (rustc ≥1.93
-  E0308 build fix; `[patch.crates-io]`).
+- **Vendored**: `src-tauri/vendor/harper-core` — patched copy of harper-core (rustc ≥1.93 E0308
+  build fix; `[patch.crates-io]`). Bumped to **2.7.0** in this pass; the fix is still required
+  (verified empirically on rustc 1.94.1 — see §2).
 - **Sibling deps**: `../texlive-wasm` (`file:` dep, mobile WASM TeX engine; CI pins commit via
   `package.json config.texliveWasm`), `../infrastructure` (Supabase SQL, separate repo).
 - **Configs**: `src-tauri/tauri.conf.json` (+ `tauri.android.conf.json` / `tauri.ios.conf.json`
@@ -118,9 +119,10 @@ in this pass** (see §3 status column and UPGRADE_NOTES.md).
 
 - **@solidjs/router 0.16.1 → 1.0.0** — changelog states functionally identical to 0.16.x, no
   breaking changes (stability declaration alongside SolidStart 2.0). Requires explicit range bump.
-- **harper 2.5.0 → 2.7.0** — upstream now builds on rustc 1.97 (their 2.7.0 fixes "new clippy
-  warnings in rust 1.97.0"; the external PR for our exact E0308 was closed as already-fixed).
-  **Lets us delete `vendor/harper-core` + the `[patch.crates-io]` block.** Verify empirically.
+- **harper 2.5.0 → 2.7.0** — bumped to 2.7.0. The research suggested this might let us delete the
+  vendor patch, but **empirical test on rustc 1.94.1 shows 2.7.0 still fails with the same E0308
+  fn-item-array class** (4 sites), so `vendor/harper-core` + the `[patch.crates-io]` block STAY,
+  re-created at 2.7.0. (harper's CI fixed 1.97 *clippy* warnings, not this hard error.)
 - **zip 2.4.2 → 8.x** — our usage (ZipWriter::start_file/deflate; ZipArchive by_index) is stable
   across 3–8 per changelog; MSRV 1.88 (met after toolchain bump). Removes one of four zip copies
   (harper pins 8.6.0). 9.0 is prerelease — do not take.
@@ -252,4 +254,50 @@ Status: **fixed** (this pass), **deferred** (documented, lower value or risk), *
 - **Windows/Linux OS floor copy** — user-facing "requirements" should say Win10 1803+ and
   webkit2gtk-4.1 (Ubuntu 22.04+), not the stale "Windows 7".
 
-_Section 4 (verification) is filled in after the fix pass._
+## 4. Verification
+
+All gates run on this host (Windows 11, rustc 1.94.1, Node 24) after the fix pass:
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --check` | **pass** (no diff) |
+| `cargo clippy --all-targets -- -D warnings` | **pass** (0 issues; 4 pre-existing warnings fixed so the new CI gate holds) |
+| `cargo test` | **pass** — 262 passed, 0 failed, 1 ignored |
+| `cargo build --release` (LTO profile) | **pass** (verified via true cargo exit code, not a pipeline's) |
+| `cargo audit` | 3 advisories remain, all triaged: quick-xml 0.39.4 ×2 (Linux build-time only, dated ignore in CI) + ammonia now patched; the libgit2 CVE cluster is cleared |
+| `tsc --noEmit` (typecheck) | **pass** |
+| `vitest` | **pass** — 576 passed (was 575; +1 new menu-bridge allowlist test) |
+| `npm run build` (Rolldown/Vite 8.1) | **pass** |
+| `npm run check:bundle` (boot budget) | **pass** — 2 boot chunks, 33 KB boot JS, heavy vendors lazy |
+| `npm audit` | **0 vulnerabilities** |
+
+### Per-platform notes
+
+- **Windows (host)**: fully built + tested here. The CI Cargo job now also runs on
+  `windows-latest`, so `cfg(windows)` paths (compile tree-kill via `taskkill /T`, credential
+  blob chunking) compile and test in PR CI for the first time.
+- **Linux**: not built here. CI covers it (ubuntu-24.04). Release AppImage leg should move to
+  ubuntu-22.04 (glibc floor) — logged, not yet changed pending the OS-floor decision.
+- **macOS**: not buildable on this host (no macOS runner). CI covers the build; signing/notarization
+  path unchanged. Manual smoke-test one installer per the release runbook.
+- **Android/iOS**: unchanged (Phase 3 gated; Android still blocked on keyring, iOS untouched).
+
+### What was deliberately NOT changed (with reasons)
+
+- **harper vendor patch** — kept (harper 2.7.0 still hits E0308 on the pinned toolchain).
+- **ESLint / Prettier** — not adopted (dev-advisory reintroduction / 293-file mass reformat; see §3
+  + UPGRADE_NOTES). `.editorconfig` added.
+- **Dead frontend exports, `gen/` gitignore, CodeMirror per-keystroke store write, visual-editor
+  field-rebuild perf, nested-verbatim edit guards** — deferred with rationale in §3 (risk vs value,
+  or touches the property-test-guarded parser).
+- **git2 0.21, sentry unpin, zip 8, TS 7, katex 0.18, edition 2024, jsdom 30, keyring 4,
+  Isolation Pattern, macOS Intel leg, OS-floor copy** — needs-decision / opt-in migrations (§3.1,
+  UPGRADE_NOTES). The security-relevant subset was low-risk-checked; none is a blocker.
+
+### Manual verification still recommended
+
+- Launch `npm run tauri dev` and smoke-test: crash-recovery adopts recovered content (H2); the
+  visual-edit popover closes on a file switch and Apply targets the right file (M5); a drag-dropped
+  file still imports but a fabricated path is rejected (H1); shell-escape shows exactly one native
+  confirmation (M3); pandoc export completes/aborts cleanly (M1).
+- One installer per OS from a release dry-run (the `npm ci` fix means every leg now installs deps).

@@ -13,12 +13,15 @@ things you must do by hand. Companion to `docs/AUDIT.md`.
 | tauri (+ tauri-build/runtime/runtime-wry/codegen/macros/utils, tray-icon) | 2.11.1 → **2.11.5** | currency | Patch line: scope + listener deadlock prevention, **Windows HDC handle leak fix** (undecorated-window resize perf on the ship platform), async custom-protocol handler loading. No capabilities/permissions/fs-scope model change. GHSA-7gmj-67g7-phm9 (origin confusion, Win/Android) was already patched in 2.11.1 — keep the ≥2.11.1 floor. |
 | tao | 0.35.2 → 0.35.3 | currency | In-range for tauri 2.11 (do not chase 0.36 until tauri bumps its requirement). |
 | tauri-plugin-single-instance | 2.4.2 → 2.4.3 | currency | macOS: tokio UnixListener (yields instead of blocking a thread). |
-| **harper-core / harper-tex / harper-typst** | 2.5.0 → **2.7.0** | major-ish | Upgraded to the crates.io release; **`vendor/harper-core` + the `[patch.crates-io]` block deleted**. Grammar tests + a clean release build verified. See the "harper vendor patch" note under Verification below. |
+| **harper-core / harper-tex / harper-typst** | 2.5.0 → **2.7.0** | major-ish | Upgraded to the 2.7.0 release. **The vendor patch stays** — 2.7.0 from crates.io still fails to compile on rustc 1.94.1 with 4 E0308 errors (`for_free_of_charge.rs`, `in_demand_in_depth.rs`, `naked_eye.rs` — same fn-item-array unification class as 2.5.0; **verified empirically 2026-07-29** by removing the patch and rebuilding). `vendor/harper-core` was re-created at 2.7.0 carrying only the `as fn(...)` cast fix. Re-check on the next harper release. |
 | quick-xml (direct) | already 0.41.0 | — | Load-bearing for WebDAV PROPFIND parsing — keep the ≥0.41 floor. The residual transitive 0.39.4 (RUSTSEC-2026-0194/0195) is pinned by `wayland-scanner`, a Linux build-time proc-macro parsing trusted vendored XML — not runtime-exploitable; kept as a documented, dated `cargo audit` ignore in `tests.yml`. |
 
 **Rust toolchain** pinned via new `src-tauri/rust-toolchain.toml` (channel 1.94.1
 + rustfmt/clippy) so CI stops floating on `stable`. A later bump to 1.97.1 is a
-separate, deliberate step (re-run clippy + tests first).
+separate, deliberate step (re-run clippy + tests first) — note it may still trip
+the harper-core E0308 (harper CI fixed the 1.97 *clippy* warnings, not this hard
+error), so keep the vendor patch until a harper release builds clean on the new
+pin.
 
 ### Deliberately NOT bumped (needs-decision — see AUDIT §3.1)
 - **git2 0.20 → 0.21** (clears RUSTSEC-2026-0183/0184, unsound APIs we don't call
