@@ -519,16 +519,16 @@ fn system_tex_flags(
 /// What a bounded compiler run produced. `status: None` with `timed_out` set
 /// means the deadline killed it; `cancelled` means the user's cancel flag
 /// killed it first. Partial output is still captured either way.
-struct BoundedOutput {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+pub(crate) struct BoundedOutput {
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
     status: Option<std::process::ExitStatus>,
-    timed_out: bool,
+    pub(crate) timed_out: bool,
     cancelled: bool,
 }
 
 impl BoundedOutput {
-    fn success(&self) -> bool {
+    pub(crate) fn success(&self) -> bool {
         self.status.map(|s| s.success()).unwrap_or(false)
     }
 
@@ -794,6 +794,20 @@ async fn run_bounded(
     })
 }
 
+/// Bounded spawn for non-compile tools that still run over untrusted project
+/// content (pandoc export today). Same deadline / tree-kill / capped-capture
+/// machinery as the compile passes — the one chokepoint every subprocess in
+/// this crate goes through — minus the cancel channel, which only the compile
+/// IPC exposes.
+pub(crate) async fn run_bounded_external(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    timeout: Duration,
+) -> Result<BoundedOutput, String> {
+    run_bounded(program, args, cwd, timeout, COMPILE_OUTPUT_CAP, None).await
+}
+
 /// `! `-prefixed so `parse_latex_log` lifts the timeout into an error
 /// diagnostic in the Issues tab.
 fn latex_timeout_line(tool: &str) -> String {
@@ -820,7 +834,7 @@ async fn run_system_tex(
     // Spawn the absolute path resolved against PATH, never the bare name:
     // `current_dir(root)` would otherwise let Windows' CreateProcess execute a
     // planted `latexmk`/engine binary in a malicious project directory.
-    if let Ok(latexmk) = which::which("latexmk") {
+    if let Ok(latexmk) = crate::detect::resolve_program("latexmk") {
         let mut latexmk_args: Vec<String> = system_tex_flags(
             Some(engine_latexmk_flag(engine)),
             synctex,
@@ -874,7 +888,7 @@ async fn run_system_tex(
     }
 
     let bin_name = engine_binary(engine);
-    let bin = match which::which(bin_name) {
+    let bin = match crate::detect::resolve_program(bin_name) {
         Ok(path) => path,
         Err(_) => {
             accumulated_log.push_str(&format!(
@@ -991,6 +1005,9 @@ fn recipe_passes(
 /// tracks the last engine pass's success (paired with the pdf-exists check in
 /// `compile_latex`). Resolves each program to its absolute path via `which`,
 /// mirroring `run_system_tex`, and spawns that with `current_dir(root)`.
+// Every parameter is an independent compile knob read straight from settings;
+// bundling them into a struct would only move the same list one level out.
+#[allow(clippy::too_many_arguments)]
 async fn run_engine_recipe(
     root_file: &str,
     root: &Path,
@@ -1018,7 +1035,7 @@ async fn run_engine_recipe(
     let mut log = String::new();
     let mut last_engine_ok = false;
     for pass in passes {
-        let resolved = match which::which(&pass.program) {
+        let resolved = match crate::detect::resolve_program(&pass.program) {
             Ok(path) => path,
             Err(_) => {
                 if pass.is_engine {
@@ -1200,7 +1217,7 @@ async fn run_tectonic(
     }
     // Fall back to PATH — resolve the absolute path and spawn that, not the
     // bare name, so `current_dir(root)` can't redirect to a planted binary.
-    let tectonic = match which::which("tectonic") {
+    let tectonic = match crate::detect::resolve_program("tectonic") {
         Ok(path) => path,
         Err(_) => {
             return Err(
@@ -1248,8 +1265,7 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
     // Stale-aux wedge: biblatex macros in the .aux with no biblatex in the
     // current preamble (backend/package switch), or latexmk refusing to act
     // on a previously-failed run. Both clear the same way — clean aux files.
-    if log.contains("\\abx@aux@")
-        || log.contains("gave an error in previous invocation of latexmk")
+    if log.contains("\\abx@aux@") || log.contains("gave an error in previous invocation of latexmk")
     {
         out.push(Diagnostic {
             severity: "warning".into(),
@@ -1319,7 +1335,7 @@ pub async fn compile_typst(
     // CreateProcess search the project dir first, so a planted `typst.exe`
     // in a malicious project would run (argument/binary planting). `which`
     // resolves against the app's CWD/PATH, never the project.
-    let typst = which::which("typst").map_err(|_| {
+    let typst = crate::detect::resolve_program("typst").map_err(|_| {
         "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
             .to_string()
     })?;
@@ -1847,7 +1863,8 @@ mod tests {
             .await
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
-        tx.send(true).expect("the run should still hold its receiver");
+        tx.send(true)
+            .expect("the run should still hold its receiver");
         let out = task
             .await
             .expect("task should join")

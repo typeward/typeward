@@ -12,16 +12,19 @@
 //! mutation via `fs_ops::atomic_write`.
 
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use harper_core::IgnoredLints;
 use tauri::{AppHandle, Manager};
 
 use crate::fs_ops;
 
-#[derive(Default)]
+/// Cloneable (the state is behind an `Arc`) so the commands can move a handle
+/// into `spawn_blocking` — the mutations fsync, which must not run on the main
+/// thread. Every clone shares the one lock.
+#[derive(Default, Clone)]
 pub struct GrammarState {
-    inner: RwLock<GrammarData>,
+    inner: Arc<RwLock<GrammarData>>,
 }
 
 #[derive(Default)]

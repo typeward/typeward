@@ -35,8 +35,16 @@ pub const CURRENT_HISTORY_SCHEMA: u64 = 1;
 
 /// Per-file size cap. Bigger files are silently skipped on ordinary records
 /// (binaries and generated artifacts, not "your work"); the forced pre-restore
-/// snapshot bypasses it so a restore can never drop the current state.
+/// snapshot raises it to `MAX_FORCED_SNAPSHOT_BYTES` so a restore can never
+/// drop the current state.
 const MAX_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Ceiling for the forced pre-restore snapshot. The capture reads the whole
+/// file into memory (plus its hash and gzip buffers), so "no limit" makes a
+/// restore of a file that has since grown huge — a multi-GB log renamed to a
+/// tracked extension is still valid UTF-8 — a memory spike that can take the
+/// app down. Generous enough that no real source file reaches it.
+const MAX_FORCED_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// At most one version per file per this window of continuous editing.
 const MIN_INTERVAL_MS: i64 = 5 * 60 * 1000;
@@ -293,7 +301,19 @@ fn record_in_store(
         return Ok(false);
     }
     let abs = project::resolve_existing_project_path(root, &rel)?;
-    if !forced && fs::metadata(&abs)?.len() > MAX_SNAPSHOT_BYTES {
+    // A forced record (the pre-restore safety snapshot) deliberately bypasses
+    // the normal size gate so a restore is never destructive — but the read
+    // below pulls the whole file into memory, so the bypass still needs a
+    // ceiling. Past it, refusing the restore is the safe outcome: the caller
+    // turns Ok(false) into SafetySnapshotSkipped rather than overwriting a file
+    // it could not capture.
+    let len = fs::metadata(&abs)?.len();
+    let ceiling = if forced {
+        MAX_FORCED_SNAPSHOT_BYTES
+    } else {
+        MAX_SNAPSHOT_BYTES
+    };
+    if len > ceiling {
         return Ok(false);
     }
     // Not valid UTF-8 = a binary wearing a text extension; skip, not error.
@@ -457,6 +477,12 @@ pub async fn history_list(
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
         let store = store_dir(&app, &root)?;
+        // Readers take the same per-project lock as the writers: a concurrent
+        // record's prune + blob GC can delete the blob between an unlocked
+        // index read and the blob read, surfacing as a raw "file not found"
+        // for a version the list just showed.
+        let lock = project_mutex(&project_id(&root));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         list_in_store(&store, &rel_path).map_err(err)
     })
     .await
@@ -484,6 +510,8 @@ pub async fn history_list_project(
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
         let store = store_dir(&app, &root)?;
+        let lock = project_mutex(&project_id(&root));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let index = read_index(&store).map_err(err)?;
         let mut out: Vec<ProjectVersionEntry> = index
             .files
@@ -515,6 +543,8 @@ pub async fn history_read_version(
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
         let store = store_dir(&app, &root)?;
+        let lock = project_mutex(&project_id(&root));
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         read_version_in_store(&store, &rel_path, &hash).map_err(err)
     })
     .await

@@ -107,6 +107,38 @@ fn build_dictionary(words: &[String]) -> Arc<MergedDictionary> {
     Arc::new(merged)
 }
 
+/// Building the curated `LintGroup` instantiates several hundred lint rules —
+/// far more expensive than the lint pass itself, and it was being redone on
+/// every debounced keystroke. Harper's linters are `!Send`, so the cache is
+/// thread-local (tokio's blocking pool reuses threads, so repeated checks hit
+/// it) rather than process-global.
+///
+/// The key is the dictionary content itself, not a revision counter: a changed
+/// personal-dictionary word list hashes differently and rebuilds, so
+/// `grammar_add_word` is reflected by the very next check with no invalidation
+/// plumbing to forget.
+struct CachedLinter {
+    words_hash: u64,
+    dialect: Dialect,
+    dict: Arc<MergedDictionary>,
+    linter: LintGroup,
+}
+
+thread_local! {
+    static LINTER_CACHE: std::cell::RefCell<Option<CachedLinter>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn words_hash(words: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    words.len().hash(&mut hasher);
+    for word in words {
+        word.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// The whole Harper pass, isolated so it stays inside one thread (Harper's
 /// `Rc`-based types never leave it) and is directly unit-testable.
 fn run_check(
@@ -117,10 +149,44 @@ fn run_check(
     words: &[String],
     ignored: &IgnoredLints,
 ) -> Vec<GrammarDiagnostic> {
-    let dict = build_dictionary(words);
+    LINTER_CACHE.with(|cache| {
+        let mut slot = cache.borrow_mut();
+        let hash = words_hash(words);
+        let stale = slot
+            .as_ref()
+            .is_none_or(|c| c.words_hash != hash || c.dialect != dialect);
+        if stale {
+            let dict = build_dictionary(words);
+            let linter = LintGroup::new_curated(dict.clone(), dialect);
+            *slot = Some(CachedLinter {
+                words_hash: hash,
+                dialect,
+                dict,
+                linter,
+            });
+        }
+        let cached = slot.as_mut().expect("just populated above");
+        run_with_linter(
+            text,
+            file,
+            syntax,
+            &cached.dict,
+            &mut cached.linter,
+            ignored,
+        )
+    })
+}
+
+fn run_with_linter(
+    text: &str,
+    file: &str,
+    syntax: GrammarSyntax,
+    dict: &Arc<MergedDictionary>,
+    linter: &mut LintGroup,
+    ignored: &IgnoredLints,
+) -> Vec<GrammarDiagnostic> {
     let document = build_document(text, syntax, dict.as_ref());
 
-    let mut linter = LintGroup::new_curated(dict.clone(), dialect);
     let mut lints = linter.lint(&document);
     ignored.remove_ignored(&mut lints, &document);
 
@@ -170,34 +236,50 @@ pub async fn grammar_check(
         .map_err(|e| e.to_string())
 }
 
+// The dictionary/ignore mutations lazy-load from disk and write through
+// `fs_ops::atomic_write`, whose `sync_all` is an fsync. A sync `#[tauri::command]`
+// runs on the main thread, so every "Add to dictionary" / "Ignore lint" click
+// would stall the event loop for the duration of that fsync on a slow or
+// AV-scanned disk. Each one hops to the blocking pool, like `grammar_check`.
+// `GrammarState` is plain `Send + Sync` data, so only the handle is moved.
+
 #[tauri::command]
-pub fn grammar_add_word(
+pub async fn grammar_add_word(
     app: AppHandle,
     state: State<'_, GrammarState>,
     word: String,
 ) -> Result<(), String> {
-    state.add_word(&app, word)
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || state.add_word(&app, word))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn grammar_remove_word(
+pub async fn grammar_remove_word(
     app: AppHandle,
     state: State<'_, GrammarState>,
     word: String,
 ) -> Result<(), String> {
-    state.remove_word(&app, word)
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || state.remove_word(&app, word))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn grammar_list_words(
+pub async fn grammar_list_words(
     app: AppHandle,
     state: State<'_, GrammarState>,
 ) -> Result<Vec<String>, String> {
-    state.list_words(&app)
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || state.list_words(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn grammar_ignore_lint(
+pub async fn grammar_ignore_lint(
     app: AppHandle,
     state: State<'_, GrammarState>,
     context_hash: String,
@@ -205,12 +287,21 @@ pub fn grammar_ignore_lint(
     let hash: u64 = context_hash
         .parse()
         .map_err(|_| "invalid context hash".to_string())?;
-    state.ignore_hash(&app, hash)
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || state.ignore_hash(&app, hash))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn grammar_clear_ignored(app: AppHandle, state: State<'_, GrammarState>) -> Result<(), String> {
-    state.clear_ignored(&app)
+pub async fn grammar_clear_ignored(
+    app: AppHandle,
+    state: State<'_, GrammarState>,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tokio::task::spawn_blocking(move || state.clear_ignored(&app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 fn suggestion_text(suggestion: &Suggestion) -> String {

@@ -1,0 +1,699 @@
+//! Weir is a programming language for finding errors in natural language.
+//! See our [main documentation](https://writewithharper.com/docs/weir) for more details.
+
+mod ast;
+mod error;
+mod optimize;
+mod parsing;
+
+use std::collections::VecDeque;
+use std::str::FromStr;
+use std::sync::Arc;
+
+pub use error::Error;
+use hashbrown::{HashMap, HashSet};
+use is_macro::Is;
+use parsing::{parse_expr_str, parse_str};
+use strum_macros::{AsRefStr, EnumString};
+
+use crate::expr::{Expr, ExprExt};
+use crate::linting::{
+    Chunk, ExprLinter, Lint, LintKind, Linter, MAX_SUGGESTION_TRANSFORMATION_DEPTH, Sentence,
+    Suggestion,
+};
+use crate::parsers::Markdown;
+use crate::spell::FstDictionary;
+use crate::{Document, Lrc, Token, TokenStringExt};
+
+use self::ast::{Ast, AstVariable};
+
+pub(crate) fn weir_expr_to_expr(weir_code: &str) -> Result<Box<dyn Expr>, Error> {
+    let ast = parse_expr_str(weir_code, true)?;
+    ast.to_expr(&HashMap::new())
+}
+
+#[derive(Debug, Is, EnumString, AsRefStr)]
+enum ReplacementStrategy {
+    MatchCase,
+    Exact,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString)]
+enum WeirScope {
+    Chunk,
+    Sentence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestResult {
+    pub expected: String,
+    pub got: String,
+}
+
+pub struct WeirLinter {
+    expr: Lrc<Box<dyn Expr>>,
+    description: String,
+    message: String,
+    strategy: ReplacementStrategy,
+    replacements: Vec<String>,
+    lint_kind: LintKind,
+    scope: WeirScope,
+    ast: Arc<Ast>,
+}
+
+struct ChunkWeirLinter(WeirLinter);
+
+struct SentenceWeirLinter(WeirLinter);
+
+impl WeirLinter {
+    pub fn new(weir_code: &str) -> Result<WeirLinter, Error> {
+        let ast = parse_str(weir_code, true)?;
+
+        let main_expr_name = "main";
+        let description_name = "description";
+        let message_name = "message";
+        let lint_kind_name = "kind";
+        let replacement_name = "becomes";
+        let replacement_strat_name = "strategy";
+        let scope_name = "scope";
+
+        let resolved = resolve_exprs(&ast)?;
+
+        let expr = resolved
+            .get(main_expr_name)
+            .ok_or(Error::ExpectedVariableUndefined)?;
+
+        let description = ast
+            .get_variable_value(description_name)
+            .ok_or(Error::ExpectedVariableUndefined)?
+            .as_string()
+            .ok_or(Error::ExpectedDifferentVariableType)?
+            .to_owned();
+
+        let message = ast
+            .get_variable_value(message_name)
+            .ok_or(Error::ExpectedVariableUndefined)?
+            .as_string()
+            .ok_or(Error::ExpectedDifferentVariableType)?
+            .to_owned();
+
+        let replacement_val = ast
+            .get_variable_value(replacement_name)
+            .ok_or(Error::ExpectedVariableUndefined)?;
+
+        let replacements = match replacement_val {
+            AstVariable::String(s) => vec![s.to_owned()],
+            AstVariable::Array(arr) => {
+                let mut out = Vec::with_capacity(arr.len());
+                for item in arr.iter().map(|v| {
+                    v.as_string()
+                        .cloned()
+                        .ok_or(Error::ExpectedDifferentVariableType)
+                }) {
+                    let item = item?;
+                    out.push(item);
+                }
+                out
+            }
+        };
+
+        let replacement_strat_var = ast.get_variable_value(replacement_strat_name);
+        let replacement_strat = if let Some(replacement_strat) = replacement_strat_var {
+            let str = replacement_strat
+                .as_string()
+                .ok_or(Error::ExpectedDifferentVariableType)?;
+            ReplacementStrategy::from_str(str)
+                .ok()
+                .ok_or(Error::InvalidReplacementStrategy)?
+        } else {
+            ReplacementStrategy::MatchCase
+        };
+
+        let lint_kind_var = ast.get_variable_value(lint_kind_name);
+        let lint_kind = if let Some(lint_kind) = lint_kind_var {
+            let str = lint_kind
+                .as_string()
+                .ok_or(Error::ExpectedDifferentVariableType)?;
+            LintKind::from_string_key(str).ok_or(Error::InvalidLintKind)?
+        } else {
+            LintKind::Miscellaneous
+        };
+
+        let scope_var = ast.get_variable_value(scope_name);
+        let scope = if let Some(scope) = scope_var {
+            let str = scope
+                .as_string()
+                .ok_or(Error::ExpectedDifferentVariableType)?;
+            WeirScope::from_str(str).ok().ok_or(Error::InvalidScope)?
+        } else {
+            WeirScope::Chunk
+        };
+
+        let linter = WeirLinter {
+            strategy: replacement_strat,
+            ast,
+            expr: expr.clone(),
+            lint_kind,
+            scope,
+            description,
+            message,
+            replacements,
+        };
+
+        Ok(linter)
+    }
+
+    pub fn into_chunk_linter(self) -> Result<impl ExprLinter<Unit = Chunk>, Self> {
+        if self.scope == WeirScope::Chunk {
+            Ok(ChunkWeirLinter(self))
+        } else {
+            Err(self)
+        }
+    }
+
+    pub fn into_sentence_linter(self) -> Result<impl ExprLinter<Unit = Sentence>, Self> {
+        if self.scope == WeirScope::Sentence {
+            Ok(SentenceWeirLinter(self))
+        } else {
+            Err(self)
+        }
+    }
+
+    fn match_to_lint(&self, matched_tokens: &[Token], source: &[char]) -> Option<Lint> {
+        let span = matched_tokens.span()?;
+        let orig = span.get_content(source);
+
+        let suggestions = match self.strategy {
+            ReplacementStrategy::MatchCase => self
+                .replacements
+                .iter()
+                .map(|s| Suggestion::replace_with_match_case(s.chars().collect(), orig))
+                .collect(),
+            ReplacementStrategy::Exact => self
+                .replacements
+                .iter()
+                .map(|r| Suggestion::ReplaceWith(r.chars().collect()))
+                .collect(),
+        };
+
+        Some(Lint {
+            span,
+            lint_kind: self.lint_kind,
+            suggestions,
+            message: self.message.to_owned(),
+            priority: 31,
+        })
+    }
+
+    /// Counts the total number of tests defined.
+    pub fn count_tests(&self) -> usize {
+        self.ast.iter_tests().count()
+    }
+
+    /// Runs the tests defined in the source code, returning any failing results.
+    pub fn run_tests(&mut self) -> Vec<TestResult> {
+        fn apply_nth_suggestion(text: &str, lint: &Lint, n: usize) -> Option<String> {
+            let suggestion = lint.suggestions.get(n)?;
+            let mut text_chars: Vec<char> = text.chars().collect();
+            suggestion.apply(lint.span, &mut text_chars);
+            Some(text_chars.iter().collect())
+        }
+
+        fn transform_to_expected(
+            text: &str,
+            expected: &str,
+            linter: &mut impl Linter,
+        ) -> Option<String> {
+            let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+            let mut seen: HashSet<String> = HashSet::new();
+
+            queue.push_back((text.to_string(), 0));
+            seen.insert(text.to_string());
+
+            while let Some((current, depth)) = queue.pop_front() {
+                if current == expected {
+                    return Some(current);
+                }
+
+                if depth >= MAX_SUGGESTION_TRANSFORMATION_DEPTH {
+                    continue;
+                }
+
+                let doc = Document::new_from_chars(
+                    current.chars().collect::<Vec<_>>().into(),
+                    &Markdown::default(),
+                    &FstDictionary::curated(),
+                );
+                let lints = linter.lint(&doc);
+
+                if let Some(lint) = lints.first() {
+                    for i in 0..lint.suggestions.len() {
+                        if let Some(next) = apply_nth_suggestion(&current, lint, i)
+                            && seen.insert(next.clone())
+                        {
+                            queue.push_back((next, depth + 1));
+                        }
+                    }
+                }
+            }
+
+            None
+        }
+
+        fn transform_nth_str(text: &str, linter: &mut impl Linter, n: usize) -> String {
+            let mut text_chars: Vec<char> = text.chars().collect();
+            let mut iter_count = 0;
+
+            loop {
+                let test = Document::new_from_chars(
+                    text_chars.clone().into(),
+                    &Markdown::default(),
+                    &FstDictionary::curated(),
+                );
+                let lints = linter.lint(&test);
+
+                if let Some(lint) = lints.first() {
+                    if let Some(suggestion) = lint.suggestions.get(n) {
+                        suggestion.apply(lint.span, &mut text_chars);
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+
+                iter_count += 1;
+                if iter_count == MAX_SUGGESTION_TRANSFORMATION_DEPTH {
+                    break;
+                }
+            }
+
+            text_chars.iter().collect()
+        }
+
+        fn lint_count(text: &str, linter: &mut impl Linter) -> usize {
+            let document = Document::new_from_chars(
+                text.chars().collect::<Vec<_>>().into(),
+                &Markdown::default(),
+                &FstDictionary::curated(),
+            );
+
+            linter.lint(&document).len()
+        }
+
+        let mut results = Vec::new();
+        let tests: Vec<(String, String)> = self
+            .ast
+            .iter_tests()
+            .map(|(text, expected)| (text.to_string(), expected.to_string()))
+            .collect();
+
+        for (text, expected) in tests {
+            let matched = transform_to_expected(&text, &expected, self);
+
+            match matched {
+                Some(result) => {
+                    let remaining_lints = lint_count(&result, self);
+
+                    if remaining_lints != 0 {
+                        results.push(TestResult {
+                            expected: expected.to_string(),
+                            got: result,
+                        });
+                    }
+                }
+                None => results.push(TestResult {
+                    expected: expected.to_string(),
+                    got: transform_nth_str(&text, self, 0),
+                }),
+            }
+        }
+
+        results
+    }
+}
+
+impl Linter for WeirLinter {
+    fn lint(&mut self, document: &Document) -> Vec<Lint> {
+        let source = document.get_source();
+        let mut lints = Vec::new();
+        let units: Box<dyn Iterator<Item = &[Token]> + '_> = match self.scope {
+            WeirScope::Chunk => Box::new(document.iter_chunks()),
+            WeirScope::Sentence => Box::new(document.iter_sentences()),
+        };
+
+        for unit in units {
+            lints.extend(
+                self.expr
+                    .iter_matches(unit, source)
+                    .filter_map(|match_span| {
+                        self.match_to_lint(&unit[match_span.start..match_span.end], source)
+                    }),
+            );
+        }
+
+        lints
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+}
+
+impl ExprLinter for ChunkWeirLinter {
+    type Unit = Chunk;
+
+    fn expr(&self) -> &dyn Expr {
+        &self.0.expr
+    }
+
+    fn match_to_lint(&self, matched_tokens: &[Token], source: &[char]) -> Option<Lint> {
+        self.0.match_to_lint(matched_tokens, source)
+    }
+
+    fn description(&self) -> &str {
+        &self.0.description
+    }
+}
+
+impl ExprLinter for SentenceWeirLinter {
+    type Unit = Sentence;
+
+    fn expr(&self) -> &dyn Expr {
+        &self.0.expr
+    }
+
+    fn match_to_lint(&self, matched_tokens: &[Token], source: &[char]) -> Option<Lint> {
+        self.0.match_to_lint(matched_tokens, source)
+    }
+
+    fn description(&self) -> &str {
+        &self.0.description
+    }
+}
+
+fn resolve_exprs(ast: &Ast) -> Result<HashMap<String, Lrc<Box<dyn Expr>>>, Error> {
+    let mut resolved_exprs = HashMap::new();
+
+    for (name, val) in ast.iter_exprs() {
+        let expr = val.to_expr(&resolved_exprs)?;
+        resolved_exprs.insert(name.to_owned(), Lrc::new(expr));
+    }
+
+    Ok(resolved_exprs)
+}
+
+#[cfg(test)]
+pub mod tests {
+    use quickcheck_macros::quickcheck;
+
+    use crate::weir::Error;
+
+    use super::{TestResult, WeirLinter};
+
+    #[track_caller]
+    pub fn assert_passes_all(linter: &mut WeirLinter) {
+        assert_eq!(Vec::<TestResult>::new(), linter.run_tests());
+    }
+
+    #[test]
+    fn simple_right_click_linter() {
+        let source = r#"
+            expr main <([right, middle, left] $click), ( )>
+            let message "Hyphenate this mouse command"
+            let description "Hyphenates right-click style mouse commands."
+            let kind "Punctuation"
+            let becomes "-"
+
+            test "Right click the icon." "Right-click the icon."
+            test "Please right click on the link." "Please right-click on the link."
+            test "They right clicked the submit button." "They right-clicked the submit button."
+            test "Right clicking the item highlights it." "Right-clicking the item highlights it."
+            test "Right clicks are tracked in the log." "Right-clicks are tracked in the log."
+            test "He RIGHT CLICKED the file." "He RIGHT-CLICKED the file."
+            test "Left click the checkbox." "Left-click the checkbox."
+            test "Middle click to open in a new tab." "Middle-click to open in a new tab."
+
+            allows "This test contains the correct version of right-click and therefore shouldn't error."
+            "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+        assert_passes_all(&mut linter);
+        assert_eq!(9, linter.count_tests());
+    }
+
+    #[test]
+    fn g_suite() {
+        let source = r#"
+            expr main [(G [Suite, Suit]), (Google Apps for Work)]
+            let message "Use the updated brand."
+            let description "`G Suite` or `Google Apps for Work` is now called `Google Workspace`"
+            let kind "Miscellaneous"
+            let becomes "Google Workspace"
+            let strategy "Exact"
+
+            test "We migrated from G Suite last year." "We migrated from Google Workspace last year."
+            test "This account is still labeled as Google Apps for Work." "This account is still labeled as Google Workspace."
+            test "The pricing page mentions G Suit for legacy plans." "The pricing page mentions Google Workspace for legacy plans."
+            test "New customers sign up for Google Workspace." "New customers sign up for Google Workspace."
+
+            allows "This test contains the correct version of Google Workspace and therefore shouldn't error."
+            "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_passes_all(&mut linter);
+        assert_eq!(5, linter.count_tests());
+    }
+
+    #[test]
+    fn array_prefers_longest_match_over_first_match() {
+        for main in [
+            "[(capitalized off of), (capitalized off)]",
+            "[(capitalized off), (capitalized off of)]",
+        ] {
+            let source = format!(
+                r#"
+            expr main {main}
+            let message "Use the replacement."
+            let description "Regression test for overlapping Weir array options."
+            let kind "Miscellaneous"
+            let becomes "replacement"
+            let strategy "Exact"
+
+            test "capitalized off of" "replacement"
+            "#
+            );
+
+            let mut linter = WeirLinter::new(&source).unwrap();
+            assert_passes_all(&mut linter);
+        }
+    }
+
+    #[test]
+    fn g_suite_with_refs() {
+        let source = r#"
+            expr a (G [Suite, Suit])
+            expr b (Google Apps For Work)
+            expr incorrect [@a, @b]
+
+            expr main @incorrect
+            let message "Use the updated brand."
+            let description "`G Suite` or `Google Apps for Work` is now called `Google Workspace`"
+            let kind "Miscellaneous"
+            let becomes "Google Workspace"
+            let strategy "Exact"
+
+            test "We migrated from G Suite last year." "We migrated from Google Workspace last year."
+            test "This account is still labeled as Google Apps for Work." "This account is still labeled as Google Workspace."
+            test "The pricing page mentions G Suit for legacy plans." "The pricing page mentions Google Workspace for legacy plans."
+            test "New customers sign up for Google Workspace." "New customers sign up for Google Workspace."
+            "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_passes_all(&mut linter);
+        assert_eq!(4, linter.count_tests());
+    }
+
+    #[test]
+    fn scope_defaults_to_chunk() {
+        let source = r#"
+            expr main one**two
+            let message "Use three."
+            let description "Test chunk-scoped Weir."
+            let kind "Miscellaneous"
+            let becomes "three"
+            let strategy "Exact"
+
+            allows "one, two."
+        "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_passes_all(&mut linter);
+
+        let linter = WeirLinter::new(source).unwrap();
+        let linter = match linter.into_sentence_linter() {
+            Ok(_) => panic!("default-scoped Weir rule should not convert to sentence linter"),
+            Err(linter) => linter,
+        };
+        assert!(linter.into_chunk_linter().is_ok());
+    }
+
+    #[test]
+    fn sentence_scope_can_match_across_chunks() {
+        let source = r#"
+            expr main one**two
+            let message "Use three."
+            let description "Test sentence-scoped Weir."
+            let kind "Miscellaneous"
+            let becomes "three"
+            let strategy "Exact"
+            let scope "Sentence"
+
+            test "one, two." "three."
+        "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_passes_all(&mut linter);
+
+        assert!(
+            WeirLinter::new(source)
+                .unwrap()
+                .into_sentence_linter()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn invalid_scope_errors() {
+        let source = r#"
+            expr main one
+            let message ""
+            let description ""
+            let kind "Miscellaneous"
+            let becomes ""
+            let scope "Paragraph"
+        "#;
+
+        let res = WeirLinter::new(source);
+
+        assert_eq!(res.err(), Some(Error::InvalidScope));
+    }
+
+    #[test]
+    fn fails_on_unresolved_expr() {
+        let source = r#"
+            expr main @missing
+            let message ""
+            let description ""
+            let kind "Miscellaneous"
+            let becomes ""
+            let strategy "Exact"
+        "#;
+
+        let res = WeirLinter::new(source);
+
+        assert_eq!(
+            res.err().unwrap(),
+            Error::UnableToResolveExpr("missing".to_string())
+        )
+    }
+
+    #[test]
+    fn wildcard() {
+        let source = r#"
+            expr main <(NOUN * NOUN), (* NOUN), *>
+            let message ""
+            let description ""
+            let kind "Miscellaneous"
+            let becomes ""
+            let strategy "Exact"
+
+            test "I like trees and plants of all kinds" "I like trees  plants of all kinds"
+            test "homework tempts teachers" "homework  teachers"
+            "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_passes_all(&mut linter);
+        assert_eq!(2, linter.count_tests());
+    }
+
+    #[test]
+    fn dashes() {
+        let source = r#"
+            expr main --
+            let message ""
+            let description ""
+            let kind "Miscellaneous"
+            let becomes "-"
+            let strategy "Exact"
+
+            test "This--and--that" "This-and-that"
+
+            allows "this-and-that"
+            "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_passes_all(&mut linter);
+        assert_eq!(2, linter.count_tests());
+    }
+
+    #[test]
+    fn fails_on_ignore_test() {
+        let source = r#"
+            expr main test
+            let message ""
+            let description ""
+            let kind "Miscellaneous"
+            let becomes "-"
+            let strategy "Exact"
+
+            allows "test"
+            "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+
+        assert_eq!(linter.run_tests().len(), 1)
+    }
+
+    #[test]
+    fn errors_properly_with_missing_expr() {
+        let source = "expr main";
+        let res = WeirLinter::new(source);
+        assert_eq!(res.err(), Some(Error::ExpectedVariableUndefined))
+    }
+
+    #[test]
+    fn becomes_array_with_many_alternatives() {
+        let source = r#"
+ expr main (the fact)
+ let message "Consider alternative phrasing"
+ let description "Test that all 'becomes' alternatives can be reached"
+ let kind "Miscellaneous"
+ let becomes ["the allegation", "the idea", "the claim", "the story", "the rumor"]
+ let strategy "Exact"
+
+ test "There is truth to the fact that people like images." "There is truth to the allegation that people like images."
+ test "There is truth to the fact that people like images." "There is truth to the idea that people like images."
+ test "There is truth to the fact that people like images." "There is truth to the claim that people like images."
+ test "There is truth to the fact that people like images." "There is truth to the story that people like images."
+ test "There is truth to the fact that people like images." "There is truth to the rumor that people like images."
+
+ allows "There is truth to the story that people like images."
+ "#;
+
+        let mut linter = WeirLinter::new(source).unwrap();
+        assert_passes_all(&mut linter);
+        assert_eq!(6, linter.count_tests());
+    }
+
+    #[quickcheck]
+    fn does_not_panic(s: String) {
+        let _ = WeirLinter::new(s.as_str());
+    }
+}
