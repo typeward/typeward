@@ -1,10 +1,11 @@
 import katex from "katex";
 import type { Component } from "solid-js";
-import { Show, createMemo, createSignal } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, on } from "solid-js";
 
 import { Button } from "~/components/primitives/Button";
 import { installDismiss } from "~/lib/dismiss";
 import { notifyError } from "~/lib/toast";
+import { activeFile } from "~/stores/editor-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
 import {
   clearVisualPopover,
@@ -47,7 +48,13 @@ export const VisualPopover: Component = () => {
 
 const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
   let root!: HTMLDivElement;
-  const view = getActiveEditorView();
+  // Bind to the view AND file the popover was opened against. Apply must never
+  // re-fetch the now-active view: a file switch while the popover is open would
+  // otherwise write the edit (or, for newMath, an insert with no snapshot
+  // guard) into a DIFFERENT file at a stale offset.
+  const openView = getActiveEditorView();
+  const view = openView;
+  const openPath = activeFile()?.path ?? null;
   const isNew = props.intent.kind === "newMath";
   const snapshot = isNew
     ? ""
@@ -92,9 +99,26 @@ const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
     close,
   );
 
+  // A file switch remounts CodeMirror on a fresh path; the popover's snapshot
+  // and offsets belong to the old file, so dismiss instead of letting Apply
+  // target the wrong buffer.
+  createEffect(
+    on(
+      () => activeFile()?.path ?? null,
+      (path) => {
+        if (path !== openPath) close();
+      },
+      { defer: true },
+    ),
+  );
+
   const apply = (): void => {
-    const v = getActiveEditorView();
-    if (!v) return close();
+    // Use the open-time view, not the current active one, and refuse if it was
+    // torn down (file switched) so the edit can never land in another file.
+    const v = view;
+    if (!v || !v.dom.isConnected || activeFile()?.path !== openPath) {
+      return close();
+    }
     const text = draft();
     if (isNew) {
       const insert = text.trim() === "" ? "" : `$${text.trim()}$`;
@@ -118,15 +142,26 @@ const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
       const windowFrom = Math.max(0, from - 2000);
       const windowTo = Math.min(v.state.doc.length, to + 2000);
       const around = v.state.doc.sliceString(windowFrom, windowTo);
-      const found = around.indexOf(snapshot);
-      if (snapshot === "" || found === -1) {
+      // Pick the occurrence NEAREST the original span, not the first in the
+      // window — with a shift in either direction the first match can be the
+      // wrong construct.
+      let best = -1;
+      let bestDist = Infinity;
+      for (let i = around.indexOf(snapshot); i !== -1; i = around.indexOf(snapshot, i + 1)) {
+        const dist = Math.abs(windowFrom + i - from);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = i;
+        }
+      }
+      if (snapshot === "" || best === -1) {
         notifyError(
           "Couldn't apply the edit",
           "The document changed while the editor was open — the construct moved or was removed.",
         );
         return close();
       }
-      from = windowFrom + found;
+      from = windowFrom + best;
       to = from + snapshot.length;
     }
     if (text !== snapshot) {
@@ -151,6 +186,7 @@ const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
         "box-shadow": "var(--shadow-glass-drop)",
       }}
       role="dialog"
+      aria-modal="true"
       aria-label={HEADER[props.intent.kind] ?? "Edit LaTeX"}
       onKeyDown={(e) => {
         if (e.key === "Escape") {

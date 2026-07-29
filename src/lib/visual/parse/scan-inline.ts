@@ -278,6 +278,14 @@ export function scanInline(
       continue;
     }
 
+    if (ch === 126 /* ~ */) {
+      // Bare tie is a non-breaking space in LaTeX; render it as whitespace
+      // instead of a literal tilde (matches the `\ `/`\,` space escapes).
+      nodes.push({ kind: "escape", from: i, to: i + 1, ch: " " });
+      i++;
+      continue;
+    }
+
     if (ch !== 92 /* \ */) {
       i++;
       continue;

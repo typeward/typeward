@@ -85,6 +85,7 @@ import {
 import { todoCount } from "~/stores/todo-store";
 import { touchAffordances } from "~/stores/viewport-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
+import { gitStateVersion } from "~/stores/git-store";
 
 /**
  * Shared left sidebar for the editor's TextShell.
@@ -193,8 +194,8 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
   // (worktrees) a file; `exists` covers both. Non-Tauri contexts resolve
   // false and simply hide the tab.
   const [isGitRepo] = createResource(
-    () => project()?.rootPath ?? null,
-    async (root) => {
+    () => [project()?.rootPath ?? null, gitStateVersion()] as const,
+    async ([root]) => {
       if (!root) return false;
       try {
         return await exists(`${root}/.git`);
