@@ -4,6 +4,17 @@
 //! (same convention as `export_project_zip`); the frontend copies the bytes to
 //! the user's chosen destination through the dialog-scoped fs plugin, so no new
 //! arbitrary-destination write primitive is introduced.
+//!
+//! The HTML export is deliberately NOT self-contained: `--embed-resources`
+//! would let an untrusted document have pandoc fetch and inline arbitrary
+//! remote URLs and local files at export time, which is an egress + local-file
+//! read channel outside the app's outbound allowlist. Portability of the single
+//! file is traded away for keeping untrusted project content off that channel.
+//!
+//! Pandoc runs over attacker-influenceable input (its LaTeX reader expands
+//! macros and follows `\input`), so the spawn goes through the compile crate's
+//! bounded runner — deadline, process-tree kill, capped capture — rather than
+//! a raw `Command::output()`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -112,27 +123,29 @@ fn plan_export(project: Project, format: &str) -> Result<PandocPlan, String> {
 /// Build the pandoc argument vector. `root_file` is the validated (leading-dash-
 /// guarded) project-relative input path and is placed LAST — after `-o <out>` —
 /// so it is always the positional input, never mistaken for a flag.
+///
+/// HTML export intentionally omits `--embed-resources` (see the module doc): on
+/// untrusted project content that flag is an egress + local-file-read channel
+/// outside the outbound allowlist. The exported HTML references its assets by
+/// relative path instead.
 fn build_pandoc_args(from: &str, to: &str, out: &str, root_file: String) -> Vec<String> {
-    let mut args = vec![
+    vec![
         "-f".to_string(),
         from.to_string(),
         "-t".to_string(),
         to.to_string(),
         "--standalone".to_string(),
-    ];
-    if to == "html" {
-        // Inline CSS/images so the exported file is a single portable document.
-        args.push("--embed-resources".to_string());
-    }
-    args.push("-o".to_string());
-    args.push(out.to_string());
-    args.push(root_file);
-    args
+        "-o".to_string(),
+        out.to_string(),
+        root_file,
+    ]
 }
 
 /// Pandoc gained the Typst reader in 3.1.12. Reject older builds with an
 /// actionable message rather than letting pandoc emit an opaque
-/// "unknown input format typst".
+/// "unknown input format typst". This probes `pandoc --version` (a trusted
+/// binary, no project input) so a raw `Command` is fine — the untrusted-input
+/// spawn is the export itself, which is bounded.
 fn require_pandoc_typst(pandoc: &Path) -> Result<(), String> {
     let output = Command::new(pandoc)
         .arg("--version")
@@ -192,7 +205,7 @@ mod tests {
     }
 
     #[test]
-    fn pandoc_args_place_input_last_and_gate_embed_resources() {
+    fn pandoc_args_place_input_last_and_omit_embed_resources() {
         let docx = build_pandoc_args("latex", "docx", "/b/export.docx", "main.tex".to_string());
         assert_eq!(
             docx,
@@ -213,9 +226,10 @@ mod tests {
         let oi = docx.iter().position(|s| s == "-o").unwrap();
         assert_eq!(docx[oi + 1], "/b/export.docx");
 
-        // --embed-resources only for HTML (single portable file), never docx.
+        // --embed-resources is never passed: on untrusted input it is an egress +
+        // local-file-read channel outside the outbound allowlist (module doc).
         let html = build_pandoc_args("typst", "html", "/b/e.html", "m.typ".to_string());
-        assert!(html.iter().any(|s| s == "--embed-resources"));
+        assert!(!html.iter().any(|s| s == "--embed-resources"));
         assert!(!docx.iter().any(|s| s == "--embed-resources"));
     }
 

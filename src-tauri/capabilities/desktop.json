@@ -1,25 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "desktop",
-  "description": "Desktop-only grants. The tectonic sidecar exists only on desktop, so its shell-execute permission must not ship to iOS/Android.",
+  "description": "Desktop-only grants. Deliberately empty of shell permissions: the Tectonic sidecar is spawned from Rust (compile.rs, ShellExt::sidecar), which does not consult the capability scope, so the old shell:allow-execute entry granted plugin:shell|execute to the RENDERER without any code needing it — a sidecar-spawn primitive handed to the webview for nothing.",
   "platforms": ["macOS", "windows", "linux"],
   "windows": ["main"],
-  "permissions": [
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [
-        {
-          "name": "binaries/tectonic",
-          "sidecar": true,
-          "args": [
-            "-X",
-            "compile",
-            { "validator": "^[A-Za-z0-9_](?:\\.?[A-Za-z0-9_/-])*$" },
-            "--keep-logs",
-            "--synctex"
-          ]
-        }
-      ]
-    }
-  ]
+  "permissions": []
 }

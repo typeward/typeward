@@ -117,9 +117,9 @@ pub struct TemplateManifest {
 }
 
 #[tauri::command]
-pub async fn templates_list(app: AppHandle) -> Result<Vec<TemplateManifest>, TemplateError> {
-    let builtin_root = builtin_root(&app)?;
-    let custom_root = custom_root(&app)?;
+pub async fn templates_list(app: AppHandle) -> Result<Vec<TemplateManifest>, String> {
+    let builtin_root = builtin_root(&app).map_err(|e| e.to_string())?;
+    let custom_root = custom_root(&app).map_err(|e| e.to_string())?;
 
     tokio::task::spawn_blocking(move || -> Result<Vec<TemplateManifest>, TemplateError> {
         let mut out = Vec::new();
@@ -131,7 +131,10 @@ pub async fn templates_list(app: AppHandle) -> Result<Vec<TemplateManifest>, Tem
         Ok(out)
     })
     .await
-    .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
+    // Commands reject with a plain Display string (the IPC error contract); a
+    // serialized enum would surface as a variant name or raw JSON in the UI.
+    .map_err(|e| format!("background task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -141,9 +144,9 @@ pub async fn template_instantiate(
     dest_parent: String,
     name: String,
     vars: HashMap<String, String>,
-) -> Result<Project, TemplateError> {
-    let builtin_root = builtin_root(&app)?;
-    let custom_root = custom_root(&app)?;
+) -> Result<Project, String> {
+    let builtin_root = builtin_root(&app).map_err(|e| e.to_string())?;
+    let custom_root = custom_root(&app).map_err(|e| e.to_string())?;
 
     tokio::task::spawn_blocking(move || -> Result<Project, TemplateError> {
         let source = locate_template(&template_id, &builtin_root, &custom_root)?;
@@ -211,7 +214,10 @@ pub async fn template_instantiate(
         Ok(project)
     })
     .await
-    .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
+    // Commands reject with a plain Display string (the IPC error contract); a
+    // serialized enum would surface as a variant name or raw JSON in the UI.
+    .map_err(|e| format!("background task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Directories never captured into a saved template: our own sidecar, VCS
@@ -228,8 +234,8 @@ pub async fn template_save(
     project: Project,
     name: String,
     description: String,
-) -> Result<TemplateManifest, TemplateError> {
-    let custom_root = custom_root(&app)?;
+) -> Result<TemplateManifest, String> {
+    let custom_root = custom_root(&app).map_err(|e| e.to_string())?;
 
     tokio::task::spawn_blocking(move || -> Result<TemplateManifest, TemplateError> {
         let src_root = PathBuf::from(&project.root_path).canonicalize()?;
@@ -305,7 +311,10 @@ pub async fn template_save(
         })
     })
     .await
-    .map_err(|e| TemplateError::Io(format!("background task failed: {e}")))?
+    // Commands reject with a plain Display string (the IPC error contract); a
+    // serialized enum would surface as a variant name or raw JSON in the UI.
+    .map_err(|e| format!("background task failed: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// Walk a project root collecting regular files to capture, skipping
@@ -314,11 +323,25 @@ pub async fn template_save(
 /// sources" view of a project.
 pub(crate) fn collect_project_files(root: &Path) -> Result<Vec<PathBuf>, TemplateError> {
     let mut out = Vec::new();
-    collect_template_walk(root, &mut out)?;
+    collect_template_walk(root, &mut out, 0)?;
     Ok(out)
 }
 
-fn collect_template_walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), TemplateError> {
+/// Recursion ceiling for the project walk. A hostile clone can materialize an
+/// arbitrarily deep tree, and this walk backs template capture, the source-zip
+/// export, and the TODO scan — an unbounded recursion there overflows the
+/// blocking pool's small stack, which aborts the process rather than unwinding.
+/// No real project nests anywhere near this.
+const MAX_WALK_DEPTH: usize = 64;
+
+fn collect_template_walk(
+    dir: &Path,
+    out: &mut Vec<PathBuf>,
+    depth: usize,
+) -> Result<(), TemplateError> {
+    if depth >= MAX_WALK_DEPTH {
+        return Ok(()); // skip the subtree, keep everything found so far
+    }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let file_type = entry.file_type()?;
@@ -331,7 +354,7 @@ fn collect_template_walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), Templ
             if TEMPLATE_SKIP_DIRS.contains(&name_str.as_ref()) {
                 continue;
             }
-            collect_template_walk(&entry.path(), out)?;
+            collect_template_walk(&entry.path(), out, depth + 1)?;
         } else if file_type.is_file() && !is_build_artifact(&name_str) {
             out.push(entry.path());
         }

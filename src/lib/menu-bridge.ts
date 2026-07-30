@@ -67,6 +67,10 @@ const resolveMenuCommand = (id: string): EditorCommand | undefined => {
  * keystroke anyway, so the router never gets a say).
  */
 export function dispatchMenuCommand(id: string): void {
+  // Only the ids the native menu actually carries may run. The "menu:command"
+  // event is app-wide, so without this allowlist the ipc_guard-restricted
+  // preview window could emit an arbitrary registry id into the main window.
+  if (!MENU_COMMAND_IDS.includes(id)) return;
   if (id === MENU_STOP_COMPILE_ID) {
     void cancelActiveCompile();
     return;

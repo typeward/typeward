@@ -6,9 +6,13 @@ mod compile;
 // frontend never reaches their IPC there (compile routes through texlive-wasm,
 // LSP/synctex calls are engine-gated or caught). Gating them keeps the
 // subprocess IPC surface off the mobile webview entirely.
-#[cfg(desktop)]
+// `detect` itself is NOT gated: it owns `resolve_program`, the single
+// chokepoint every spawn in the crate resolves through (binary-planting
+// invariant), and `compile.rs` compiles on mobile. Its PATH-probe surface —
+// the part that actually backs an IPC — stays desktop-only inside the module.
 mod detect;
 mod diagnostics;
+mod drop_allow;
 #[cfg(desktop)]
 mod export_annotated;
 #[cfg(desktop)]
@@ -70,6 +74,30 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init());
 
+    // Learn which absolute paths the OS actually handed us, independently of
+    // anything the renderer claims: `import_files_into_project` copies absolute
+    // sources into a readable project, so the webview alone must not be able to
+    // name them (see drop_allow.rs). Both event surfaces are registered because
+    // the drop routes through the window on some platforms and the webview on
+    // others; recording the same path twice is harmless.
+    let builder = builder
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                if window.label() == "main" {
+                    drop_allow::record(paths);
+                }
+            }
+        })
+        .on_webview_event(|webview, event| {
+            let tauri::WebviewEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+            else {
+                return;
+            };
+            if webview.label() == "main" {
+                drop_allow::record(paths);
+            }
+        });
+
     // Auto-updater (desktop only): the plugin parses the pubkey lazily at check
     // time, so registering it with the "" placeholder pubkey doesn't touch the
     // signing path at startup. Mobile ships through app stores, not the updater.
@@ -126,7 +154,10 @@ pub fn run() {
             {
                 use tauri::Manager;
                 if let Some(win) = app.get_webview_window("main") {
-                    let theme = loaded.as_ref().map(|s| s.theme.as_str()).unwrap_or("daylight");
+                    let theme = loaded
+                        .as_ref()
+                        .map(|s| s.theme.as_str())
+                        .unwrap_or("daylight");
                     let theme = if theme == "system" {
                         match win.theme() {
                             Ok(tauri::Theme::Dark) => "lamplight",
@@ -416,13 +447,7 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     // Tab takes Cmd+W (routed to the frontend, which falls back to a window
     // close when no tab is open), Close Window moves to Shift+Cmd+W —
     // the browser convention users already know.
-    let close_tab = MenuItem::with_id(
-        handle,
-        "close-tab",
-        "Close Tab",
-        true,
-        Some("CmdOrCtrl+W"),
-    )?;
+    let close_tab = MenuItem::with_id(handle, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?;
     let close_window = MenuItem::with_id(
         handle,
         "close-window",
@@ -503,8 +528,13 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+Enter"),
     )?;
-    let stop_compile =
-        MenuItem::with_id(handle, "editor.stopCompile", "Stop Compile", true, None::<&str>)?;
+    let stop_compile = MenuItem::with_id(
+        handle,
+        "editor.stopCompile",
+        "Stop Compile",
+        true,
+        None::<&str>,
+    )?;
     let jump_to_pdf = MenuItem::with_id(
         handle,
         "latex.syncForward",

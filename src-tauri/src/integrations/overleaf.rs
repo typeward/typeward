@@ -66,11 +66,21 @@ impl From<project::ProjectError> for OverleafError {
 
 #[tauri::command]
 pub async fn overleaf_import_zip(
+    app: tauri::AppHandle,
     zip_path: String,
     parent_dir: String,
     name: String,
-) -> Result<Project, OverleafError> {
+) -> Result<Project, String> {
     tokio::task::spawn_blocking(move || -> Result<Project, OverleafError> {
+        // The zip is picked in a file dialog, which adds that exact path to
+        // plugin-fs's runtime scope. Requiring it here stops a compromised
+        // webview from naming any other zip-shaped file on disk and having its
+        // contents extracted into a project it can then read back.
+        if !fs_scope_allows(&app, Path::new(&zip_path)) {
+            return Err(OverleafError::UnsafeEntry(
+                "zip path was not picked in a file dialog".into(),
+            ));
+        }
         let parent = PathBuf::from(&parent_dir);
         let safe_name = sanitize(&name);
         if safe_name.is_empty() {
@@ -107,7 +117,19 @@ pub async fn overleaf_import_zip(
         Ok(project)
     })
     .await
-    .map_err(|e| OverleafError::Io(format!("background task failed: {e}")))?
+    // Commands reject with a plain Display string (the IPC error contract); a
+    // serialized enum would surface as a variant name or raw JSON in the UI.
+    .map_err(|e| format!("background task failed: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// True when plugin-fs's runtime scope covers `path` — the dialog plugin adds
+/// every user-picked path to it, so this is proof of a real pick.
+fn fs_scope_allows(app: &tauri::AppHandle, path: &Path) -> bool {
+    use tauri_plugin_fs::FsExt;
+    app.try_fs_scope()
+        .map(|scope| scope.is_allowed(path))
+        .unwrap_or(false)
 }
 
 // Decompression-bomb guards: a malicious Overleaf export can claim a small

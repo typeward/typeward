@@ -586,6 +586,7 @@ fn import_files_op(
     root: &Path,
     target_rel_dir: &str,
     source_paths: &[String],
+    source_allowed: &dyn Fn(&Path) -> bool,
 ) -> CmdResult<Vec<String>> {
     if source_paths.is_empty() {
         return Ok(Vec::new());
@@ -632,6 +633,17 @@ fn import_files_op(
                 MAX_IMPORT_FILE_BYTES / (1024 * 1024)
             ));
         }
+        // The user must have designated this exact file, either by dropping it
+        // on the window (recorded backend-side) or by picking it in a dialog
+        // (which adds it to the fs runtime scope). Without this the command is
+        // an arbitrary-read primitive: a compromised webview could name any
+        // path, have it copied into the project, and read it back through the
+        // project IPC.
+        if !source_allowed(src) {
+            return Err(format!(
+                "import source was not drag-dropped or picked in a dialog: {source}"
+            ));
+        }
         let name = src
             .file_name()
             .and_then(|s| s.to_str())
@@ -660,15 +672,34 @@ fn import_files_op(
     Ok(created)
 }
 
+/// A source path the user designated: dropped on the window (recorded in
+/// `drop_allow` from the backend's own drag-drop event) or picked in a file
+/// dialog (the dialog plugin adds each picked path to plugin-fs's runtime
+/// scope). Either proves a real user gesture the renderer cannot fabricate.
+fn user_designated_source(app: &tauri::AppHandle, path: &Path) -> bool {
+    use tauri_plugin_fs::FsExt;
+    crate::drop_allow::is_allowed(path)
+        || app
+            .try_fs_scope()
+            .map(|scope| scope.is_allowed(path))
+            .unwrap_or(false)
+}
+
 #[tauri::command]
 pub async fn import_files_into_project(
+    app: tauri::AppHandle,
     project_root: String,
     target_rel_dir: String,
     source_paths: Vec<String>,
 ) -> CmdResult<Vec<String>> {
     tokio::task::spawn_blocking(move || -> CmdResult<Vec<String>> {
         ensure_registered(&project_root)?;
-        import_files_op(Path::new(&project_root), &target_rel_dir, &source_paths)
+        import_files_op(
+            Path::new(&project_root),
+            &target_rel_dir,
+            &source_paths,
+            &|path| user_designated_source(&app, path),
+        )
     })
     .await
     .map_err(err)?
@@ -1162,6 +1193,12 @@ mod tests {
         assert!(!root.join("chapters").exists());
     }
 
+    /// Stands in for the drop-allowlist / fs-scope check in tests that are
+    /// exercising the path handling rather than the designation gate.
+    fn any_source(_: &Path) -> bool {
+        true
+    }
+
     #[test]
     fn import_copies_and_suffixes_collisions() {
         let root = temp_dir();
@@ -1169,15 +1206,32 @@ mod tests {
         std::fs::write(outside.join("fig.png"), b"png").unwrap();
         let src = outside.join("fig.png").to_string_lossy().into_owned();
 
-        let first = import_files_op(&root, "", std::slice::from_ref(&src)).unwrap();
+        let first = import_files_op(&root, "", std::slice::from_ref(&src), &any_source).unwrap();
         assert_eq!(first, vec!["fig.png".to_string()]);
         // Into a not-yet-existing subdir (created on demand).
-        let second = import_files_op(&root, "assets", std::slice::from_ref(&src)).unwrap();
+        let second =
+            import_files_op(&root, "assets", std::slice::from_ref(&src), &any_source).unwrap();
         assert_eq!(second, vec!["assets/fig.png".to_string()]);
         // Collision auto-suffixes " (2)" before the extension.
-        let third = import_files_op(&root, "assets", &[src]).unwrap();
+        let third = import_files_op(&root, "assets", &[src], &any_source).unwrap();
         assert_eq!(third, vec!["assets/fig (2).png".to_string()]);
         assert!(root.join("assets").join("fig (2).png").exists());
+    }
+
+    #[test]
+    fn import_rejects_a_source_the_user_never_designated() {
+        // The arbitrary-read primitive: a compromised renderer names a path
+        // the user never dropped or picked, has it copied into the project,
+        // then reads it back through the project IPC.
+        let root = temp_dir();
+        let outside = temp_dir();
+        std::fs::write(outside.join("id_rsa"), b"PRIVATE KEY").unwrap();
+        let src = outside.join("id_rsa").to_string_lossy().into_owned();
+
+        let err = import_files_op(&root, "", &[src], &|_| false).unwrap_err();
+
+        assert!(err.contains("was not drag-dropped"), "got: {err}");
+        assert!(!root.join("id_rsa").exists());
     }
 
     #[test]
@@ -1185,27 +1239,37 @@ mod tests {
         let root = temp_dir();
         let outside = temp_dir();
         // A directory source is refused.
-        assert!(
-            import_files_op(&root, "", &[outside.to_string_lossy().into_owned()])
-                .unwrap_err()
-                .contains("only files")
-        );
+        assert!(import_files_op(
+            &root,
+            "",
+            &[outside.to_string_lossy().into_owned()],
+            &any_source
+        )
+        .unwrap_err()
+        .contains("only files"));
         // Relative source paths never come from the drop/dialog surfaces.
-        assert!(import_files_op(&root, "", &["fig.png".into()]).is_err());
+        assert!(import_files_op(&root, "", &["fig.png".into()], &any_source).is_err());
         // A file literally named like a CLI flag can't land in the project.
         std::fs::write(outside.join("-flag.tex"), "x").unwrap();
         assert!(import_files_op(
             &root,
             "",
-            &[outside.join("-flag.tex").to_string_lossy().into_owned()]
+            &[outside.join("-flag.tex").to_string_lossy().into_owned()],
+            &any_source
         )
         .is_err());
         // Protected target dirs are refused.
         std::fs::write(outside.join("ok.tex"), "x").unwrap();
         let ok_src = outside.join("ok.tex").to_string_lossy().into_owned();
-        assert!(import_files_op(&root, ".typeward", std::slice::from_ref(&ok_src)).is_err());
+        assert!(import_files_op(
+            &root,
+            ".typeward",
+            std::slice::from_ref(&ok_src),
+            &any_source
+        )
+        .is_err());
         // Traversal in the target dir is refused.
-        assert!(import_files_op(&root, "../outside", &[ok_src]).is_err());
+        assert!(import_files_op(&root, "../outside", &[ok_src], &any_source).is_err());
     }
 
     #[test]
