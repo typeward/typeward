@@ -79,7 +79,11 @@ jobs:
             os: windows
             target: x86_64-pc-windows-msvc
           - label: Linux (x64)
-            runner: ubuntu-24.04
+            # Build on the oldest supported runner (glibc 2.35) so the AppImage
+            # runs on older distros too — glibc is forward-compatible only.
+            # 22.04 is the Tauri v2 floor (oldest with libwebkit2gtk-4.1). Runner
+            # is removed 2027-04-17; move to a pinned ubuntu:22.04 container then.
+            runner: ubuntu-22.04
             os: linux
             target: x86_64-unknown-linux-gnu
 
