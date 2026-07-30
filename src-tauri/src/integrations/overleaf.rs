@@ -209,7 +209,7 @@ fn sanitize_relative(input: &Path) -> Option<PathBuf> {
     }
 }
 
-fn is_zip_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
+fn is_zip_symlink<R: std::io::Read>(entry: &zip::read::ZipFile<'_, R>) -> bool {
     const S_IFMT: u32 = 0o170000;
     const S_IFLNK: u32 = 0o120000;
     entry
