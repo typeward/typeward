@@ -332,10 +332,17 @@ export const shellEscapeTrustGet = (
   projectRoot: string,
 ): Promise<string | null> => invoke("shell_escape_trust_get", { projectRoot });
 
+/**
+ * Record shell-escape trust. Denials/revocations apply as asked; a `"granted"`
+ * request triggers a NATIVE confirmation dialog in Rust the renderer can't
+ * fabricate, so the returned string is the EFFECTIVE decision (`"granted"` only
+ * if the user confirmed, else `"denied"`).
+ */
 export const shellEscapeTrustSet = (
   projectRoot: string,
   grant: "granted" | "denied",
-): Promise<void> => invoke("shell_escape_trust_set", { projectRoot, grant });
+): Promise<"granted" | "denied"> =>
+  invoke("shell_escape_trust_set", { projectRoot, grant });
 
 export const compileTypst = async (
   project: Project,

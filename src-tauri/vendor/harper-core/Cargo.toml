@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "harper-core"
-version = "2.5.0"
+version = "2.7.0"
 build = "build.rs"
 autolib = false
 autobins = false
@@ -34,10 +34,31 @@ thesaurus = ["dep:harper-thesaurus"]
 name = "harper_core"
 path = "src/lib.rs"
 
-# Vendored patch for E6: tests/ and benches/ were dropped from this copy (see
-# the [patch] note in src-tauri/Cargo.toml), so their target + dev-dependency
-# declarations are removed to keep the manifest self-consistent. Only the lib
-# is built as a dependency.
+[[test]]
+name = "linters"
+path = "tests/linters.rs"
+
+[[test]]
+name = "pos_tags"
+path = "tests/pos_tags.rs"
+
+[[test]]
+name = "run_tests"
+path = "tests/run_tests.rs"
+
+[[test]]
+name = "snapshot"
+path = "tests/snapshot.rs"
+
+[[bench]]
+name = "parse_essay"
+path = "benches/parse_essay.rs"
+harness = false
+
+[[bench]]
+name = "spellcheck"
+path = "benches/spellcheck.rs"
+harness = false
 
 [dependencies.ammonia]
 version = "4.1.2"
@@ -131,3 +152,19 @@ version = "0.2.2"
 version = "8.6.0"
 features = ["deflate"]
 default-features = false
+
+[dev-dependencies.criterion]
+version = "0.8.2"
+default-features = false
+
+[dev-dependencies.quickcheck]
+version = "1.1.0"
+
+[dev-dependencies.quickcheck_macros]
+version = "1.2.0"
+
+[dev-dependencies.rand]
+version = "0.10.1"
+
+[dev-dependencies.rayon]
+version = "1.12.0"

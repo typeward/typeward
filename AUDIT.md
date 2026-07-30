@@ -5,6 +5,15 @@ Linux (X11+Wayland), Android/iOS tablets.
 
 Audit started: 2026-07-25 · Branch: `fix/tectonic-win-arm64-sidecar` · Auditor: Claude (Opus 4.8)
 
+> **Two audit passes were run in parallel and merged 2026-07-30.** This file is the
+> **TW-S** self-review pass (ARM/Intel build fixes + TW-S1/S2/S3 remediations), merged to
+> `main` via PR #4. A second, independent modernization pass — dependency currency, the
+> H1 drag-drop arbitrary-read gate, and CI hardening — is recorded in
+> [`docs/AUDIT.md`](docs/AUDIT.md) with per-bump notes in
+> [`docs/UPGRADE_NOTES.md`](docs/UPGRADE_NOTES.md). Where the two passes fixed the same
+> surface (crash-recovery remount, subprocess bounding, clippy CI gate, DOMPurify/linkify
+> bumps) the merge kept the stronger of the two; see `docs/AUDIT.md` §0 for the reconciliation.
+
 ---
 
 ## Phase 0 — Repo map & baseline

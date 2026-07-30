@@ -120,13 +120,18 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: app/package-lock.json
+          # Include the sibling lockfile so a texlive-wasm pin bump busts the
+          # npm cache instead of restoring stale sibling deps.
+          cache-dependency-path: |
+            app/package-lock.json
+            texlive-wasm/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          # Pinned to an explicit version for reproducible CI — bump deliberately.
-          toolchain: "1.96.0"
+          # Pinned (matches src-tauri/rust-toolchain.toml) so rebuilding a tag
+          # later uses the same compiler instead of the moving stable channel.
+          toolchain: '1.96.0'
           targets: ${{ matrix.target }}
 
       - name: Cargo cache
@@ -153,8 +158,27 @@ jobs:
           npm ci
           npm run build
 
-      # Builtin-only script — no app node_modules needed yet; tauri-action runs
-      # the app's `npm ci` itself before the build.
+      # Install the app's deps explicitly (mirrors build.yml). tauri-action's
+      # implicit install is not relied on — the `file:../texlive-wasm` dep must
+      # resolve against the sibling's freshly-built dist/, and beforeBuildCommand
+      # (`npm run build` = tsc + vite) needs node_modules present.
+      - name: Install npm deps
+        working-directory: app
+        run: npm ci
+
+      - name: Verify tag matches app version
+        shell: bash
+        working-directory: app
+        run: |
+          set -euo pipefail
+          pkg_version="$(node -p "require('./package.json').version")"
+          tag_version="${TAG#v}"
+          if [ "$pkg_version" != "$tag_version" ]; then
+            echo "::error::Tag ${TAG} does not match package.json version ${pkg_version}. Run 'npm run release -- ${pkg_version}' and push the matching tag, or retag."
+            exit 1
+          fi
+          echo "Tag ${TAG} matches app version ${pkg_version}."
+
       - name: Fetch Tectonic sidecar
         shell: bash
         working-directory: app
@@ -288,8 +312,13 @@ jobs:
       - name: Collect artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          # Per-TARGET name: the two macOS legs share matrix.os == 'macos', so a
+          # matrix.os name would collide the arm64 and Intel uploads.
           name: release-bundle-${{ matrix.target }}
-          if-no-files-found: ignore
+          # Each leg builds only its own OS's targets, so at least one glob
+          # always matches; zero files means this platform's build silently
+          # produced nothing — fail loudly rather than drop it from the release.
+          if-no-files-found: error
           retention-days: 7
           path: |
             app/src-tauri/target/release/bundle/nsis/*.exe

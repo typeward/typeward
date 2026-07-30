@@ -96,6 +96,18 @@ function buildPanel(view: EditorView): Panel {
   let matches: Match[] = [];
   let index = -1;
 
+  // The panel has no updateListener, so `matches` (computed on input) can hold
+  // offsets past a since-edited document; dispatching them raw throws
+  // "Selection points outside of document". Clamp to the live doc length.
+  const selectMatch = (m: Match): void => {
+    const len = view.state.doc.length;
+    view.dispatch({
+      selection: { anchor: Math.min(m.from, len), head: Math.min(m.to, len) },
+      scrollIntoView: true,
+      userEvent: "select.search",
+    });
+  };
+
   const refresh = (moveTo: "first" | "keep" = "keep"): void => {
     matches = findMatches(view, input.value);
     if (matches.length === 0) {
@@ -110,24 +122,17 @@ function buildPanel(view: EditorView): Panel {
       if (index === -1) index = 0;
     }
     count.textContent = `${index + 1} of ${matches.length}`;
-    const m = matches[index];
-    view.dispatch({
-      selection: { anchor: m.from, head: m.to },
-      scrollIntoView: true,
-      userEvent: "select.search",
-    });
+    selectMatch(matches[index]);
   };
 
   const step = (dir: 1 | -1): void => {
+    // Re-derive against the current document so an edit since the last search
+    // can't leave us stepping stale offsets.
+    matches = findMatches(view, input.value);
     if (matches.length === 0) return refresh("first");
     index = (index + dir + matches.length) % matches.length;
     count.textContent = `${index + 1} of ${matches.length}`;
-    const m = matches[index];
-    view.dispatch({
-      selection: { anchor: m.from, head: m.to },
-      scrollIntoView: true,
-      userEvent: "select.search",
-    });
+    selectMatch(matches[index]);
   };
 
   input.oninput = () => refresh("first");

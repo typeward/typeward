@@ -528,7 +528,7 @@ pub(crate) struct BoundedOutput {
 }
 
 impl BoundedOutput {
-    fn success(&self) -> bool {
+    pub(crate) fn success(&self) -> bool {
         self.status.map(|s| s.success()).unwrap_or(false)
     }
 
@@ -820,7 +820,7 @@ async fn run_system_tex(
     // Spawn the absolute path resolved against PATH, never the bare name:
     // `current_dir(root)` would otherwise let Windows' CreateProcess execute a
     // planted `latexmk`/engine binary in a malicious project directory.
-    if let Ok(latexmk) = which::which("latexmk") {
+    if let Ok(latexmk) = crate::detect::resolve_program("latexmk") {
         let mut latexmk_args: Vec<String> = system_tex_flags(
             Some(engine_latexmk_flag(engine)),
             synctex,
@@ -874,7 +874,7 @@ async fn run_system_tex(
     }
 
     let bin_name = engine_binary(engine);
-    let bin = match which::which(bin_name) {
+    let bin = match crate::detect::resolve_program(bin_name) {
         Ok(path) => path,
         Err(_) => {
             accumulated_log.push_str(&format!(
@@ -1021,7 +1021,7 @@ async fn run_engine_recipe(
     let mut log = String::new();
     let mut last_engine_ok = false;
     for pass in passes {
-        let resolved = match which::which(&pass.program) {
+        let resolved = match crate::detect::resolve_program(&pass.program) {
             Ok(path) => path,
             Err(_) => {
                 if pass.is_engine {
@@ -1203,7 +1203,7 @@ async fn run_tectonic(
     }
     // Fall back to PATH — resolve the absolute path and spawn that, not the
     // bare name, so `current_dir(root)` can't redirect to a planted binary.
-    let tectonic = match which::which("tectonic") {
+    let tectonic = match crate::detect::resolve_program("tectonic") {
         Ok(path) => path,
         Err(_) => {
             return Err(
@@ -1251,8 +1251,7 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
     // Stale-aux wedge: biblatex macros in the .aux with no biblatex in the
     // current preamble (backend/package switch), or latexmk refusing to act
     // on a previously-failed run. Both clear the same way — clean aux files.
-    if log.contains("\\abx@aux@")
-        || log.contains("gave an error in previous invocation of latexmk")
+    if log.contains("\\abx@aux@") || log.contains("gave an error in previous invocation of latexmk")
     {
         out.push(Diagnostic {
             severity: "warning".into(),
@@ -1322,7 +1321,7 @@ pub async fn compile_typst(
     // CreateProcess search the project dir first, so a planted `typst.exe`
     // in a malicious project would run (argument/binary planting). `which`
     // resolves against the app's CWD/PATH, never the project.
-    let typst = which::which("typst").map_err(|_| {
+    let typst = crate::detect::resolve_program("typst").map_err(|_| {
         "typst is not on PATH — install it from https://typst.app/download or `cargo install typst-cli`"
             .to_string()
     })?;
@@ -1850,7 +1849,8 @@ mod tests {
             .await
         });
         tokio::time::sleep(Duration::from_millis(200)).await;
-        tx.send(true).expect("the run should still hold its receiver");
+        tx.send(true)
+            .expect("the run should still hold its receiver");
         let out = task
             .await
             .expect("task should join")

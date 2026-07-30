@@ -26,6 +26,7 @@ import { For, Show, createMemo, createResource, createSignal, onCleanup } from "
 import { Button } from "~/components/primitives/Button";
 import * as ipc from "~/ipc";
 import { project } from "~/stores/editor-store";
+import { bumpGitState } from "~/stores/git-store";
 import { integrationsSettings } from "~/stores/settings-store";
 
 const POLL_INTERVAL_MS = 2_000;
@@ -152,6 +153,9 @@ export const CommitPanel: Component = () => {
       const proj = project();
       if (!proj) return;
       await ipc.gitInit(proj.rootPath);
+      // Let the sidebar's `.git` probe re-run so the SCM tab reflects the new
+      // repo without a project reopen.
+      bumpGitState();
     });
 
   return (

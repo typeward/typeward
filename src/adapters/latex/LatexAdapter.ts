@@ -17,20 +17,13 @@ export const ensureShellEscapeTrust = async (project: Project): Promise<boolean>
   const current = await ipc.shellEscapeTrustGet(project.rootPath).catch(() => null);
   if (current === "granted") return true;
   if (current === "denied") return false;
-  const { ask } = await import("@tauri-apps/plugin-dialog");
-  const ok = await ask(
-    "This project requests shell-escape, which lets the document run arbitrary programs during compile. Allow it on this machine?",
-    {
-      title: "Allow shell-escape?",
-      kind: "warning",
-      okLabel: "Allow shell-escape",
-      cancelLabel: "Keep blocked",
-    },
-  );
-  await ipc
-    .shellEscapeTrustSet(project.rootPath, ok ? "granted" : "denied")
-    .catch(() => {});
-  return ok;
+  // The confirmation is owned by Rust (shell_escape_trust_set raises a native
+  // dialog the renderer can't fabricate, then returns the effective decision) —
+  // a renderer-side prompt here would double up and, worse, be forgeable.
+  const decision = await ipc
+    .shellEscapeTrustSet(project.rootPath, "granted")
+    .catch(() => "denied" as const);
+  return decision === "granted";
 };
 
 const compile = async (project: Project): Promise<CompileResult> => {

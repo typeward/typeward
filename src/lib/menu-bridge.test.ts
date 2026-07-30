@@ -51,26 +51,39 @@ describe("macOS menu / command registry drift", () => {
 
   it("menu dispatch treats gated-off and unknown ids as silent no-ops", () => {
     let ran = 0;
+    let gate = false;
+    // Use a real menu id (in MENU_COMMAND_IDS) so the allowlist lets it through
+    // and the when-gate is what decides.
     registerCommand({
-      id: "test.gatedOff",
-      title: "Gated off",
-      when: () => false,
+      id: "core.toggleFocusMode",
+      title: "Toggle focus mode",
+      when: () => gate,
       run: () => {
         ran += 1;
       },
     });
+    dispatchMenuCommand("core.toggleFocusMode"); // gated off
+    dispatchMenuCommand("test.notRegistered"); // unknown
+    expect(ran).toBe(0);
+    gate = true;
+    dispatchMenuCommand("core.toggleFocusMode"); // gated on
+    expect(ran).toBe(1);
+  });
+
+  it("menu dispatch ignores registered ids that aren't native-menu ids", () => {
+    let ran = 0;
+    // Even a live, gated-on command runs ONLY if it's a real menu id — the
+    // allowlist stops the app-wide menu:command event (reachable from the
+    // ipc_guard-restricted preview window) from invoking arbitrary commands.
     registerCommand({
-      id: "test.gatedOn",
-      title: "Gated on",
+      id: "test.notInMenu",
+      title: "Not a menu item",
       when: () => true,
       run: () => {
         ran += 1;
       },
     });
-    dispatchMenuCommand("test.gatedOff");
-    dispatchMenuCommand("test.notRegistered");
+    dispatchMenuCommand("test.notInMenu");
     expect(ran).toBe(0);
-    dispatchMenuCommand("test.gatedOn");
-    expect(ran).toBe(1);
   });
 });
