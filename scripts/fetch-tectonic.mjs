@@ -25,7 +25,7 @@
 // no Windows/arm64 leg; this only unblocks local ARM64 dev builds.)
 
 import { createWriteStream } from "node:fs";
-import { mkdir, rm, chmod, readdir, rename } from "node:fs/promises";
+import { mkdir, rm, chmod, readdir, rename, copyFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir, arch, platform } from "node:os";
@@ -53,6 +53,20 @@ async function verifyFile(path, expected, what) {
         `stale (bump it deliberately after checking the upstream release) or the download ` +
         `was tampered with.`,
     );
+  }
+}
+
+// Move the verified binary into place. `rename` is atomic but only within one
+// filesystem; on Windows CI the OS temp dir (C:) and the checkout (D:) are on
+// different drives, so a bare rename throws EXDEV. Fall back to copy + remove,
+// which crosses devices.
+async function moveInto(src, dest) {
+  try {
+    await rename(src, dest);
+  } catch (e) {
+    if (e.code !== "EXDEV") throw e;
+    await copyFile(src, dest);
+    await rm(src, { force: true });
   }
 }
 
@@ -101,7 +115,7 @@ async function main() {
       throw new Error(`Could not find ${spec.exe} in extracted archive at ${work}`);
     }
     await verifyFile(found, spec.exeSha256, `${spec.exe} (extracted)`);
-    await rename(found, finalPath);
+    await moveInto(found, finalPath);
     if (platform() !== "win32") {
       await chmod(finalPath, 0o755);
     }
