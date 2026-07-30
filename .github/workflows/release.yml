@@ -70,6 +70,10 @@ jobs:
             runner: macos-latest
             os: macos
             target: aarch64-apple-darwin
+          - label: macOS (Intel)
+            runner: macos-13
+            os: macos
+            target: x86_64-apple-darwin
           - label: Windows (x64)
             runner: windows-latest
             os: windows
@@ -127,7 +131,7 @@ jobs:
         with:
           # Pinned (matches src-tauri/rust-toolchain.toml) so rebuilding a tag
           # later uses the same compiler instead of the moving stable channel.
-          toolchain: '1.94.1'
+          toolchain: '1.96.0'
           targets: ${{ matrix.target }}
 
       - name: Cargo cache
@@ -281,6 +285,26 @@ jobs:
           projectPath: app
           args: ${{ steps.sign.outputs.updater == 'true' && format('--config {0}/updater.overlay.json', runner.temp) || '' }}
 
+      # Both macOS legs emit bundle/macos/Typeward.app.tar.gz (Tauri names the
+      # updater bundle after productName only — no arch, unlike the dmg). Without
+      # this, the publish job's flatten (cp into one dir) would collapse the two
+      # into one file and build-latest-json would map the survivor to
+      # darwin-aarch64, so Apple-Silicon users would auto-update to the Intel
+      # bundle and Intel users would get no entry. Tag each with the target so
+      # both survive and platformKey classifies them (it matches x86_64/aarch64).
+      # No-op when the updater is dormant (no .app.tar.gz produced).
+      - name: Disambiguate macOS updater bundle by arch
+        if: matrix.os == 'macos'
+        shell: bash
+        working-directory: app/src-tauri/target/release/bundle/macos
+        run: |
+          shopt -s nullglob
+          for f in *.app.tar.gz; do
+            base="${f%.app.tar.gz}"
+            mv "$f" "${base}_${{ matrix.target }}.app.tar.gz"
+            [ -f "$f.sig" ] && mv "$f.sig" "${base}_${{ matrix.target }}.app.tar.gz.sig"
+          done
+
       # Installers + updater bundles + their .sig signatures. Per-OS globs that
       # don't match (a leg only builds its own OS's targets) are ignored. The
       # raw .app directory is intentionally excluded — only the .app.tar.gz
@@ -288,7 +312,9 @@ jobs:
       - name: Collect artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-bundle-${{ matrix.os }}
+          # Per-TARGET name: the two macOS legs share matrix.os == 'macos', so a
+          # matrix.os name would collide the arm64 and Intel uploads.
+          name: release-bundle-${{ matrix.target }}
           # Each leg builds only its own OS's targets, so at least one glob
           # always matches; zero files means this platform's build silently
           # produced nothing — fail loudly rather than drop it from the release.
@@ -365,6 +391,7 @@ jobs:
           }
           copy_one 'Typeward_*_x64-setup.exe' 'Typeward-windows-x64-setup.exe'
           copy_one 'Typeward_*_aarch64.dmg'   'Typeward-macos-aarch64.dmg'
+          copy_one 'Typeward_*_x64.dmg'        'Typeward-macos-x64.dmg'
           copy_one 'Typeward_*_amd64.AppImage' 'Typeward-linux-x86_64.AppImage'
           copy_one 'Typeward_*_amd64.deb'      'Typeward-linux-amd64.deb'
           echo "Assets:"; ls -1

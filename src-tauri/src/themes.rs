@@ -180,7 +180,7 @@ pub async fn custom_themes_list(app: tauri::AppHandle) -> CmdResult<CustomThemes
             }
         }
 
-        themes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        themes.sort_by_key(|a| a.name.to_lowercase());
         Ok(CustomThemesResult { themes, warnings })
     })
     .await

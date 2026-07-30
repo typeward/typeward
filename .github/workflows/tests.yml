@@ -109,7 +109,8 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to an explicit version for reproducible CI — bump deliberately.
+          toolchain: "1.96.0"
 
       # Was `install-action@cargo-audit`, a per-tool alias tag that MOVES with
       # every release of the action. The versioned action + explicit `tool` is
@@ -186,7 +187,7 @@ jobs:
         with:
           # Pinned to match src-tauri/rust-toolchain.toml; rustfmt + clippy for
           # the static-analysis gates below.
-          toolchain: '1.94.1'
+          toolchain: '1.96.0'
           components: rustfmt, clippy
 
       - name: Cargo cache
@@ -227,13 +228,15 @@ jobs:
           cd app/src-tauri/binaries
           ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
 
+      # Formatting is platform-independent, so the fmt gate runs on Linux only;
+      # clippy runs on every matrix leg to cover the cfg(windows) subprocess /
+      # keyring code paths.
       - name: Rustfmt
         if: matrix.os == 'linux'
         run: cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
 
-      - name: Clippy
-        if: matrix.os == 'linux'
-        run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Clippy (lints gate)
+        run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Cargo test
-        run: cargo test --manifest-path app/src-tauri/Cargo.toml
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml --locked

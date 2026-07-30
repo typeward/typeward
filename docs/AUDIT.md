@@ -4,6 +4,37 @@ Audit of the Tauri 2 + SolidJS app at commit `ac227ef`. Builds on the prior audi
 CLAUDE.md (2026-06-10/11/14, 2026-07-02, 2026-07-13); items those passes fixed or explicitly
 deferred are not re-flagged here.
 
+## 0. Reconciliation with the TW-S self-review pass (merged 2026-07-30)
+
+A second, independent audit ran in parallel on another machine (the `fix/tectonic-win-arm64-sidecar`
+branch — ARM/Intel build fixes plus the TW-S1/S2/S3 remediations), landed on `main` via PR #4, and
+was then merged with this modernization branch. Where both passes touched the same surface, the
+merge kept the stronger side:
+
+- **Crash-recovery remount** (H2 / TW-S1-02): kept the TW-S version — it only bumps the editor's
+  adopt-generation when recovered content actually differs, avoiding a needless remount.
+- **Subprocess bounding** (M1/M2 / TW-S): kept the TW-S structure — pandoc export plans off the
+  event loop (`spawn_blocking`) and both pandoc and per-annotation synctex route through the single
+  `compile::run_bounded` chokepoint. This branch's parallel `proc::run_bounded_sync` module was
+  dropped as a redundant second runner.
+- **Pandoc HTML `--embed-resources`**: kept **off** (this branch's decision + module doc rationale):
+  on untrusted project content it is an egress + local-file-read channel outside the outbound
+  allowlist. This differs from the binary `main` shipped, which passed the flag for a portable
+  single file.
+- **Annotated-PDF export**: kept the TW-S version — it caps the input PDF size up front (before
+  spawning up to 500 synctex processes) and resolves the synctex binary once.
+- **CI**: unioned both — this branch's `cargo fmt --check` gate + the TW-S `--locked` clippy gate,
+  clippy on every OS leg, and the release artifact renamed per-`matrix.target` (the two macOS legs
+  would otherwise collide) while keeping `if-no-files-found: error`.
+- **Toolchain**: standardized on the TW-S pin **1.96.0**, recorded in the new
+  `src-tauri/rust-toolchain.toml` so local `cargo` and CI agree. harper-core 2.7 still needs the
+  vendored `as fn(...)` patch on rustc ≥ 1.93 (verified on 1.96.0).
+- **Dependency bumps** present on both (DOMPurify, linkify-it, nanoid, etc.) deduplicated cleanly;
+  `npm audit` and `cargo` are clean on the merged tree.
+
+The TW-S pass's own findings table lives in the root [`AUDIT.md`](../AUDIT.md); its per-platform
+release steps in [`CHECKLIST.md`](../CHECKLIST.md).
+
 ## 1. Inventory
 
 ### Repo shape

@@ -18,6 +18,12 @@ use crate::project::{self, Project};
 /// cloned repo could ship with an unbounded count.
 const MAX_ANNOTATIONS: usize = 500;
 
+/// Upper bound on the PDF handed to lopdf. `pdf_path` is renderer-supplied and a
+/// malicious project can plant an oversized `.pdf` under the tree; lopdf parses
+/// the whole file in memory, so cap it up front (mirrors the byte-bounded IPC
+/// readers). Build PDFs are typically well under 100 MiB.
+const MAX_PDF_BYTES: u64 = 512 * 1024 * 1024;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnnotationInput {
@@ -70,14 +76,30 @@ fn run(
         return Err("compiled PDF not found — build the project first".into());
     };
 
-    // If synctex isn't installed every annotation would skip for the same
-    // reason; surface that as one actionable error instead of an all-skipped
-    // no-op result.
-    if !annotations.is_empty() && crate::detect::resolve_program("synctex").is_err() {
-        return Err(
-            "SyncTeX is unavailable — annotation placement needs a LaTeX build with SyncTeX".into(),
-        );
+    // Bound the PDF parse UP FRONT — before any synctex work — so an oversized
+    // planted .pdf is rejected without first spawning up to 500 synctex
+    // processes. lopdf reads the whole file into memory.
+    let pdf_size = std::fs::metadata(&pdf).map_err(|e| e.to_string())?.len();
+    if pdf_size > MAX_PDF_BYTES {
+        return Err(format!(
+            "PDF is too large to annotate ({} MiB; limit {} MiB)",
+            pdf_size / (1024 * 1024),
+            MAX_PDF_BYTES / (1024 * 1024)
+        ));
     }
+
+    // Resolve synctex ONCE, not per annotation (a review-heavy export otherwise
+    // PATH-scans up to 500×). If it isn't installed every annotation would skip
+    // for the same reason, so surface that as one actionable error instead of an
+    // all-skipped no-op result.
+    let synctex = if annotations.is_empty() {
+        None
+    } else {
+        Some(crate::detect::resolve_program("synctex").map_err(|_| {
+            "SyncTeX is unavailable — annotation placement needs a LaTeX build with SyncTeX"
+                .to_string()
+        })?)
+    };
 
     let mut skipped: Vec<SkippedAnnotation> = Vec::new();
     // (index into annotations, page, synctex x, synctex y).
@@ -87,8 +109,6 @@ fn run(
         // Bound the per-annotation synctex spawns — review threads come from a
         // project-local sidecar a cloned repo could ship with thousands of
         // entries (mirrors todo_scan's caps). Excess is reported, not silent.
-        // The COUNT is capped here; each individual spawn is separately
-        // deadline-bounded inside synctex::forward (see proc::run_bounded_sync).
         if idx >= MAX_ANNOTATIONS {
             skipped.push(skip(ann, "annotation limit reached (max 500)"));
             continue;
@@ -100,7 +120,11 @@ fn run(
                 continue;
             }
         };
-        match crate::synctex::forward(&pdf, &source, ann.line)? {
+        let loc = match &synctex {
+            Some(sx) => crate::synctex::forward_with(sx, &pdf, &source, ann.line)?,
+            None => None,
+        };
+        match loc {
             Some(loc) => placements.push((idx, loc.page, loc.x, loc.y)),
             None => skipped.push(skip(ann, "no SyncTeX mapping")),
         }

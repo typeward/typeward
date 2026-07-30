@@ -9,7 +9,6 @@
 //! When the CLI isn't on PATH we return `Ok(None)` so the frontend can
 //! quietly disable sync features instead of erroring.
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -17,11 +16,42 @@ use serde::Serialize;
 
 use crate::project;
 
-/// A synctex lookup is a single indexed seek — seconds at worst on a big
-/// `.synctex.gz`. `export_annotated` drives up to 500 of these in a row over
-/// project data an attacker can shape, so each one is bounded rather than
-/// trusted to return.
-const SYNCTEX_TIMEOUT: Duration = Duration::from_secs(60);
+/// SyncTeX lookups are fast; a hung CLI — e.g. gunzipping a malformed or
+/// decompression-bomb `.synctex.gz` shipped inside a malicious project — must
+/// not park the blocking worker. Bounds each spawn; export_annotated calls
+/// `forward` up to 500× per export.
+const SYNCTEX_TIMEOUT: Duration = Duration::from_secs(30);
+/// synctex emits small text; cap the capture defensively.
+const SYNCTEX_OUTPUT_CAP: usize = 1024 * 1024;
+
+/// Run the `which`-resolved synctex CLI through the shared bounded runner
+/// (deadline + process-tree kill + capped capture + stdin=null). Returns the
+/// stdout text on success, or `None` on timeout / non-zero exit — the same
+/// graceful "no sync" the callers already expect.
+///
+/// MUST be called from a blocking thread (a `spawn_blocking` closure), never a
+/// tokio runtime worker/async task: `Handle::current().block_on` panics with
+/// "Cannot start a runtime from within a runtime" if called from async context.
+/// All callers (`forward`/`inverse`, and via them the synctex commands +
+/// annotated export) already run inside `spawn_blocking`; keep it that way.
+fn run_synctex_bounded(
+    synctex: &Path,
+    args: &[String],
+    cwd: &Path,
+) -> Result<Option<String>, String> {
+    let out = tokio::runtime::Handle::current().block_on(crate::compile::run_bounded(
+        synctex,
+        args,
+        cwd,
+        SYNCTEX_TIMEOUT,
+        SYNCTEX_OUTPUT_CAP,
+        None,
+    ))?;
+    if out.timed_out || !out.status.map(|s| s.success()).unwrap_or(false) {
+        return Ok(None);
+    }
+    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForwardLocation {
@@ -45,7 +75,7 @@ pub struct InverseLocation {
 ///
 /// Returns the FIRST result block (synctex CLI may emit several for a
 /// single query — they typically represent close-by hbox/vbox candidates).
-pub fn forward(
+pub(crate) fn forward(
     pdf_path: &Path,
     source_file: &Path,
     line: u32,
@@ -53,6 +83,18 @@ pub fn forward(
     let Ok(synctex) = crate::detect::resolve_program("synctex") else {
         return Ok(None);
     };
+    forward_with(&synctex, pdf_path, source_file, line)
+}
+
+/// `forward` with a pre-resolved synctex path — lets a caller that runs many
+/// lookups (annotated export, up to 500) resolve the binary once instead of
+/// PATH-scanning per call.
+pub(crate) fn forward_with(
+    synctex: &Path,
+    pdf_path: &Path,
+    source_file: &Path,
+    line: u32,
+) -> Result<Option<ForwardLocation>, String> {
     if !pdf_path.exists() {
         return Ok(None);
     }
@@ -60,28 +102,23 @@ pub fn forward(
     // synctex view -i <line>:<col>:<file> -o <pdf>. Spawn the absolute path,
     // not the bare name, so the binary is never resolved from a current dir.
     let input = format!("{line}:1:{}", source_file.display());
-    let args: Vec<&OsStr> = vec![
-        OsStr::new("view"),
-        OsStr::new("-i"),
-        OsStr::new(&input),
-        OsStr::new("-o"),
-        pdf_path.as_os_str(),
+    let args = [
+        "view".to_string(),
+        "-i".to_string(),
+        input,
+        "-o".to_string(),
+        pdf_path.to_string_lossy().into_owned(),
     ];
-    let output = crate::proc::run_bounded_sync(&synctex, &args, None, SYNCTEX_TIMEOUT)
-        .map_err(|e| format!("synctex spawn failed: {e}"))?;
-
-    // A killed-on-deadline run has no usable answer; degrade to "no sync"
-    // exactly like a non-zero exit rather than failing the whole export.
-    if output.timed_out || !output.success() {
+    let cwd = pdf_path.parent().unwrap_or_else(|| Path::new("."));
+    let Some(text) = run_synctex_bounded(synctex, &args, cwd)? else {
         return Ok(None);
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
+    };
     Ok(parse_forward_result(&text))
 }
 
 /// Inverse search: PDF page+coordinates → source position. `x` and `y`
 /// are in PDF points (top-left origin).
-pub fn inverse(
+pub(crate) fn inverse(
     pdf_path: &Path,
     page: u32,
     x: f64,
@@ -97,14 +134,11 @@ pub fn inverse(
     // synctex edit -o <page>:<x>:<y>:<pdf>. Spawn the absolute path, not the
     // bare name, so the binary is never resolved from a current dir.
     let arg = format!("{page}:{x}:{y}:{}", pdf_path.display());
-    let args: Vec<&OsStr> = vec![OsStr::new("edit"), OsStr::new("-o"), OsStr::new(&arg)];
-    let output = crate::proc::run_bounded_sync(&synctex, &args, None, SYNCTEX_TIMEOUT)
-        .map_err(|e| format!("synctex spawn failed: {e}"))?;
-
-    if output.timed_out || !output.success() {
+    let args = ["edit".to_string(), "-o".to_string(), arg];
+    let cwd = pdf_path.parent().unwrap_or_else(|| Path::new("."));
+    let Some(text) = run_synctex_bounded(&synctex, &args, cwd)? else {
         return Ok(None);
-    }
-    let text = String::from_utf8_lossy(&output.stdout);
+    };
     Ok(parse_inverse_result(&text))
 }
 

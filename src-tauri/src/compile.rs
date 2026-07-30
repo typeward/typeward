@@ -522,9 +522,9 @@ fn system_tex_flags(
 pub(crate) struct BoundedOutput {
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
-    status: Option<std::process::ExitStatus>,
+    pub(crate) status: Option<std::process::ExitStatus>,
     pub(crate) timed_out: bool,
-    cancelled: bool,
+    pub(crate) cancelled: bool,
 }
 
 impl BoundedOutput {
@@ -696,7 +696,7 @@ async fn kill_compile_child(child: &mut tokio::process::Child) {
 /// `timed_out` set so the partial log still reaches the LogsDrawer. A fired
 /// `cancel` flag reuses the exact same kill machinery and comes back as `Ok`
 /// with `cancelled` set; the timeout semantics are untouched.
-async fn run_bounded(
+pub(crate) async fn run_bounded(
     program: &Path,
     args: &[String],
     cwd: &Path,
@@ -792,20 +792,6 @@ async fn run_bounded(
         timed_out,
         cancelled: was_cancelled,
     })
-}
-
-/// Bounded spawn for non-compile tools that still run over untrusted project
-/// content (pandoc export today). Same deadline / tree-kill / capped-capture
-/// machinery as the compile passes — the one chokepoint every subprocess in
-/// this crate goes through — minus the cancel channel, which only the compile
-/// IPC exposes.
-pub(crate) async fn run_bounded_external(
-    program: &Path,
-    args: &[String],
-    cwd: &Path,
-    timeout: Duration,
-) -> Result<BoundedOutput, String> {
-    run_bounded(program, args, cwd, timeout, COMPILE_OUTPUT_CAP, None).await
 }
 
 /// `! `-prefixed so `parse_latex_log` lifts the timeout into an error
@@ -1005,8 +991,8 @@ fn recipe_passes(
 /// tracks the last engine pass's success (paired with the pdf-exists check in
 /// `compile_latex`). Resolves each program to its absolute path via `which`,
 /// mirroring `run_system_tex`, and spawns that with `current_dir(root)`.
-// Every parameter is an independent compile knob read straight from settings;
-// bundling them into a struct would only move the same list one level out.
+// Recipe assembly threads the build knobs positionally; a params struct here
+// would just relocate the same fields without improving the call site.
 #[allow(clippy::too_many_arguments)]
 async fn run_engine_recipe(
     root_file: &str,

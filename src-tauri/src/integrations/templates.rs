@@ -127,7 +127,7 @@ pub async fn templates_list(app: AppHandle) -> Result<Vec<TemplateManifest>, Str
         if custom_root.exists() {
             scan_root(&custom_root, TemplateSource::Custom, &mut out)?;
         }
-        out.sort_by(|a, b| a.doc.name.to_lowercase().cmp(&b.doc.name.to_lowercase()));
+        out.sort_by_key(|a| a.doc.name.to_lowercase());
         Ok(out)
     })
     .await

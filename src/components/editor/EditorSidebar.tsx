@@ -471,7 +471,10 @@ export const EditorSidebar: Component<EditorSidebarProps> = (props) => {
 
   const copyRelPath = async (node: FileNode) => {
     try {
-      await navigator.clipboard.writeText(node.relPath);
+      // The Tauri clipboard plugin, not navigator.clipboard: the latter needs a
+      // secure context + user-gesture and is unreliable under WebKitGTK (Linux).
+      const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
+      await writeText(node.relPath);
     } catch (e) {
       notifyError("Couldn't copy path", describeIpcError(e));
     }

@@ -16,6 +16,7 @@ import { handleMenuKeydown, useMenuOpenFocus } from "~/lib/menu-nav";
 import { offsetToLine } from "~/lib/reviews/lines";
 import { notifyInfo, notifySuccess } from "~/lib/toast";
 import { recordError } from "~/lib/telemetry";
+import { isTauriMobile } from "~/lib/platform";
 import { openFiles, project } from "~/stores/editor-store";
 import { allThreads } from "~/stores/review-store";
 
@@ -30,7 +31,10 @@ export const ExportMenu: Component<{
   pdfPath: string | null;
 }> = (props) => {
   const [open, setOpen] = createSignal(false);
-  const [busy, setBusy] = createSignal(false);
+  // One export runs at a time; the key names WHICH row is running so only that
+  // row shows the spinner (busy() still disables all rows).
+  const [busyKey, setBusyKey] = createSignal<string | null>(null);
+  const busy = () => busyKey() !== null;
   const [error, setError] = createSignal<string | null>(null);
   let rootRef: HTMLDivElement | undefined;
   installDismiss(() => rootRef, open, () => setOpen(false));
@@ -61,7 +65,7 @@ export const ExportMenu: Component<{
     const source = props.pdfPath;
     if (!source || busy()) return;
     setError(null);
-    setBusy(true);
+    setBusyKey("pdf");
     try {
       const suggested = source.split(/[\\/]/).pop() ?? "document.pdf";
       await copyToChosenDest(source, suggested, { name: "PDF", extensions: ["pdf"] });
@@ -69,7 +73,7 @@ export const ExportMenu: Component<{
       setError(describeIpcError(e));
       recordError("export-pdf", "PDF export failed", e);
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   };
 
@@ -77,7 +81,7 @@ export const ExportMenu: Component<{
     const p = project();
     if (!p || busy()) return;
     setError(null);
-    setBusy(true);
+    setBusyKey("zip");
     try {
       const bundle = await ipc.exportProjectZip(p);
       await copyToChosenDest(bundle, `${p.name}-source.zip`, {
@@ -88,7 +92,7 @@ export const ExportMenu: Component<{
       setError(describeIpcError(e));
       recordError("export-zip", "source bundle export failed", e);
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   };
 
@@ -96,7 +100,7 @@ export const ExportMenu: Component<{
     const p = project();
     if (!p || busy()) return;
     setError(null);
-    setBusy(true);
+    setBusyKey(format);
     try {
       const artifact = await ipc.exportPandoc(p, format);
       await copyToChosenDest(artifact, `${p.name}.${format}`, {
@@ -107,7 +111,7 @@ export const ExportMenu: Component<{
       setError(describeIpcError(e));
       recordError(`export-${format}`, `${format} export failed`, e);
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   };
 
@@ -134,7 +138,7 @@ export const ExportMenu: Component<{
     const threads = openThreads();
     if (threads.length === 0) return;
     setError(null);
-    setBusy(true);
+    setBusyKey("annotated");
     try {
       // Read each thread's file once; prefer the live buffer (may hold unsaved
       // edits that shifted offsets) and fall back to disk for unopened files.
@@ -179,7 +183,7 @@ export const ExportMenu: Component<{
       setError(describeIpcError(e));
       recordError("export-annotated", "annotated PDF export failed", e);
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   };
 
@@ -188,6 +192,7 @@ export const ExportMenu: Component<{
     hint: string;
     icon: JSX.Element;
     disabled: boolean;
+    spinning: boolean;
     onSelect: () => void;
   }> = (o) => (
     <button
@@ -202,7 +207,7 @@ export const ExportMenu: Component<{
         class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
         style={{ background: "var(--color-control-fill)" }}
       >
-        <Show when={busy()} fallback={o.icon}>
+        <Show when={o.spinning} fallback={o.icon}>
           <Loader2 size={13} class="animate-spin" />
         </Show>
       </span>
@@ -243,6 +248,7 @@ export const ExportMenu: Component<{
             hint={props.pdfPath ? "Save the compiled PDF as…" : "Compile first"}
             icon={<FileDown size={13} />}
             disabled={!props.pdfPath || busy()}
+            spinning={busyKey() === "pdf"}
             onSelect={() => void exportPdf()}
           />
           <OptionRow
@@ -250,29 +256,38 @@ export const ExportMenu: Component<{
             hint="Sources only — build junk, .git and .typeward excluded"
             icon={<Package size={13} />}
             disabled={!project() || busy()}
+            spinning={busyKey() === "zip"}
             onSelect={() => void exportZip()}
           />
-          <OptionRow
-            label="PDF + annotations"
-            hint={annHint()}
-            icon={<MessageSquare size={13} />}
-            disabled={!annEnabled()}
-            onSelect={() => void exportAnnotated()}
-          />
-          <OptionRow
-            label="Word (.docx)"
-            hint="Pandoc → Word — complex macros may not convert"
-            icon={<FileType2 size={13} />}
-            disabled={!project() || busy()}
-            onSelect={() => void exportViaPandoc("docx")}
-          />
-          <OptionRow
-            label="HTML"
-            hint="Pandoc → standalone HTML — complex macros may not convert"
-            icon={<FileCode size={13} />}
-            disabled={!project() || busy()}
-            onSelect={() => void exportViaPandoc("html")}
-          />
+          {/* Pandoc + SyncTeX-annotated exports are desktop-only Rust commands
+              (#[cfg(desktop)]); on mobile they don't exist, so hide the rows
+              rather than surface calls that always error. */}
+          <Show when={!isTauriMobile()}>
+            <OptionRow
+              label="PDF + annotations"
+              hint={annHint()}
+              icon={<MessageSquare size={13} />}
+              disabled={!annEnabled()}
+              spinning={busyKey() === "annotated"}
+              onSelect={() => void exportAnnotated()}
+            />
+            <OptionRow
+              label="Word (.docx)"
+              hint="Pandoc → Word — complex macros may not convert"
+              icon={<FileType2 size={13} />}
+              disabled={!project() || busy()}
+              spinning={busyKey() === "docx"}
+              onSelect={() => void exportViaPandoc("docx")}
+            />
+            <OptionRow
+              label="HTML"
+              hint="Pandoc → standalone HTML — complex macros may not convert"
+              icon={<FileCode size={13} />}
+              disabled={!project() || busy()}
+              spinning={busyKey() === "html"}
+              onSelect={() => void exportViaPandoc("html")}
+            />
+          </Show>
           <Show when={error()}>
             <div class="select-text px-2 pt-1 text-xs" style={{ color: "var(--color-err)" }}>
               {error()}

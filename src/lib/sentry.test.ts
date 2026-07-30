@@ -33,7 +33,14 @@ describe("initSentry", () => {
     initSentry();
     expect(h.init).toHaveBeenCalledOnce();
     const options = h.init.mock.calls[0][0] as Record<string, unknown>;
-    expect(Object.keys(options).sort()).toEqual(["dsn", "environment"]);
+    expect(Object.keys(options).sort()).toEqual([
+      "beforeSend",
+      "dsn",
+      "environment",
+      "sendDefaultPii",
+    ]);
+    expect(options.sendDefaultPii).toBe(false);
+    expect(options.beforeSend).toBeTypeOf("function");
     // The "Share crash reports" toggle consents to exactly crash/error
     // events; any of these options would silently widen that egress.
     expect(options).not.toHaveProperty("integrations");
@@ -65,6 +72,53 @@ describe("shutdownSentry", () => {
     expect(h.close).toHaveBeenCalledWith(2000);
     initSentry();
     expect(h.init).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("scrubPaths — egress path scrubber (TW-S2-05)", () => {
+  it("removes the username from Windows and POSIX home paths", async () => {
+    const { scrubPaths } = await load();
+    expect(scrubPaths("read C:\\Users\\marek\\Documents\\main.tex")).not.toContain(
+      "marek",
+    );
+    expect(scrubPaths("open /home/marek/proj/main.tex")).not.toContain("marek");
+    expect(scrubPaths("open /Users/marek/proj/main.tex")).not.toContain("marek");
+  });
+
+  it("removes the surname from home paths whose username contains a space", async () => {
+    const { scrubPaths } = await load();
+    expect(
+      scrubPaths("read C:\\Users\\First Last\\Documents\\main.tex"),
+    ).not.toContain("Last");
+    expect(scrubPaths("open /Users/First Last/proj/main.tex")).not.toContain(
+      "Last",
+    );
+  });
+
+  it("collapses non-home POSIX absolute paths to a basename, but not URLs", async () => {
+    const { scrubPaths } = await load();
+    const out = scrubPaths("spawn /opt/homebrew/bin/pandoc failed");
+    expect(out).toContain("pandoc");
+    expect(out).not.toContain("homebrew");
+    // an already-collapsed home path keeps its structure
+    expect(scrubPaths("~/proj/main.tex")).toBe("~/proj/main.tex");
+    expect(scrubPaths("GET https://export.arxiv.org/api/query")).toBe(
+      "GET https://export.arxiv.org/api/query",
+    );
+  });
+
+  it("reduces a space-free Windows absolute path to its basename", async () => {
+    const { scrubPaths } = await load();
+    const out = scrubPaths("spawn C:\\tools\\bin\\pandoc.exe failed");
+    expect(out).toContain("pandoc.exe");
+    expect(out).not.toContain("tools");
+  });
+
+  it("leaves https URLs and path-free messages intact", async () => {
+    const { scrubPaths } = await load();
+    const u = "https://export.arxiv.org/api/query?id_list=2401.00001";
+    expect(scrubPaths(u)).toBe(u);
+    expect(scrubPaths("network timed out")).toBe("network timed out");
   });
 });
 

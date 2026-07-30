@@ -183,7 +183,9 @@ async fn start_lsp_impl(
             match read_framed(&mut reader).await {
                 Ok(Some(payload)) => {
                     let event = format!("lsp:{}:message", reader_id);
-                    if let Err(e) = reader_app.emit(&event, payload) {
+                    if let Err(e) =
+                        reader_app.emit_to(crate::ipc_guard::MAIN_LABEL, &event, payload)
+                    {
                         eprintln!("[lsp:{}] emit failed: {}", reader_id, e);
                     }
                 }
