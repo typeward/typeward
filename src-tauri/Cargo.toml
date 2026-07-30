@@ -47,7 +47,13 @@ dirs = "6"
 # loopback redirect server. Kept behind project-scoped IPC commands so the
 # capability surface stays minimal.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "gzip", "brotli"] }
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+# v4 dropped the per-OS feature flags (apple-native / windows-native /
+# sync-secret-service): the default `v1` feature now registers the platform
+# stores itself (macOS/Windows keychain + a pure-Rust zbus Secret Service on
+# Linux, which also removes the libdbus build dep). Keep default features — the
+# `v1` Entry API is what credentials.rs uses. Do NOT set default-features=false
+# (that trips keyring's own compile_error for having no store feature).
+keyring = "4"
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
 base64 = "0.22"
 rand = "0.9"

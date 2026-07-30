@@ -62,14 +62,16 @@ fn validate(service: &str, account: &str) -> Result<String, CredentialError> {
     Ok(format!("{SERVICE_PREFIX}.{service}"))
 }
 
-/// `keyring` 3.x selects its backend by target: Apple (macOS/iOS), Windows
-/// Credential Manager, or Secret Service (Linux/BSD). Every other target —
-/// Android today — falls through to the crate's `mock` store, which is
-/// per-`Entry` and in-memory: `set_secret` would report success, and the next
-/// IPC call's fresh `Entry` would read back `None`. A silent write-to-nowhere
-/// for OAuth tokens and API keys is worse than no support, so a target with no
-/// real keystore is a hard, explicit failure at the boundary. Shipping Android
-/// means implementing a Keystore-backed store here first.
+/// `keyring` 4's default `v1` feature registers a real OS store for macOS +
+/// Windows (Credential Manager) + Secret Service (Linux/BSD, via pure-Rust
+/// zbus). A target with no registered store makes `Entry::new` fail with
+/// `NoDefaultStore` instead of v3's silent in-memory `mock` (where a write
+/// "succeeded" and the next `Entry` read back `None` — a write-to-nowhere for
+/// OAuth tokens and API keys). We keep this explicit boundary guard regardless
+/// so an unsupported target fails clearly and early. (iOS is listed but v4's
+/// `v1` wires only the macOS keychain, not iOS — latent until an iOS build
+/// ships, and it degrades to `NoDefaultStore`, never a silent mock.) Shipping
+/// Android means registering a Keystore-backed store here first.
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
