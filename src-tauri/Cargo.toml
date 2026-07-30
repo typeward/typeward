@@ -85,11 +85,14 @@ harper-typst = "2.7"
 quick-xml = "0.41"
 percent-encoding = "2"
 bytes = "1"
-# Held at 0.46.x for its build tooling, NOT for reqwest anymore: reqwest 0.13 is
-# already in the dependency tree, so the old "0.46 keeps us on reqwest ^0.12"
-# rationale is stale. The reason to hold is that 0.47+ can pull aws-lc-sys
-# (cmake/NASM build hazard); re-verify that before bumping.
-sentry = { version = "0.46.2", default-features = false, features = ["reqwest", "rustls"] }
+# Sentry crash reporting (one-shot client in diagnostics.rs). Uses ONLY the
+# `reqwest` feature, deliberately NOT `rustls`: sentry's `rustls` feature selects
+# rustls with the aws-lc-rs provider, which drags in aws-lc-sys → cmake + NASM
+# (a real build hazard, worst on Windows CI). The `reqwest` feature alone gives
+# sentry its own reqwest 0.13 transport on ring-based rustls-tls (no aws-lc, no
+# native-tls) — matching the app's ring TLS stack. Do NOT add `rustls` back here
+# or the aws-lc build hazard returns. (Unpinned 0.46.2 → 0.48.5 on 2026-07-30.)
+sentry = { version = "0.48.5", default-features = false, features = ["reqwest"] }
 uuid = { version = "1.23.4", features = ["v4"] }
 os_info = { version = "3.15.0", default-features = false }
 
