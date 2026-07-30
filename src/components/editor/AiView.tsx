@@ -22,7 +22,7 @@ import {
   createMemo,
   createResource,
   createSignal,
-  onMount,
+  on,
 } from "solid-js";
 
 import {
@@ -42,6 +42,7 @@ import { describeIpcError } from "~/lib/errors";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { notifyError, notifyInfo } from "~/lib/toast";
+import { project } from "~/stores/editor-store";
 import {
   decorateCodeBlocks,
   renderAssistantMarkdown,
@@ -84,13 +85,24 @@ export const AiView: Component = () => {
   let scrollEl: HTMLDivElement | undefined;
   let fileInput: HTMLInputElement | undefined;
 
-  onMount(() => {
-    void ensureConversationsLoaded().then(() => {
-      if (!activeConversationId() && conversations().length > 0) {
-        selectConversation(conversations()[0].id);
-      }
-    });
-  });
+  // Load this project's conversations on mount AND whenever the project changes
+  // under a still-mounted pane (a project switch leaves TextShell/AiView
+  // mounted, and the store's switch effect clears conversations without
+  // reloading). onMount-only would leave project B showing an empty list until
+  // the pane was toggled. ensureConversationsLoaded guards on loadedRoot, so
+  // re-running is idempotent.
+  createEffect(
+    on(
+      () => project()?.rootPath ?? null,
+      () => {
+        void ensureConversationsLoaded().then(() => {
+          if (!activeConversationId() && conversations().length > 0) {
+            selectConversation(conversations()[0].id);
+          }
+        });
+      },
+    ),
+  );
 
   const provider = () => activeProvider(integrationsSettings().ai.ollamaBaseUrl);
 

@@ -510,6 +510,10 @@ pub async fn history_list_project(
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
         let store = store_dir(&app, &root)?;
+        // Serialize against writers (record/restore/clear hold the same lock)
+        // so a read can't observe the store mid-prune. index.json itself is
+        // written atomically, so this is defense-in-depth for the content-blob
+        // read paths and a consistent project-wide snapshot.
         let lock = project_mutex(&project_id(&root));
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let index = read_index(&store).map_err(err)?;
@@ -543,6 +547,8 @@ pub async fn history_read_version(
         let root = PathBuf::from(&project_root);
         project::require_registered_root(&root).map_err(err)?;
         let store = store_dir(&app, &root)?;
+        // Guard against a concurrent prune (record/restore) deleting the blob
+        // mid-read; those writers hold the same per-project lock.
         let lock = project_mutex(&project_id(&root));
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         read_version_in_store(&store, &rel_path, &hash).map_err(err)

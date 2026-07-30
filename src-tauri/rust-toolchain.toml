@@ -1,8 +1,11 @@
 # Pin the Rust toolchain so a release rebuilt from the same tag uses the same
-# compiler (CI previously floated on the moving `stable` channel). 1.94.1 is the
-# version this codebase — including harper-core 2.7 without the old vendor patch
-# — is verified to build on. Bumping is a deliberate, separate step (re-run
-# clippy + tests on the new compiler first).
+# compiler (CI previously floated on the moving `stable` channel). Keep this in
+# lockstep with the `toolchain:` pins in .github/workflows/{build,tests,release}.yml
+# — this file overrides the CI action's toolchain for every `cargo` invocation.
+# harper-core 2.7 still fails to compile on rustc >= 1.93 (the fn-item-array
+# E0308 class), so vendor/harper-core carries the upstream `as fn(...)` fix and
+# the [patch.crates-io] in Cargo.toml applies it. Bumping the channel is a
+# deliberate, separate step (re-run clippy + tests on the new compiler first).
 [toolchain]
-channel = "1.94.1"
+channel = "1.96.0"
 components = ["rustfmt", "clippy"]

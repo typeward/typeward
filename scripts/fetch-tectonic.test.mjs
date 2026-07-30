@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertAllowedUrl, PLATFORMS } from "./fetch-tectonic.mjs";
+import { assertAllowedUrl, PLATFORMS } from "./fetch-tectonic.lib.mjs";
 
 describe("fetch-tectonic supply chain guards", () => {
   it("accepts the pinned release host and GitHub's asset CDN", () => {
