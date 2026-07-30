@@ -274,16 +274,26 @@ Status: **fixed** (this pass), **deferred** (documented, lower value or risk), *
 
 ### 3.1 Needs-decision
 
-- **macOS Intel (x86_64) release leg** — currently arm64 only. Adding it later risks clobbering the
-  updater bundle name if not distinctly targeted. Decision: ship arm64-only (state minimum: Apple
-  Silicon) or add an Intel leg now?
-- **Edition 2021 → 2024**, **TypeScript 6 → 7**, **katex 0.17 → 0.18** (breaking CSS classes),
-  **jsdom 30 / Node floor**, **keyring 3 → 4**, **git2 0.20 → 0.21**, **zip → 8**, **sentry unpin
-  → 0.48.5**, **Isolation Pattern adoption** — each is a deliberate migration. The security-relevant
-  subset (sentry unpin to drop the pin caveat, zip dedup, git2 unsound-advisory clearance) is
-  attempted in this pass where low-risk; the rest are logged here as opt-in.
-- **Windows/Linux OS floor copy** — user-facing "requirements" should say Win10 1803+ and
-  webkit2gtk-4.1 (Ubuntu 22.04+), not the stale "Windows 7".
+Resolved in the 2026-07-30 follow-up pass (after the two-audit merge):
+
+- **macOS Intel (x86_64) release leg** — ✅ **done**: main's PR #4 added the `macos-13`
+  x86_64-apple-darwin leg (artifact named per `matrix.target` so it doesn't collide with arm64).
+- **katex 0.17 → 0.18** — ✅ **done**: 0.18's CSS-class prefixing doesn't touch `.katex-display`
+  (our only override) or the base classes; we ship the version-matched CSS. Verified.
+- **sentry unpin → 0.48.5** — ✅ **done, without the aws-lc hazard**: the pin's real cause was
+  sentry's `rustls` feature (rustls-with-aws-lc-rs → cmake/NASM). Dropping it and keeping only
+  `reqwest` gives sentry a reqwest 0.13 transport on ring-based rustls-tls. No aws-lc, no native-tls.
+- **git2 0.20 → 0.21** — ✖ **reassessed, NOT taken**: 0.21 is a breaking API migration
+  (`shorthand()`/`summary()` flipped `Option`↔`Result`, plus deprecations) across ~8 sites in the
+  security-critical git auth/push code, for ~zero benefit — it only silences an *unsound* cargo-audit
+  warning about `blame_buffer`, an API we never call, and CI's RustSec gate already passes on 0.20.
+  Not worth the regression surface. Revisit if the advisory ever escalates to a vulnerability.
+- **"Windows 7" OS-floor copy** — moot: no stale "Windows 7" string exists in any user-facing surface.
+
+Still open (opt-in migrations, no security angle): **Edition 2021 → 2024**, **TypeScript 6 → 7**,
+**jsdom 30 / Node floor**, **keyring 3 → 4** (touches the credential layer — highest risk),
+**zip → 8**, **Tauri Isolation Pattern adoption**. The Linux release AppImage leg should still move
+to ubuntu-22.04 for the glibc floor.
 
 ## 4. Verification
 
