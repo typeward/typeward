@@ -307,11 +307,17 @@ lowest-risk-first with per-migration verification):
   our SolidJS JSX + full tsconfig cleanly; typecheck + build + bundle (33 KB) pass. The per-platform
   native binary ships as an optional npm dep, so CI must `npm ci` per runner (it does). Editor LS
   stays on TS 6 until 7.1.
-- **keyring 3 → 4.1.5** — ✅ done, verified: `keyring = "4"` (v4 dropped the per-OS feature flags;
-  default `v1` re-provides the Entry API + registers the platform stores). Zero Rust code changes to
-  compile; a real Windows Credential Manager set/get/delete round-trip passes. **Caveat:** v4's Linux
-  backend switches to pure-Rust zbus Secret Service, which cannot be runtime-tested in headless CI —
-  smoke-test credential storage on a Linux desktop before relying on it there.
+- **keyring 3 → 4** — ✖ **attempted, then reverted** (stayed on 3.6.3). The bump itself was trivial
+  (`keyring = "4"`, zero Rust changes, Windows round-trip passed), but the adversarial-review pass
+  found — and a second reviewer + a read of the actual keyring 4.1.5 source confirmed — a **Linux
+  reliability regression**: v4's `v1` `Entry::new` registers the store once behind a sticky `AtomicBool`
+  that is flipped *before* the fallible register runs and never reset on failure; on Linux the register
+  eagerly does a D-Bus `SecretService::connect()`. If the first credential access happens before the
+  Secret Service daemon is up (app autostart before gnome-keyring/KWallet), the connect fails and
+  **every** later credential op returns `NoDefaultStore` for the whole process — where v3 reconnected
+  per-operation and self-healed. No clean mitigation keeps the v1 wrapper (a flipped flag can't be
+  retried; re-architecting onto `keyring-core` directly is high-risk for zero functional gain), so we
+  stay on 3.6.3 (no RUSTSEC advisory, self-healing). This confirms the research's original "defer".
 
 Deferred (hard blocker — needs its own dedicated effort, must NOT be batched):
 
