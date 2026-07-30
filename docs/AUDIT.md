@@ -290,10 +290,38 @@ Resolved in the 2026-07-30 follow-up pass (after the two-audit merge):
   Not worth the regression surface. Revisit if the advisory ever escalates to a vulnerability.
 - **"Windows 7" OS-floor copy** — moot: no stale "Windows 7" string exists in any user-facing surface.
 
-Still open (opt-in migrations, no security angle): **Edition 2021 → 2024**, **TypeScript 6 → 7**,
-**jsdom 30 / Node floor**, **keyring 3 → 4** (touches the credential layer — highest risk),
-**zip → 8**, **Tauri Isolation Pattern adoption**. The Linux release AppImage leg should still move
-to ubuntu-22.04 for the glibc floor.
+Resolved in the 2026-07-30 migration batch (researched via a 7-agent workflow first, then applied
+lowest-risk-first with per-migration verification):
+
+- **Linux AppImage glibc floor** — ✅ done: release + test Linux legs build on ubuntu-22.04 (glibc
+  2.35, the Tauri v2 floor) so the AppImage runs on older distros. Publish job + tests.yml unchanged.
+  (Runner is removed 2027-04-17 → move to a pinned ubuntu:22.04 container then.)
+- **jsdom 29 → 30.0.1** — ✅ done: pinned .0.1 (skips the .0.0 getComputedStyle+calc() regression);
+  584 vitest pass.
+- **zip 2 → 8** — ✅ done: one code line (`ZipFile` gained a reader type param); our 2.4.2 collapses
+  onto the 8.6.0 harper already pulls — no new C-toolchain footprint.
+- **Rust edition 2021 → 2024** — ✅ done: build.rs `set_var` wrapped `unsafe` (single-threaded build
+  script), nested ifs collapsed to let-chains, style_edition=2024 reformat. Lock unchanged;
+  fmt/clippy(-D warnings)/261 tests pass.
+- **TypeScript 6 → 7.0.2** — ✅ done: TS 7 GA'd 2026-07-08; the native ("tsgo") compiler typechecks
+  our SolidJS JSX + full tsconfig cleanly; typecheck + build + bundle (33 KB) pass. The per-platform
+  native binary ships as an optional npm dep, so CI must `npm ci` per runner (it does). Editor LS
+  stays on TS 6 until 7.1.
+- **keyring 3 → 4.1.5** — ✅ done, verified: `keyring = "4"` (v4 dropped the per-OS feature flags;
+  default `v1` re-provides the Entry API + registers the platform stores). Zero Rust code changes to
+  compile; a real Windows Credential Manager set/get/delete round-trip passes. **Caveat:** v4's Linux
+  backend switches to pure-Rust zbus Secret Service, which cannot be runtime-tested in headless CI —
+  smoke-test credential storage on a Linux desktop before relying on it there.
+
+Deferred (hard blocker — needs its own dedicated effort, must NOT be batched):
+
+- **Tauri Isolation Pattern** — ✖ deferred: our CSP has `frame-src 'none'` in both csp/devCsp, and the
+  isolation iframe loads from an internal origin that can't yet be declared as a stable CSP literal
+  (upstream tauri#13879 open). A blocked iframe = dead IPC = blank app, indistinguishable from a
+  dep-bump regression. The security upside is modest for us (the hook runs in the renderer; the real
+  trust boundary is the already-hardened Rust side — path validation, registered-root gating,
+  which-resolved spawns, main-window IPC guard, outbound allowlists) and it adds per-invoke AES-GCM
+  cost. Ship it standalone once #13879 lands, with cross-webview (WebView2/WebKitGTK/WKWebView) testing.
 
 ## 4. Verification
 
