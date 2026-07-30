@@ -57,7 +57,9 @@ fn inject_supabase_csp_origin() {
     // Two consumers, two channels: `tauri_build::build()` reads the process
     // env; `generate_context!` reads the rustc env of the crate build.
     println!("cargo:rustc-env=TAURI_CONFIG={overlay}");
-    env::set_var("TAURI_CONFIG", overlay);
+    // SAFETY: build scripts run single-threaded and no threads are spawned
+    // before this point, so mutating the process environment has no data race.
+    unsafe { env::set_var("TAURI_CONFIG", overlay) };
 }
 
 /// Splice the origin into the policy's `connect-src`. A missing anchor is a

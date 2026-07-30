@@ -17,9 +17,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
-use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
@@ -75,7 +75,9 @@ pub enum HistoryError {
     NotTracked(String),
     #[error("version {hash} not found for {rel}")]
     UnknownVersion { rel: String, hash: String },
-    #[error("did not restore {0}: its current content could not be captured to history first (not valid UTF-8?) — fix or delete the file, then restore again")]
+    #[error(
+        "did not restore {0}: its current content could not be captured to history first (not valid UTF-8?) — fix or delete the file, then restore again"
+    )]
     SafetySnapshotSkipped(String),
 }
 
@@ -709,16 +711,18 @@ mod tests {
         let (root, store) = setup();
         for i in 0..5 {
             write_file(&root, "main.tex", &format!("version {i}"));
-            assert!(record_in_store(
-                &store,
-                &root,
-                "main.tex",
-                10, // clamped floor — the smallest legal retention
-                true,
-                T0 + i,
-                "Test"
-            )
-            .unwrap());
+            assert!(
+                record_in_store(
+                    &store,
+                    &root,
+                    "main.tex",
+                    10, // clamped floor — the smallest legal retention
+                    true,
+                    T0 + i,
+                    "Test"
+                )
+                .unwrap()
+            );
         }
         // 5 recorded with max 10: nothing pruned yet.
         assert_eq!(list_in_store(&store, "main.tex").unwrap().len(), 5);

@@ -209,7 +209,7 @@ fn sanitize_relative(input: &Path) -> Option<PathBuf> {
     }
 }
 
-fn is_zip_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
+fn is_zip_symlink<R: std::io::Read>(entry: &zip::read::ZipFile<'_, R>) -> bool {
     const S_IFMT: u32 = 0o170000;
     const S_IFLNK: u32 = 0o120000;
     entry
@@ -255,10 +255,10 @@ fn find_by_ext(dir: &Path, ext: &str) -> Result<Option<String>, OverleafError> {
         if !path.is_file() {
             continue;
         }
-        if path.extension().and_then(|s| s.to_str()) == Some(ext) {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                return Ok(Some(name.to_string()));
-            }
+        if path.extension().and_then(|s| s.to_str()) == Some(ext)
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+        {
+            return Ok(Some(name.to_string()));
         }
     }
     Ok(None)

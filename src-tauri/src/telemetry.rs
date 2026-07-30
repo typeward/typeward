@@ -10,8 +10,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -59,14 +59,13 @@ pub fn install(app: &AppHandle) {
             summary,
             detail: Some(detail),
         };
-        if let Ok(line) = serde_json::to_string(&event) {
-            if let Ok(mut f) = OpenOptions::new()
+        if let Ok(line) = serde_json::to_string(&event)
+            && let Ok(mut f) = OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&panic_path)
-            {
-                let _ = writeln!(f, "{}", line);
-            }
+        {
+            let _ = writeln!(f, "{}", line);
         }
     }));
 }

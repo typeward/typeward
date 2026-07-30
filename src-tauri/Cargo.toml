@@ -3,7 +3,7 @@ name = "typeward"
 version = "0.0.1"
 description = "Typeward — multiplatform editor for LaTeX and Typst"
 authors = ["Typeward"]
-edition = "2021"
+edition = "2024"
 
 # crate-type required for both desktop static linking and future mobile (cdylib)
 [lib]
@@ -55,7 +55,7 @@ url = "2"
 sha2 = "0.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # Project history (history.rs): gzip for the content-addressed version blobs.
 # Already compiled transitively through zip's `deflate` feature, so promoting

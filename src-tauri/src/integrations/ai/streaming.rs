@@ -19,8 +19,8 @@ use thiserror::Error;
 use tokio::sync::oneshot;
 
 use crate::integrations::http::{
-    build_outbound_request, outbound_client_builder, AuthRef, HttpError, OutboundBody,
-    OutboundRedirect,
+    AuthRef, HttpError, OutboundBody, OutboundRedirect, build_outbound_request,
+    outbound_client_builder,
 };
 
 const MAX_AI_ERROR_BODY_BYTES: usize = 64 * 1024;
@@ -322,12 +322,12 @@ async fn run_stream(
 }
 
 async fn read_text_capped(mut response: reqwest::Response, cap: usize) -> Result<String, String> {
-    if let Some(len) = response.content_length() {
-        if len > cap as u64 {
-            return Err(format!(
-                "response too large: {len} bytes exceeds cap of {cap}"
-            ));
-        }
+    if let Some(len) = response.content_length()
+        && len > cap as u64
+    {
+        return Err(format!(
+            "response too large: {len} bytes exceeds cap of {cap}"
+        ));
     }
     let mut out = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {

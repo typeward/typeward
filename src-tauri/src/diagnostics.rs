@@ -12,8 +12,8 @@
 //! account id), minted lazily on the first submission.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -25,8 +25,7 @@ use crate::telemetry::{self, Event};
 
 /// Same public-by-design DSN as the frontend SDK — keep in sync with
 /// `src/lib/sentry.ts`. It is a routing identifier, not a secret.
-const DSN: &str =
-    "https://20ad6af910fa6634a2a400656db18be1@o4511688473640960.ingest.de.sentry.io/4511688490418256";
+const DSN: &str = "https://20ad6af910fa6634a2a400656db18be1@o4511688473640960.ingest.de.sentry.io/4511688490418256";
 
 /// Bound on events pushed by one crash scan so a panic loop on a previous run
 /// can't turn the next launch into a burst of egress.

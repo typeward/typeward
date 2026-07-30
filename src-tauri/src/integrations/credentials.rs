@@ -314,9 +314,11 @@ mod tests {
 
     #[test]
     fn secure_storage_error_is_explicit_about_the_platform() {
-        assert!(CredentialError::SecureStorageUnavailable
-            .to_string()
-            .contains("secure storage is not available"));
+        assert!(
+            CredentialError::SecureStorageUnavailable
+                .to_string()
+                .contains("secure storage is not available")
+        );
     }
 
     #[test]

@@ -26,16 +26,16 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use bytes::Bytes;
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, CONTROLS};
-use quick_xml::events::{BytesRef, Event};
+use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, utf8_percent_encode};
 use quick_xml::Reader;
+use quick_xml::events::{BytesRef, Event};
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use url::Url;
 
 use crate::integrations::http::{
-    blocking, outbound_client_builder, read_body_capped_raw, BodyCapError, OutboundRedirect,
+    BodyCapError, OutboundRedirect, blocking, outbound_client_builder, read_body_capped_raw,
 };
 use crate::{integrations::credentials, settings};
 
