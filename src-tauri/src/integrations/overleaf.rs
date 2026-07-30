@@ -255,10 +255,10 @@ fn find_by_ext(dir: &Path, ext: &str) -> Result<Option<String>, OverleafError> {
         if !path.is_file() {
             continue;
         }
-        if path.extension().and_then(|s| s.to_str()) == Some(ext) {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                return Ok(Some(name.to_string()));
-            }
+        if path.extension().and_then(|s| s.to_str()) == Some(ext)
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+        {
+            return Ok(Some(name.to_string()));
         }
     }
     Ok(None)

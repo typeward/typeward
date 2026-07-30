@@ -137,10 +137,10 @@ fn tex_comment(line: &str) -> Option<&str> {
 fn keyword_in(text: &str) -> Option<(&'static str, String)> {
     let mut best: Option<(usize, &'static str, usize)> = None;
     for &(kw, kind) in KEYWORDS {
-        if let Some(pos) = find_keyword(text, kw) {
-            if best.is_none_or(|(bp, _, _)| pos < bp) {
-                best = Some((pos, kind, kw.len()));
-            }
+        if let Some(pos) = find_keyword(text, kw)
+            && best.is_none_or(|(bp, _, _)| pos < bp)
+        {
+            best = Some((pos, kind, kw.len()));
         }
     }
     let (pos, kind, kwlen) = best?;

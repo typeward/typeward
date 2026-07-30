@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::CommandEvent;
 use tokio::io::AsyncReadExt;
 use tokio::sync::watch;
 
@@ -84,10 +84,10 @@ struct CancelRegistration(Option<String>);
 
 impl Drop for CancelRegistration {
     fn drop(&mut self) {
-        if let Some(id) = self.0.take() {
-            if let Ok(mut map) = active_compiles().lock() {
-                map.remove(&id);
-            }
+        if let Some(id) = self.0.take()
+            && let Ok(mut map) = active_compiles().lock()
+        {
+            map.remove(&id);
         }
     }
 }
@@ -1208,7 +1208,7 @@ async fn run_tectonic(
         Err(_) => {
             return Err(
                 "tectonic is not bundled (run `npm run fetch:tectonic`) and not on PATH".into(),
-            )
+            );
         }
     };
     let owned_args: Vec<String> = tectonic_args.iter().map(|s| s.to_string()).collect();
@@ -1516,21 +1516,27 @@ mod tests {
         // The biblatex-macro-in-aux signature (backend switch wedge).
         let log = "! Undefined control sequence.\nl.7 \\abx@aux@refcontext\n";
         let diags = parse_latex_log(log, "main.tex");
-        assert!(diags
-            .iter()
-            .any(|d| d.severity == "warning" && d.message.contains("Clean auxiliary files")));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == "warning" && d.message.contains("Clean auxiliary files"))
+        );
 
         // latexmk exit-12 refusal after a previously failed run.
         let log2 = "Latexmk: Nothing to do for 'main.tex'.\n  pdflatex: gave an error in previous invocation of latexmk.\n";
         let diags2 = parse_latex_log(log2, "main.tex");
-        assert!(diags2
-            .iter()
-            .any(|d| d.message.contains("Clean auxiliary files")));
+        assert!(
+            diags2
+                .iter()
+                .any(|d| d.message.contains("Clean auxiliary files"))
+        );
 
         // A clean log gets no hint.
-        assert!(parse_latex_log("all good\n", "main.tex")
-            .iter()
-            .all(|d| !d.message.contains("Clean auxiliary files")));
+        assert!(
+            parse_latex_log("all good\n", "main.tex")
+                .iter()
+                .all(|d| !d.message.contains("Clean auxiliary files"))
+        );
     }
 
     #[test]
@@ -1560,9 +1566,11 @@ mod tests {
             false,
         );
         assert_eq!(passes.len(), 2);
-        assert!(passes
-            .iter()
-            .all(|p| p.is_engine && p.program == "pdflatex"));
+        assert!(
+            passes
+                .iter()
+                .all(|p| p.is_engine && p.program == "pdflatex")
+        );
         for p in &passes {
             assert_eq!(p.args.last().unwrap(), "main.tex");
             assert!(p.args.contains(&"-synctex=1".to_string()));
@@ -1583,10 +1591,12 @@ mod tests {
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes.iter().filter(|p| p.is_engine).count(), 3);
-        assert!(passes
-            .iter()
-            .filter(|p| p.is_engine)
-            .all(|p| p.program == "lualatex"));
+        assert!(
+            passes
+                .iter()
+                .filter(|p| p.is_engine)
+                .all(|p| p.program == "lualatex")
+        );
         // The single bib pass runs `bibtex <stem>` with no other args.
         assert_eq!(passes[1].program, "bibtex");
         assert!(!passes[1].is_engine);
@@ -2023,9 +2033,11 @@ Package hyperref Warning: Draft mode on.
         assert_eq!(errors[0].message, "Undefined control sequence.");
         assert!(errors[1].message.contains("File `missing.sty' not found."));
         // Everything is attributed to the entry file with the compile source.
-        assert!(diags
-            .iter()
-            .all(|d| d.file == "main.tex" && d.source == "compile"));
+        assert!(
+            diags
+                .iter()
+                .all(|d| d.file == "main.tex" && d.source == "compile")
+        );
         // Line numbers are 1-based positions within the log.
         assert!(diags.iter().all(|d| d.line >= 1));
     }

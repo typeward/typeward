@@ -439,8 +439,7 @@ mod tests {
     #[test]
     fn latex_cite_ref_label_keys_are_not_flagged() {
         // Citation / cross-reference keys are identifiers, not prose.
-        let text =
-            "We build on \\cite{smith_2020} and revisit \\ref{fig:overview} near \\label{sec:intro}.";
+        let text = "We build on \\cite{smith_2020} and revisit \\ref{fig:overview} near \\label{sec:intro}.";
         let diags = run(text, GrammarSyntax::Latex, &[]);
         assert!(
             !diags.iter().any(|d| d.kind == "Spelling"),

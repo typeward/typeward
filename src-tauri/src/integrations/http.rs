@@ -20,11 +20,11 @@
 //!     automatic retry with a 250ms delay; everything else surfaces as-is
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use reqwest::{Client, Method, Url};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -424,12 +424,12 @@ pub(crate) async fn read_body_capped_raw(
     mut res: reqwest::Response,
     cap: usize,
 ) -> Result<Vec<u8>, BodyCapError> {
-    if let Some(len) = res.content_length() {
-        if len > cap as u64 {
-            return Err(BodyCapError::TooLarge(format!(
-                "response too large: {len} bytes exceeds cap of {cap}"
-            )));
-        }
+    if let Some(len) = res.content_length()
+        && len > cap as u64
+    {
+        return Err(BodyCapError::TooLarge(format!(
+            "response too large: {len} bytes exceeds cap of {cap}"
+        )));
     }
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = res
@@ -559,7 +559,7 @@ async fn refresh_oauth_token(
         _ => {
             return Err(HttpError::Credential(format!(
                 "unsupported OAuth service: {service}"
-            )))
+            )));
         }
     };
 

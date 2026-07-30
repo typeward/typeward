@@ -82,10 +82,10 @@ pub fn run() {
     // others; recording the same path twice is harmless.
     let builder = builder
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
-                if window.label() == "main" {
-                    drop_allow::record(paths);
-                }
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+                && window.label() == "main"
+            {
+                drop_allow::record(paths);
             }
         })
         .on_webview_event(|webview, event| {
@@ -409,7 +409,7 @@ pub fn run() {
 #[cfg(target_os = "macos")]
 fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{
-        AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID,
+        AboutMetadata, HELP_SUBMENU_ID, Menu, MenuItem, PredefinedMenuItem, Submenu,
         WINDOW_SUBMENU_ID,
     };
 

@@ -62,10 +62,10 @@ fn ensure_loaded(app: &AppHandle, data: &mut GrammarData) -> Result<(), String> 
         data.words = words;
     }
 
-    if let Ok(bytes) = std::fs::read(dir.join("ignored.json")) {
-        if let Ok(ignored) = serde_json::from_slice::<IgnoredLints>(&bytes) {
-            data.ignored = ignored;
-        }
+    if let Ok(bytes) = std::fs::read(dir.join("ignored.json"))
+        && let Ok(ignored) = serde_json::from_slice::<IgnoredLints>(&bytes)
+    {
+        data.ignored = ignored;
     }
 
     data.loaded = true;

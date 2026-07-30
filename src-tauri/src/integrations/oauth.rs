@@ -32,24 +32,24 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::{
+    Router,
     extract::{Query, State},
     response::Html,
     routing::get,
-    Router,
 };
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::sync::{Mutex, broadcast, oneshot};
 
 use tauri::Manager;
 
 use crate::integrations::credentials;
-use crate::integrations::http::{blocking, outbound_client_builder, OutboundRedirect};
+use crate::integrations::http::{OutboundRedirect, blocking, outbound_client_builder};
 
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_TOKEN_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -713,12 +713,16 @@ mod tests {
             !verifier.contains('=') && !challenge.contains('='),
             "PKCE values must be base64url without padding"
         );
-        assert!(verifier
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
-        assert!(challenge
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
+        assert!(
+            challenge
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]
@@ -770,30 +774,38 @@ mod tests {
 
     #[test]
     fn oauth_endpoint_allowlist_accepts_known_providers() {
-        assert!(validate_oauth_endpoint(
-            "https://www.dropbox.com/oauth2/authorize",
-            OauthEndpointKind::Authorization,
-        )
-        .is_ok());
-        assert!(validate_oauth_endpoint(
-            "https://api.dropboxapi.com/oauth2/token",
-            OauthEndpointKind::Token,
-        )
-        .is_ok());
+        assert!(
+            validate_oauth_endpoint(
+                "https://www.dropbox.com/oauth2/authorize",
+                OauthEndpointKind::Authorization,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_oauth_endpoint(
+                "https://api.dropboxapi.com/oauth2/token",
+                OauthEndpointKind::Token,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn oauth_endpoint_allowlist_blocks_unknown_hosts_and_plain_http() {
-        assert!(validate_oauth_endpoint(
-            "https://example.com/oauth2/authorize",
-            OauthEndpointKind::Authorization,
-        )
-        .is_err());
-        assert!(validate_oauth_endpoint(
-            "http://api.dropboxapi.com/oauth2/token",
-            OauthEndpointKind::Token,
-        )
-        .is_err());
+        assert!(
+            validate_oauth_endpoint(
+                "https://example.com/oauth2/authorize",
+                OauthEndpointKind::Authorization,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_oauth_endpoint(
+                "http://api.dropboxapi.com/oauth2/token",
+                OauthEndpointKind::Token,
+            )
+            .is_err()
+        );
     }
 
     #[test]

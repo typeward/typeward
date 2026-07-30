@@ -3,7 +3,7 @@ name = "typeward"
 version = "0.0.1"
 description = "Typeward — multiplatform editor for LaTeX and Typst"
 authors = ["Typeward"]
-edition = "2021"
+edition = "2024"
 
 # crate-type required for both desktop static linking and future mobile (cdylib)
 [lib]
