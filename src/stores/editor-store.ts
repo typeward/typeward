@@ -205,14 +205,25 @@ function adoptDiskContent(path: string, content: string, baseHash: string): void
  * Restore a snapshot's content into the editor: replace the buffer of an
  * already-open tab (marking it dirty) or open a new tab for it. Used by crash
  * recovery, where the orphaned file is frequently the root file that was
- * already opened on project load.
+ * already opened on project load — so the target tab is usually already mounted.
+ * Bump `adoptGeneration` when the content actually changed so the active tab's
+ * keyed editor remounts on the recovered text; without it the already-mounted
+ * CodeMirror keeps showing the stale on-disk buffer (its `value` prop is a
+ * snapshot captured at mount) and the next keystroke/save would clobber the
+ * recovered content with what is still displayed.
  */
 function restoreFileContent(file: OpenFile): void {
   setOpenFiles((prev) => {
     const i = prev.findIndex((f) => f.path === file.path);
     if (i < 0) return [...prev, { ...file, dirty: true }];
     const next = prev.slice();
-    next[i] = { ...next[i], content: file.content, dirty: true };
+    const gen = prev[i].adoptGeneration ?? 0;
+    next[i] = {
+      ...next[i],
+      content: file.content,
+      dirty: true,
+      adoptGeneration: prev[i].content === file.content ? gen : gen + 1,
+    };
     return next;
   });
   if (activeIndex() < 0) setActiveIndex(0);

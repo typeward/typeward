@@ -39,6 +39,11 @@
         animation: boot-spin 0.9s linear infinite;
       }
       @keyframes boot-spin { to { transform: rotate(360deg); } }
+      /* Honor the OS reduced-motion preference during the boot window too — the
+       * app's own motion.css only applies once the bundle has loaded. */
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash::after { animation: none; }
+      }
     </style>
   </head>
   <body>

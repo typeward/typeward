@@ -519,12 +519,12 @@ fn system_tex_flags(
 /// What a bounded compiler run produced. `status: None` with `timed_out` set
 /// means the deadline killed it; `cancelled` means the user's cancel flag
 /// killed it first. Partial output is still captured either way.
-struct BoundedOutput {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-    status: Option<std::process::ExitStatus>,
-    timed_out: bool,
-    cancelled: bool,
+pub(crate) struct BoundedOutput {
+    pub(crate) stdout: Vec<u8>,
+    pub(crate) stderr: Vec<u8>,
+    pub(crate) status: Option<std::process::ExitStatus>,
+    pub(crate) timed_out: bool,
+    pub(crate) cancelled: bool,
 }
 
 impl BoundedOutput {
@@ -696,7 +696,7 @@ async fn kill_compile_child(child: &mut tokio::process::Child) {
 /// `timed_out` set so the partial log still reaches the LogsDrawer. A fired
 /// `cancel` flag reuses the exact same kill machinery and comes back as `Ok`
 /// with `cancelled` set; the timeout semantics are untouched.
-async fn run_bounded(
+pub(crate) async fn run_bounded(
     program: &Path,
     args: &[String],
     cwd: &Path,
@@ -991,6 +991,9 @@ fn recipe_passes(
 /// tracks the last engine pass's success (paired with the pdf-exists check in
 /// `compile_latex`). Resolves each program to its absolute path via `which`,
 /// mirroring `run_system_tex`, and spawns that with `current_dir(root)`.
+// Recipe assembly threads the build knobs positionally; a params struct here
+// would just relocate the same fields without improving the call site.
+#[allow(clippy::too_many_arguments)]
 async fn run_engine_recipe(
     root_file: &str,
     root: &Path,

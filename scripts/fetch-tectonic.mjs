@@ -11,100 +11,45 @@
 // already-present file is re-verified rather than trusted. Bump
 // TECTONIC_VERSION together with BOTH digests per platform (compute them from
 // the release assets — never copy them from an unverified source).
+//
+// The pinned version, digest table, and URL/host guards live in the sibling
+// fetch-tectonic.lib.mjs (a shebang-free module) so the supply-chain test can
+// import them without Vitest's Rolldown transform tripping over this shebang.
+//
+// Windows on ARM: upstream ships NO aarch64-pc-windows-msvc build (0.15.0 has
+// only x86_64 Windows assets). Windows 11 on ARM runs x64 binaries under its
+// built-in emulation, so the `win32:arm64` entry deliberately downloads the
+// x86_64 archive and installs it under the aarch64 target-triple name that
+// Tauri's `externalBin` resolves for an ARM64 build — same archive, same
+// digests as win32:x64, it just runs emulated. (The desktop release matrix has
+// no Windows/arm64 leg; this only unblocks local ARM64 dev builds.)
 
 import { createWriteStream } from "node:fs";
-import { mkdir, rm, chmod, readdir, rename, readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { mkdir, rm, chmod, readdir, rename } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir, arch, platform } from "node:os";
 import { spawn } from "node:child_process";
 import { get } from "node:https";
 
-const TECTONIC_VERSION = "0.15.0";
-
-// Release assets are served from github.com and redirect to GitHub's asset
-// CDN. A redirect to anything else is an attack, not a mirror.
-const ALLOWED_HOSTS = new Set([
-  "github.com",
-  "objects.githubusercontent.com",
-  "release-assets.githubusercontent.com",
-]);
-const MAX_REDIRECTS = 5;
-
-export const PLATFORMS = {
-  // node platform/arch → { triple, archive, ext, exe, archiveSha256, exeSha256 }
-  // archiveSha256: the published release asset. exeSha256: the binary inside
-  // it, which is what actually lands in src-tauri/binaries (and what the
-  // already-present-file check re-verifies).
-  "win32:x64": {
-    triple: "x86_64-pc-windows-msvc",
-    archive: `tectonic-${TECTONIC_VERSION}-x86_64-pc-windows-msvc.zip`,
-    ext: "zip",
-    exe: "tectonic.exe",
-    archiveSha256: "1d6bb76f049c8a3774f6e9d66e4b04e1a8c3dcb37527b6b41b7e894328e7bf29",
-    exeSha256: "6760c6368d3219c687eb1811e55379af9526fbd97e97fa954968267f5241deb9",
-  },
-  "darwin:x64": {
-    triple: "x86_64-apple-darwin",
-    archive: `tectonic-${TECTONIC_VERSION}-x86_64-apple-darwin.tar.gz`,
-    ext: "tar.gz",
-    exe: "tectonic",
-    archiveSha256: "dd42576eaa4c0df58c243dd78b7b864d9deb405ffdfcdadd1b79a31faceab747",
-    exeSha256: "c53331a1c6e1a0bbc9a14bb7fa605ffbd2e379388df8d8b07c801642530b22cf",
-  },
-  "darwin:arm64": {
-    triple: "aarch64-apple-darwin",
-    archive: `tectonic-${TECTONIC_VERSION}-aarch64-apple-darwin.tar.gz`,
-    ext: "tar.gz",
-    exe: "tectonic",
-    archiveSha256: "24bd46566fa30d41101848405e9cbc4645edb92d8f857c9d21262174fb70cd33",
-    exeSha256: "7b8efd258bf04fcd4d200e3e64faa47abc82671285a35c3af2018d2f03ecc890",
-  },
-  "linux:x64": {
-    triple: "x86_64-unknown-linux-musl",
-    archive: `tectonic-${TECTONIC_VERSION}-x86_64-unknown-linux-musl.tar.gz`,
-    ext: "tar.gz",
-    exe: "tectonic",
-    archiveSha256: "dfb82876f2986862996e564fa507a9e576e0c1e3bee63c2c1bd677c2543e6407",
-    exeSha256: "4df19452c202c5bef9f7c7e4a01a3f2b9d5199f0a1f73b70b4fe1bffbc9837f6",
-  },
-};
+import {
+  TECTONIC_VERSION,
+  MAX_REDIRECTS,
+  PLATFORMS,
+  assertAllowedUrl,
+  sha256File,
+} from "./fetch-tectonic.lib.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "..");
 const targetDir = join(repoRoot, "src-tauri", "binaries");
-
-/** Throws unless `url` is https on an allowlisted host. */
-export function assertAllowedUrl(url) {
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Refusing to fetch a malformed URL: ${url}`);
-  }
-  if (parsed.protocol !== "https:") {
-    throw new Error(`Refusing a non-https URL: ${parsed.protocol}//${parsed.host}`);
-  }
-  if (!ALLOWED_HOSTS.has(parsed.hostname)) {
-    throw new Error(
-      `Refusing a redirect to an unexpected host: ${parsed.hostname}. ` +
-        `Allowed: ${[...ALLOWED_HOSTS].join(", ")}.`,
-    );
-  }
-  return parsed;
-}
-
-export async function sha256File(path) {
-  return createHash("sha256").update(await readFile(path)).digest("hex");
-}
 
 async function verifyFile(path, expected, what) {
   const actual = await sha256File(path);
   if (actual !== expected) {
     throw new Error(
       `SHA-256 mismatch for ${what}\n  expected ${expected}\n  actual   ${actual}\n` +
-        `Refusing to install it. Either the pinned digest in scripts/fetch-tectonic.mjs is ` +
+        `Refusing to install it. Either the pinned digest in scripts/fetch-tectonic.lib.mjs is ` +
         `stale (bump it deliberately after checking the upstream release) or the download ` +
         `was tampered with.`,
     );
@@ -116,7 +61,7 @@ async function main() {
   const spec = PLATFORMS[key];
   if (!spec) {
     console.error(`Unsupported platform: ${key}`);
-    console.error(`Add an entry to PLATFORMS in this script if you need one.`);
+    console.error(`Add an entry to PLATFORMS in scripts/fetch-tectonic.lib.mjs if you need one.`);
     process.exit(1);
   }
 
