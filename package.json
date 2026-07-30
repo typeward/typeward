@@ -44,7 +44,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "corvu": "^0.7.2",
     "dompurify": "^3.4.12",
-    "katex": "^0.17.0",
+    "katex": "^0.18.1",
     "lucide-solid": "^1.27.0",
     "markdown-it": "^14.3.0",
     "markdown-it-anchor": "^9.2.1",
