@@ -5,8 +5,9 @@
 //! the user's chosen destination through the dialog-scoped fs plugin, so no new
 //! arbitrary-destination write primitive is introduced.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use crate::project::{Project, ProjectFormat};
 
@@ -14,16 +15,60 @@ use crate::project::{Project, ProjectFormat};
 /// (which is also what lands in telemetry).
 const MAX_STDERR_BYTES: usize = 4096;
 
-#[tauri::command]
-pub async fn export_pandoc(project: Project, format: String) -> Result<String, String> {
-    // Off the event-loop thread: `which` PATH-scans and pandoc can run for
-    // several seconds on a large document.
-    tokio::task::spawn_blocking(move || run(project, &format))
-        .await
-        .map_err(|e| e.to_string())?
+/// A large book -> docx can take minutes, but an unbounded pandoc on adversarial
+/// project content (a Lua filter, pathological input recursion) must never park
+/// a blocking-pool worker forever.
+const EXPORT_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Head cap per captured stream so pandoc's stderr stays bounded DURING capture,
+/// not merely truncated after it has already been buffered whole.
+const EXPORT_OUTPUT_CAP: usize = 256 * 1024;
+
+struct PandocPlan {
+    pandoc: PathBuf,
+    args: Vec<String>,
+    root: PathBuf,
+    out: String,
 }
 
-fn run(project: Project, format: &str) -> Result<String, String> {
+#[tauri::command]
+pub async fn export_pandoc(project: Project, format: String) -> Result<String, String> {
+    // The `which` PATH-scan, version probe, and dir creation run off the event
+    // loop; the pandoc spawn itself goes through the shared bounded runner.
+    let plan = tokio::task::spawn_blocking(move || plan_export(project, &format))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    // Bounded spawn: deadline + process-tree kill + capped capture + stdin=null,
+    // matching the compile-subprocess invariant (pandoc runs current_dir(root)
+    // on attacker-controlled project content). Without this an adversarial or
+    // hanging pandoc would park the blocking worker indefinitely.
+    let out = crate::compile::run_bounded(
+        &plan.pandoc,
+        &plan.args,
+        &plan.root,
+        EXPORT_TIMEOUT,
+        EXPORT_OUTPUT_CAP,
+        None,
+    )
+    .await?;
+
+    if out.timed_out {
+        return Err(format!(
+            "pandoc export timed out after {} minutes — aborted",
+            EXPORT_TIMEOUT.as_secs() / 60
+        ));
+    }
+    match out.status {
+        Some(s) if s.success() => Ok(plan.out),
+        _ => {
+            let stderr = cap(&String::from_utf8_lossy(&out.stderr), MAX_STDERR_BYTES);
+            Err(format!("pandoc export failed: {stderr}"))
+        }
+    }
+}
+
+fn plan_export(project: Project, format: &str) -> Result<PandocPlan, String> {
     let to = match format {
         "docx" => "docx",
         "html" => "html",
@@ -48,32 +93,41 @@ fn run(project: Project, format: &str) -> Result<String, String> {
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     let out = out_dir.join(format!("export.{to}"));
 
-    // Spawn the `which`-resolved absolute path with `current_dir(root)` so
-    // relative `\input`/`\includegraphics`/image paths resolve, while the
-    // program itself is never resolved from the (untrusted) project dir. The
-    // root file is validated (leading-dash guard) so it can't inject a flag.
-    let mut cmd = Command::new(&pandoc);
-    cmd.current_dir(&root)
-        .arg("-f")
-        .arg(from)
-        .arg("-t")
-        .arg(to)
-        .arg("--standalone");
+    // The spawn (run_bounded) uses current_dir(root) so relative
+    // `\input`/`\includegraphics`/image paths resolve, while the program itself
+    // is the `which`-resolved absolute path — never resolved from the (untrusted)
+    // project dir. The root file is validated (leading-dash guard) so it can't
+    // inject a flag.
+    let out_str = out.to_string_lossy().into_owned();
+    let args = build_pandoc_args(from, to, &out_str, root_file);
+
+    Ok(PandocPlan {
+        pandoc,
+        args,
+        root,
+        out: out_str,
+    })
+}
+
+/// Build the pandoc argument vector. `root_file` is the validated (leading-dash-
+/// guarded) project-relative input path and is placed LAST — after `-o <out>` —
+/// so it is always the positional input, never mistaken for a flag.
+fn build_pandoc_args(from: &str, to: &str, out: &str, root_file: String) -> Vec<String> {
+    let mut args = vec![
+        "-f".to_string(),
+        from.to_string(),
+        "-t".to_string(),
+        to.to_string(),
+        "--standalone".to_string(),
+    ];
     if to == "html" {
         // Inline CSS/images so the exported file is a single portable document.
-        cmd.arg("--embed-resources");
+        args.push("--embed-resources".to_string());
     }
-    cmd.arg("-o").arg(&out).arg(&root_file);
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("pandoc spawn failed: {e}"))?;
-    if !output.status.success() {
-        let stderr = cap(&String::from_utf8_lossy(&output.stderr), MAX_STDERR_BYTES);
-        return Err(format!("pandoc export failed: {stderr}"));
-    }
-
-    Ok(out.to_string_lossy().into_owned())
+    args.push("-o".to_string());
+    args.push(out.to_string());
+    args.push(root_file);
+    args
 }
 
 /// Pandoc gained the Typst reader in 3.1.12. Reject older builds with an
@@ -135,6 +189,34 @@ mod tests {
         assert!(!version_at_least("3.1.11.1", (3, 1, 12)));
         assert!(!version_at_least("3.1.11", (3, 1, 12)));
         assert!(!version_at_least("2.19", (3, 1, 12)));
+    }
+
+    #[test]
+    fn pandoc_args_place_input_last_and_gate_embed_resources() {
+        let docx = build_pandoc_args("latex", "docx", "/b/export.docx", "main.tex".to_string());
+        assert_eq!(
+            docx,
+            vec![
+                "-f",
+                "latex",
+                "-t",
+                "docx",
+                "--standalone",
+                "-o",
+                "/b/export.docx",
+                "main.tex",
+            ]
+        );
+        // The validated input is always the final positional arg (never a flag),
+        // and -o immediately precedes the output path.
+        assert_eq!(docx.last().unwrap(), "main.tex");
+        let oi = docx.iter().position(|s| s == "-o").unwrap();
+        assert_eq!(docx[oi + 1], "/b/export.docx");
+
+        // --embed-resources only for HTML (single portable file), never docx.
+        let html = build_pandoc_args("typst", "html", "/b/e.html", "m.typ".to_string());
+        assert!(html.iter().any(|s| s == "--embed-resources"));
+        assert!(!docx.iter().any(|s| s == "--embed-resources"));
     }
 
     #[test]

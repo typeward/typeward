@@ -16,10 +16,12 @@ import {
   readFile,
   readTextFile,
   remove,
+  rename,
   stat,
   writeFile,
   writeTextFile,
 } from "@tauri-apps/plugin-fs";
+import { nanoid } from "nanoid";
 
 import type { CloudFsProvider, DeltaChange, RemoteFile } from "~/integrations/types";
 import { recordError } from "~/lib/telemetry";
@@ -725,8 +727,7 @@ export class SyncEngine {
 
   private async persistCursor(value: string): Promise<void> {
     const path = cursorPathForCacheRoot(this.cacheRoot(), this.opts.providerId);
-    await mkdirParents(path);
-    await writeTextFile(path, value);
+    await atomicWriteText(path, value);
   }
 
   private async ensureSyncStateLoaded(): Promise<void> {
@@ -745,8 +746,7 @@ export class SyncEngine {
   private async persistSyncState(): Promise<void> {
     if (!this.syncState) return;
     const path = syncStatePathForCacheRoot(this.cacheRoot(), this.opts.providerId);
-    await mkdirParents(path);
-    await writeTextFile(path, JSON.stringify(this.syncState, null, 2));
+    await atomicWriteText(path, JSON.stringify(this.syncState, null, 2));
   }
 
   private async recordSyncedFile(
@@ -828,6 +828,26 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+/**
+ * Atomic text write: write to a unique temp sibling then rename over the
+ * target. A crash/power-loss mid-write must never leave a torn file — a
+ * truncated sync cursor or sync-state manifest silently wedges delta sync
+ * (the cursor is an opaque provider token, so a partial value can't be
+ * validated on read; atomicity is the only guard). rename over an existing
+ * file is atomic on the same filesystem.
+ */
+async function atomicWriteText(absPath: string, content: string): Promise<void> {
+  await mkdirParents(absPath);
+  const tmp = `${absPath}.${nanoid(8)}.tmp`;
+  await writeTextFile(tmp, content);
+  try {
+    await rename(tmp, absPath);
+  } catch (e) {
+    await remove(tmp).catch(() => {});
+    throw e;
+  }
 }
 
 async function mkdirParents(absPath: string): Promise<void> {

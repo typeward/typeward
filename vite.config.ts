@@ -212,6 +212,11 @@ export default defineConfig({
 
   test: {
     environment: "jsdom",
+    // jsdom's default `about:blank` is an opaque origin, where Storage is
+    // unavailable; a concrete URL makes window.localStorage work so the setup
+    // file below can bridge it over Node 22+'s shadowing native global.
+    environmentOptions: { jsdom: { url: "http://localhost" } },
+    setupFiles: ["./src/test-setup.ts"],
     globals: true,
     server: {
       deps: { inline: [/solid-js/, /@solidjs\/router/] },

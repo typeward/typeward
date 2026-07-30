@@ -107,7 +107,8 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to an explicit version for reproducible CI — bump deliberately.
+          toolchain: "1.96.0"
 
       # Was `install-action@cargo-audit`, a per-tool alias tag that MOVES with
       # every release of the action. The versioned action + explicit `tool` is
@@ -170,7 +171,9 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
-          toolchain: stable
+          # Pinned to an explicit version for reproducible CI — bump deliberately.
+          toolchain: "1.96.0"
+          components: clippy
 
       - name: Cargo cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
@@ -207,5 +210,8 @@ jobs:
           cd app/src-tauri/binaries
           ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
 
+      - name: Clippy (lints gate)
+        run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
       - name: Cargo test
-        run: cargo test --manifest-path app/src-tauri/Cargo.toml
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml --locked
