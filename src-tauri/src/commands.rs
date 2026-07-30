@@ -354,10 +354,10 @@ fn reject_protected_first_component(rel_path: &str) -> CmdResult<()> {
         std::path::Component::Normal(p) => Some(p.to_string_lossy().to_ascii_lowercase()),
         _ => None,
     });
-    if let Some(first) = first {
-        if first == ".typeward" || first == ".git" {
-            return Err(format!("cannot modify protected path: {rel_path}"));
-        }
+    if let Some(first) = first
+        && (first == ".typeward" || first == ".git")
+    {
+        return Err(format!("cannot modify protected path: {rel_path}"));
     }
     Ok(())
 }
@@ -872,20 +872,20 @@ pub async fn write_project_binary_file(request: tauri::ipc::Request<'_>) -> CmdR
         ensure_registered(&project_root)?;
         let path = project::resolve_project_write_path(Path::new(&project_root), &rel_path)
             .map_err(err)?;
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(err)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(err)?;
         }
         // Refuse to write through an existing symlink: a malicious cloned repo or
         // extracted zip can plant a symlink at a project-relative path so a later
         // binary write (e.g. the WASM engine's PDF) lands outside the project root.
         // `resolve_project_write_path` only canonicalizes the parent, so the leaf
         // is checked here. The text path is already safe via atomic temp+rename.
-        if let Ok(meta) = std::fs::symlink_metadata(&path) {
-            if meta.file_type().is_symlink() {
-                return Err("refusing to write through a symlink".to_string());
-            }
+        if let Ok(meta) = std::fs::symlink_metadata(&path)
+            && meta.file_type().is_symlink()
+        {
+            return Err("refusing to write through a symlink".to_string());
         }
         std::fs::write(path, &bytes).map_err(err)
     })
@@ -1120,12 +1120,16 @@ mod tests {
         std::fs::write(root.join("real.tex"), "R").unwrap();
         symlink(root.join("real.tex"), root.join("link.tex")).unwrap();
 
-        assert!(rename_project_file_op(&root, "link.tex", "moved.tex")
-            .unwrap_err()
-            .contains("symlink"));
-        assert!(duplicate_project_file_op(&root, "link.tex")
-            .unwrap_err()
-            .contains("symlink"));
+        assert!(
+            rename_project_file_op(&root, "link.tex", "moved.tex")
+                .unwrap_err()
+                .contains("symlink")
+        );
+        assert!(
+            duplicate_project_file_op(&root, "link.tex")
+                .unwrap_err()
+                .contains("symlink")
+        );
         // The real file behind the link is untouched.
         assert!(root.join("real.tex").exists());
         assert!(root.join("link.tex").exists());
@@ -1160,9 +1164,11 @@ mod tests {
     fn duplicate_rejects_directories() {
         let root = temp_dir();
         std::fs::create_dir_all(root.join("sub")).unwrap();
-        assert!(duplicate_project_file_op(&root, "sub")
-            .unwrap_err()
-            .contains("only files"));
+        assert!(
+            duplicate_project_file_op(&root, "sub")
+                .unwrap_err()
+                .contains("only files")
+        );
     }
 
     #[test]
@@ -1239,35 +1245,41 @@ mod tests {
         let root = temp_dir();
         let outside = temp_dir();
         // A directory source is refused.
-        assert!(import_files_op(
-            &root,
-            "",
-            &[outside.to_string_lossy().into_owned()],
-            &any_source
-        )
-        .unwrap_err()
-        .contains("only files"));
+        assert!(
+            import_files_op(
+                &root,
+                "",
+                &[outside.to_string_lossy().into_owned()],
+                &any_source
+            )
+            .unwrap_err()
+            .contains("only files")
+        );
         // Relative source paths never come from the drop/dialog surfaces.
         assert!(import_files_op(&root, "", &["fig.png".into()], &any_source).is_err());
         // A file literally named like a CLI flag can't land in the project.
         std::fs::write(outside.join("-flag.tex"), "x").unwrap();
-        assert!(import_files_op(
-            &root,
-            "",
-            &[outside.join("-flag.tex").to_string_lossy().into_owned()],
-            &any_source
-        )
-        .is_err());
+        assert!(
+            import_files_op(
+                &root,
+                "",
+                &[outside.join("-flag.tex").to_string_lossy().into_owned()],
+                &any_source
+            )
+            .is_err()
+        );
         // Protected target dirs are refused.
         std::fs::write(outside.join("ok.tex"), "x").unwrap();
         let ok_src = outside.join("ok.tex").to_string_lossy().into_owned();
-        assert!(import_files_op(
-            &root,
-            ".typeward",
-            std::slice::from_ref(&ok_src),
-            &any_source
-        )
-        .is_err());
+        assert!(
+            import_files_op(
+                &root,
+                ".typeward",
+                std::slice::from_ref(&ok_src),
+                &any_source
+            )
+            .is_err()
+        );
         // Traversal in the target dir is refused.
         assert!(import_files_op(&root, "../outside", &[ok_src], &any_source).is_err());
     }
@@ -1290,13 +1302,17 @@ mod tests {
         assert!(move_project_path_op(&root, "chapters/a.tex", "chapters").is_err());
         // An existing target is never overwritten.
         std::fs::write(root.join("b.tex"), "B2").unwrap();
-        assert!(move_project_path_op(&root, "b.tex", "chapters")
-            .unwrap_err()
-            .contains("already exists"));
+        assert!(
+            move_project_path_op(&root, "b.tex", "chapters")
+                .unwrap_err()
+                .contains("already exists")
+        );
         // A directory can't move into its own subtree.
-        assert!(move_project_path_op(&root, "chapters", "chapters/sub")
-            .unwrap_err()
-            .contains("into itself"));
+        assert!(
+            move_project_path_op(&root, "chapters", "chapters/sub")
+                .unwrap_err()
+                .contains("into itself")
+        );
         // A directory move works and carries its contents.
         std::fs::create_dir_all(root.join("dest")).unwrap();
         assert_eq!(

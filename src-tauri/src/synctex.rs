@@ -181,10 +181,10 @@ fn parse_forward_result(text: &str) -> Option<ForwardLocation> {
             if h.is_none() {
                 h = rest.trim().parse().ok();
             }
-        } else if let Some(rest) = line.strip_prefix("v:") {
-            if v.is_none() {
-                v = rest.trim().parse().ok();
-            }
+        } else if let Some(rest) = line.strip_prefix("v:")
+            && v.is_none()
+        {
+            v = rest.trim().parse().ok();
         }
     }
 
@@ -219,10 +219,10 @@ fn parse_inverse_result(text: &str) -> Option<InverseLocation> {
             if file.is_none() {
                 file = Some(rest.trim().to_string());
             }
-        } else if let Some(rest) = line.strip_prefix("Line:") {
-            if line_no.is_none() {
-                line_no = rest.trim().parse().ok();
-            }
+        } else if let Some(rest) = line.strip_prefix("Line:")
+            && line_no.is_none()
+        {
+            line_no = rest.trim().parse().ok();
         }
     }
 

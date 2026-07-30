@@ -490,15 +490,15 @@ pub const VALID_BUILD_RECIPES: &[&str] =
 /// never reaches the compile command (which maps each to a strict enum).
 pub fn set_build(root: &Path, build: Option<ProjectBuild>) -> Result<Project, ProjectError> {
     if let Some(b) = &build {
-        if let Some(engine) = &b.engine {
-            if !VALID_BUILD_ENGINES.contains(&engine.as_str()) {
-                return Err(ProjectError::InvalidBuildEngine(engine.clone()));
-            }
+        if let Some(engine) = &b.engine
+            && !VALID_BUILD_ENGINES.contains(&engine.as_str())
+        {
+            return Err(ProjectError::InvalidBuildEngine(engine.clone()));
         }
-        if let Some(recipe) = &b.recipe {
-            if !VALID_BUILD_RECIPES.contains(&recipe.as_str()) {
-                return Err(ProjectError::InvalidBuildRecipe(recipe.clone()));
-            }
+        if let Some(recipe) = &b.recipe
+            && !VALID_BUILD_RECIPES.contains(&recipe.as_str())
+        {
+            return Err(ProjectError::InvalidBuildRecipe(recipe.clone()));
         }
     }
     let mut project = read_project(root)?;
@@ -736,10 +736,10 @@ fn find_first_by_ext(dir: &Path, ext: &str) -> Result<Option<String>, ProjectErr
         if !path.is_file() {
             continue;
         }
-        if path.extension().and_then(|s| s.to_str()) == Some(ext) {
-            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                matches.push(name.to_string());
-            }
+        if path.extension().and_then(|s| s.to_str()) == Some(ext)
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+        {
+            matches.push(name.to_string());
         }
     }
     matches.sort();
@@ -897,10 +897,10 @@ fn projects_root_cell() -> &'static RwLock<Option<PathBuf>> {
 /// Record a project root the user opened. Call ONLY from trusted command paths
 /// (open/list/create/import) that have proven the path is a real project.
 pub fn register_root(root: &Path) {
-    if let Ok(canon) = root.canonicalize() {
-        if let Ok(mut set) = opened_roots().write() {
-            set.insert(canon);
-        }
+    if let Ok(canon) = root.canonicalize()
+        && let Ok(mut set) = opened_roots().write()
+    {
+        set.insert(canon);
     }
 }
 
@@ -1251,11 +1251,12 @@ mod tests {
         assert_eq!(copy.tags, vec!["keep".to_string()]);
         assert!(copy.trashed_at.is_none()); // reset
         assert!(dest.join("main.tex").exists());
-        assert!(dest
-            .join(".typeward")
-            .join("citations")
-            .join("local.bib")
-            .exists());
+        assert!(
+            dest.join(".typeward")
+                .join("citations")
+                .join("local.bib")
+                .exists()
+        );
         assert!(!dest.join(".typeward").join("snapshots").exists());
     }
 

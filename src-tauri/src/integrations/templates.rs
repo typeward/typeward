@@ -471,11 +471,11 @@ fn scan_root(
                 if !inner.file_type()?.is_dir() {
                     continue;
                 }
-                if inner.path().join("template.json").exists() {
-                    if let Ok(mut doc) = read_manifest(&inner.path()) {
-                        doc.id = qualify_id(source, &doc.id);
-                        out.push(TemplateManifest { doc, source });
-                    }
+                if inner.path().join("template.json").exists()
+                    && let Ok(mut doc) = read_manifest(&inner.path())
+                {
+                    doc.id = qualify_id(source, &doc.id);
+                    out.push(TemplateManifest { doc, source });
                 }
             }
         }
@@ -537,21 +537,22 @@ fn render(input: &str, vars: &HashMap<String, String>) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.char_indices().peekable();
     while let Some((i, ch)) = chars.next() {
-        if ch == '{' && input[i..].starts_with("{{") {
-            if let Some(close) = input[i..].find("}}") {
-                let key = input[i + 2..i + close].trim();
-                if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    out.push_str(vars.get(key).map(|s| s.as_str()).unwrap_or(""));
-                    // Skip past the closing braces.
-                    while let Some((j, _)) = chars.peek() {
-                        if *j < i + close + 2 {
-                            chars.next();
-                        } else {
-                            break;
-                        }
+        if ch == '{'
+            && input[i..].starts_with("{{")
+            && let Some(close) = input[i..].find("}}")
+        {
+            let key = input[i + 2..i + close].trim();
+            if !key.is_empty() && key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                out.push_str(vars.get(key).map(|s| s.as_str()).unwrap_or(""));
+                // Skip past the closing braces.
+                while let Some((j, _)) = chars.peek() {
+                    if *j < i + close + 2 {
+                        chars.next();
+                    } else {
+                        break;
                     }
-                    continue;
                 }
+                continue;
             }
         }
         out.push(ch);
@@ -603,10 +604,10 @@ fn sanitize(name: &str) -> String {
 fn sanitize_relative(input: &str) -> Option<PathBuf> {
     let out = project::validate_project_relative_path(input).ok()?;
     for component in out.components() {
-        if let Component::Normal(part) = component {
-            if is_template_internal_segment(part) {
-                return None;
-            }
+        if let Component::Normal(part) = component
+            && is_template_internal_segment(part)
+        {
+            return None;
         }
     }
     Some(out)
