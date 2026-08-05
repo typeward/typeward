@@ -16,7 +16,7 @@ import {
   clearFocusedThread,
 } from "~/stores/review-store";
 import { recoverThreads } from "~/lib/reviews/recovery";
-import { offsetToLine } from "~/lib/reviews/lines";
+import { offsetToLine, toLF } from "~/lib/reviews/lines";
 import { formatShortcutForDisplay } from "~/lib/shortcuts";
 import { setCursorLine } from "~/stores/editor-view-store";
 
@@ -58,9 +58,11 @@ export const ReviewPanel: Component<ReviewPanelProps> = (props) => {
   const lineNumberFor = (thread: { fromOffset: number }): number | null => {
     const f = file();
     if (!f) return null;
+    // Offsets are LF-space; a buffer fresh off disk may still carry CRLF.
+    const content = toLF(f.content);
     const offset = thread.fromOffset;
-    if (offset < 0 || offset > f.content.length) return null;
-    return offsetToLine(f.content, offset);
+    if (offset < 0 || offset > content.length) return null;
+    return offsetToLine(content, offset);
   };
 
   const handleClickAnchor = (thread: { fromOffset: number }) => {

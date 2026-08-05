@@ -58,23 +58,51 @@ const projectA: Project = {
   name: "A",
 };
 
-// Two recorded versions, newest first (the Rust list order), project-wide.
+// Timestamps come from explicit local calendar dates: a fixed now-minus-hours
+// offset lands on the wrong side of midnight depending on when the suite
+// runs, which would flake the day-grouping assertions.
+const localTs = (daysAgo: number, hour: number) => {
+  const now = new Date();
+  return new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - daysAgo,
+    hour,
+  ).getTime();
+};
+
+// Four recorded versions, newest first (the Rust list order), across two
+// files and two local calendar days. main.tex sizes newest-first are
+// 2048 → 2048 → 1024, so its summaries are "edited, size unchanged",
+// "+1.0 KB", "first version".
 const V_NEW = {
   relPath: "main.tex",
   hash: "a".repeat(64),
-  ts: Date.now() - 2 * 60_000,
+  ts: localTs(0, 12),
+  size: 2048,
+};
+const V_MID = {
+  relPath: "main.tex",
+  hash: "c".repeat(64),
+  ts: localTs(0, 11),
   size: 2048,
 };
 const V_OLD = {
   relPath: "chapters/intro.tex",
   hash: "b".repeat(64),
-  ts: Date.now() - 2 * 3_600_000,
+  ts: localTs(1, 12),
   size: 100,
+};
+const V_FIRST = {
+  relPath: "main.tex",
+  hash: "d".repeat(64),
+  ts: localTs(1, 9),
+  size: 1024,
 };
 
 beforeEach(() => {
   vi.resetAllMocks();
-  spies.historyListProject.mockResolvedValue([V_NEW, V_OLD]);
+  spies.historyListProject.mockResolvedValue([V_NEW, V_MID, V_OLD, V_FIRST]);
   spies.readProjectTextFile.mockResolvedValue("disk content");
   spies.historyReadVersion.mockResolvedValue("old content");
   spies.historyRestore.mockResolvedValue("old content");
@@ -98,24 +126,47 @@ const restoreButton = (): HTMLButtonElement | undefined =>
   ) as HTMLButtonElement | undefined;
 
 describe("HistoryPanel", () => {
-  it("lists every file's versions project-wide with path, time, and size", async () => {
+  it("groups versions project-wide under day headers with change summaries", async () => {
     const { findByText, container } = render(() => <HistoryPanel />);
 
-    await findByText(/2m ago/);
-    await findByText(/2h ago/);
+    await findByText("Today");
     expect(spies.historyListProject).toHaveBeenCalledWith("/A");
 
-    const text = container.textContent ?? "";
-    expect(text).toContain("main.tex");
-    expect(text).toContain("chapters/intro.tex");
-    expect(text).toContain("2.0 KB");
-    expect(text).toContain("100 B");
+    const headers = [...container.querySelectorAll("div.sticky")].map(
+      (h) => h.textContent,
+    );
+    expect(headers).toEqual(["Today", "Yesterday"]);
+
+    // One list per day header, entries in listed (newest-first) order.
+    const lists = [...container.querySelectorAll("ul")];
+    expect(lists).toHaveLength(2);
+    const rowPaths = (list: Element) =>
+      [...list.querySelectorAll("li .mono")].map((s) => s.textContent);
+    expect(rowPaths(lists[0])).toEqual(["main.tex", "main.tex"]);
+    expect(rowPaths(lists[1])).toEqual(["chapters/intro.tex", "main.tex"]);
+
+    // Summaries state size facts only; the oldest version of each file reads
+    // "first version". Rendered times are locale-dependent — never asserted.
+    const rowSummaries = (list: Element) =>
+      [...list.querySelectorAll("li .text-xs")].map((s) => s.textContent ?? "");
+    const [newSummary, midSummary] = rowSummaries(lists[0]);
+    expect(newSummary).toContain("edited, size unchanged");
+    expect(midSummary).toContain("+1.0 KB");
+    const [introSummary, firstSummary] = rowSummaries(lists[1]);
+    expect(introSummary).toContain("first version");
+    expect(firstSummary).toContain("first version");
+
+    // The absolute size moved off the row into its tooltip.
+    const rows = [...container.querySelectorAll("li button")];
+    expect(rows[0].getAttribute("title")).toContain("2.0 KB");
+    expect(rows[2].getAttribute("title")).toContain("100 B");
   });
 
   it("selecting a version opens a read-only diff against the current buffer", async () => {
-    const { findByText } = render(() => <HistoryPanel />);
+    const { findAllByText } = render(() => <HistoryPanel />);
 
-    (await findByText(/2m ago/)).click();
+    // Rows render newest-first, so the first main.tex row is V_NEW.
+    (await findAllByText("main.tex"))[0].click();
 
     await waitFor(() => {
       expect(spies.historyReadVersion).toHaveBeenCalledWith("/A", "main.tex", V_NEW.hash);
@@ -132,7 +183,7 @@ describe("HistoryPanel", () => {
   it("diffs a version of a file that has no open tab against its disk content", async () => {
     const { findByText } = render(() => <HistoryPanel />);
 
-    (await findByText(/2h ago/)).click();
+    (await findByText("chapters/intro.tex")).click();
 
     await waitFor(() => {
       expect(spies.historyReadVersion).toHaveBeenCalledWith(
@@ -158,9 +209,9 @@ describe("HistoryPanel", () => {
       dirty: true,
       baseHash: "h:disk",
     });
-    const { findByText } = render(() => <HistoryPanel />);
+    const { findAllByText } = render(() => <HistoryPanel />);
 
-    (await findByText(/2m ago/)).click();
+    (await findAllByText("main.tex"))[0].click();
     const btn = await waitFor(() => {
       const b = restoreButton();
       expect(b).toBeTruthy();
@@ -201,9 +252,9 @@ describe("HistoryPanel", () => {
   });
 
   it("does not save first when the buffer is already clean", async () => {
-    const { findByText } = render(() => <HistoryPanel />);
+    const { findAllByText } = render(() => <HistoryPanel />);
 
-    (await findByText(/2m ago/)).click();
+    (await findAllByText("main.tex"))[0].click();
     const btn = await waitFor(() => {
       const b = restoreButton();
       expect(b).toBeTruthy();
@@ -220,9 +271,9 @@ describe("HistoryPanel", () => {
 
   it("surfaces a restore failure as a toast + telemetry and keeps the buffer", async () => {
     spies.historyRestore.mockRejectedValue(new Error("blob missing"));
-    const { findByText } = render(() => <HistoryPanel />);
+    const { findAllByText } = render(() => <HistoryPanel />);
 
-    (await findByText(/2m ago/)).click();
+    (await findAllByText("main.tex"))[0].click();
     const btn = await waitFor(() => {
       const b = restoreButton();
       expect(b).toBeTruthy();

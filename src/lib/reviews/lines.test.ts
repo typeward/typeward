@@ -1,5 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { lineRange, offsetToLine } from "./lines";
+import { lineRange, offsetToLine, toLF } from "./lines";
+
+describe("toLF", () => {
+  it("normalizes CRLF and lone CR to LF", () => {
+    expect(toLF("a\r\nb\rc\nd")).toBe("a\nb\nc\nd");
+  });
+  it("returns the input unchanged when no CR is present", () => {
+    const s = "a\nb";
+    expect(toLF(s)).toBe(s);
+  });
+  it("maps LF-space offsets to the CM6 line for CRLF files", () => {
+    const crlf = "one\r\ntwo\r\nthree\r\nfour body";
+    const lf = toLF(crlf);
+    expect(lf.indexOf("four")).toBe(14); // the CM6/LF-space anchor offset
+    expect(offsetToLine(lf, 14)).toBe(4);
+    // The same offset over the raw disk text lands a line early — the bug
+    // toLF exists to prevent.
+    expect(offsetToLine(crlf, 14)).toBe(3);
+  });
+});
 
 describe("offsetToLine", () => {
   const doc = "line1\nline2\nline3";

@@ -17,6 +17,8 @@ export interface PdfAnnotation {
   page: number;
   /** PDF points from the top of the page (SyncTeX y). */
   y: number;
+  /** SyncTeX hbox in top-origin pt; null when unreported. */
+  box?: { left: number; top: number; width: number; height: number } | null;
   anchorText: string;
 }
 

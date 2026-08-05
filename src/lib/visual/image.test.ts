@@ -41,6 +41,16 @@ describe("visible image", () => {
     expect(imageWordBoundary(doc, text, afterBeta, -1)).toBe(betaStart);
   });
 
+  it("includes prose-wrapper arguments — searchable, not swallowed", () => {
+    const text = "Claim\\footnote{hidden detail} and \\href{https://x}{link text}.";
+    const doc = parse(text);
+    const win = buildImageWindow(doc, text, 0, text.length);
+    expect(win.text).toContain("hidden detail");
+    expect(win.text).toContain("link text");
+    expect(win.text).not.toContain("https");
+    expect(win.text).not.toContain("footnote");
+  });
+
   it("treats widgets as single space-class units", () => {
     const text = "see \\cite{knuth} now";
     const doc = parse(text);

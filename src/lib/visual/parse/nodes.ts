@@ -23,7 +23,35 @@ export interface Span {
 /* Inline nodes                                                        */
 /* ------------------------------------------------------------------ */
 
-export type StyleKind = "bold" | "italic" | "underline" | "code";
+/**
+ * A wrapper whose argument is real prose the user keeps editing in place.
+ * Beyond the visual styles this covers semantic wrappers (`\footnote`,
+ * `\caption`, `\href`, `\textcolor`) — they are StyleNodes because their
+ * shape is identical: hidden wrapper tokens around live content.
+ */
+export type StyleKind =
+  | "bold"
+  | "italic"
+  | "underline"
+  | "code"
+  | "smallcaps"
+  | "sans"
+  | "serif"
+  | "normal"
+  | "sup"
+  | "sub"
+  | "upper"
+  | "lower"
+  | "footnote"
+  | "caption"
+  | "link"
+  | "colored"
+  // Metadata declarations reached in the BODY (the IEEE class puts them
+  // there). In the preamble they are inside the hidden preamble block.
+  | "docTitle"
+  | "docAuthor"
+  | "docDate"
+  | "docInstitute";
 
 export interface StyleNode {
   kind: "style";
@@ -159,12 +187,14 @@ export interface DocMarkerBlock {
   to: number;
 }
 
+/** 0 = \part/\chapter … 3 = \subsubsection, 4 = \paragraph, 5 = \subparagraph. */
+export type HeadingLevel = 0 | 1 | 2 | 3 | 4 | 5;
+
 export interface HeadingBlock {
   kind: "heading";
   from: number;
   to: number;
-  /** 1 = \section, 2 = \subsection, 3 = \subsubsection. */
-  level: 1 | 2 | 3;
+  level: HeadingLevel;
   starred: boolean;
   hide: Span[];
   content: Span;
@@ -267,6 +297,21 @@ export interface RawSourceBlock {
   reason: string;
 }
 
+/**
+ * `\maketitle` alone on its line — the rendered title block.
+ *
+ * Deliberately carries NO metadata. Title/author/date are resolved by the
+ * decoration builder from the whole document text, because the incremental
+ * splice reuses untouched nodes verbatim (mapBlock's default arm) and
+ * `\title{}` is legal in the body — a borrowed field would go stale the
+ * moment its source was edited outside the rescanned region.
+ */
+export interface TitleBlock {
+  kind: "titleBlock";
+  from: number;
+  to: number;
+}
+
 export type BlockNode =
   | PreambleBlock
   | DocMarkerBlock
@@ -277,7 +322,8 @@ export type BlockNode =
   | ItemMarkerBlock
   | CommentLineBlock
   | BlankBlock
-  | RawSourceBlock;
+  | RawSourceBlock
+  | TitleBlock;
 
 /* ------------------------------------------------------------------ */
 /* Document                                                            */
@@ -408,6 +454,15 @@ function coverInlines(b: CoverageBuilder, inlines: InlineNode[]): void {
         // markup, so the no-inline-reveal policy is unaffected).
         b.push(node.from, node.to, "content");
         break;
+      default: {
+        // A node kind with no arm here would silently fall through to
+        // `fill()` and be classified as content — i.e. its raw markup would
+        // render as live text, with assertTotalCoverage still green because
+        // tiling holds. Keep this guard: it turns that into a tsc error.
+        const exhaustive: never = node;
+        void exhaustive;
+        break;
+      }
     }
   }
 }
@@ -416,6 +471,7 @@ function coverBlock(b: CoverageBuilder, block: BlockNode): void {
   switch (block.kind) {
     case "preamble":
     case "displayMath":
+    case "titleBlock":
       b.push(block.from, block.to, "widget");
       break;
     case "docBegin":
@@ -456,6 +512,11 @@ function coverBlock(b: CoverageBuilder, block: BlockNode): void {
     case "rawSource":
       b.push(block.from, block.to, "content");
       break;
+    default: {
+      const exhaustive: never = block;
+      void exhaustive;
+      break;
+    }
   }
 }
 

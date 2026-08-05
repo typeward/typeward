@@ -21,13 +21,18 @@ export interface PdfAnnotationDeps {
   pdfVersion: () => number;
   /** Source text for a file — buffer-preferred, disk fallback; null if unreadable. */
   getContent: (relPath: string) => Promise<string | null>;
-  /** SyncTeX forward (source line → page + y), engine-resolved by the caller. */
+  /** SyncTeX forward (source line → page + y + optional hbox), engine-resolved
+   *  by the caller. */
   resolveForward: (
     p: Project,
     outputPath: string,
     relPath: string,
     line: number,
-  ) => Promise<{ page: number; y: number } | null>;
+  ) => Promise<{
+    page: number;
+    y: number;
+    box?: { left: number; top: number; width: number; height: number } | null;
+  } | null>;
 }
 
 /**
@@ -79,6 +84,7 @@ export function createPdfAnnotations(deps: PdfAnnotationDeps): () => PdfAnnotati
               kind: t.kind === "todo" ? "todo" : "comment",
               page: loc.page,
               y: loc.y,
+              box: loc.box ?? null,
               anchorText: t.anchorText,
             }
           : null;

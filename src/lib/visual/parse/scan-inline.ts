@@ -17,6 +17,12 @@ import type { InlineNode, PillCommand, Span, StyleKind } from "./nodes";
 /* ------------------------------------------------------------------ */
 
 export const MAX_INLINE_ARG = 1000;
+/**
+ * Cap for prose wrappers (`\footnote`, `\caption`, `\href`). Larger than
+ * MAX_INLINE_ARG because these hold whole sentences: past the cap the
+ * construct degrades to a chip, which would swallow the prose.
+ */
+export const MAX_WRAPPER_ARG = 4000;
 export const MAX_PILL_ARG = 200;
 export const MAX_OPT_ARG = 200;
 export const MAX_MATH_SPAN = 5000;
@@ -117,12 +123,58 @@ export function findMathClose(
 /* Construct tables                                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * `\cmd{prose}` — the argument stays live, editable document text. Semantic
+ * wrappers (footnote/caption/url) belong here too: what matters is that the
+ * prose is not swallowed into an atomic chip, not that the effect is a font.
+ */
 const INLINE_STYLES: Record<string, StyleKind> = {
   textbf: "bold",
   textit: "italic",
   emph: "italic",
   underline: "underline",
   texttt: "code",
+  textsc: "smallcaps",
+  textsf: "sans",
+  textrm: "serif",
+  textnormal: "normal",
+  textmd: "normal",
+  textup: "normal",
+  textsuperscript: "sup",
+  textsubscript: "sub",
+  MakeUppercase: "upper",
+  uppercase: "upper",
+  MakeLowercase: "lower",
+  lowercase: "lower",
+  footnote: "footnote",
+  footnotetext: "footnote",
+  caption: "caption",
+  url: "link",
+  path: "link",
+  nolinkurl: "link",
+  title: "docTitle",
+  author: "docAuthor",
+  date: "docDate",
+  institute: "docInstitute",
+  // Author-block containers hold names, not markup — without these the
+  // IEEE class's `\author{\IEEEauthorblockN{…}}` swallows the names.
+  IEEEauthorblockN: "normal",
+  IEEEauthorblockA: "normal",
+};
+
+/**
+ * Wrappers whose argument has verbatim catcodes: `~ $ \ # &` are literal
+ * characters there, not TeX. Their content is NOT rescanned — prose lexing
+ * would render `\url{x/~bob}` as "x/ bob", i.e. a wrong URL presented as the
+ * truth. Empty children leave the span classified as plain content.
+ */
+const VERBATIM_ARG_STYLES = new Set(["url", "path", "nolinkurl"]);
+
+/** `\cmd{meta}{prose}` — first argument is metadata, second is live prose. */
+const WRAPPED_SECOND_ARG: Record<string, StyleKind> = {
+  href: "link",
+  textcolor: "colored",
+  colorbox: "colored",
 };
 
 /** Declarations that style a bare group: `{\em …}`. */
@@ -381,7 +433,7 @@ export function scanInline(
     if (style !== undefined) {
       const braceAt = skipInlineSpace(text, e);
       if (braceAt < to && text.charCodeAt(braceAt) === 123 /* { */) {
-        const close = matchBrace(text, braceAt, MAX_INLINE_ARG, false, to);
+        const close = matchBrace(text, braceAt, MAX_WRAPPER_ARG, false, to);
         if (close !== -1) {
           if (depth >= MAX_NEST_DEPTH) {
             pushCommandChip(i, close + 1, name, [{ from: braceAt, to: close + 1 }]);
@@ -398,7 +450,9 @@ export function scanInline(
               { from: close, to: close + 1 },
             ],
             content: { from: braceAt + 1, to: close },
-            children: scanInline(text, braceAt + 1, close, depth + 1),
+            children: VERBATIM_ARG_STYLES.has(name)
+              ? []
+              : scanInline(text, braceAt + 1, close, depth + 1),
           });
           i = close + 1;
           continue;
@@ -445,6 +499,46 @@ export function scanInline(
       pushCommandChip(i, e, name, []);
       i = e;
       continue;
+    }
+
+    const wrapped = WRAPPED_SECOND_ARG[name];
+    if (wrapped !== undefined) {
+      // `\href{url}{text}` — the whole `\href{url}{` prefix is one hidden
+      // wrapper span so the coverage tiling is unchanged from a `\cmd{…}`.
+      const a1 = skipInlineSpace(text, e);
+      if (a1 < to && text.charCodeAt(a1) === 123 /* { */) {
+        const close1 = matchBrace(text, a1, MAX_OPT_ARG, false, to);
+        if (close1 !== -1) {
+          const a2 = skipInlineSpace(text, close1 + 1);
+          if (a2 < to && text.charCodeAt(a2) === 123 /* { */) {
+            const close2 = matchBrace(text, a2, MAX_WRAPPER_ARG, false, to);
+            if (close2 !== -1) {
+              if (depth >= MAX_NEST_DEPTH) {
+                pushCommandChip(i, close2 + 1, name, [
+                  { from: a1, to: close1 + 1 },
+                  { from: a2, to: close2 + 1 },
+                ]);
+              } else {
+                nodes.push({
+                  kind: "style",
+                  from: i,
+                  to: close2 + 1,
+                  style: wrapped,
+                  hide: [
+                    { from: i, to: a2 + 1 },
+                    { from: close2, to: close2 + 1 },
+                  ],
+                  content: { from: a2 + 1, to: close2 },
+                  children: scanInline(text, a2 + 1, close2, depth + 1),
+                });
+              }
+              i = close2 + 1;
+              continue;
+            }
+          }
+        }
+      }
+      // Malformed — fall through to the chip so nothing is half-consumed.
     }
 
     // Unknown control word: consume `*`, then up to 2 same-line [..] and up

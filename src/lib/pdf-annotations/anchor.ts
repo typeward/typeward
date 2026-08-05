@@ -19,15 +19,23 @@ const LIGATURES: [RegExp, string][] = [
   [/ﬄ/g, "ffl"],
 ];
 
-function normalizeWord(w: string): string {
+export function normalizeWord(w: string): string {
   let s = w.toLowerCase();
   for (const [re, rep] of LIGATURES) s = s.replace(re, rep);
   return s.replace(/[^a-z0-9]/g, "");
 }
 
+/** Word tokenizer shared with the PDF-side rect matcher. Fresh instance per
+ * call: a /g regex carries lastIndex state across callers. The ﬀ-ﬄ range
+ * keeps ligature glyphs (as pdfjs text items render them) inside their word
+ * so normalizeWord can expand them. */
+export function wordRe(): RegExp {
+  return /[A-Za-z0-9'À-ɏﬀ-ﬄ-]+/g;
+}
+
 /** Replace LaTeX markup (commands, braces, math toggles, comments) with spaces
  * char-for-char so word offsets into the ORIGINAL string are preserved. */
-function maskMarkup(s: string): string {
+export function maskMarkup(s: string): string {
   const out = s.split("");
   let i = 0;
   let inComment = false;
@@ -77,7 +85,7 @@ interface SourceWord {
 function sourceWords(source: string, from: number, to: number): SourceWord[] {
   const window = source.slice(from, to);
   const masked = maskMarkup(window);
-  const re = /[A-Za-z0-9'À-ɏ-]+/g;
+  const re = wordRe();
   const out: SourceWord[] = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(masked)) !== null) {

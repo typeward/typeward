@@ -4,6 +4,7 @@ import {
   For,
   Show,
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   onCleanup,
@@ -22,11 +23,12 @@ import { mountHistoryDiff } from "./history-diff";
 
 /**
  * Project history (the top-bar HistoryMenu popover): every recorded version
- * across the whole project, newest first, each openable as a read-only diff
- * against the file's current state with a Restore action. Versions are
- * recorded on save by the Rust store (history.rs) — at most one per file per
- * five minutes — and restore always snapshots the state it overwrites, so
- * nothing here is destructive.
+ * across the whole project, newest first, grouped under local-calendar-day
+ * headers with a per-entry time and change summary. Each entry opens as a
+ * read-only diff against the file's current state with a Restore action.
+ * Versions are recorded on save by the Rust store (history.rs) — at most one
+ * per file per five minutes — and restore always snapshots the state it
+ * overwrites, so nothing here is destructive.
  */
 export const HistoryPanel: Component = () => {
   // Bumped after restore/clear so the resource refetches without a remount.
@@ -49,6 +51,44 @@ export const HistoryPanel: Component = () => {
     },
     { initialValue: [] },
   );
+
+  // Per-entry change summaries. The list is newest-first, so within a file
+  // the next entry is the version this one replaced. The store records bytes,
+  // not lines — a summary states only size facts, never a line count.
+  const summaries = createMemo(() => {
+    const byFile = new Map<string, ipc.ProjectHistoryVersion[]>();
+    for (const v of versions()) {
+      const arr = byFile.get(v.relPath);
+      if (arr) arr.push(v);
+      else byFile.set(v.relPath, [v]);
+    }
+    const out = new Map<ipc.ProjectHistoryVersion, string>();
+    for (const arr of byFile.values()) {
+      for (let i = 0; i < arr.length; i++) {
+        out.set(
+          arr[i],
+          i + 1 < arr.length ? sizeDelta(arr[i].size - arr[i + 1].size) : "first version",
+        );
+      }
+    }
+    return out;
+  });
+
+  // Fold into day groups. The list order (newest first) is preserved, so a
+  // break on the local calendar day is enough.
+  const groups = createMemo(() => {
+    const out: { label: string; items: ipc.ProjectHistoryVersion[] }[] = [];
+    let dayKey = "";
+    for (const v of versions()) {
+      const day = new Date(v.ts).toDateString();
+      if (day !== dayKey) {
+        dayKey = day;
+        out.push({ label: dayLabel(v.ts), items: [] });
+      }
+      out[out.length - 1].items.push(v);
+    }
+    return out;
+  });
 
   /** The version's file, when it's open in a tab (buffer beats disk). */
   const openBuffer = (relPath: string) =>
@@ -168,29 +208,42 @@ export const HistoryPanel: Component = () => {
             <EmptyState text="No versions yet. Typeward records one automatically on save — at most one per file every five minutes." />
           }
         >
-          <ul class="flex flex-col gap-1">
-            <For each={versions()}>
-              {(v) => (
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => setSelected(v)}
-                    class="lift glass-soft flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-[var(--color-control-fill)]"
-                  >
-                    <HistoryIcon size={12} class="flex-shrink-0 text-fg-3" />
-                    <span class="min-w-0 flex-1">
-                      <span class="mono block truncate text-sm text-fg-1">
-                        {v.relPath}
-                      </span>
-                      <span class="block text-xs text-fg-3">
-                        {formatWhen(v.ts)} · {formatSize(v.size)}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
+          <For each={groups()}>
+            {(group) => (
+              <>
+                <div
+                  class="label-xs sticky top-0 z-10 px-1.5 pb-1 pt-2 text-fg-3"
+                  style={{ background: "var(--color-popover-bg)" }}
+                >
+                  {group.label}
+                </div>
+                <ul class="flex flex-col gap-1">
+                  <For each={group.items}>
+                    {(v) => (
+                      <li>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(v)}
+                          title={`${formatWhen(v.ts)} · ${formatSize(v.size)}`}
+                          class="lift glass-soft flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left hover:bg-[var(--color-control-fill)]"
+                        >
+                          <HistoryIcon size={12} class="flex-shrink-0 text-fg-3" />
+                          <span class="min-w-0 flex-1">
+                            <span class="mono block truncate text-sm text-fg-1">
+                              {v.relPath}
+                            </span>
+                            <span class="block text-xs text-fg-3">
+                              {formatTime(v.ts)} · {summaries().get(v)}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </>
+            )}
+          </For>
         </Show>
       </div>
 
@@ -308,4 +361,32 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function dayLabel(ms: number): string {
+  const day = new Date(ms);
+  const now = new Date();
+  if (day.toDateString() === now.toDateString()) return "Today";
+  if (day.toDateString() === new Date(now.getTime() - 86_400_000).toDateString()) {
+    return "Yesterday";
+  }
+  const opts: Intl.DateTimeFormatOptions = {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  };
+  if (day.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return day.toLocaleDateString(undefined, opts);
+}
+
+function sizeDelta(d: number): string {
+  if (d === 0) return "edited, size unchanged";
+  return d > 0 ? `+${formatSize(d)}` : `-${formatSize(-d)}`;
 }

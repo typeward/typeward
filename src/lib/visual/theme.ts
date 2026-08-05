@@ -44,6 +44,12 @@ export const documentTheme: Extension = EditorView.theme({
  */
 export const constructTheme: Extension = EditorView.theme({
   // Headings — sans display type over the serif body.
+  ".cm-vis-h0": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "1.9em",
+    fontWeight: "680",
+    letterSpacing: "-0.02em",
+  },
   ".cm-vis-h1": {
     fontFamily: "var(--font-sans)",
     fontSize: "1.6em",
@@ -60,9 +66,23 @@ export const constructTheme: Extension = EditorView.theme({
     fontSize: "1.1em",
     fontWeight: "600",
   },
+  ".cm-vis-h4": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "1em",
+    fontWeight: "620",
+  },
+  ".cm-vis-h5": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "1em",
+    fontWeight: "600",
+    fontStyle: "italic",
+  },
+  ".cm-line.cm-vis-line-h0": { padding: "1.1em 0 0.4em" },
   ".cm-line.cm-vis-line-h1": { padding: "0.9em 0 0.3em" },
   ".cm-line.cm-vis-line-h2": { padding: "0.7em 0 0.25em" },
   ".cm-line.cm-vis-line-h3": { padding: "0.5em 0 0.2em" },
+  ".cm-line.cm-vis-line-h4": { padding: "0.4em 0 0.15em" },
+  ".cm-line.cm-vis-line-h5": { padding: "0.35em 0 0.15em" },
 
   // Inline marks.
   ".cm-vis-b": { fontWeight: "700" },
@@ -74,6 +94,44 @@ export const constructTheme: Extension = EditorView.theme({
     background: "var(--color-control-fill)",
     borderRadius: "3px",
     padding: "0 3px",
+  },
+
+  // Prose wrappers — the argument stays live text, the wrapper only styles.
+  ".cm-vis-sc": { fontVariant: "small-caps" },
+  ".cm-vis-sans": { fontFamily: "var(--font-sans)" },
+  ".cm-vis-serif": { fontFamily: "var(--font-doc)" },
+  ".cm-vis-normal": { fontStyle: "normal", fontWeight: "400" },
+  ".cm-vis-sup": { verticalAlign: "super", fontSize: "0.75em" },
+  ".cm-vis-sub": { verticalAlign: "sub", fontSize: "0.75em" },
+  ".cm-vis-upper": { textTransform: "uppercase" },
+  ".cm-vis-lower": { textTransform: "lowercase" },
+  ".cm-vis-footnote": {
+    fontSize: "0.85em",
+    color: "var(--color-fg-3)",
+  },
+  ".cm-vis-caption": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "0.85em",
+    color: "var(--color-fg-3)",
+  },
+  ".cm-vis-link": {
+    color: "var(--color-accent-1)",
+    textDecoration: "underline",
+    textUnderlineOffset: "2px",
+  },
+  ".cm-vis-colored": {},
+  ".cm-vis-field": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "0.92em",
+    color: "var(--color-fg-2)",
+  },
+  ".cm-vis-field-label": {
+    marginRight: "0.5em",
+    fontSize: "0.72em",
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    borderStyle: "dashed",
+    color: "var(--color-fg-3)",
   },
 
   // Chips — the honest stand-ins for atomic constructs.
@@ -97,7 +155,9 @@ export const constructTheme: Extension = EditorView.theme({
     outline: "2px solid var(--color-accent-1)",
     outlineOffset: "1px",
   },
-  ".cm-vis-cmd-chip": { fontFamily: "var(--font-mono)" },
+  // Sans, deliberately: mono is this file's signal for "source", and a
+  // command chip carries a human label, not markup.
+  ".cm-vis-cmd-chip": { fontFamily: "var(--font-sans)", fontSize: "0.8em" },
   ".cm-vis-verb-chip": { fontFamily: "var(--font-mono)" },
   ".cm-vis-math-chip": { color: "var(--syntax-math)" },
   ".cm-vis-pill": { color: "var(--color-fg-1)" },
@@ -225,6 +285,31 @@ export const constructTheme: Extension = EditorView.theme({
     fontSize: "0.85em",
     color: "var(--color-fg-3)",
     textAlign: "center",
+  },
+
+  // Title block — what \maketitle actually produces.
+  ".cm-vis-title": {
+    textAlign: "center",
+    margin: "0.5em 0 1.6em",
+    padding: "1.4em 1em",
+    background: "transparent",
+    border: "0",
+    borderBottom: "1px solid var(--color-glass-stroke)",
+    borderRadius: "0",
+  },
+  ".cm-vis-title:hover": { background: "var(--color-control-fill)" },
+  ".cm-vis-title-main": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "1.75em",
+    fontWeight: "660",
+    letterSpacing: "-0.02em",
+    lineHeight: "1.2",
+    color: "var(--color-fg-1)",
+  },
+  ".cm-vis-title-sub": {
+    marginTop: "0.5em",
+    fontSize: "0.95em",
+    color: "var(--color-fg-2)",
   },
 
   // Preamble chip.

@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Typeward</title>
+    <!-- From design_files/icon-kit/web. The adaptive SVG carries both themes
+         and switches on prefers-color-scheme, matching the app's own theming;
+         the .ico is the fallback for anything that won't take an SVG. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon-adaptive.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <style>
       /* Painted before any external CSS loads — avoids a flash while the
        * bundle is being fetched/parsed. Defaults mirror the Daylight tokens

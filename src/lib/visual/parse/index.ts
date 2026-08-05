@@ -17,12 +17,14 @@ export type {
   EnvKind,
   EnvironmentBlock,
   HeadingBlock,
+  HeadingLevel,
   InlineNode,
   ItemMarkerBlock,
   ParagraphBlock,
   PillCommand,
   Span,
   StyleKind,
+  TitleBlock,
   VisualDoc,
 } from "./nodes";
 export {
@@ -34,6 +36,7 @@ export {
 export type { ChangeAdapter, UpdateResult } from "./incremental";
 export { mapVisualDoc } from "./incremental";
 export { findPreambleEnd } from "./scan-blocks";
+export { MAX_OPT_ARG, matchBrace, scanInline, skipInlineSpace } from "./scan-inline";
 
 /** Budget for the enable-time full parse. */
 export const FULL_PARSE_BUDGET_MS = 25;

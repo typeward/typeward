@@ -1,3 +1,11 @@
+/** Review offsets are CM6/LF-space (CM6 splits on \r\n but joins with \n), so
+ * every consumer of file content in the review pipeline must normalize through
+ * this before mapping offsets — disk reads preserve CRLF, and a CRLF file
+ * otherwise shifts every anchor up by its preceding \r count. */
+export function toLF(s: string): string {
+  return s.includes("\r") ? s.replace(/\r\n?/g, "\n") : s;
+}
+
 /** Shared offset→line mapping for review/annotation anchoring. 1-based line
  * numbers; allocation-free (no slice/split per call). */
 export function offsetToLine(content: string, offset: number): number {

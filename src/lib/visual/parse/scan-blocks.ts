@@ -13,6 +13,7 @@ import type {
   BlockNode,
   EnvKind,
   HeadingBlock,
+  HeadingLevel,
   Span,
 } from "./nodes";
 import { TRANSPARENT_ENV_KINDS } from "./nodes";
@@ -32,11 +33,18 @@ const MAX_HEADING_ARG = 500;
 /** Budget clock is sampled once per this many scanner steps. */
 const BUDGET_STRIDE = 4096;
 
-const HEADING_LEVELS: Record<string, 1 | 2 | 3> = {
+const HEADING_LEVELS: Record<string, HeadingLevel> = {
+  part: 0,
+  chapter: 0,
   section: 1,
   subsection: 2,
   subsubsection: 3,
+  paragraph: 4,
+  subparagraph: 5,
 };
+
+/** Control words that form a block of their own when alone on a line. */
+const BLOCK_COMMANDS = new Set(["maketitle"]);
 
 const ENV_KINDS: Record<string, EnvKind> = {
   itemize: "list",
@@ -48,6 +56,22 @@ const ENV_KINDS: Record<string, EnvKind> = {
   center: "prose",
   flushleft: "prose",
   flushright: "prose",
+  // Body-bearing envs: opaque would render them as an EMPTY card, i.e. every
+  // slide/theorem/proof body invisible. Transparent parses them as blocks.
+  frame: "prose",
+  columns: "prose",
+  column: "prose",
+  block: "prose",
+  theorem: "prose",
+  lemma: "prose",
+  proof: "prose",
+  definition: "prose",
+  corollary: "prose",
+  proposition: "prose",
+  remark: "prose",
+  example: "prose",
+  IEEEkeywords: "prose",
+  tcolorbox: "prose",
   equation: "mathEnv",
   "equation*": "mathEnv",
   align: "mathEnv",
@@ -105,9 +129,10 @@ type Boundary =
   | { type: "blank"; pos: number }
   | { type: "begin"; pos: number; name: string; nameEnd: number }
   | { type: "end"; pos: number; name: string; nameEnd: number }
-  | { type: "heading"; pos: number; level: 1 | 2 | 3; starred: boolean; nameEnd: number }
+  | { type: "heading"; pos: number; level: HeadingLevel; starred: boolean; nameEnd: number }
   | { type: "displayMath"; pos: number; delim: "bracket" | "dollars" }
-  | { type: "item"; pos: number; nameEnd: number };
+  | { type: "item"; pos: number; nameEnd: number }
+  | { type: "blockCmd"; pos: number; name: string; nameEnd: number };
 
 /**
  * Scan forward from `i` for the next structural boundary, skipping over
@@ -188,6 +213,10 @@ function nextBoundary(
       return { type: "heading", pos: i, level, starred, nameEnd: starred ? e + 1 : e };
     }
 
+    if (BLOCK_COMMANDS.has(name)) {
+      return { type: "blockCmd", pos: i, name, nameEnd: e };
+    }
+
     if (name === "item" && inList) {
       return { type: "item", pos: i, nameEnd: e };
     }
@@ -229,6 +258,35 @@ function extendThroughBlankTail(text: string, end: number, limit: number): numbe
     j++;
   }
   return limit;
+}
+
+/**
+ * Transparent envs whose `\begin` takes mandatory `{..}` arguments that are
+ * NOT prose. beamer's `\begin{column}{0.5\textwidth}` is a length — left in
+ * the body it renders as editable page text ("0.5" next to a chip). Envs
+ * whose brace argument IS a title (`frame`, `block`) are deliberately absent:
+ * there the argument should stay visible.
+ */
+const ENV_HIDDEN_BRACE_ARGS: Record<string, number> = {
+  column: 1,
+};
+
+/** Consume up to `count` same-line `{..}` groups after `end`. */
+function consumeBraceArgs(
+  text: string,
+  end: number,
+  limit: number,
+  count: number,
+): number {
+  let at = end;
+  for (let n = 0; n < count; n++) {
+    const braceAt = skipInlineSpace(text, at);
+    if (braceAt >= limit || text.charCodeAt(braceAt) !== 123 /* { */) break;
+    const close = matchBrace(text, braceAt, MAX_OPT_ARG, true, limit);
+    if (close === -1) break;
+    at = close + 1;
+  }
+  return at;
 }
 
 /** Consume one same-line `[..]` after `end` (env placement args). */
@@ -390,6 +448,28 @@ function parseRegion(
       continue;
     }
 
+    if (b.type === "blockCmd") {
+      // Only a command that OWNS its whole line becomes a block: the card is
+      // rendered by a block replace, which hideRange only takes for a
+      // line-aligned range. Anywhere else it stays paragraph flow and chips.
+      const lineStart = text.lastIndexOf("\n", b.pos - 1) + 1;
+      const to = extendThroughBlankTail(text, b.nameEnd, limit);
+      const ownsLine =
+        lineStart >= i &&
+        /^[ \t]*$/.test(text.slice(lineStart, b.pos)) &&
+        (to > b.nameEnd || b.nameEnd >= limit);
+      if (ownsLine) {
+        emitParagraph(i, lineStart);
+        blocks.push({ kind: "titleBlock", from: lineStart, to });
+        i = to;
+      } else {
+        const para = paragraphThrough(ctx, b.nameEnd, limit, listDepth > 0);
+        emitParagraph(i, para);
+        i = para;
+      }
+      continue;
+    }
+
     if (b.type === "displayMath") {
       emitParagraph(i, b.pos);
       const opener = b.delim === "bracket" ? 2 : 2; /* \[ or $$ */
@@ -538,6 +618,10 @@ function parseEnvironment(
   const isList = envKind === "list";
 
   let tokenEnd = consumeOptArg(text, b.nameEnd, limit);
+  const braceArgs = ENV_HIDDEN_BRACE_ARGS[name];
+  if (braceArgs !== undefined) {
+    tokenEnd = consumeBraceArgs(text, tokenEnd, limit, braceArgs);
+  }
   tokenEnd = extendThroughBlankTail(text, tokenEnd, limit);
   const beginToken: Span = { from: b.pos, to: tokenEnd };
 

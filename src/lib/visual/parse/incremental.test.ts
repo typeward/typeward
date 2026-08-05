@@ -80,6 +80,22 @@ const SNIPPETS = [
   " ",
   "\\begin{verbatim}\nraw\n\\end{verbatim}\n",
   "\\end{document}\n",
+  // Semantic constructs — the block-owning \maketitle, the prose wrappers,
+  // the wider heading levels, and a body-parsed env.
+  "\\maketitle\n",
+  "\\maketitle",
+  "\\title{T}\n",
+  "\\author{A}\n",
+  "\\date{}\n",
+  "\\footnote{note}",
+  "\\href{https://x}{y}",
+  "\\textcolor{red}{c}",
+  "\\chapter{C}\n",
+  "\\paragraph{P}\n",
+  "\\begin{frame}{F}\nslide\n\\end{frame}\n",
+  "\\begin{column}{0.5\\textwidth}\nc\n\\end{column}\n",
+  "\\url{http://x/~a$b}",
+  "\\title[s]{T}\n",
 ];
 
 const BASE_DOCS = [
@@ -140,6 +156,28 @@ x^2 + y^2 = z^2
 Closing paragraph of the part. % note
 
 `.repeat(60) +
+    `\\end{document}
+`,
+  // IEEE shape: the title metadata lives in the BODY, past the preamble, so
+  // edits to it are inside the splice window rather than forcing a full
+  // reparse. This is the falsifier for resolving title/author/date in the
+  // decoration builder instead of carrying them on the titleBlock node — a
+  // borrowed field would go stale here and this comparison would go red.
+  `\\documentclass{IEEEtran}
+\\begin{document}
+\\title{A Body Placed Title}
+\\author{\\IEEEauthorblockN{Jane Roe}}
+\\maketitle
+
+` +
+    `\\section{Section}
+Prose with a \\footnote{note text} and a \\href{https://example.com}{link},
+wrapped over two lines.
+
+\\paragraph{Aside}
+Another paragraph with \\textcolor{red}{colour} in it.
+
+`.repeat(40) +
     `\\end{document}
 `,
 ];

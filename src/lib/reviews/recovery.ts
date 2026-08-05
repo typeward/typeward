@@ -1,4 +1,5 @@
 import type { CommentThread } from "./types";
+import { toLF } from "./lines";
 
 export interface RecoveredThread {
   thread: CommentThread;
@@ -12,13 +13,17 @@ export function recoverThreads(
   fileContent: string,
   fileRelPath: string,
 ): RecoveredThread[] {
+  // Thread offsets are LF-space; callers may hand disk-flavored CRLF content.
+  const content = toLF(fileContent);
   return threads
     .filter((t) => t.fileRelPath === fileRelPath)
-    .map((thread) => recover(thread, fileContent));
+    .map((thread) => recover(thread, content));
 }
 
 function recover(thread: CommentThread, content: string): RecoveredThread {
-  const { fromOffset, toOffset, anchorText } = thread;
+  const { fromOffset, toOffset } = thread;
+  // Anchors captured before offsets were LF-normalized may carry CRLF.
+  const anchorText = toLF(thread.anchorText);
 
   if (
     fromOffset >= 0 &&

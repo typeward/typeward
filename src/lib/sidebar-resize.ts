@@ -11,6 +11,14 @@ interface SidebarResizeOptions {
    * measurement is available.
    */
   desiredPx?: () => number | undefined;
+  /**
+   * True while the resize handle is actually held down. When provided, this
+   * is the sole drag discriminator: value comparison cannot tell a drag from
+   * corvu echoing a programmatic size (mount, window reflow, min-clamp on
+   * first paint), and boot echoes used to freeze auto-follow through exactly
+   * that misread.
+   */
+  isDragging?: () => boolean;
 }
 
 // Stores the sidebar width in pixels (window-resize-independent) and projects
@@ -18,7 +26,7 @@ interface SidebarResizeOptions {
 // fraction-based sizing lets px-bounded panels drift past their max whenever
 // the window changes width, then snap back on the next drag.
 export function createSidebarResize(opts: SidebarResizeOptions) {
-  const { defaultPx = 260, minPx, maxPx, desiredPx } = opts;
+  const { defaultPx = 260, minPx, maxPx, desiredPx, isDragging } = opts;
   const initialWindowWidth =
     typeof window !== "undefined" && window.innerWidth > 0
       ? window.innerWidth
@@ -67,9 +75,15 @@ export function createSidebarResize(opts: SidebarResizeOptions) {
     const w = rootW();
     if (w <= 0 || next[0] === undefined) return;
     const desired = next[0] * w;
-    // Distinguish a real drag from corvu echoing back the size we just set
-    // (programmatic updates and window-resize reflow report the same width).
-    if (Math.abs(desired - clamp(sidebarPx())) > 1) setUserAdjusted(true);
+    // Only a held-down handle makes a sizes report a drag. The old fallback
+    // (compare against the current width with a 1px tolerance) misread mount
+    // echoes that arrive before layout settles — corvu can report the panel's
+    // min-clamped first paint — and froze auto-follow on boot.
+    const dragging = isDragging
+      ? isDragging()
+      : Math.abs(desired - clamp(sidebarPx())) > 1;
+    if (!dragging) return;
+    setUserAdjusted(true);
     setSidebarPx(clamp(desired));
   };
 

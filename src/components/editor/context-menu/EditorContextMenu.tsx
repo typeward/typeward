@@ -41,12 +41,16 @@ export const EditorContextMenu: Component<{
                   label={action.label}
                   disabled={action.enabled ? !action.enabled(props.ctx) : false}
                   onClick={() => {
+                    // Read everything BEFORE closing: onClose unmounts this
+                    // keyed component, and reading props.ctx afterwards
+                    // throws Solid's stale-<Show>-value error in dev builds —
+                    // the run then never executes and the click silently
+                    // no-ops (uncaught, so not even the toast fires).
+                    const ctx = props.ctx;
+                    const { run, label } = action;
                     props.onClose();
-                    void Promise.resolve(action.run(props.ctx)).catch((e) =>
-                      notifyError(
-                        `Couldn't run "${action.label}"`,
-                        describeIpcError(e),
-                      ),
+                    void Promise.resolve(run(ctx)).catch((e) =>
+                      notifyError(`Couldn't run "${label}"`, describeIpcError(e)),
                     );
                   }}
                 />

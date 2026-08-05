@@ -27,6 +27,11 @@
   --color-popover-bg: rgb(255 255 255 / 0.98);
   --color-topbar-bg: rgb(255 255 255 / 0.78);
   --color-selection-bg: rgb(124 58 237 / 0.12);
+  /* Pinned, not inherited: without this Paper falls through to the Aurora
+     accent-following color-mix default and the editor selection re-tints
+     when the user switches data-accent — unlike every other fixed theme.
+     28% matches Light's weight; ink stays ~11.7:1 over the composite. */
+  --color-text-selection: rgb(124 58 237 / 0.28);
   --color-card-bg: rgb(255 255 255 / 0.88);
   --color-doc-surface: rgb(255 255 255);
   --color-card-bg-soft: rgb(255 255 255 / 0.65);

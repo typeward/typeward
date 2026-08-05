@@ -161,7 +161,7 @@ export function registerBaseEditorMenuActions(): void {
 
   registerEditorMenuAction({
     id: "editor.fileHistory",
-    label: "File history",
+    label: "Project history",
     icon: History,
     group: "navigate",
     order: 0,

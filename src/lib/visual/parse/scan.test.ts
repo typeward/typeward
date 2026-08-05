@@ -344,6 +344,120 @@ After`;
   });
 });
 
+describe("visual parse — semantic constructs", () => {
+  it("makes a line-owning \\maketitle its own block", () => {
+    const text = String.raw`\begin{document}
+\maketitle
+
+Body.
+\end{document}`;
+    const d = parse(text);
+    expect(kinds(d)).toContain("titleBlock");
+    const title = firstBlock(d, "titleBlock");
+    expect(text.slice(title.from, title.to)).toBe("\\maketitle\n");
+    // Nothing of it is content — the widget covers the whole line.
+    expect(contentText(text, d)).not.toContain("maketitle");
+  });
+
+  it("keeps a mid-paragraph \\maketitle an inline command", () => {
+    const text = String.raw`text \maketitle text`;
+    const d = parse(text);
+    expect(kinds(d)).not.toContain("titleBlock");
+    const para = firstBlock(d, "paragraph");
+    const chip = para.inlines.find((n) => n.kind === "command");
+    if (chip?.kind !== "command") throw new Error("no chip");
+    expect(chip.name).toBe("maketitle");
+  });
+
+  it("blocks a \\maketitle at EOF with no trailing newline", () => {
+    const text = "\\begin{document}\n\\maketitle";
+    const d = parse(text);
+    const title = firstBlock(d, "titleBlock");
+    expect(title.to).toBe(text.length);
+  });
+
+  it("keeps footnote prose editable instead of swallowing it", () => {
+    const text = String.raw`Claim\footnote{Supporting \emph{detail} here.} follows.`;
+    const d = parse(text);
+    const para = firstBlock(d, "paragraph");
+    const note = para.inlines.find((n) => n.kind === "style");
+    if (note?.kind !== "style") throw new Error("footnote not a style node");
+    expect(note.style).toBe("footnote");
+    const visible = contentText(text, d);
+    expect(visible).toContain("Supporting");
+    expect(visible).toContain("detail");
+    expect(visible).not.toMatch(/\\[a-zA-Z]/);
+  });
+
+  it("shows \\href link text but not its URL", () => {
+    const text = String.raw`See \href{https://example.com/x}{the docs} now.`;
+    const d = parse(text);
+    const para = firstBlock(d, "paragraph");
+    const link = para.inlines.find((n) => n.kind === "style");
+    if (link?.kind !== "style") throw new Error("href not a style node");
+    expect(link.style).toBe("link");
+    const visible = contentText(text, d);
+    expect(visible).toContain("the docs");
+    expect(visible).not.toContain("example.com");
+  });
+
+  it("keeps \\textcolor content live", () => {
+    const text = String.raw`A \textcolor{red}{warning} here.`;
+    const d = parse(text);
+    const para = firstBlock(d, "paragraph");
+    const colored = para.inlines.find((n) => n.kind === "style");
+    if (colored?.kind !== "style") throw new Error("textcolor not a style node");
+    expect(colored.style).toBe("colored");
+    const visible = contentText(text, d);
+    expect(visible).toContain("warning");
+    expect(visible).not.toContain("red");
+  });
+
+  it("falls back to a chip for a malformed two-arg wrapper", () => {
+    const text = String.raw`Broken \href{https://x} only.`;
+    const d = parse(text);
+    const para = firstBlock(d, "paragraph");
+    const chip = para.inlines.find((n) => n.kind === "command");
+    if (chip?.kind !== "command") throw new Error("no fallback chip");
+    expect(chip.name).toBe("href");
+    expect(contentText(text, d)).not.toContain("https");
+  });
+
+  it("gives \\chapter, \\part and \\paragraph real heading levels", () => {
+    const text = String.raw`\part{One}
+
+\chapter{Two}
+
+\paragraph{Three}
+
+\subparagraph{Four}`;
+    const d = parse(text);
+    const levels = d.blocks
+      .filter((b) => b.kind === "heading")
+      .map((b) => (b.kind === "heading" ? b.level : -1));
+    expect(levels).toEqual([0, 0, 4, 5]);
+    const visible = contentText(text, d);
+    for (const t of ["One", "Two", "Three", "Four"]) expect(visible).toContain(t);
+    expect(visible).not.toMatch(/\\[a-zA-Z]/);
+  });
+
+  it("parses beamer frame bodies instead of hiding them in a card", () => {
+    const text = String.raw`\begin{frame}{Slide title}
+\begin{itemize}
+\item A point
+\end{itemize}
+\end{frame}`;
+    const d = parse(text);
+    const env = firstBlock(d, "environment");
+    expect(env.name).toBe("frame");
+    expect(env.envKind).toBe("prose");
+    expect(env.children).not.toBeNull();
+    const visible = contentText(text, d);
+    expect(visible).toContain("Slide title");
+    expect(visible).toContain("A point");
+  });
+});
+
 describe("visual parse — comment lines and blanks", () => {
   it("emits whole-line comments at block level", () => {
     const text = "para one\n\n% a note line\n\npara two";

@@ -151,6 +151,45 @@ export class BlockCardWidget extends WidgetType {
   }
 }
 
+/**
+ * `\maketitle`, rendered as the title block it produces. The fields are
+ * resolved by the decoration builder from `\title` / `\author` / `\date`
+ * wherever they sit in the document — this widget only paints them.
+ */
+export class TitleWidget extends WidgetType {
+  constructor(
+    readonly title: string,
+    readonly author: string,
+    readonly date: string,
+    readonly selected: boolean,
+  ) {
+    super();
+  }
+
+  override eq(other: TitleWidget): boolean {
+    return (
+      other.title === this.title &&
+      other.author === this.author &&
+      other.date === this.date &&
+      other.selected === this.selected
+    );
+  }
+
+  override toDOM(): HTMLElement {
+    const card = el("div", "cm-vis-card cm-vis-title");
+    if (this.selected) card.classList.add("cm-vis-card-selected");
+    card.appendChild(el("div", "cm-vis-title-main", this.title));
+    if (this.author) card.appendChild(el("div", "cm-vis-title-sub", this.author));
+    if (this.date) card.appendChild(el("div", "cm-vis-title-sub", this.date));
+    card.title = "Title block (\\maketitle) — from \\title, \\author, \\date";
+    return card;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
 /** The hidden preamble, standing in as one "Document settings" chip line. */
 export class PreambleWidget extends WidgetType {
   constructor(

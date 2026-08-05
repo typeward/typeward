@@ -103,6 +103,215 @@ describe("visual cm6: never-reveal", () => {
   });
 });
 
+describe("visual cm6: semantic rendering (no markup as widget text)", () => {
+  const TITLED = [
+    "\\documentclass{article}",
+    "\\title{On Recursive Proofs}",
+    "\\author{A. Author}",
+    "\\date{\\today}",
+    "\\begin{document}",
+    "\\maketitle",
+    "",
+    "Body text.",
+    "\\end{document}",
+    "",
+  ].join("\n");
+
+  it("renders \\maketitle as a title block, not a chip reading the markup", () => {
+    const view = makeView(TITLED);
+    const card = view.contentDOM.querySelector(".cm-vis-title");
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain("On Recursive Proofs");
+    expect(card?.textContent).toContain("A. Author");
+    const text = view.contentDOM.textContent ?? "";
+    // The reported bug, pinned. (The date string moves daily — never assert it.)
+    expect(text).not.toContain("\\maketitle");
+    expect(text).not.toContain("\\title");
+    expect(text).not.toContain("\\today");
+    expect(text).toContain("Body text.");
+    view.destroy();
+  });
+
+  it("reads title fields from the body, where the IEEE template puts them", () => {
+    const view = makeView(
+      [
+        "\\documentclass{IEEEtran}",
+        "\\begin{document}",
+        "\\title{Body Placed Title}",
+        "\\author{\\IEEEauthorblockN{Jane Roe}}",
+        "\\maketitle",
+        "",
+        "Abstract text.",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+    const card = view.contentDOM.querySelector(".cm-vis-title");
+    expect(card?.textContent).toContain("Body Placed Title");
+    expect(card?.textContent).toContain("Jane Roe");
+    expect(card?.textContent).not.toContain("IEEEauthorblockN");
+    // The declarations themselves render as labelled field rows — the value
+    // stays live text so it is still editable in place.
+    const labels = [...view.contentDOM.querySelectorAll(".cm-vis-field-label")].map(
+      (e) => e.textContent,
+    );
+    expect(labels).toEqual(["Title", "Author"]);
+    expect(view.contentDOM.textContent).not.toContain("\\author");
+    view.destroy();
+  });
+
+  it("blocks a \\maketitle on the final line with no trailing newline", () => {
+    const view = makeView("\\begin{document}\n\\maketitle");
+    expect(view.contentDOM.querySelector(".cm-vis-title")).not.toBeNull();
+    expect(view.contentDOM.textContent).not.toContain("\\maketitle");
+    view.destroy();
+  });
+
+  it("opens the popover when the title block is clicked", () => {
+    const intents: unknown[] = [];
+    const view = makeView(TITLED, {
+      onOpenPopover: (i: unknown) => intents.push(i),
+    });
+    const card = view.contentDOM.querySelector(".cm-vis-title") as HTMLElement;
+    card.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    expect(intents).toHaveLength(1);
+    view.destroy();
+  });
+
+  it("labels command chips in words, never as control sequences", () => {
+    const view = makeView(
+      "Start\n\n\\tableofcontents\n\nGap \\vspace{1em} and \\input{chapters/one.tex} end.\n",
+    );
+    const text = view.contentDOM.textContent ?? "";
+    expect(text).not.toMatch(/\\[a-zA-Z]/);
+    expect(text).toContain("Table of contents");
+    expect(text).toContain("Space");
+    expect(text).toContain("Include — chapters/one.tex");
+    view.destroy();
+  });
+
+  it("shows the \\verb payload rather than its delimiters", () => {
+    const view = makeView("Use \\verb|rm -rf| carefully.\n");
+    const chip = view.contentDOM.querySelector(".cm-vis-verb-chip");
+    expect(chip?.textContent).toBe("rm -rf");
+    expect(view.contentDOM.textContent).not.toContain("\\verb");
+    view.destroy();
+  });
+
+  it("keeps footnote, link and colored prose visible and in the content flow", () => {
+    const view = makeView(
+      "Claim\\footnote{Supporting detail.} and \\href{https://example.com}{the docs} and \\textcolor{red}{a warning}.\n",
+    );
+    const text = view.contentDOM.textContent ?? "";
+    expect(text).toContain("Supporting detail.");
+    expect(text).toContain("the docs");
+    expect(text).toContain("a warning");
+    expect(text).not.toContain("\\footnote");
+    expect(text).not.toContain("\\href");
+    expect(text).not.toContain("example.com");
+    expect(view.contentDOM.querySelector(".cm-vis-link")).not.toBeNull();
+    view.destroy();
+  });
+
+  it("renders beamer frame bodies instead of an empty card", () => {
+    const view = makeView(
+      "\\begin{frame}{Slide one}\n\\begin{itemize}\n\\item A real point\n\\end{itemize}\n\\end{frame}\n",
+    );
+    const text = view.contentDOM.textContent ?? "";
+    expect(text).toContain("Slide one");
+    expect(text).toContain("A real point");
+    expect(text).not.toContain("\\begin");
+    view.destroy();
+  });
+
+  it("renders a URL verbatim — prose lexing would corrupt it", () => {
+    const view = makeView(
+      "See \\url{http://x.com/~bob} and \\url{http://x.com/a$b$c}.\n",
+    );
+    const text = view.contentDOM.textContent ?? "";
+    // `~` and `$…$` are literal characters under \url's catcodes; rendering
+    // them as a space / as math would present a WRONG url as the truth.
+    expect(text).toContain("http://x.com/~bob");
+    expect(text).toContain("http://x.com/a$b$c");
+    view.destroy();
+  });
+
+  it("reads \\title[short]{full}, the beamer running-head form", () => {
+    const view = makeView(
+      [
+        "\\documentclass{beamer}",
+        "\\title[Short]{The Full Long Title}",
+        "\\author[AL]{Ada Lovelace}",
+        "\\date[x]{2020}",
+        "\\begin{document}",
+        "\\maketitle",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+    const card = view.contentDOM.querySelector(".cm-vis-title");
+    expect(card?.textContent).toContain("The Full Long Title");
+    expect(card?.textContent).toContain("Ada Lovelace");
+    expect(card?.textContent).toContain("2020");
+    expect(card?.textContent).not.toContain("Short");
+    view.destroy();
+  });
+
+  it("ignores a \\title written inside a verbatim body", () => {
+    const view = makeView(
+      [
+        "\\documentclass{article}",
+        "\\title{Real Title}",
+        "\\begin{document}",
+        "\\begin{verbatim}",
+        "\\title{FAKE}",
+        "\\end{verbatim}",
+        "",
+        "\\maketitle",
+        "\\end{document}",
+        "",
+      ].join("\n"),
+    );
+    const card = view.contentDOM.querySelector(".cm-vis-title");
+    expect(card?.textContent).toContain("Real Title");
+    expect(card?.textContent).not.toContain("FAKE");
+    view.destroy();
+  });
+
+  it("hides the beamer column width instead of showing it as body text", () => {
+    const view = makeView(
+      [
+        "\\begin{columns}",
+        "\\begin{column}{0.5\\textwidth}",
+        "Left side.",
+        "\\end{column}",
+        "\\begin{column}{0.5\\textwidth}",
+        "Right side.",
+        "\\end{column}",
+        "\\end{columns}",
+        "",
+      ].join("\n"),
+    );
+    const text = view.contentDOM.textContent ?? "";
+    expect(text).toContain("Left side.");
+    expect(text).toContain("Right side.");
+    // The width spec is a TeX length, not prose — it must not be page text.
+    expect(text).not.toContain("0.5");
+    expect(text).not.toContain("textwidth");
+    view.destroy();
+  });
+
+  it("renders \\chapter and \\paragraph titles as headings", () => {
+    const view = makeView("\\chapter{Beginnings}\n\n\\paragraph{Aside}\n\nText.\n");
+    expect(view.contentDOM.querySelector(".cm-vis-h0")?.textContent).toBe(
+      "Beginnings",
+    );
+    expect(view.contentDOM.querySelector(".cm-vis-h4")?.textContent).toBe("Aside");
+    expect(view.contentDOM.textContent).not.toContain("\\chapter");
+    view.destroy();
+  });
+});
+
 describe("visual cm6: tables and figures", () => {
   it("renders a simple tabular as a formatted table", () => {
     const view = makeView(

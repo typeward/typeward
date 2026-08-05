@@ -9,7 +9,7 @@ import { HistoryPanel } from "~/components/editor/HistoryPanel";
 import { installDismiss } from "~/lib/dismiss";
 
 /**
- * File-history popover in the editor top bar (moved out of the left sidebar
+ * Project-history popover in the editor top bar (moved out of the left sidebar
  * per user direction 2026-07-19). Hosts the existing HistoryPanel; the
  * `core.fileHistory` palette command and the editor context menu open it
  * through the same requestHistoryPanel intent as before.
@@ -29,8 +29,8 @@ export const HistoryMenu: Component = () => {
     <div ref={rootRef} class="relative">
       <button
         type="button"
-        title="File history"
-        aria-label="File history"
+        title="Project history"
+        aria-label="Project history"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open()}
         class="lift flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--color-control-fill)]"
@@ -41,8 +41,8 @@ export const HistoryMenu: Component = () => {
         <div
           tabindex={-1}
           role="group"
-          aria-label="File history"
-          class="glass absolute right-0 top-full z-50 mt-1 flex w-[420px] max-w-[92vw] flex-col overflow-hidden rounded-xl"
+          aria-label="Project history"
+          class="glass absolute right-0 top-full z-50 mt-1 flex w-[480px] max-w-[92vw] flex-col overflow-hidden rounded-xl"
           style={{
             background: "var(--color-popover-bg)",
             "max-height": "min(70vh, 560px)",
