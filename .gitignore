@@ -41,9 +41,12 @@ coverage/
 tsconfig.tsbuildinfo
 *.tsbuildinfo
 
-# Supabase CLI link cache (project ref + org id). The backend lives in the
-# sibling typeward/infrastructure repo — nothing under supabase/ belongs here.
-supabase/.temp/
+# Working notes, living UI/UX specs, and design prototypes. Kept on disk as
+# the local source of truth for visuals and phase history, but out of the
+# public repo.
+docs/
+design/
+design_files/
 
 # Claude Code machine-local settings (the shared .claude/settings.json is kept)
 .claude/settings.local.json
@@ -62,7 +65,3 @@ src-tauri/binaries/*
 public/texlive-wasm/
 src-tauri/resources/texlive-wasm/*
 !src-tauri/resources/texlive-wasm/placeholder.txt
-
-# Supabase backend moved to the dedicated typeward/infrastructure repo (sibling
-# folder ../infrastructure). Guard against a stale copy landing back on main.
-infrastructure/
