@@ -86,8 +86,21 @@ fn watch_project_impl(
     // to the async Tauri emit.
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     let mut watcher: RecommendedWatcher = notify::recommended_watcher(move |res| {
-        if let Ok(ev) = res {
-            let _ = tx.send(ev);
+        match res {
+            Ok(ev) => {
+                let _ = tx.send(ev);
+            }
+            // Backend errors used to be dropped silently. An inotify watch-limit
+            // failure means files created in new subdirectories never appear
+            // until the project is reopened, with nothing to explain it — so at
+            // least say so, and force a refresh: the frontend re-reads the tree
+            // on any event, which is the recovery for a missed one.
+            Err(e) => {
+                eprintln!("[watcher] backend error: {e}");
+                let _ = tx.send(
+                    Event::new(notify::EventKind::Other).set_flag(notify::event::Flag::Rescan),
+                );
+            }
         }
     })?;
 
@@ -112,9 +125,20 @@ fn watch_project_impl(
                 Some(e) => e,
                 None => break,
             };
+            let burst_started = tokio::time::Instant::now();
             let mut events = vec![first];
             let mut closed = false;
             loop {
+                // Bound the burst two ways. Quiet-gap-only coalescing never
+                // flushes while events keep arriving under the window — an
+                // external `latexmk -pvc`, a logger appending to a project file,
+                // or a long download into the folder would hold the tree stale
+                // indefinitely while `events` grew without limit.
+                if events.len() >= MAX_COALESCED_EVENTS
+                    || burst_started.elapsed() >= MAX_COALESCE_WINDOW
+                {
+                    break;
+                }
                 match tokio::time::timeout(COALESCE_WINDOW, rx.recv()).await {
                     Ok(Some(e)) => events.push(e),
                     Ok(None) => {
@@ -128,7 +152,16 @@ fn watch_project_impl(
             let mut seen = std::collections::HashSet::new();
             let mut paths: Vec<String> = Vec::new();
             let mut last_kind = String::from("any");
+            // "You missed events, rescan" markers: inotify queue overflow and
+            // FSEvents MustScanSubDirs arrive with EMPTY paths, so the
+            // non-empty guard below used to swallow them — leaving the FileTree,
+            // palette file cache, and TODO scan stale for the rest of the
+            // session after any bulk operation (git checkout, large pull, unzip).
+            let mut needs_rescan = false;
             for ev in &events {
+                if ev.need_rescan() {
+                    needs_rescan = true;
+                }
                 last_kind = classify(&ev.kind);
                 for p in &ev.paths {
                     let s = p.to_string_lossy().into_owned();
@@ -139,6 +172,12 @@ fn watch_project_impl(
                         paths.push(s);
                     }
                 }
+            }
+
+            if needs_rescan && paths.is_empty() {
+                // Name the root so the frontend's per-path filter keeps it.
+                paths.push(root_path.to_string_lossy().into_owned());
+                last_kind = String::from("any");
             }
 
             if !paths.is_empty() {
@@ -177,6 +216,12 @@ pub fn unwatch_project(
 }
 
 const COALESCE_WINDOW: Duration = Duration::from_millis(150);
+
+/// Hard ceilings on one coalesced burst, so a process writing into the project
+/// faster than [`COALESCE_WINDOW`] can't starve emits forever (stale tree) while
+/// the pending-event vector grows without bound.
+const MAX_COALESCE_WINDOW: Duration = Duration::from_secs(1);
+const MAX_COALESCED_EVENTS: usize = 512;
 
 /// True for paths under Typeward's own sidecar (`.typeward/`) or VCS metadata
 /// (`.git/`) — churn the FileTree never needs to react to, and the source of

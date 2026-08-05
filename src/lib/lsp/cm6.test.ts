@@ -7,6 +7,7 @@ import {
   lspPosToOffset,
   lspToCmDiagnostic,
   pathToFileUri,
+  sameDocumentUri,
   type LspDiagnostic,
 } from "./cm6";
 
@@ -67,6 +68,55 @@ describe("pathToFileUri", () => {
 
   it("normalizes backslashes in already-forward paths without a drive", () => {
     expect(pathToFileUri("/a\\b/c")).toBe("file:///a/b/c");
+  });
+
+  // Servers parse our URI with a WHATWG parser and echo the normalized spelling
+  // on publishDiagnostics. An unencoded space never string-equalled the raw URI
+  // we registered, so users whose path contains one ("C:\Users\John Smith\...",
+  // "OneDrive - Company") silently got zero diagnostics.
+  it("percent-encodes spaces and non-ASCII so the server's echo matches", () => {
+    expect(pathToFileUri("C:\\Users\\John Smith\\main.tex")).toBe(
+      "file:///C:/Users/John%20Smith/main.tex",
+    );
+    expect(pathToFileUri("/home/josé/main.tex")).toBe(
+      "file:///home/jos%C3%A9/main.tex",
+    );
+  });
+
+  // '#' and '?' are URI delimiters: unescaped, they truncate the path and the
+  // server resolves an entirely different document.
+  it("escapes characters that would otherwise change the URI structure", () => {
+    expect(pathToFileUri("/a/b#c/main.tex")).toBe(
+      "file:///a/b%23c/main.tex",
+    );
+    expect(pathToFileUri("/a/b?c/main.tex")).toBe(
+      "file:///a/b%3Fc/main.tex",
+    );
+    // A literal '%' must not be re-read as an escape sequence.
+    expect(pathToFileUri("/a/100%25/main.tex")).toBe(
+      "file:///a/100%2525/main.tex",
+    );
+  });
+});
+
+describe("sameDocumentUri", () => {
+  it("matches identical URIs", () => {
+    expect(sameDocumentUri("file:///a/b.tex", "file:///a/b.tex")).toBe(true);
+  });
+
+  it("matches equivalent spellings that differ only in escaping", () => {
+    // Implementations disagree on which sub-delimiters to escape; the
+    // diagnostics filter must not drop a notification over that.
+    expect(
+      sameDocumentUri("file:///a/b%40c.tex", "file:///a/b@c.tex"),
+    ).toBe(true);
+    expect(
+      sameDocumentUri("file:///a/x%20y.tex", "file:///a/x y.tex"),
+    ).toBe(true);
+  });
+
+  it("does not match different documents", () => {
+    expect(sameDocumentUri("file:///a/b.tex", "file:///a/c.tex")).toBe(false);
   });
 });
 

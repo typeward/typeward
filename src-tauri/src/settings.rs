@@ -565,8 +565,42 @@ pub enum SettingsError {
     InvalidProjectsRoot(String),
 }
 
-pub fn default_projects_root() -> PathBuf {
+/// Containment anchor for mobile, which has no Documents dir at all. Seeded
+/// once from setup with the app data dir, before the first settings read.
+#[cfg(mobile)]
+static ROOT_ANCHOR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Seed the mobile fallback anchor. Must run before any `load`/`save`, since
+/// both validate the projects root against it.
+#[cfg(mobile)]
+pub fn set_root_anchor(dir: PathBuf) {
+    let _ = ROOT_ANCHOR.set(dir);
+}
+
+#[cfg(mobile)]
+fn seeded_anchor() -> Option<PathBuf> {
+    ROOT_ANCHOR.get().cloned()
+}
+
+#[cfg(not(mobile))]
+fn seeded_anchor() -> Option<PathBuf> {
+    None
+}
+
+/// Directory the projects root must live under. `dirs::document_dir()` is the
+/// answer on a normal desktop; without it — mobile always, and Linux installs
+/// with no `xdg-user-dirs` configured — fall back to the seeded anchor and then
+/// to `~/Documents`. The fallbacks are load-bearing: returning `None` makes
+/// every settings write fail validation, and a relative default would put the
+/// project library wherever the app happened to be launched from.
+fn root_anchor() -> Option<PathBuf> {
     dirs::document_dir()
+        .or_else(seeded_anchor)
+        .or_else(|| dirs::home_dir().map(|h| h.join("Documents")))
+}
+
+pub fn default_projects_root() -> PathBuf {
+    root_anchor()
         .map(|d| d.join("Typeward"))
         .unwrap_or_else(|| PathBuf::from("Typeward"))
 }
@@ -589,7 +623,7 @@ pub fn validate_projects_root(root: &Path) -> Result<(), SettingsError> {
             root.to_string_lossy().into_owned(),
         ));
     }
-    let documents = dirs::document_dir()
+    let documents = root_anchor()
         .ok_or_else(|| SettingsError::InvalidProjectsRoot(root.to_string_lossy().into_owned()))?;
     let documents = canonical_existing_ancestor(&documents)?;
     let candidate = canonical_existing_ancestor(root)?;
@@ -722,9 +756,13 @@ pub fn save_preserving_backend_owned(
     incoming: &mut Settings,
 ) -> Result<(), SettingsError> {
     let _guard = lock_settings();
-    if let Ok(existing) = load_locked(app_handle) {
-        merge_backend_owned(incoming, &existing);
-    }
+    // Propagate a read failure instead of skipping the merge: a missing file
+    // still reads as `Ok(defaults)`, so genuine first boot is unaffected, but an
+    // unreadable-yet-present settings.json (transient AV/indexer lock) must not
+    // be overwritten with a renderer payload that was itself built from
+    // defaults — that silently discards the user's whole configuration.
+    let existing = load_locked(app_handle)?;
+    merge_backend_owned(incoming, &existing);
     save_locked(app_handle, incoming)
 }
 
@@ -738,6 +776,15 @@ fn merge_backend_owned(incoming: &mut Settings, existing: &Settings) {
     }
     if incoming.profile.avatar_path.is_none() {
         incoming.profile.avatar_path = existing.profile.avatar_path.clone();
+    }
+    // Also backend-minted (diagnostics.rs, on the first crash submission). The
+    // renderer only learns it via `noteInstallId` after that IPC returns, so a
+    // settings save already in flight would otherwise clear the id that was just
+    // written — churning the Sentry install identity the field exists to keep
+    // stable. A Reset still clears it: that path writes `Settings::default()`
+    // through `save`, not this merge.
+    if incoming.privacy.install_id.is_none() {
+        incoming.privacy.install_id = existing.privacy.install_id.clone();
     }
 }
 
@@ -792,6 +839,27 @@ mod tests {
             Some("/data/profile/avatar.png")
         );
         assert_eq!(incoming.profile.display_name, "Ada");
+    }
+
+    #[test]
+    fn the_minted_install_id_survives_a_frontend_settings_roundtrip() {
+        // Rust mints it on the first crash submission; the renderer only learns
+        // it after that IPC returns. A save already in flight must not clear it,
+        // or the Sentry install identity churns on the next submission.
+        let mut existing = Settings::default();
+        existing.privacy.install_id = Some("6f1e2c1a-0000-4000-8000-abcdefabcdef".into());
+
+        let mut payload = serde_json::to_value(Settings::default()).unwrap();
+        payload["privacy"]["shareCrashReports"] = serde_json::json!(true);
+        let mut incoming: Settings = serde_json::from_value(payload).unwrap();
+        assert_eq!(incoming.privacy.install_id, None);
+
+        merge_backend_owned(&mut incoming, &existing);
+        assert_eq!(
+            incoming.privacy.install_id.as_deref(),
+            Some("6f1e2c1a-0000-4000-8000-abcdefabcdef")
+        );
+        assert!(incoming.privacy.share_crash_reports);
     }
 
     #[test]

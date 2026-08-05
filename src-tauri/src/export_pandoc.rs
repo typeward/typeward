@@ -147,8 +147,10 @@ fn build_pandoc_args(from: &str, to: &str, out: &str, root_file: String) -> Vec<
 /// binary, no project input) so a raw `Command` is fine — the untrusted-input
 /// spawn is the export itself, which is bounded.
 fn require_pandoc_typst(pandoc: &Path) -> Result<(), String> {
-    let output = Command::new(pandoc)
-        .arg("--version")
+    let mut cmd = Command::new(pandoc);
+    cmd.arg("--version");
+    crate::detect::hide_console(&mut cmd);
+    let output = cmd
         .output()
         .map_err(|e| format!("pandoc spawn failed: {e}"))?;
     let text = String::from_utf8_lossy(&output.stdout);

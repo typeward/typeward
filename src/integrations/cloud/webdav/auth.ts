@@ -13,7 +13,7 @@
 
 import { deleteCredential, setCredential } from "~/integrations/auth/credentials";
 
-import { type WebdavAccount, webdavStatusProbe, webdavValidateHost } from "./ipc";
+import { type WebdavAccount, webdavEnrollProbe, webdavValidateHost } from "./ipc";
 
 const KEYRING_SERVICE = "webdav";
 
@@ -54,7 +54,10 @@ export async function connectWebdav(input: WebdavConnectInput): Promise<WebdavCo
 
   let reachable = false;
   try {
-    reachable = await webdavStatusProbe(account);
+    // The enrollment probe, not the ordinary one: the account is only written
+    // to settings after this succeeds, and every other `webdav_*` command
+    // rejects an account that settings.json doesn't already list.
+    reachable = await webdavEnrollProbe(account);
   } catch (err) {
     await deleteCredential({ service: KEYRING_SERVICE, account: accountId });
     throw err;

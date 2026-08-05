@@ -32,6 +32,40 @@ pub fn resolve_program(name: &str) -> Result<PathBuf, String> {
     which::which(name).map_err(|_| format!("`{name}` was not found on PATH"))
 }
 
+/// `CREATE_NO_WINDOW`. Release builds set `windows_subsystem = "windows"`, so
+/// the app itself owns no console — and Windows then allocates a *fresh*,
+/// visible console for every console-subsystem child we spawn. Piped stdio does
+/// not suppress that. Without this flag an installed build pops a black window
+/// for each compile (staying up for the whole latexmk run), parks one on the
+/// taskbar for the lifetime of a texlab/tinymist session, and flashes one per
+/// `--version` probe. `tauri-plugin-shell` already sets it for the bundled
+/// Tectonic sidecar; these helpers cover every Command we build ourselves.
+/// Dev builds keep a console and children inherit it, which is why `tauri dev`
+/// never shows the problem.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Suppress the console window for a std subprocess. No-op off Windows.
+pub fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
+/// Suppress the console window for a tokio subprocess. No-op off Windows.
+pub fn hide_console_async(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = cmd;
+}
+
 #[cfg(desktop)]
 const ENGINES: &[&str] = &[
     "pdflatex", "xelatex", "lualatex", "latexmk", "tectonic", "typst", "pandoc",
@@ -73,7 +107,10 @@ fn run_version(name: &str, exe: &std::path::Path) -> Option<String> {
         // TeX engines support --version too; latexmk uses -v but accepts --version on modern installs
         _ => "--version",
     };
-    let output = Command::new(exe).arg(flag).output().ok()?;
+    let mut cmd = Command::new(exe);
+    cmd.arg(flag);
+    hide_console(&mut cmd);
+    let output = cmd.output().ok()?;
     if !output.status.success() && output.stdout.is_empty() {
         return None;
     }

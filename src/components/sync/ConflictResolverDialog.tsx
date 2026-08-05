@@ -14,6 +14,7 @@
  */
 
 import { describeIpcError } from "~/lib/errors";
+import { sha256Hex } from "~/lib/hash";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { AlertTriangle, FileText } from "lucide-solid";
 import type { Component } from "solid-js";
@@ -144,20 +145,41 @@ export const ConflictResolverDialog: Component<ConflictResolverDialogProps> = (p
   };
 
   const openBoth = async (entry: ConflictEntry) => {
+    // A failed read must NOT open as an empty buffer. This dialog serves cloud
+    // projects, where a transient read failure is expected (the sync engine or
+    // antivirus holding the file on Windows); an empty, clean tab with no
+    // baseHash invites a reflexive Mod+S, and `saveActiveFile` writes
+    // unconditionally while `preserveConflictingDiskCopy` skips its guard when
+    // baseHash is missing — so the real file is overwritten with nothing and no
+    // sidecar is kept.
     const originalContent = await safeReadText(entry.originalAbs);
+    if (originalContent === null) {
+      setActionError(
+        `Couldn't read "${entry.relPath}" — it may be locked by another program. Try again in a moment.`,
+      );
+      return;
+    }
     openFile({
       path: entry.originalAbs,
       relPath: entry.relPath,
       content: originalContent,
       dirty: false,
+      baseHash: await sha256Hex(originalContent),
     });
     if (entry.conflictAbs && entry.conflictRelPath) {
       const conflictContent = await safeReadText(entry.conflictAbs);
+      if (conflictContent === null) {
+        setActionError(
+          `Couldn't read the conflict copy of "${entry.relPath}" — it may be locked by another program.`,
+        );
+        return;
+      }
       openFile({
         path: entry.conflictAbs,
         relPath: entry.conflictRelPath,
         content: conflictContent,
         dirty: false,
+        baseHash: await sha256Hex(conflictContent),
       });
     }
     props.onOpenChange(false);
@@ -253,10 +275,12 @@ async function confirmDestructive(
   }
 }
 
-async function safeReadText(absPath: string): Promise<string> {
+/** `null` on failure — never an empty string, which a caller would open as a
+ * clean, guard-less buffer and then save over the real file. */
+async function safeReadText(absPath: string): Promise<string | null> {
   try {
     return await readTextFile(absPath);
   } catch {
-    return "";
+    return null;
   }
 }

@@ -616,10 +616,38 @@ fn is_template_internal_segment(part: &std::ffi::OsStr) -> bool {
         .any(|skip| value.eq_ignore_ascii_case(skip))
 }
 
+/// Where the bundled templates actually land.
+///
+/// `bundle.resources` is declared as `resources/templates/**/*`, and Tauri
+/// copies each entry into the resource directory **preserving its path relative
+/// to `tauri.conf.json`** — so the files end up at
+/// `<resource_dir>/resources/templates/...`, not `<resource_dir>/templates/...`.
+/// Resolving the bare `"templates"` therefore pointed at a directory that never
+/// exists, and because `scan_root` treats a missing root as "no templates" the
+/// failure was completely silent: the built-in gallery was empty in every build,
+/// dev and installed alike, with no error anywhere.
+///
+/// Both spellings are probed (prefixed first) rather than hard-coding one:
+/// `resource_dir()` differs per platform (`Contents/Resources` on macOS, the exe
+/// directory on Windows/Linux), and a tolerant lookup cannot silently regress
+/// the way the single hard-coded path did.
 fn builtin_root(app: &AppHandle) -> Result<PathBuf, TemplateError> {
-    app.path()
-        .resolve("templates", BaseDirectory::Resource)
-        .map_err(|e| TemplateError::BadPath(e.to_string()))
+    let resolve = |rel: &str| {
+        app.path()
+            .resolve(rel, BaseDirectory::Resource)
+            .map_err(|e| TemplateError::BadPath(e.to_string()))
+    };
+    let prefixed = resolve("resources/templates")?;
+    if prefixed.is_dir() {
+        return Ok(prefixed);
+    }
+    let bare = resolve("templates")?;
+    if bare.is_dir() {
+        return Ok(bare);
+    }
+    // Neither exists: hand back the expected location so the (empty) scan and
+    // any error message name the path a packager should have populated.
+    Ok(prefixed)
 }
 
 fn custom_root(app: &AppHandle) -> Result<PathBuf, TemplateError> {

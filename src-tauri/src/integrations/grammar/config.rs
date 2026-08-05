@@ -155,8 +155,12 @@ impl GrammarState {
 
     pub fn clear_ignored(&self, app: &AppHandle) -> Result<(), String> {
         let mut data = self.write()?;
+        // Load first. Setting `loaded = true` without reading disk would make
+        // every later `ensure_loaded` a no-op over an empty `words`, and the
+        // next `add_word` would then persist a one-word file over the user's
+        // whole personal dictionary.
+        ensure_loaded(app, &mut data)?;
         data.ignored = IgnoredLints::new();
-        data.loaded = true;
         write_ignored(app, &data.ignored)?;
         Ok(())
     }

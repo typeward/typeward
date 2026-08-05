@@ -22,7 +22,14 @@ vi.mock("~/stores/settings-store", () => ({
 }));
 
 import { setupAutosave } from "./index";
-import { openFile, resetTabs, setProject } from "~/stores/editor-store";
+import {
+  openFile,
+  renameOpenFile,
+  resetTabs,
+  setActiveIndex,
+  setProject,
+  updateActiveFile,
+} from "~/stores/editor-store";
 
 const projectA: Project = { rootPath: "/A", rootFile: "main.tex", format: "latex", name: "A" };
 
@@ -71,5 +78,57 @@ describe("autosave branch on autosaveEnabled", () => {
     expect(h.writeSnapshot).toHaveBeenCalledTimes(1);
     expect(h.writeSnapshot).toHaveBeenCalledWith("/A", "off.tex", "typed");
     expect(h.saveOpenFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("captured state is revalidated before it is written", () => {
+  // A rename repoints the dirty tab's path while keeping it dirty, which the
+  // effect sees as a tab switch. Flushing the captured (old) path recreated the
+  // file the user had just renamed away — leaving two divergent copies, and on
+  // a cloud project pushing the ghost to the remote.
+  it("does not resurrect the old path when a dirty file is renamed mid-debounce", async () => {
+    h.enabled = true;
+
+    openFile({
+      path: "/A/chapter.tex",
+      relPath: "chapter.tex",
+      content: "typed",
+      dirty: true,
+    });
+    renameOpenFile("chapter.tex", "chapter2.tex", "/A/chapter2.tex");
+    await flush();
+
+    const written = h.saveOpenFile.mock.calls.map(([, f]) => f.relPath);
+    expect(written).not.toContain("chapter.tex");
+  });
+
+  // The effect body is async; a run that suspends on a flush can resume after a
+  // newer run armed its timer. The stale run must not write the bytes it
+  // captured — that reverts the file and mints a conflict sidecar from the
+  // user's own newer content.
+  it("does not write content the buffer has already moved past", async () => {
+    h.enabled = true;
+
+    openFile({ path: "/A/live.tex", relPath: "live.tex", content: "v1", dirty: true });
+    setActiveIndex(0);
+    updateActiveFile({ content: "v2" });
+    await flush();
+
+    const contents = h.saveOpenFile.mock.calls.map(([, f]) => f.content);
+    expect(contents).not.toContain("v1");
+    expect(contents).toContain("v2");
+  });
+
+  // The revalidation must stay narrow: switching away from a still-open dirty
+  // file is the case the flush exists for, and it must keep working.
+  it("still flushes the previous file when switching tabs mid-debounce", async () => {
+    h.enabled = true;
+
+    openFile({ path: "/A/first.tex", relPath: "first.tex", content: "edited", dirty: true });
+    openFile({ path: "/A/second.tex", relPath: "second.tex", content: "other", dirty: true });
+    await flush();
+
+    const written = h.saveOpenFile.mock.calls.map(([, f]) => f.relPath);
+    expect(written).toContain("first.tex");
   });
 });

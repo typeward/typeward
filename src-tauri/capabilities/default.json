@@ -5,6 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-close",
     "core:window:allow-destroy",
     "core:window:allow-set-focus",
     "core:window:allow-set-title",
@@ -88,6 +89,7 @@
         { "url": "https://github.com/login/device*" },
         { "url": "https://github.com/typeward/app/issues/new*" },
         { "url": "https://tug.org/*" },
+        { "url": "https://typst.app/download" },
         { "url": "https://www.zotero.org/*" },
         { "url": "https://console.anthropic.com/*" },
         { "url": "https://platform.openai.com/*" },

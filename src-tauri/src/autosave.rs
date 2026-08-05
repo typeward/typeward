@@ -83,6 +83,14 @@ pub fn list_orphans(project_root: &Path) -> Result<Vec<Snapshot>, AutosaveError>
     Ok(out)
 }
 
+/// Recover the orphan list from the snapshot tree.
+///
+/// Every per-entry failure is skipped rather than propagated: this list is the
+/// crash-recovery surface, and a single unreadable `.snap` — a Windows sharing
+/// violation from AV holding a just-written snapshot, one bad permission, a
+/// file deleted mid-scan — used to abort the whole walk. The caller treats that
+/// as "no orphans", so the user's unsaved pre-crash edits would sit on disk with
+/// no RecoveryDialog and no error. Only the top-level `read_dir` stays fatal.
 fn walk(
     dir: &Path,
     snapshot_root: &Path,
@@ -90,14 +98,18 @@ fn walk(
     out: &mut Vec<Snapshot>,
 ) -> Result<(), AutosaveError> {
     for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
+        let Ok(entry) = entry else { continue };
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         if file_type.is_symlink() {
             continue;
         }
         let path = entry.path();
         if file_type.is_dir() {
-            walk(&path, snapshot_root, project_root, out)?;
+            // A subdirectory that can't be listed skips its subtree instead of
+            // killing the scan of everything already collected.
+            let _ = walk(&path, snapshot_root, project_root, out);
             continue;
         }
         if !file_type.is_file() {
@@ -106,20 +118,23 @@ fn walk(
         if path.extension().and_then(|s| s.to_str()) != Some("snap") {
             continue;
         }
-        let rel = path
-            .strip_prefix(snapshot_root)
-            .map_err(|_| std::io::Error::other("strip_prefix"))?
+        let Ok(stripped) = path.strip_prefix(snapshot_root) else {
+            continue;
+        };
+        let rel = stripped
             .with_extension("")
             .to_string_lossy()
             .replace('\\', "/");
-        let content = fs::read_to_string(&path)?;
-        let snapshot_mtime = mtime_ms(&path)?;
-        let file_path = project_root.join(&rel);
-        let file_mtime = if file_path.exists() {
-            Some(mtime_ms(&file_path)?)
-        } else {
-            None
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
         };
+        let Ok(snapshot_mtime) = mtime_ms(&path) else {
+            continue;
+        };
+        let file_path = project_root.join(&rel);
+        // No `exists()` pre-check: the file can vanish between the probe and the
+        // stat, and a missing file is exactly the "orphan" case anyway.
+        let file_mtime = mtime_ms(&file_path).ok();
         // Orphans are snapshots strictly newer than the file (or where the file
         // is missing). Older snapshots are stale and we just clean them up.
         let is_orphan = match file_mtime {

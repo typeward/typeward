@@ -45,7 +45,7 @@ pub fn run() {
     // sync-state.json, snapshots, and settings.json all assume one writer.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
-        use tauri::{Emitter, Manager};
+        use tauri::Manager;
         if let Some(win) = app.webview_windows().values().next() {
             let _ = win.unminimize();
             let _ = win.set_focus();
@@ -57,7 +57,7 @@ pub fn run() {
         if let Some(path) =
             first_open_with_path(args.into_iter().skip(1), Some(std::path::Path::new(&cwd)))
         {
-            let _ = app.emit_to("main", "open-with:path", path);
+            open_with::deliver(app, path);
         }
     }));
 
@@ -67,6 +67,42 @@ pub fn run() {
     // API is used, so no capability permission entry is needed.
     #[cfg(desktop)]
     let builder = builder.plugin(tauri_plugin_window_state::Builder::default().build());
+
+    // Nothing may navigate the app shell off its own origin. The window has no
+    // address bar, back button, or reload affordance, so a navigation is
+    // unrecoverable: the SPA and everything it held (unsaved buffers, in-flight
+    // compiles, pending debounced writes) is gone, and an attacker page is a
+    // credible pixel-copy phish of the very Settings panel that collects the
+    // user's Zotero / OpenAI / Anthropic / GitHub credentials. Malicious project
+    // content is an explicit adversary in the threat model, and a `.md` preview
+    // renders links straight from it.
+    //
+    // Registered as a plugin because the main window is created from
+    // tauri.conf.json, so there is no builder to hang `on_navigation` off; with
+    // no window-level handler Tauri delegates the decision to plugins, and no
+    // other plugin in the tree registers one. This is structural — it holds for
+    // any future HTML sink, not just the markdown preview.
+    let builder = builder.plugin(
+        tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
+            .on_navigation(|_webview, url| {
+                let allowed = match url.scheme() {
+                    // The custom protocol the webview is served over.
+                    "tauri" => true,
+                    // Windows serves the app over http://tauri.localhost, and
+                    // `tauri dev` over the loopback Vite server.
+                    "http" | "https" => matches!(
+                        url.host_str(),
+                        Some("tauri.localhost") | Some("localhost") | Some("127.0.0.1")
+                    ),
+                    _ => false,
+                };
+                if !allowed {
+                    eprintln!("[navigation-guard] blocked navigation to {url}");
+                }
+                allowed
+            })
+            .build(),
+    );
 
     let builder = builder
         .plugin(tauri_plugin_shell::init())
@@ -112,26 +148,28 @@ pub fn run() {
             telemetry::install(app.handle());
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
+            // Mobile has no Documents dir (dirs::document_dir() is None), so
+            // both the default projects root and the containment check that
+            // guards every settings write need another anchor — otherwise the
+            // root degrades to a RELATIVE "Typeward" (useless as a trust root,
+            // unwritable from an app sandbox cwd) and no setting can ever be
+            // saved. Seed it BEFORE the first load: `load` sanitizes the stored
+            // root against this same anchor.
+            #[cfg(mobile)]
+            {
+                use tauri::Manager;
+                if let Ok(data) = app.path().app_data_dir() {
+                    settings::set_root_anchor(data);
+                }
+            }
             // Seed the project trust boundary (project.rs) from the configured
             // projects root before the webview can issue any IPC, so file IO /
             // compile / git can be gated to the projects area.
             let loaded = settings::load(app.handle()).ok();
-            #[allow(unused_mut)]
-            let mut projects_root = loaded
+            let projects_root = loaded
                 .as_ref()
                 .map(|s| std::path::PathBuf::from(&s.projects_root))
                 .unwrap_or_else(settings::default_projects_root);
-            // Mobile has no Documents dir (dirs::document_dir() is None), so
-            // the default degrades to a RELATIVE "Typeward" — useless as a
-            // trust root and unwritable from an app sandbox cwd. Anchor it in
-            // the app's own data dir instead.
-            #[cfg(mobile)]
-            if projects_root.is_relative() {
-                use tauri::Manager;
-                if let Ok(data) = app.path().app_data_dir() {
-                    projects_root = data.join("Projects");
-                }
-            }
             let _ = std::fs::create_dir_all(&projects_root);
             project::set_projects_root(&projects_root);
             // The capabilities grant plugin-fs only the DEFAULT projects root
@@ -179,22 +217,14 @@ pub fn run() {
                 }
             }
             // First-launch "Open with Typeward": the OS passes the file as a
-            // plain argv entry. The frontend listener mounts during boot, so
-            // the emit is deferred a beat off the setup path; if the webview
-            // takes longer than the delay the event is lost — acceptable v1
-            // (follow-up: an ack handshake where the frontend pulls the
-            // pending path instead of racing this emit).
+            // plain argv entry, long before the webview exists. Park it; the
+            // frontend drains it as its listener mounts (see `open_with`).
             #[cfg(desktop)]
             if let Some(path) = first_open_with_path(
                 std::env::args().skip(1),
                 std::env::current_dir().ok().as_deref(),
             ) {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    use tauri::Emitter;
-                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-                    let _ = handle.emit_to("main", "open-with:path", path);
-                });
+                open_with::deliver(app.handle(), path);
             }
             Ok(())
         })
@@ -257,6 +287,7 @@ pub fn run() {
         synctex::synctex_forward,
         #[cfg(desktop)]
         synctex::synctex_inverse,
+        open_with::take_pending_open,
         commands::load_settings,
         commands::save_settings,
         commands::reset_settings,
@@ -346,6 +377,7 @@ pub fn run() {
         integrations::templates::template_save,
         integrations::webdav::webdav_validate_host,
         integrations::webdav::webdav_status_probe,
+        integrations::webdav::webdav_enroll_probe,
         integrations::webdav::webdav_propfind,
         integrations::webdav::webdav_get,
         integrations::webdav::webdav_put,
@@ -373,17 +405,15 @@ pub fn run() {
             // argv (first launch + the single-instance plugin) instead.
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Opened { urls } = &_event {
-                use tauri::Emitter;
                 if let Some(path) = urls
                     .iter()
                     .filter_map(|u| u.to_file_path().ok())
                     .find(|p| p.is_file())
                 {
-                    let _ = _app_handle.emit_to(
-                        "main",
-                        "open-with:path",
-                        path.to_string_lossy().into_owned(),
-                    );
+                    // Cold launch delivers this within the first event-loop
+                    // iterations, well before the webview has loaded the JS
+                    // bundle — so it parks rather than emitting into the void.
+                    open_with::deliver(_app_handle, path.to_string_lossy().into_owned());
                 }
             }
         });
@@ -629,6 +659,50 @@ fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+/// "Open with Typeward" delivery, race-free on every platform.
+///
+/// The OS can hand us a file before the webview exists — always on a cold
+/// Finder/Explorer double-click. Tauri events are fire-and-forget to *current*
+/// listeners, so emitting straight away simply lost the open; the previous
+/// mitigation (a 1500 ms deferred emit) was a guess that still lost the race on
+/// a slow boot, and the macOS Apple Event path had no delay at all even though
+/// it is the ONLY delivery route there (Finder opens never arrive via argv).
+///
+/// So: park the path until the frontend announces itself by draining it, and
+/// emit directly only once we know a listener is mounted.
+mod open_with {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static PENDING: Mutex<Option<String>> = Mutex::new(None);
+    static FRONTEND_READY: AtomicBool = AtomicBool::new(false);
+
+    /// Route one path to the frontend, or hold it until the frontend is up.
+    /// Desktop-only: every caller (argv on first launch, the single-instance
+    /// callback, the macOS Apple Event) is desktop, and mobile has no
+    /// "open with" surface. `take_pending_open` stays available everywhere and
+    /// simply returns `None` there.
+    #[cfg(desktop)]
+    pub(crate) fn deliver(app: &tauri::AppHandle, path: String) {
+        if FRONTEND_READY.load(Ordering::SeqCst) {
+            use tauri::Emitter;
+            let _ = app.emit_to(crate::ipc_guard::MAIN_LABEL, "open-with:path", path);
+            return;
+        }
+        // Last one wins: a launch delivers at most one file, and a newer
+        // request is the one the user is waiting on.
+        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
+    }
+
+    /// Drain the parked path. Called once as the frontend's open-with listener
+    /// mounts, which is also what marks the frontend ready for direct emits.
+    #[tauri::command]
+    pub fn take_pending_open() -> Option<String> {
+        FRONTEND_READY.store(true, Ordering::SeqCst);
+        PENDING.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
 }
 
 /// First existing file path in a launch argv tail ("Open with Typeward").

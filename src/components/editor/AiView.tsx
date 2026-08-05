@@ -529,6 +529,23 @@ const ConversationSwitcher: Component = () => {
     setOpen(false);
   };
 
+  // Deleting removes the saved chat file for good, and the control is a
+  // hover-revealed icon a few pixels from the row you click to *switch*
+  // conversations — one slip and the history is gone with no undo.
+  const confirmAndDeleteConversation = async (conv: { id: string; title: string }) => {
+    let ok = false;
+    try {
+      const { ask } = await import("@tauri-apps/plugin-dialog");
+      ok = await ask(
+        `Delete the conversation "${conv.title}"? This permanently removes its saved history and cannot be undone.`,
+        { title: "Delete conversation", kind: "warning", okLabel: "Delete", cancelLabel: "Cancel" },
+      );
+    } catch {
+      ok = window.confirm(`Delete the conversation "${conv.title}"? This cannot be undone.`);
+    }
+    if (ok) await deleteConversation(conv.id);
+  };
+
   return (
     <div ref={menuRef} class="relative min-w-0">
       <button
@@ -591,7 +608,7 @@ const ConversationSwitcher: Component = () => {
                     type="button"
                     title="Delete conversation"
                     aria-label={`Delete conversation "${conv.title}"`}
-                    onClick={() => void deleteConversation(conv.id)}
+                    onClick={() => void confirmAndDeleteConversation(conv)}
                     class="-m-0.5 mr-0.5 rounded p-1.5 text-fg-4 opacity-0 hover:text-[var(--color-err)] group-hover:opacity-100 focus-visible:opacity-100"
                   >
                     <Trash2 size={12} />

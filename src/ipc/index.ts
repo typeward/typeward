@@ -572,6 +572,16 @@ export interface ReferencesProvidersSettings {
 
 export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");
 
+/**
+ * Drain the file path the OS handed us at launch ("Open with Typeward"), if
+ * any. A cold launch delivers it before the webview exists, so Rust parks it
+ * rather than emitting into the void; calling this is also what tells Rust a
+ * listener is mounted, after which further opens arrive as events. Call exactly
+ * once, from the open-with listener's mount.
+ */
+export const takePendingOpen = (): Promise<string | null> =>
+  invoke("take_pending_open");
+
 /** Overwrite settings.json with the defaults (Settings → Security → Reset). */
 export const resetSettings = (): Promise<void> => invoke("reset_settings");
 

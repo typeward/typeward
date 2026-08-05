@@ -42,10 +42,17 @@ export const CommitPanel: Component = () => {
     async ([rootPath]): Promise<ipc.GitStatusSummary | { kind: "not-a-repo" } | null> => {
       if (!rootPath) return null;
       try {
-        return await ipc.gitStatus(rootPath);
+        const result = await ipc.gitStatus(rootPath);
+        // Clear on success: this runs on a 2s heartbeat, so a single transient
+        // failure (an index.lock held by a concurrent git command, a brief
+        // network hiccup) otherwise left a permanent error banner that no later
+        // successful poll could ever retract.
+        setError(null);
+        return result;
       } catch (err) {
         const msg = describeIpcError(err);
         if (/could not be opened|repository|not.+repo|not\s+found/i.test(msg)) {
+          setError(null);
           return { kind: "not-a-repo" };
         }
         setError(msg);

@@ -417,10 +417,18 @@ export class SyncEngine {
           await this.pushDeletionIfTracked(rel);
           continue;
         }
+        // Send the revision we last synced so the server refuses the write if
+        // someone else changed the file since. Without it the PUT is
+        // unconditional: another device's edit is replaced, and echo
+        // suppression matches our own new rev on the next delta, so the loss is
+        // never even detected — no `.conflict-*` sidecar, contradicting the
+        // engine's own preserve-the-loser guarantee. A file we have never
+        // synced has no rev and stays a plain create.
         const remote = await pushOne(this.provider, {
           rootId: this.opts.rootId,
           relPath: rel,
           sourceAbsPath: abs,
+          expectedRev: this.syncState?.files[rel]?.rev,
         });
         if (remote.rev) this.pushedRevs.set(rel, remote.rev);
         await this.recordSyncedFile(rel, remote, abs);
@@ -875,6 +883,8 @@ export interface PushPlan {
   rootId: string;
   relPath: string;
   sourceAbsPath: string;
+  /** Last synced remote revision for this path, when one is known. */
+  expectedRev?: string;
 }
 
 export async function pushOne(provider: CloudFsProvider, plan: PushPlan): Promise<RemoteFile> {
@@ -882,5 +892,6 @@ export async function pushOne(provider: CloudFsProvider, plan: PushPlan): Promis
     plan.rootId,
     normalizeRemoteRelPath(plan.relPath),
     plan.sourceAbsPath,
+    plan.expectedRev,
   );
 }

@@ -7,7 +7,9 @@ import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import type Token from "markdown-it/lib/token.mjs";
 import type { Accessor, Component } from "solid-js";
 import { createEffect, createMemo, onCleanup } from "solid-js";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { fileUrlFromPath, safeRelativePath } from "~/lib/file-url";
+import { notifyInfo } from "~/lib/toast";
 
 interface Props {
   content: Accessor<string>;
@@ -192,6 +194,28 @@ export const MarkdownPreview: Component<Props> = (props) => {
     if (timer !== null) window.clearTimeout(timer);
   });
 
+  // Links in this pane come from untrusted document content, and letting the
+  // webview follow one is unrecoverable: the window has no address bar or back
+  // button, so an external link replaces the whole app with attacker content
+  // (a convincing phish of our own credential screens), and even a benign
+  // relative link like `[notes](notes.md)` navigates to a path the asset
+  // resolver 404s, blanking the running app. Rust's navigation-guard plugin is
+  // the structural backstop; this handler is what makes the click do something
+  // *useful* instead of silently nothing.
+  const onLinkClick = (e: MouseEvent) => {
+    const target = e.target as Element | null;
+    const anchor = target?.closest?.("a[href]");
+    if (!anchor) return;
+    const href = anchor.getAttribute("href") ?? "";
+    // In-document anchors are the one kind that may resolve natively.
+    if (href.startsWith("#")) return;
+    e.preventDefault();
+    if (!/^https?:/i.test(href)) return;
+    void openUrl(href).catch(() => {
+      notifyInfo("Link not opened", href);
+    });
+  };
+
   return (
     <div
       class="md-preview scroll h-full w-full overflow-auto px-8 py-6 text-fg-1"
@@ -199,6 +223,7 @@ export const MarkdownPreview: Component<Props> = (props) => {
         "md-preview-dark": props.theme() === "dark",
         "md-preview-light": props.theme() === "light",
       }}
+      onClick={onLinkClick}
       ref={host}
     />
   );

@@ -20,6 +20,7 @@
 //!     automatic retry with a 250ms delay; everything else surfaces as-is
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -317,6 +318,17 @@ fn allowed_https_host(host: &str) -> bool {
         host,
         "api.zotero.org"
             | "doi.org"
+            // doi.org never serves BibTeX itself: a content-negotiated request
+            // 302s to the registration agency that holds the record, and
+            // `allowlist_redirect_policy` re-validates every hop — so without
+            // these four the whole DOI lookup feature fails with a
+            // redirect-blocked error. Metadata-only hosts: no credential binds
+            // to them and they are absent from
+            // `allowed_raw_auth_header_host`, so nothing else widens.
+            | "api.crossref.org"
+            | "data.crossref.org"
+            | "data.crosscite.org"
+            | "data.datacite.org"
             | "export.arxiv.org"
             | "api.mendeley.com"
             | "generativelanguage.googleapis.com"
@@ -501,6 +513,31 @@ fn is_oauth_bundle_auth(auth: &AuthRef, host: &str) -> bool {
     )
 }
 
+/// One refresh at a time per stored token bundle.
+///
+/// The Mendeley provider issues up to 6 concurrent requests, each carrying the
+/// same `authRef`. Around the expiry boundary every one of them independently
+/// read the bundle, saw it expiring, and fired its own `grant_type=refresh_token`
+/// POST with the *same* refresh token; the writes then raced last-writer-wins.
+/// Against a provider that rotates refresh tokens (and detects reuse), the
+/// losers fail with `invalid_grant` mid-listing, a superseded token can be the
+/// one persisted, and reuse detection can revoke the whole grant — leaving the
+/// account dead until the user redoes the sign-in flow.
+static OAUTH_REFRESH_LOCKS: std::sync::Mutex<Option<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    std::sync::Mutex::new(None);
+
+fn oauth_refresh_lock(service: &str, account: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let key = format!("{service}\u{0}{account}");
+    let mut guard = OAUTH_REFRESH_LOCKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    guard
+        .get_or_insert_with(HashMap::new)
+        .entry(key)
+        .or_default()
+        .clone()
+}
+
 async fn oauth_bundle_access_token(auth: &AuthRef) -> Result<String, HttpError> {
     let raw = keyring_get(&auth.service, &auth.account)
         .await?
@@ -510,6 +547,20 @@ async fn oauth_bundle_access_token(auth: &AuthRef) -> Result<String, HttpError> 
 
     if !is_expiring_soon(stored.expires_at) {
         return Ok(stored.access_token);
+    }
+
+    // Serialize the refresh, then re-read: a concurrent caller that got here
+    // first has already stored a fresh bundle, and reusing its access token is
+    // both correct and one round trip cheaper than refreshing again.
+    let lock = oauth_refresh_lock(&auth.service, &auth.account);
+    let _refresh_guard = lock.lock().await;
+    if let Some(raw) = keyring_get(&auth.service, &auth.account).await?
+        && let Ok(fresh) = serde_json::from_str::<StoredOAuthTokens>(&raw)
+    {
+        if !is_expiring_soon(fresh.expires_at) {
+            return Ok(fresh.access_token);
+        }
+        stored = fresh;
     }
 
     let refresh_token = stored.refresh_token.clone().ok_or_else(|| {
@@ -803,6 +854,44 @@ mod tests {
     fn outbound_allowlist_accepts_known_https_hosts() {
         assert!(validate_outbound_url("https://api.zotero.org/users/1/items", None).is_ok());
         assert!(validate_outbound_url("https://api.openai.com/v1/models", None).is_ok());
+    }
+
+    /// doi.org never serves BibTeX itself — a content-negotiated request 302s to
+    /// the registration agency, and the redirect policy re-validates every hop.
+    /// Without these hosts every DOI lookup failed as redirect-blocked.
+    #[test]
+    fn outbound_allowlist_covers_the_doi_content_negotiation_targets() {
+        for url in [
+            "https://doi.org/10.1145/3290605.3300479",
+            "https://api.crossref.org/v1/works/10.1145%2F3290605.3300479/transform",
+            "https://data.crosscite.org/10.48550%2FarXiv.2403.04132",
+            "https://data.crossref.org/10.1145%2F3290605.3300479",
+            "https://data.datacite.org/10.5281%2Fzenodo.1234567",
+        ] {
+            assert!(validate_outbound_url(url, None).is_ok(), "{url}");
+        }
+    }
+
+    /// They are metadata-only: no credential may be bound to them, so adding
+    /// them to the host allowlist widens nothing else.
+    #[test]
+    fn doi_agency_hosts_accept_no_credentials() {
+        for host in [
+            "api.crossref.org",
+            "data.crossref.org",
+            "data.crosscite.org",
+            "data.datacite.org",
+        ] {
+            assert!(!allowed_raw_auth_header_host(host), "{host}");
+            let auth = AuthRef {
+                service: "mendeley".into(),
+                account: "alice".into(),
+                header: "Authorization".into(),
+                prefix: "Bearer ".into(),
+                client_id: None,
+            };
+            assert!(validate_auth_ref_for_host(&auth, host).is_err(), "{host}");
+        }
     }
 
     #[test]

@@ -36,6 +36,8 @@ enum ProfileError {
     Symlink,
     #[error("unsupported image type (use png, jpg, jpeg, webp, or gif)")]
     BadExtension,
+    #[error("pick the image with the file dialog")]
+    NotUserDesignated,
     #[error("image is too large (max 8 MB)")]
     TooLarge,
     #[error("{0}")]
@@ -136,7 +138,26 @@ pub(crate) fn clear_stored_avatar_files(app: &tauri::AppHandle) -> Result<(), St
     Ok(())
 }
 
+/// The renderer may not name an arbitrary path here. `store_avatar` copies the
+/// source into app data and the copy is served back to the webview through the
+/// asset protocol (`$APPDATA/profile/**`), so an ungated source path is an
+/// arbitrary-file-read primitive for a compromised webview — the same hazard
+/// `import_files_into_project` gates with `user_designated_source`. The
+/// legitimate flow already passes: `ProfileSection` picks the file with the
+/// dialog plugin, which adds the picked path to the fs runtime scope.
+fn user_designated_source(app: &tauri::AppHandle, path: &Path) -> bool {
+    use tauri_plugin_fs::FsExt;
+    crate::drop_allow::is_allowed(path)
+        || app
+            .try_fs_scope()
+            .map(|scope| scope.is_allowed(path))
+            .unwrap_or(false)
+}
+
 fn store_avatar(app: &tauri::AppHandle, source: &Path) -> Result<String, ProfileError> {
+    if !user_designated_source(app, source) {
+        return Err(ProfileError::NotUserDesignated);
+    }
     let dir = profile_dir(app)?;
     let dest = write_avatar_into(&dir, source)?;
     let dest = dest.to_string_lossy().into_owned();

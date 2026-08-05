@@ -270,7 +270,13 @@ export const HistoryPanel: Component = () => {
             <Button
               variant="primary"
               size="sm"
-              disabled={busy() || versionContent() === undefined}
+              // `.error` first: reading an errored resource re-throws, and a
+              // throw from this binding escapes to the app-shell ErrorBoundary
+              // — blanking the editor instead of letting the dialog body show
+              // the read failure it already handles.
+              disabled={
+                busy() || !!versionContent.error || versionContent() === undefined
+              }
               leadingIcon={<RotateCcw size={14} />}
               onClick={() => {
                 const v = selected();

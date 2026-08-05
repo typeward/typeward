@@ -5,7 +5,12 @@ import * as ipc from "~/ipc";
 import { formatShortcutForDisplay } from "~/lib/shortcuts";
 import { notifyError } from "~/lib/toast";
 import { recordError } from "~/lib/telemetry";
-import { activeFile, project, type OpenFile } from "~/stores/editor-store";
+import {
+  activeFile,
+  openFiles,
+  project,
+  type OpenFile,
+} from "~/stores/editor-store";
 import { editorSettings } from "~/stores/settings-store";
 
 /**
@@ -40,6 +45,8 @@ export function setupAutosave(): void {
       file: OpenFile;
     };
     let prev: AutosaveState | null = null;
+    // Monotonic id for effect runs; see the generation check in the effect.
+    let runSeq = 0;
 
     const fileKey = (s: AutosaveState): string =>
       `${s.project.rootPath} ${s.file.relPath}`;
@@ -50,8 +57,41 @@ export function setupAutosave(): void {
       a.project.rootPath === b.project.rootPath &&
       a.file.relPath === b.file.relPath;
 
+    /**
+     * Whether a captured state has been invalidated by the live store.
+     *
+     * `OpenFile` is an immutable snapshot — every edit replaces the object — so
+     * the state captured when the effect ran can be arbitrarily old by the time
+     * an awaited flush or a debounce timer gets to it. Two writes must not
+     * happen:
+     *
+     *   - Stale content: a save carrying pre-edit bytes landing after a newer
+     *     one reverts the file on disk and mints a bogus `.conflict-*` sidecar
+     *     out of the user's own newer content.
+     *   - Renamed-away path: `renameProjectFile` repoints a dirty tab's
+     *     path/relPath, which reads here as a tab switch. Writing the captured
+     *     (old) path resurrects the file the user just renamed — and on a
+     *     cloud-backed project pushes the ghost to the remote too.
+     *
+     * Deliberately conservative: when the project has been torn down or the tab
+     * was simply closed there is nothing to compare against, and flushing the
+     * captured edit is the lossless choice — so those keep persisting exactly
+     * as before.
+     */
+    const isStale = (s: AutosaveState): boolean => {
+      const p = project();
+      if (!p || p.rootPath !== s.project.rootPath) return false;
+      const files = openFiles();
+      const sameTab = files.find((f) => f.path === s.file.path);
+      if (sameTab) return !sameTab.dirty || sameTab.content !== s.file.content;
+      // No tab at that path any more. A dirty tab holding exactly these bytes
+      // means the tab was repointed (rename/move), not closed.
+      return files.some((f) => f.dirty && f.content === s.file.content);
+    };
+
     // Flush the pending edit: a real save when autosave is on, else a snapshot.
     const persist = async (s: AutosaveState): Promise<void> => {
+      if (isStale(s)) return;
       const key = fileKey(s);
       if (editorSettings().autosaveEnabled) {
         try {
@@ -87,6 +127,13 @@ export function setupAutosave(): void {
           return f && p ? { project: p, file: f } : null;
         },
         async (state) => {
+          // The effect body is async and Solid does not await one run before
+          // starting the next, so a run that suspends on the flush below can
+          // resume *after* a newer run has already armed its timer. Without
+          // this generation check the stale run overwrites `timer`, orphaning
+          // the newer handle: both fire, and the stale one — armed later —
+          // lands last.
+          const myRun = ++runSeq;
           const previous = prev;
           prev = state;
 
@@ -105,6 +152,9 @@ export function setupAutosave(): void {
               await persist(previous);
             }
           }
+          // A newer run took over while the flush was in flight; it owns the
+          // timer and the `prev` bookkeeping from here.
+          if (runSeq !== myRun) return;
           if (!state) return;
 
           // Clear the snapshot only on an actual dirty -> clean transition for

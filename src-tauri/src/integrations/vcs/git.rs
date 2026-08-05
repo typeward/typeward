@@ -262,7 +262,7 @@ fn validate_remote_url(remote_url: &str) -> Result<(), GitError> {
 fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
     let mut cb = RemoteCallbacks::new();
     let host = host_of(&remote_url);
-    cb.credentials(move |_url, username_from_url, allowed| {
+    cb.credentials(move |url, username_from_url, allowed| {
         // We only support HTTPS user/pass for Phase 3. SSH and other
         // schemes return an error so libgit2 falls through to the next
         // helper (typically the system's git-credential cache).
@@ -274,6 +274,20 @@ fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
         let host = host
             .clone()
             .ok_or_else(|| git2::Error::from_str("could not parse host from remote URL"))?;
+        // Bind the secret to the host libgit2 is ACTUALLY authenticating
+        // against, not just the one we validated up front. A repository's
+        // `.git/config` is attacker-controlled content (cloned repo, imported
+        // Overleaf zip), and libgit2 connects to `pushurl` when one is set —
+        // so a config naming a benign `url` and a hostile `pushurl` would
+        // otherwise hand that host the PAT stored for the benign one.
+        match host_of(url) {
+            Some(actual) if actual == host => {}
+            _ => {
+                return Err(git2::Error::from_str(&format!(
+                    "refusing to send credentials for {host} to a different host ({url})"
+                )));
+            }
+        }
         let username = username_from_url.unwrap_or("x-access-token");
         let secret = credentials::get_secret(&format!("git.{host}"), username)
             .map_err(|e| git2::Error::from_str(&format!("keyring lookup: {e}")))?
@@ -654,7 +668,14 @@ pub async fn git_push(
                 .to_string(),
         };
         let mut remote = repo.find_remote(&remote_name)?;
-        let url = remote.url().unwrap_or("").to_string();
+        // The PUSH url, not the fetch url: libgit2 pushes to `pushurl` when
+        // `.git/config` sets one, so validating (and binding credentials to)
+        // `remote.url()` would check a destination this push never contacts.
+        let url = remote
+            .pushurl()
+            .or_else(|| remote.url())
+            .unwrap_or("")
+            .to_string();
         validate_remote_url(&url)?;
         let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
         let mut push_opts = PushOptions::new();

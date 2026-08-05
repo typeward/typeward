@@ -6,6 +6,46 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Replace `path` with `tmp`. On Windows, `MoveFileEx(MOVEFILE_REPLACE_EXISTING)`
+/// fails with a sharing violation whenever the destination is open without
+/// `FILE_SHARE_DELETE` — routinely true while a compile engine has the `.tex`
+/// open for read (up to the 10-minute compile deadline), and while Defender or
+/// OneDrive momentarily hold a just-written file under the default
+/// `$DOCUMENT/Typeward` root. Every editor save, settings.json, project.json,
+/// history blob and autosave snapshot lands here, so a single-shot rename turns
+/// ordinary AV timing into an "Access is denied" save failure. Retry briefly
+/// (~330ms total) before giving up; other platforms keep the single attempt.
+#[cfg(windows)]
+fn rename_replacing(tmp: &Path, path: &Path) -> io::Result<()> {
+    const ATTEMPTS: u32 = 10;
+    const BACKOFF: std::time::Duration = std::time::Duration::from_millis(30);
+    let mut last = None;
+    for attempt in 0..ATTEMPTS {
+        match fs::rename(tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let retryable = matches!(
+                    e.kind(),
+                    io::ErrorKind::PermissionDenied | io::ErrorKind::ResourceBusy
+                );
+                if !retryable {
+                    return Err(e);
+                }
+                last = Some(e);
+                if attempt + 1 < ATTEMPTS {
+                    std::thread::sleep(BACKOFF);
+                }
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::other("rename failed")))
+}
+
+#[cfg(not(windows))]
+fn rename_replacing(tmp: &Path, path: &Path) -> io::Result<()> {
+    fs::rename(tmp, path)
+}
+
 /// Write bytes to `path` via a temp-file rename, so a process crash mid-write
 /// can never leave a half-written project.json on disk.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -43,7 +83,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
         drop(f);
 
-        if let Err(e) = fs::rename(&tmp, path) {
+        if let Err(e) = rename_replacing(&tmp, path) {
             let _ = fs::remove_file(&tmp);
             return Err(e);
         }

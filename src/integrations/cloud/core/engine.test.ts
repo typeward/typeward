@@ -101,6 +101,9 @@ describe("SyncEngine push", () => {
       ROOT_ID,
       "sections/intro.tex",
       expect.stringContaining("sections/intro.tex"),
+      // Never synced before, so there is no revision to make the PUT
+      // conditional on — this is a plain create.
+      undefined,
     );
     engine.stop();
   });

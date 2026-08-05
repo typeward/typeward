@@ -306,7 +306,9 @@ const MendeleyRow: Component = () => {
   const [error, setError] = createSignal<string | null>(null);
   const [secretInput, setSecretInput] = createSignal("");
   const [secretSaved, { refetch: refetchSecret }] = createResource(
-    hasMendeleyClientSecret,
+    // Read unguarded in JSX below, so a keyring failure must not reject — an
+    // errored resource re-throws on read and takes down the app shell.
+    () => hasMendeleyClientSecret().catch(() => false),
     { initialValue: false },
   );
   const [redirectInput, setRedirectInput] = createSignal(
@@ -714,7 +716,9 @@ const GithubAccountRow: Component = () => {
 
   const [hasCred] = createResource(accountId, async (login) => {
     if (!login) return false;
-    return await hasGithubCredential();
+    // Read unguarded in JSX below; an errored resource re-throws on read, so a
+    // keyring failure would blank the window rather than showing "not signed in".
+    return await hasGithubCredential().catch(() => false);
   });
 
   const handleConnect = async () => {
@@ -900,7 +904,12 @@ const AiProviderRow: Component<{
     () => props.provider.keyringService,
     async (service) => {
       if (!service) return true; // Ollama: no key needed.
-      return credentialExists({ service, account: "default" });
+      // A keyring that is unavailable or locked (headless Linux session, dead
+      // D-Bus) rejects here. `hasKey()` is read directly in JSX, and reading an
+      // errored resource re-throws — which would replace the whole window with
+      // the crash fallback and re-crash on "Try again". Degrade to
+      // "unconfigured" instead, matching the other probes in this file.
+      return credentialExists({ service, account: "default" }).catch(() => false);
     },
   );
 

@@ -189,8 +189,13 @@ export const DiagnosticsPanel: Component = () => {
   const [reportTarget, setReportTarget] = createSignal<ipc.TelemetryEvent | null>(null);
   const [preview] = createResource(reportTarget, (ev) => ipc.previewErrorReport(ev));
   // Resources keep their previous value while refetching — gate on loading so
-  // reopening the dialog for another event never flashes the old payload.
-  const previewReady = () => (preview.loading ? undefined : preview());
+  // reopening the dialog for another event never flashes the old payload. The
+  // `.error` check must come first: reading an errored resource re-throws, and
+  // this accessor is evaluated inside the dialog's `<Show>` and the footer's
+  // `disabled` binding, so a rejected preview would take down the whole app
+  // shell instead of rendering the error branch below.
+  const previewReady = () =>
+    preview.loading || preview.error ? undefined : preview();
   const [sending, setSending] = createSignal(false);
 
   const send = async () => {

@@ -134,13 +134,14 @@ async fn start_lsp_impl(
             .unwrap_or(0)
     );
 
-    let mut child = Command::new(&bin_path)
-        .current_dir(&args.project_root)
+    let mut cmd = Command::new(&bin_path);
+    cmd.current_dir(&args.project_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
+        .kill_on_drop(true);
+    crate::detect::hide_console_async(&mut cmd);
+    let mut child = cmd.spawn()?;
 
     let stdin = child
         .stdin

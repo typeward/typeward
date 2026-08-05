@@ -93,4 +93,55 @@ describe("MarkdownPreview", () => {
     expect(container.textContent).toContain("after");
     expect(container.querySelector("img")).toBeNull();
   });
+
+  // Letting the webview follow a link from untrusted document content replaces
+  // the whole app: the window has no address bar or back button, so an external
+  // link is an unrecoverable phishing surface, and even a benign relative link
+  // navigates to a path the asset resolver 404s, blanking the running app.
+  describe("link clicks never navigate the app shell", () => {
+    it("cancels navigation for an external link", async () => {
+      const [content] = createSignal("[click](https://attacker.example/phish)");
+      const { container } = render(() => (
+        <MarkdownPreview content={content} baseDir="/proj" theme={() => "dark"} />
+      ));
+      let anchor: HTMLAnchorElement | null = null;
+      await waitFor(() => {
+        anchor = container.querySelector("a");
+        expect(anchor).not.toBeNull();
+      });
+      const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+      anchor!.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(true);
+    });
+
+    it("cancels navigation for a relative link", async () => {
+      const [content] = createSignal("[notes](notes.md)");
+      const { container } = render(() => (
+        <MarkdownPreview content={content} baseDir="/proj" theme={() => "dark"} />
+      ));
+      let anchor: HTMLAnchorElement | null = null;
+      await waitFor(() => {
+        anchor = container.querySelector("a");
+        expect(anchor).not.toBeNull();
+      });
+      const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+      anchor!.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(true);
+    });
+
+    it("leaves in-document anchors alone so headings still jump", async () => {
+      const [content] = createSignal("# Title\n\n[to top](#title)");
+      const { container } = render(() => (
+        <MarkdownPreview content={content} baseDir="/proj" theme={() => "dark"} />
+      ));
+      let anchor: HTMLAnchorElement | null = null;
+      await waitFor(() => {
+        anchor = container.querySelector('a[href^="#"]');
+        expect(anchor).not.toBeNull();
+      });
+      const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
+      anchor!.dispatchEvent(ev);
+      expect(ev.defaultPrevented).toBe(false);
+    });
+  });
 });

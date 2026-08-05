@@ -150,7 +150,7 @@ function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
       "textDocument/publishDiagnostics",
       (params) => {
         const p = params as { uri: string; diagnostics: LspDiagnostic[] };
-        if (p?.uri !== opts.uri) return;
+        if (!p?.uri || !sameDocumentUri(p.uri, opts.uri)) return;
         const cmDiags = (p.diagnostics ?? [])
           .map((d) => lspToCmDiagnostic(d, view))
           .filter((d): d is Diagnostic => d !== null);
@@ -337,8 +337,43 @@ export function pathToFileUri(absPath: string): string {
   // Windows: C:\foo\bar -> file:///C:/foo/bar
   // Unix: /foo/bar -> file:///foo/bar
   const normalized = absPath.replace(/\\/g, "/");
-  if (/^[a-zA-Z]:/.test(normalized)) {
-    return `file:///${normalized}`;
+  // Escape the characters that would otherwise change the URI's *structure*
+  // before parsing: `#`/`?` start a fragment/query, and a bare `%` followed by
+  // hex digits would be read as an escape and decoded server-side into a
+  // different path. Spaces and non-ASCII are left for the URL parser.
+  const escaped = normalized
+    .replace(/%/g, "%25")
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F");
+  const raw = /^[a-zA-Z]:/.test(normalized)
+    ? `file:///${escaped}`
+    : `file://${escaped}`;
+  // Round-trip through the WHATWG URL parser so the URI we register is already
+  // in the normalized form a server re-serializes to. texlab/tinymist parse our
+  // URI with Rust's `url` crate (same standard) and echo the normalized spelling
+  // on publishDiagnostics; handing them an unencoded space meant their
+  // `.../First%20Last/...` never string-equalled our raw-space URI and every
+  // diagnostic was silently discarded.
+  try {
+    return new URL(raw).href;
+  } catch {
+    return raw;
   }
-  return `file://${normalized}`;
+}
+
+/// Compare two document URIs for identity, tolerating equivalent spellings.
+/// Percent-encoding sets differ between implementations (`@`, `!`, `(`… are
+/// escaped by some and not others), so raw string equality is too strict for
+/// matching a server notification to the document we opened.
+export function sameDocumentUri(a: string, b: string): boolean {
+  if (a === b) return true;
+  return canonicalUri(a) === canonicalUri(b);
+}
+
+function canonicalUri(uri: string): string {
+  try {
+    return decodeURIComponent(new URL(uri).href);
+  } catch {
+    return uri;
+  }
 }

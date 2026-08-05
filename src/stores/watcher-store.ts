@@ -15,8 +15,21 @@ const [fsVersion, setFsVersion] = createSignal(0);
 let currentHandle: WatchHandle | null = null;
 let currentUnsubscribe: (() => void) | null = null;
 
-function sanitizeId(root: string): string {
-  return root.replace(/[^A-Za-z0-9]/g, "_");
+/**
+ * Watcher id, unique per start.
+ *
+ * The id was derived from the root alone, which made two starts for the SAME
+ * project collide: Rust keys its watcher map on the id and `insert` replaces,
+ * so navigating away and straight back (while the first `watch_project` was
+ * still walking the tree) had the second start replace the first's watcher —
+ * and the first's late `stop()` then removed the map entry belonging to the
+ * second. The result was a live `currentHandle` with no watcher behind it:
+ * external edits stopped refreshing the tree for the rest of the session, with
+ * no error anywhere. A per-start counter makes a stale stop remove only its own.
+ */
+let watcherSeq = 0;
+function nextWatcherId(root: string): string {
+  return `${root.replace(/[^A-Za-z0-9]/g, "_")}_${++watcherSeq}`;
 }
 
 const TYPEWARD_DIR_PATTERN = /[\\/]\.typeward[\\/]/;
@@ -32,7 +45,7 @@ async function startWatching(
   await stopWatching();
   if (!isCurrent()) return;
   try {
-    const handle = await watchProject(sanitizeId(root), root);
+    const handle = await watchProject(nextWatcherId(root), root);
     if (!isCurrent()) {
       await handle.stop().catch(() => {
         /* stale startup; watcher may already be gone */

@@ -249,7 +249,9 @@ mod tests {
 
     // Round-trip tests against the real OS keyring are skipped in CI because
     // the Secret Service backend isn't reachable in a sandbox/container.
-    // Run them locally with `cargo test --features keyring-roundtrip -- --ignored`.
+    // Run locally with `cargo test -- --ignored` (there is no cargo feature
+    // gating this; the `#[ignore]` attribute is the whole mechanism).
+    // Verified passing against Windows Credential Manager on 2026-08-05.
     #[test]
     #[ignore]
     fn set_get_delete_roundtrip() {

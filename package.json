@@ -35,6 +35,7 @@
     "@solidjs/router": "^1.0.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2.5.0",
     "@tauri-apps/plugin-process": "^2.3.1",
@@ -50,12 +51,15 @@
     "pdfjs-dist": "^6.2.108",
     "solid-js": "^1.9.14"
   },
+  "//overrides": "brace-expansion: GHSA-rgw5-rvv9-x895 (DoS on unbounded intermediate arrays) reaches us only through @sentry/vite-plugin -> glob -> minimatch, i.e. build-time dev tooling matching our own source-map globs — never the shipped bundle, and never an attacker-controlled pattern. Pinned rather than run through `npm audit fix`, which also downgrades nanoid (a RUNTIME dep) 3.3.17 -> 3.3.16. Drop this once the plugin's own tree ships a patched minimatch.",
+  "overrides": {
+    "brace-expansion": "^5.0.9"
+  },
   "devDependencies": {
     "@sentry/vite-plugin": "^5.4.0",
     "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.11.4",
-    "@tauri-apps/plugin-dialog": "^2.7.2",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.0.0",
     "esbuild": "^0.28.1",

@@ -1,15 +1,18 @@
 import { createEffect, createRoot } from "solid-js";
 import { navigateTo } from "~/commands/palette-store";
+import { takePendingOpen } from "~/ipc";
 import { project as activeProject, requestGotoSource } from "~/stores/editor-store";
 import { projects, refresh as refreshProjects } from "~/stores/projects-store";
 import { notifyInfo } from "~/lib/toast";
 
 /**
- * OS "Open with Typeward" bridge. Rust emits "open-with:path" with the
- * absolute path of a file passed on the command line — from the
- * single-instance callback when the app is already running, or a deferred
- * emit on first launch (see lib.rs; that emit can lose the race against a
- * slow boot, accepted for v1).
+ * OS "Open with Typeward" bridge, with two delivery routes (see the `open_with`
+ * module in lib.rs). A cold launch — always the case for a Finder/Explorer
+ * double-click, and on macOS the *only* route, since Finder opens arrive as
+ * Apple Events rather than argv — hands Rust the path before this listener
+ * exists, so Rust parks it and we drain it here at mount. Once drained, Rust
+ * knows a listener is live and emits "open-with:path" directly (the
+ * single-instance case, where the app was already running).
  *
  * Resolution is deliberately read-only: the file opens only when a library
  * project already contains it. Auto-importing the parent folder would turn
@@ -87,7 +90,13 @@ export function installOpenWith(): () => void {
       if (disposed) {
         unlisten();
         unlisten = undefined;
+        return;
       }
+      // Listener first, then drain: taking the pending path is what tells Rust
+      // a listener exists, so doing it in this order cannot drop an open that
+      // arrives in between.
+      const pending = await takePendingOpen();
+      if (pending && !disposed) void handleOpenPath(pending);
     } catch {
       /* non-Tauri context */
     }

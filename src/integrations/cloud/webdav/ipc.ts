@@ -43,6 +43,12 @@ export const webdavValidateHost = (url: string, allowPrivate: boolean): Promise<
 export const webdavStatusProbe = (account: WebdavAccount): Promise<boolean> =>
   invoke("webdav_status_probe", { account });
 
+/** Verify credentials for an account that is not in settings yet. Every other
+ * `webdav_*` command requires an enrolled account, which the very first
+ * connection cannot be — see the Rust doc comment on `webdav_enroll_probe`. */
+export const webdavEnrollProbe = (account: WebdavAccount): Promise<boolean> =>
+  invoke("webdav_enroll_probe", { account });
+
 export const webdavPropfind = (
   account: WebdavAccount,
   relPath: string,

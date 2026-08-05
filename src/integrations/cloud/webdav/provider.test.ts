@@ -209,7 +209,13 @@ describe("createWebdavProvider download/upload round-trip", () => {
 
     expect(readFile).toHaveBeenCalledWith("/cache/sections/intro.tex");
     // joinUnderBase: rootId + relPath -> base-relative id used by the Rust IPC.
-    expect(webdavPut).toHaveBeenCalledWith(ACCOUNT, "projects/paper/sections/intro.tex", bytes);
+    // No expectedRev: a first upload is an unconditional create.
+    expect(webdavPut).toHaveBeenCalledWith(
+      ACCOUNT,
+      "projects/paper/sections/intro.tex",
+      bytes,
+      undefined,
+    );
     expect(meta).toEqual({
       id: "projects/paper/sections/intro.tex",
       relPath: "sections/intro.tex",
@@ -217,17 +223,58 @@ describe("createWebdavProvider download/upload round-trip", () => {
       size: bytes.length,
     });
   });
+
+  // Without If-Match the PUT is unconditional: a second device's edit inside
+  // our poll window is replaced, and echo suppression matches our own new ETag
+  // on the next delta — so the loss is never detected and no `.conflict-*`
+  // sidecar is written.
+  it("sends the last synced revision as If-Match when it has one", async () => {
+    const bytes = new TextEncoder().encode("hello");
+    vi.mocked(readFile).mockResolvedValueOnce(bytes);
+    vi.mocked(webdavPut).mockResolvedValueOnce({ etag: "new-etag" });
+
+    await createWebdavProvider(ACCOUNT).uploadFile(
+      "projects/paper",
+      "main.tex",
+      "/cache/main.tex",
+      "known-etag",
+    );
+
+    expect(webdavPut).toHaveBeenCalledWith(
+      ACCOUNT,
+      "projects/paper/main.tex",
+      bytes,
+      "known-etag",
+    );
+  });
+
+  it("reports a precondition failure as a skipped upload, not a generic error", async () => {
+    const bytes = new TextEncoder().encode("hello");
+    vi.mocked(readFile).mockResolvedValueOnce(bytes);
+    vi.mocked(webdavPut).mockRejectedValueOnce(
+      "WebDAV request failed with status 412",
+    );
+
+    await expect(
+      createWebdavProvider(ACCOUNT).uploadFile(
+        "projects/paper",
+        "main.tex",
+        "/cache/main.tex",
+        "stale-etag",
+      ),
+    ).rejects.toThrow(/changed on the server/);
+  });
 });
 
 describe("createWebdavProvider deleteRemoteFile", () => {
-  it("deletes by the base-relative id", async () => {
+  it("deletes by the base-relative id, conditional on the known revision", async () => {
     vi.mocked(webdavDelete).mockResolvedValueOnce(undefined);
     await createWebdavProvider(ACCOUNT).deleteRemoteFile("projects/paper", {
       id: "projects/paper/old.tex",
       relPath: "old.tex",
       rev: "e",
     });
-    expect(webdavDelete).toHaveBeenCalledWith(ACCOUNT, "projects/paper/old.tex");
+    expect(webdavDelete).toHaveBeenCalledWith(ACCOUNT, "projects/paper/old.tex", "e");
   });
 });
 

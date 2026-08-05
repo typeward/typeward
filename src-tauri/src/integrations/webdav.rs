@@ -435,8 +435,29 @@ fn encode_rel(rel_path: &str) -> String {
         .join("/")
 }
 
+/// Reject a relative path that could climb out of the account's base
+/// collection. `SEGMENT` deliberately leaves `.` unencoded (it is an RFC 3986
+/// unreserved char), so a `..` segment would survive `encode_rel` and then be
+/// resolved as a dot-segment by `Url::join` — landing the request on the vetted
+/// host but ABOVE the enrolled base path. The renderer is untrusted (webview
+/// XSS = arbitrary IPC), so the check belongs here in Rust rather than only in
+/// the frontend's `normalizeRemoteRelPath` funnel, which guards local cache IO.
+fn reject_escaping_rel(rel_path: &str) -> Result<(), WebdavError> {
+    let unsafe_segment = rel_path
+        .split(['/', '\\'])
+        .filter(|s| !s.is_empty())
+        .any(|seg| seg == "." || seg == ".." || seg.eq_ignore_ascii_case(".typeward"));
+    if unsafe_segment {
+        return Err(WebdavError::InvalidUrl(format!(
+            "unsafe remote path: {rel_path}"
+        )));
+    }
+    Ok(())
+}
+
 /// Build the absolute request URL for `rel_path` under the account base.
 fn request_url(account: &WebdavAccount, rel_path: &str, is_dir: bool) -> Result<Url, WebdavError> {
+    reject_escaping_rel(rel_path)?;
     let (base, _) = normalize_base(&account.base_url)?;
     let encoded = encode_rel(rel_path);
     let mut joined = base
@@ -489,7 +510,14 @@ fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<Client, WebdavError>
     let expected = host.to_ascii_lowercase();
     outbound_client_builder(OutboundRedirect::SameHost(expected.clone()))
         .connect_timeout(Duration::from_secs(15))
-        .timeout(Duration::from_secs(120))
+        // An idle-gap timeout, not a whole-request deadline. A 120s total
+        // budget against the 256 MB `MAX_FILE_BYTES` cap demands a sustained
+        // >2.1 MB/s link: on a typical self-hosted uplink every legal-but-large
+        // project asset aborted at exactly 120s, then retried forever and
+        // pinned the sync badge in a permanent error. Body size stays bounded by
+        // `read_body_capped_raw`; a genuinely dead peer still trips this.
+        // (Same pattern and rationale as the AI stream client.)
+        .read_timeout(Duration::from_secs(60))
         .resolve_to_addrs(&expected, addrs)
         .build()
         .map_err(|e| WebdavError::Network(e.to_string()))
@@ -951,6 +979,64 @@ async fn webdav_status_probe_body(
     webdav_status_probe_inner(&session).await
 }
 
+/// Keyring account id for a WebDAV login. Mirrors `webdavAccountId` in
+/// `src/integrations/cloud/webdav/auth.ts` — the two must agree or enrollment
+/// stores the password under one id and the probe looks for another.
+fn derive_account_id(host: &str, username: &str) -> String {
+    format!("{username}@{host}")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// Verify credentials for an account that is not enrolled yet.
+///
+/// Every other `webdav_*` command resolves its account through
+/// `trusted_webdav_account`, which reads `cloud.accounts` from settings.json.
+/// Enrollment cannot satisfy that by construction: the account is only written
+/// to settings *after* the probe succeeds, so the first connection of any server
+/// failed with `AccountNotTrusted` and the enrollment flow then deleted the
+/// freshly stored password — making WebDAV, the only cloud backend,
+/// un-enrollable from a fresh install.
+///
+/// This takes the login directly and persists nothing. It is not a hole in the
+/// allowlist-by-account rule:
+///   - the base URL goes through the same `normalize_base` (https only) and the
+///     per-request `resolve_and_screen` SSRF screen as every other command, and
+///   - the account id is *recomputed* from the supplied host + username and must
+///     match the one passed in, so a compromised renderer cannot point an
+///     already-enrolled account's stored password at a host of its choosing.
+#[tauri::command]
+pub async fn webdav_enroll_probe(account: WebdavAccount) -> Result<bool, String> {
+    webdav_enroll_probe_body(account)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn webdav_enroll_probe_body(requested: WebdavAccount) -> Result<bool, WebdavError> {
+    let (base, _) = normalize_base(&requested.base_url)?;
+    let host = host_of(&base)?;
+    let expected_id = derive_account_id(&host, &requested.username);
+    if expected_id != requested.account_id {
+        return Err(WebdavError::AccountNotTrusted(requested.account_id));
+    }
+    let password = account_password(&requested.account_id).await?;
+    let session = WebdavSession {
+        account: WebdavAccount {
+            base_url: base.to_string(),
+            ..requested
+        },
+        password,
+    };
+    webdav_status_probe_inner(&session).await
+}
+
 async fn webdav_status_probe_inner(session: &WebdavSession) -> Result<bool, WebdavError> {
     let url = request_url(&session.account, "", true)?;
     let body = Bytes::from_static(PROPFIND_BODY.as_bytes());
@@ -1313,6 +1399,109 @@ mod tests {
             Err(WebdavError::AccountNotTrusted(_))
         ));
     }
+
+    fn enrolled_account() -> WebdavAccount {
+        WebdavAccount {
+            account_id: "acct-1".into(),
+            base_url: "https://dav.example.com/remote.php/dav/files/alice/".into(),
+            username: "alice".into(),
+            allow_private_host: false,
+        }
+    }
+
+    #[test]
+    fn request_url_rejects_paths_that_climb_out_of_the_base_collection() {
+        // `.` is unreserved, so SEGMENT leaves `..` intact and Url::join would
+        // resolve it — reaching the rest of the user's account on the vetted
+        // host. The renderer is untrusted, so this must fail in Rust.
+        let account = enrolled_account();
+        for rel in [
+            "../../../secrets.kdbx",
+            "a/../../b.tex",
+            "..",
+            "./a.tex",
+            r"..\..\windows.tex",
+        ] {
+            assert!(
+                matches!(
+                    request_url(&account, rel, false),
+                    Err(WebdavError::InvalidUrl(_))
+                ),
+                "expected rejection for {rel}"
+            );
+        }
+    }
+
+    #[test]
+    fn request_url_rejects_the_sidecar_directory_at_any_depth() {
+        let account = enrolled_account();
+        for rel in [".typeward/cursor.json", "sub/.TypeWard/x", ".typeward"] {
+            assert!(
+                matches!(
+                    request_url(&account, rel, false),
+                    Err(WebdavError::InvalidUrl(_))
+                ),
+                "expected rejection for {rel}"
+            );
+        }
+    }
+
+    #[test]
+    fn derived_account_id_matches_the_frontend_rule() {
+        // Must agree with `webdavAccountId` in cloud/webdav/auth.ts, or the
+        // password is stored under one id and looked up under another.
+        assert_eq!(
+            derive_account_id("dav.example.com", "alice"),
+            "alice@dav.example.com"
+        );
+        assert_eq!(
+            derive_account_id("dav.example.com", "a li/ce"),
+            "a_li_ce@dav.example.com"
+        );
+    }
+
+    #[tokio::test]
+    async fn enroll_probe_refuses_an_account_id_that_does_not_match_the_host() {
+        // The binding is what keeps this un-enrolled path from becoming a way to
+        // aim an already-enrolled account's stored password at a foreign host.
+        let mismatched = WebdavAccount {
+            account_id: "alice@dav.example.com".into(),
+            base_url: "https://attacker.example/dav/".into(),
+            username: "alice".into(),
+            allow_private_host: false,
+        };
+        assert!(matches!(
+            webdav_enroll_probe_body(mismatched).await,
+            Err(WebdavError::AccountNotTrusted(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn enroll_probe_still_requires_https() {
+        let insecure = WebdavAccount {
+            account_id: "alice@dav.example.com".into(),
+            base_url: "http://dav.example.com/dav/".into(),
+            username: "alice".into(),
+            allow_private_host: false,
+        };
+        assert!(matches!(
+            webdav_enroll_probe_body(insecure).await,
+            Err(WebdavError::InsecureScheme(_))
+        ));
+    }
+
+    #[test]
+    fn request_url_builds_ordinary_paths_under_the_base() {
+        let account = enrolled_account();
+        let url = request_url(&account, "chapters/intro one.tex", false).unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://dav.example.com/remote.php/dav/files/alice/chapters/intro%20one.tex"
+        );
+        let dir = request_url(&account, "chapters", true).unwrap();
+        assert!(dir.as_str().ends_with("/chapters/"));
+    }
+
     #[test]
     fn parses_decimal_hex_octal_ipv4_literals() {
         assert_eq!(

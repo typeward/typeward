@@ -317,11 +317,22 @@ pub async fn compile_clean(project: Project) -> CmdResult<u32> {
     let (root, root_file) = checked_project_root_and_file(&project)?;
     tokio::task::spawn_blocking(move || {
         let mut removed = 0u32;
-        let base = root.join(&root_file);
-        for ext in CLEANABLE_EXTS {
-            let p = base.with_extension(ext);
-            if p.is_file() && std::fs::remove_file(&p).is_ok() {
-                removed += 1;
+        // Two artifact locations, because the engines disagree: latexmk and the
+        // raw engines write `<jobname>.ext` into the CWD (the project root)
+        // while Tectonic writes beside the source. For a root file at the top
+        // level these are the same path; for a nested one they differ, and
+        // cleaning only the source-adjacent set left the real artifacts behind.
+        let mut bases = vec![root.join(&root_file)];
+        let root_level = root.join(latex_output_rel(&root_file, LatexEngine::Pdflatex));
+        if !bases.contains(&root_level) {
+            bases.push(root_level);
+        }
+        for base in &bases {
+            for ext in CLEANABLE_EXTS {
+                let p = base.with_extension(ext);
+                if p.is_file() && std::fs::remove_file(&p).is_ok() {
+                    removed += 1;
+                }
             }
         }
         remove_aux_recursive(&root, 0, &mut removed);
@@ -474,7 +485,7 @@ pub async fn compile_latex(
         },
     };
 
-    let pdf_path = root.join(replace_ext(&root_file, "pdf"));
+    let pdf_path = root.join(latex_output_rel(&root_file, opts.engine));
     let ok = success && pdf_path.exists();
     let diagnostics = parse_latex_log(&log, &root_file);
 
@@ -663,13 +674,13 @@ async fn kill_tree_windows(pid: u32) {
     let taskkill = Path::new(&system_root)
         .join("System32")
         .join("taskkill.exe");
-    let _ = tokio::process::Command::new(taskkill)
-        .args(["/F", "/T", "/PID", &pid.to_string()])
+    let mut cmd = tokio::process::Command::new(taskkill);
+    cmd.args(["/F", "/T", "/PID", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await;
+        .stderr(Stdio::null());
+    crate::detect::hide_console_async(&mut cmd);
+    let _ = cmd.status().await;
 }
 
 async fn kill_compile_child(child: &mut tokio::process::Child) {
@@ -711,6 +722,7 @@ pub(crate) async fn run_bounded(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    crate::detect::hide_console_async(&mut cmd);
     // Own process group per compiler child: latexmk's real work happens in an
     // engine grandchild that would survive a kill of latexmk alone, spinning
     // at full CPU forever. setsid cannot fail here (a freshly forked child is
@@ -1426,13 +1438,60 @@ pub async fn compile_typst(
     })
 }
 
+/// Split a codespan location tail (`path:line:col` or `path:line`) into its
+/// path and line. Peeled from the right so a Windows drive letter in the path
+/// (`C:\work\main.typ:12:5`) doesn't get mistaken for the line number.
+fn split_typst_location(s: &str) -> Option<(String, u32)> {
+    let (head, last) = s.trim().rsplit_once(':')?;
+    let last_num = last.parse::<u32>().ok()?;
+    if let Some((head2, mid)) = head.rsplit_once(':')
+        && let Ok(line) = mid.parse::<u32>()
+    {
+        // `path:line:col` — `last_num` was the column.
+        return Some((head2.to_string(), line));
+    }
+    Some((head.to_string(), last_num))
+}
+
+/// The `┌─ file:line:col` (or `--> file:line:col`) line codespan prints
+/// directly under a Typst diagnostic.
+fn parse_typst_location(line: &str) -> Option<(String, u32)> {
+    let rest = line
+        .split_once("┌─")
+        .or_else(|| line.split_once("-->"))
+        .map(|(_, r)| r)?;
+    split_typst_location(rest)
+}
+
 /// Lines like `error: ...` and `warning: ...` are surfaced as Diagnostics.
-/// Typst also prints follow-up location hints; we attach them to the
-/// previous diagnostic via message concatenation.
+///
+/// The line number must be a SOURCE line, never the log line index — the Issues
+/// tab feeds it straight to `requestGotoSource`, so a log index would jump the
+/// editor to an unrelated place on every Typst failure. Typst prints the real
+/// position on the codespan location line right under each diagnostic; that is
+/// what gets attached here, with line 1 as the honest fallback when a
+/// diagnostic carries no location (matching the LaTeX parser's convention).
 fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
     let mut out: Vec<Diagnostic> = Vec::new();
-    for (i, line) in log.lines().enumerate() {
+    // Index of the diagnostic still waiting for its location line, if any.
+    let mut pending: Option<usize> = None;
+    for line in log.lines() {
         let trimmed = line.trim();
+        if let Some(idx) = pending
+            && let Some((file, src_line)) = parse_typst_location(trimmed)
+        {
+            let d = &mut out[idx];
+            d.line = src_line;
+            // Typst is spawned with `current_dir(root)`, so a relative path it
+            // prints is already project-relative and usable for click-to-jump;
+            // an absolute one (a package or an out-of-project include) is not,
+            // so the entry file stays the anchor there.
+            if !Path::new(&file).is_absolute() {
+                d.file = file.replace('\\', "/");
+            }
+            pending = None;
+            continue;
+        }
         let (severity, rest) = if let Some(rest) = trimmed.strip_prefix("error:") {
             ("error", rest.trim())
         } else if let Some(rest) = trimmed.strip_prefix("warning:") {
@@ -1446,9 +1505,10 @@ fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
             severity: severity.into(),
             message: rest.to_string(),
             file: entry.to_string(),
-            line: (i + 1) as u32,
+            line: 1,
             source: "typst".into(),
         });
+        pending = Some(out.len() - 1);
     }
     out
 }
@@ -1463,6 +1523,28 @@ fn replace_ext(rel_path: &str, new_ext: &str) -> String {
     }
 }
 
+/// Project-relative path of the PDF a LaTeX build produces.
+///
+/// latexmk and the raw engines are spawned with `current_dir(root)` and no
+/// `-output-directory`, so TeX writes `<jobname>.pdf` into the CWD — the project
+/// root — regardless of where the entry file lives. A nested root file such as
+/// `chapters/thesis.tex` therefore yields `<root>/thesis.pdf`, not
+/// `<root>/chapters/thesis.pdf`; looking beside the source made every otherwise
+/// successful nested-entry build report `ok: false` with no PDF. Tectonic writes
+/// beside its input instead, so it keeps the source-relative path.
+fn latex_output_rel(root_file: &str, engine: LatexEngine) -> String {
+    match engine {
+        LatexEngine::Tectonic => replace_ext(root_file, "pdf"),
+        _ => {
+            let stem = Path::new(root_file)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root_file.to_string());
+            format!("{stem}.pdf")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1473,6 +1555,68 @@ mod tests {
         assert_eq!(replace_ext("paper.md", "pdf"), "paper.pdf");
         assert_eq!(replace_ext("notes", "pdf"), "notes.pdf");
         assert_eq!(replace_ext("a.b.tex", "pdf"), "a.b.pdf");
+    }
+
+    #[test]
+    fn nested_root_file_resolves_the_pdf_where_the_engine_actually_writes_it() {
+        // latexmk/pdflatex run with current_dir(root) and no -output-directory,
+        // so the PDF lands at the ROOT as <jobname>.pdf — not beside the source.
+        // Looking beside the source made every nested-entry build report failure.
+        assert_eq!(
+            latex_output_rel("chapters/thesis.tex", LatexEngine::Pdflatex),
+            "thesis.pdf"
+        );
+        assert_eq!(
+            latex_output_rel("main.tex", LatexEngine::Pdflatex),
+            "main.pdf"
+        );
+        // Tectonic writes beside its input, so the source-relative path holds.
+        assert_eq!(
+            latex_output_rel("chapters/thesis.tex", LatexEngine::Tectonic),
+            "chapters/thesis.pdf"
+        );
+    }
+
+    #[test]
+    fn typst_diagnostics_take_the_line_from_the_location_line() {
+        // The line must be a SOURCE line: the Issues tab feeds it straight to
+        // click-to-jump. Reporting the log line index sent the cursor somewhere
+        // unrelated on every Typst failure.
+        let log = "\
+error: unknown variable: foo
+   ┌─ main.typ:42:5
+   │
+warning: this is deprecated
+   ┌─ chapters/intro.typ:7:1
+";
+        let diags = parse_typst_log(log, "main.typ");
+        assert_eq!(diags.len(), 2);
+        assert_eq!(diags[0].line, 42);
+        assert_eq!(diags[0].file, "main.typ");
+        assert_eq!(diags[1].line, 7);
+        assert_eq!(diags[1].file, "chapters/intro.typ");
+    }
+
+    #[test]
+    fn typst_diagnostic_without_a_location_falls_back_to_line_one() {
+        let diags = parse_typst_log("error: failed to load package\n", "main.typ");
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 1);
+        assert_eq!(diags[0].file, "main.typ");
+    }
+
+    #[test]
+    fn typst_location_parsing_survives_a_windows_drive_letter() {
+        // Peeled from the right, so `C:` is not mistaken for a line number.
+        assert_eq!(
+            split_typst_location(r"C:\work\main.typ:12:5"),
+            Some((r"C:\work\main.typ".to_string(), 12))
+        );
+        assert_eq!(
+            split_typst_location("main.typ:9"),
+            Some(("main.typ".to_string(), 9))
+        );
+        assert_eq!(split_typst_location("no-numbers-here"), None);
     }
 
     #[test]

@@ -15,6 +15,8 @@
 
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 
+import { describeIpcError } from "~/lib/errors";
+
 import type {
   CloudFsProvider,
   DeltaChange,
@@ -58,6 +60,23 @@ function stripRoot(idUnderBase: string, rootId: string): string {
   return idUnderBase.startsWith(`${r}/`) ? idUnderBase.slice(r.length + 1) : idUnderBase;
 }
 
+/** Rust surfaces a non-2xx as `WebdavError::Status { status, detail }`, which
+ * crosses the bridge as its Display string — so the code is matched textually. */
+function isPreconditionFailed(err: unknown): boolean {
+  return /\b412\b/.test(describeIpcError(err));
+}
+
+/**
+ * Bounds for the PROPFIND tree walk. Remote content is attacker-controlled in
+ * this project's threat model, and a server whose listings cycle (A lists B, B
+ * lists A — trivial to serve, and reachable on real servers via loop mounts)
+ * would otherwise spin the pull pass forever. Because the engine serializes
+ * everything through one promise chain, that also means queued pushes never
+ * drain and `SyncEngine.stop()` never resolves, so closing or switching the
+ * project hangs.
+ */
+const MAX_WALK_ENTRIES = 20_000;
+
 function encodeCursor(snap: Record<string, string>): string {
   return JSON.stringify({ v: 1, snap });
 }
@@ -76,12 +95,24 @@ export function createWebdavProvider(account: WebdavAccount): CloudFsProvider {
   // BFS over the subtree under `rootId` (base-relative; "" = base root),
   // invoking `onFile` for each file. Directories are enqueued, not emitted.
   const walk = async (rootId: string, onFile: (e: WebdavEntry) => void): Promise<void> => {
-    const queue: string[] = [trimSlashes(rootId)];
+    const start = trimSlashes(rootId);
+    const queue: string[] = [start];
+    // Directories already listed. A cycling listing would otherwise re-enqueue
+    // forever; a merely huge tree is caught by the entry cap below.
+    const visited = new Set<string>([start]);
+    let seen = 0;
     while (queue.length > 0) {
       const dir = queue.shift() as string;
       const { entries } = await webdavPropfind(account, dir, 1);
       for (const entry of entries) {
+        if (++seen > MAX_WALK_ENTRIES) {
+          throw new Error(
+            `Remote folder listing exceeded ${MAX_WALK_ENTRIES} entries — pick a narrower project folder, or check the server for a directory loop.`,
+          );
+        }
         if (entry.isDir) {
+          if (visited.has(entry.relPath)) continue;
+          visited.add(entry.relPath);
           queue.push(entry.relPath);
         } else {
           onFile(entry);
@@ -161,15 +192,33 @@ export function createWebdavProvider(account: WebdavAccount): CloudFsProvider {
       await writeFile(destAbsPath, res.body);
     },
 
-    async uploadFile(rootId: string, relPath: string, sourceAbsPath: string): Promise<RemoteFile> {
+    async uploadFile(
+      rootId: string,
+      relPath: string,
+      sourceAbsPath: string,
+      expectedRev?: string,
+    ): Promise<RemoteFile> {
       const bytes = await readFile(sourceAbsPath);
       const idUnderBase = joinUnderBase(rootId, relPath);
-      const res = await webdavPut(account, idUnderBase, bytes);
-      return { id: idUnderBase, relPath, rev: res.etag, size: bytes.length };
+      // Conditional on the revision we last synced: the server rejects the PUT
+      // with 412 if anyone changed the file since, instead of us overwriting
+      // their edit. First upload of a path has no rev and stays unconditional.
+      try {
+        const res = await webdavPut(account, idUnderBase, bytes, expectedRev);
+        return { id: idUnderBase, relPath, rev: res.etag, size: bytes.length };
+      } catch (err) {
+        if (expectedRev && isPreconditionFailed(err)) {
+          throw new Error(
+            `"${relPath}" changed on the server since it was last synced — skipping the upload so the remote edit isn't overwritten. It will be reconciled on the next pull.`,
+          );
+        }
+        throw err;
+      }
     },
 
     async deleteRemoteFile(_rootId: string, file: RemoteFile): Promise<void> {
-      await webdavDelete(account, file.id);
+      // Same guard on the destructive path: only delete the revision we know.
+      await webdavDelete(account, file.id, file.rev);
     },
   };
 }

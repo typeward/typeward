@@ -172,11 +172,20 @@ export interface CloudFsProvider extends IntegrationProvider {
   enumerateFiles(rootId: string): Promise<{ files: RemoteFile[]; cursor: string }>;
   /** Download one file's bytes to the given absolute local path. */
   downloadFile(file: RemoteFile, destAbsPath: string): Promise<void>;
-  /** Upload local bytes to a remote relative path under a root folder. */
+  /**
+   * Upload local bytes to a remote relative path under a root folder.
+   *
+   * `expectedRev` is the revision the engine last synced for this path, when it
+   * has one. A provider that can express conditional writes MUST send it (and
+   * surface the precondition failure) so a concurrent remote edit is detected
+   * instead of silently overwritten — an unconditional PUT is a lost update
+   * that echo suppression then hides from the next delta.
+   */
   uploadFile(
     rootId: string,
     relPath: string,
     sourceAbsPath: string,
+    expectedRev?: string,
   ): Promise<RemoteFile>;
   /** Delete a remote file. */
   deleteRemoteFile(rootId: string, file: RemoteFile): Promise<void>;
