@@ -1,3 +1,8 @@
+// Modified by Typeward relative to upstream harper-core 2.7.0: the first
+// element of the `then_kind_any_but_not` predicate array carries an added
+// `as fn(&TokenKind) -> bool` cast so rustc >= ~1.93 coerces the distinct
+// fn-item types into one fn-pointer type (E0308). No behavioural change.
+
 use crate::{
     Lint, Token, TokenKind,
     expr::{Expr, SequenceExpr},
