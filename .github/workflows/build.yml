@@ -52,6 +52,9 @@ jobs:
   build:
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
+    # A wedged bundling step would otherwise run to GitHub's 6h default on
+    # every matrix leg. Release-profile Tauri builds take ~5-15 min warm.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -65,7 +68,9 @@ jobs:
               app/src-tauri/target/release/bundle/dmg/*.dmg
               app/src-tauri/target/release/bundle/macos/*.app.tar.gz
           - label: macOS (Intel)
-            runner: macos-13
+            # The macOS 13 image was retired 2025-12-04; macos-15-intel is the
+            # current free x86_64 image (mirrors release.yml).
+            runner: macos-15-intel
             os: macos
             target: x86_64-apple-darwin
             artifact: typeward-macos-x64
@@ -165,6 +170,17 @@ jobs:
         run: |
           cd app/src-tauri/binaries
           ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
+      # `tauri build` shells out to cargo WITHOUT --locked, so a stale Cargo.lock
+      # is silently "repaired" mid-build and CI can ship dependency versions the
+      # lockfile never pinned and no reviewer saw. Forwarding the flag through
+      # npm -> tauri -> cargo is brittle; asserting the lock is current up front
+      # gives the same guarantee and fails with a clear message.
+      - name: Verify Cargo.lock is current
+        if: steps.gate.outputs.build == 'true'
+        working-directory: app/src-tauri
+        run: cargo metadata --locked --format-version 1 > /dev/null
+        shell: bash
 
       - name: Build release bundle
         if: steps.gate.outputs.build == 'true'

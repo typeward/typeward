@@ -62,6 +62,9 @@ jobs:
   build:
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.runner }}
+    # A wedged signing/notarization or bundling step would otherwise hold a
+    # runner for GitHub's 6h default on every leg of a release.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -71,7 +74,11 @@ jobs:
             os: macos
             target: aarch64-apple-darwin
           - label: macOS (Intel)
-            runner: macos-13
+            # macos-15-intel, not macos-13: the macOS 13 image was retired on
+            # 2025-12-04, so that leg fails at queue time — and because `publish`
+            # declares `needs: build` with no `if: always()`, one dead leg
+            # discards the artifacts of every other platform too.
+            runner: macos-15-intel
             os: macos
             target: x86_64-apple-darwin
           - label: Windows (x64)
@@ -218,6 +225,15 @@ jobs:
         shell: bash
         run: echo '{"bundle":{"createUpdaterArtifacts":true}}' > "${{ runner.temp }}/updater.overlay.json"
 
+      # tauri-action shells out to cargo WITHOUT --locked, so a stale Cargo.lock
+      # would be silently "repaired" and a RELEASE could ship dependency
+      # versions the lockfile never pinned. Assert it up front — forwarding the
+      # flag through the action is brittle, this gives the same guarantee.
+      - name: Verify Cargo.lock is current
+        working-directory: app/src-tauri
+        shell: bash
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
       - name: Build the app
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
@@ -301,6 +317,7 @@ jobs:
     name: Assemble + draft release
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       contents: read
       # Build provenance attestations for the published artifacts.
