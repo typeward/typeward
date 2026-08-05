@@ -6,7 +6,6 @@
 
 import { createEffect, createRoot } from "solid-js";
 
-import { hasEntitlement } from "~/integrations/entitlements";
 import { integrationsSettings } from "~/stores/settings-store";
 
 import {
@@ -20,12 +19,7 @@ export function initAiProviders(): void {
     createEffect(() => {
       const ai = integrationsSettings().ai;
       const desired = ai.activeProvider as AiProviderId | undefined;
-      if (
-        ai.enabled &&
-        desired &&
-        getAvailableProviderIds().includes(desired) &&
-        hasEntitlement(`integrations.ai.${desired}`)
-      ) {
+      if (ai.enabled && desired && getAvailableProviderIds().includes(desired)) {
         setActiveProvider(desired);
       } else {
         setActiveProvider(null);

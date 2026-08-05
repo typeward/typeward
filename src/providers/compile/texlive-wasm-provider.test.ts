@@ -27,7 +27,7 @@ vi.mock("~/stores/editor-store", () => ({
   project: vi.fn(() => null),
 }));
 
-vi.mock("texlive-wasm/worker?url", () => ({
+vi.mock("@typeward/texlive-wasm/worker?url", () => ({
   default: "/assets/texlive-wasm-worker.js",
 }));
 
@@ -37,14 +37,14 @@ vi.mock("@tauri-apps/plugin-fs", () => ({
   BaseDirectory: { Resource: 11 },
 }));
 
-vi.mock("texlive-wasm", () => ({
+vi.mock("@typeward/texlive-wasm", () => ({
   createEngine: mocks.createEngine,
   latexmk: mocks.latexmk,
   willRunBibtex: mocks.willRunBibtex,
   willRunBiber: mocks.willRunBiber,
 }));
 
-vi.mock("texlive-wasm/tauri", () => ({
+vi.mock("@typeward/texlive-wasm/tauri", () => ({
   createTauriFs: mocks.createTauriFs,
 }));
 

@@ -906,10 +906,11 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResu
     // create_dir_all must not hitch the event-loop thread.
     tokio::task::spawn_blocking(move || -> CmdResult<()> {
         // The renderer's payload has no `compile` key, so backend-owned values
-        // are carried forward rather than reset on every settings write.
+        // are carried forward rather than reset on every settings write. The
+        // carry-forward read and the write share one lock, so a concurrent
+        // backend write (e.g. the avatar IPC) can't land in between and be lost.
         let mut settings = settings;
-        settings::preserve_backend_owned(&app, &mut settings);
-        settings::save(&app, &settings).map_err(err)?;
+        settings::save_preserving_backend_owned(&app, &mut settings).map_err(err)?;
         // Keep the clone-destination boundary in sync when the user moves their
         // projects root. (File IO is gated by the opened-project registry, which
         // this does not affect.)
@@ -928,25 +929,6 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> CmdResu
     .map_err(err)?
 }
 
-#[tauri::command]
-pub async fn load_sync_state(app: tauri::AppHandle) -> CmdResult<settings::SyncStateFile> {
-    tokio::task::spawn_blocking(move || settings::load_sync_state(&app).map_err(err))
-        .await
-        .map_err(err)?
-}
-
-#[tauri::command]
-pub async fn save_sync_state(
-    app: tauri::AppHandle,
-    state: settings::SyncStateFile,
-) -> CmdResult<()> {
-    // Written by the settings-sync engine after network passes; keep the
-    // fsync off the event-loop thread like save_settings.
-    tokio::task::spawn_blocking(move || settings::save_sync_state(&app, &state).map_err(err))
-        .await
-        .map_err(err)?
-}
-
 /// Settings → Security → "Reset local app data". Overwrites settings.json
 /// with the defaults; the frontend clears localStorage and reloads. Project
 /// files on disk are untouched.
@@ -955,6 +937,9 @@ pub async fn reset_settings(app: tauri::AppHandle) -> CmdResult<()> {
     // Writes settings.json (fsync); keep it off the event-loop thread like save_settings.
     tokio::task::spawn_blocking(move || -> CmdResult<()> {
         settings::save(&app, &Settings::default()).map_err(err)?;
+        // The defaults clear `profile.avatarPath`, which leaves the copied image
+        // itself unreferenced in app data — reset has to drop the file too.
+        crate::profile::clear_stored_avatar_files(&app)?;
         project::set_projects_root(&settings::default_projects_root());
         Ok(())
     })

@@ -4,6 +4,7 @@ version = "0.0.1"
 description = "Typeward — multiplatform editor for LaTeX and Typst"
 authors = ["Typeward"]
 edition = "2024"
+license = "GPL-3.0-or-later"
 
 # crate-type required for both desktop static linking and future mobile (cdylib)
 [lib]
@@ -12,9 +13,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-# build.rs splices the configured Supabase project's exact origin into the CSP
-# (the wildcard it replaces would let an XSS payload exfiltrate to any tenant).
-serde_json = "1"
 
 [dependencies]
 # protocol-asset backs app.security.assetProtocol (convertFileSrc) — the only

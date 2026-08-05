@@ -8,7 +8,6 @@
 
 import { createEffect, createRoot } from "solid-js";
 
-import { hasEntitlement } from "~/integrations/entitlements";
 import { project } from "~/stores/editor-store";
 import { integrationsSettings, projectsRoot } from "~/stores/settings-store";
 
@@ -39,20 +38,19 @@ interface EngineTarget {
 }
 
 /**
- * A cloud-bound project whose engine cannot start. Distinguished from a
- * plain local project (null) so the badge can say "sync is off" instead of
- * silently unmounting — before this, "syncing" and "silently not syncing"
- * looked identical.
+ * A cloud-bound project whose engine cannot start — the account it remembers
+ * has no credentials on this machine. Distinguished from a plain local
+ * project (null) so the badge can say "sync is off" instead of silently
+ * unmounting — before this, "syncing" and "silently not syncing" looked
+ * identical.
  */
 interface DisconnectedTarget {
   disconnected: true;
   providerId: CloudProviderId;
   projectId: string;
-  reason: "credentials" | "entitlement";
 }
 
 const PROVIDER_LABEL: Record<CloudProviderId, string> = {
-  dropbox: "Dropbox",
   webdav: "WebDAV",
 };
 
@@ -87,14 +85,6 @@ function computeTarget(): EngineTarget | DisconnectedTarget | null {
 
   const origin = readCloudOrigin(proj);
   if (!origin) return null;
-  if (!hasEntitlement(`integrations.cloud.${origin.provider}`)) {
-    return {
-      disconnected: true,
-      providerId: origin.provider,
-      projectId: deriveProjectId(proj.rootPath),
-      reason: "entitlement",
-    };
-  }
 
   const accountRef = findAccount(origin.provider, origin.accountId);
   if (!accountRef) {
@@ -105,7 +95,6 @@ function computeTarget(): EngineTarget | DisconnectedTarget | null {
       disconnected: true,
       providerId: origin.provider,
       projectId: deriveProjectId(proj.rootPath),
-      reason: "credentials",
     };
   }
 
@@ -193,9 +182,7 @@ function showDisconnected(target: DisconnectedTarget): void {
     target.providerId,
     target.projectId,
     "disconnected",
-    target.reason === "credentials"
-      ? `${label} isn't connected on this machine — reconnect it in Settings to resume syncing. Your files stay safe locally.`
-      : `Cloud sync needs your plan restored — this project keeps working locally meanwhile.`,
+    `${label} isn't connected on this machine — reconnect it in Settings to resume syncing. Your files stay safe locally.`,
   );
   disconnectedShown = {
     providerId: target.providerId,

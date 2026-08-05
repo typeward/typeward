@@ -44,6 +44,30 @@ export function requestReviewPanelIntent(
 }
 
 /**
+ * Compose intent for a new editor-anchored comment/TODO. The add-comment
+ * commands raise this instead of creating a thread outright — an empty
+ * thread appearing silently in the panel reads as "nothing happened", and
+ * the PDF selection path already composes first. The ReviewComposePopover
+ * mounted in the editor shell observes and clears it.
+ */
+export interface ReviewComposeIntent {
+  kind: "comment" | "todo";
+  /** Selection span + snapshot at the moment the command fired. */
+  from: number;
+  to: number;
+  anchorText: string;
+}
+const [composeIntent, setComposeIntent] =
+  createSignal<ReviewComposeIntent | null>(null);
+export const reviewComposeIntent = composeIntent;
+export const requestReviewCompose = (intent: ReviewComposeIntent): void => {
+  setComposeIntent(intent);
+};
+export const clearReviewCompose = (): void => {
+  setComposeIntent(null);
+};
+
+/**
  * Open a thread in the correct panel, routing TODO-kind threads to the TODO
  * tab. Shared by gutter clicks and PDF band clicks, which only know a threadId.
  */

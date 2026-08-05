@@ -8,7 +8,6 @@ import type { Component } from "solid-js";
 import { Show } from "solid-js";
 import { IconButton } from "~/components/primitives/IconButton";
 import { KbdHint } from "~/components/primitives/KbdHint";
-import { SubscriptionBadge } from "~/components/account/SubscriptionBadge";
 import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
 import { GitStatusBar } from "~/components/vcs/GitStatusBar";
 
@@ -109,7 +108,6 @@ export const TopBar: Component<TopBarProps> = (props) => {
 
       {/* Right cluster — density-sized icons */}
       <div class="absolute right-4 top-0 flex h-full items-center gap-2">
-        <SubscriptionBadge />
         <GitStatusBar />
         <SyncStatusBadge />
         {/* Inline fg-2 keeps the chrome tint the ghost variant's text

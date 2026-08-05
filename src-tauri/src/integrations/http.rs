@@ -12,7 +12,7 @@
 //! Per-request:
 //!   - a bearer header is added by name only; the actual token is fetched
 //!     from the keyring inside Rust so it never crosses the IPC bridge
-//!   - for OAuth token-bundle services (Dropbox, Mendeley) the access token is
+//!   - for OAuth token-bundle services (Mendeley) the access token is
 //!     refreshed *pre-emptively* when it is within 60s of expiry
 //!     ([`oauth_bundle_access_token`]); static API keys attach verbatim. There
 //!     is no 401-triggered refresh/replay here (see [`http_request`]).
@@ -148,7 +148,7 @@ pub struct AuthRef {
     #[serde(default)]
     pub prefix: String,
     /// Public OAuth client id for token-bundle services that Rust may refresh
-    /// before attaching the bearer (Dropbox, Mendeley).
+    /// before attaching the bearer (Mendeley).
     #[serde(rename = "clientId", default)]
     pub client_id: Option<String>,
 }
@@ -319,9 +319,6 @@ fn allowed_https_host(host: &str) -> bool {
             | "doi.org"
             | "export.arxiv.org"
             | "api.mendeley.com"
-            | "api.dropboxapi.com"
-            | "content.dropboxapi.com"
-            | "notify.dropboxapi.com"
             | "generativelanguage.googleapis.com"
             | "github.com"
             | "api.github.com"
@@ -333,11 +330,7 @@ fn allowed_https_host(host: &str) -> bool {
 fn allowed_raw_auth_header_host(host: &str) -> bool {
     matches!(
         host,
-        "api.mendeley.com"
-            | "api.dropboxapi.com"
-            | "content.dropboxapi.com"
-            | "notify.dropboxapi.com"
-            | "generativelanguage.googleapis.com"
+        "api.mendeley.com" | "generativelanguage.googleapis.com"
     )
 }
 
@@ -354,9 +347,6 @@ pub fn validate_auth_ref_for_host(auth: &AuthRef, host: &str) -> Result<(), Http
         | ("openai", "api.openai.com")
         | ("anthropic", "api.anthropic.com")
         | ("gemini", "generativelanguage.googleapis.com") => true,
-        ("dropbox", "api.dropboxapi.com" | "content.dropboxapi.com" | "notify.dropboxapi.com") => {
-            true
-        }
         ("mendeley", "api.mendeley.com") if auth.account != "app-secret" => true,
         _ => false,
     };
@@ -507,10 +497,7 @@ fn is_expiring_soon(expires_at: Option<i64>) -> bool {
 fn is_oauth_bundle_auth(auth: &AuthRef, host: &str) -> bool {
     matches!(
         (auth.service.as_str(), host),
-        (
-            "dropbox",
-            "api.dropboxapi.com" | "content.dropboxapi.com" | "notify.dropboxapi.com"
-        ) | ("mendeley", "api.mendeley.com")
+        ("mendeley", "api.mendeley.com")
     )
 }
 
@@ -554,7 +541,6 @@ async fn refresh_oauth_token(
     refresh_token: &str,
 ) -> Result<OAuthRefreshResponse, HttpError> {
     let token_url = match service {
-        "dropbox" => "https://api.dropboxapi.com/oauth2/token",
         "mendeley" => "https://api.mendeley.com/oauth/token",
         _ => {
             return Err(HttpError::Credential(format!(
@@ -567,9 +553,6 @@ async fn refresh_oauth_token(
         let mut form = url::form_urlencoded::Serializer::new(String::new());
         form.append_pair("grant_type", "refresh_token");
         form.append_pair("refresh_token", refresh_token);
-        if service == "dropbox" {
-            form.append_pair("client_id", client_id);
-        }
         form.finish()
     };
 
@@ -887,7 +870,7 @@ mod tests {
 
     #[test]
     fn no_credential_is_bound_to_a_loopback_host() {
-        for service in ["zotero-web", "openai", "anthropic", "gemini", "dropbox"] {
+        for service in ["zotero-web", "openai", "anthropic", "gemini", "mendeley"] {
             let auth = AuthRef {
                 service: service.into(),
                 account: "default".into(),

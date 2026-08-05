@@ -23,10 +23,10 @@ const SIZE: Record<TextFieldSize, string> = {
 };
 
 /**
- * The house text input: real <label> wrapping a styled span + input
- * (SignInForm pattern), glass-inset recipe. The focus treatment is a 2px
- * outline in --color-focus-ring — the old 1px accent ring was
- * sub-perceptible on glass surfaces.
+ * The house text input: real <label> wrapping a styled span + input, on the
+ * glass-inset recipe. The focus treatment is a 2px outline in
+ * --color-focus-ring — the old 1px accent ring was sub-perceptible on glass
+ * surfaces.
  */
 export const TextField: Component<TextFieldProps> = (props) => {
   const [local, rest] = splitProps(props, [

@@ -18,9 +18,9 @@
  * producer. Branding it makes the funnel visible to the compiler: engine data
  * structures that key on remote paths (the sync-state manifest, the pending
  * push set, the echo-suppression map) require this type, so a raw provider
- * string (Dropbox `path_display`, a WebDAV href) cannot be inserted without
- * first passing the traversal / `.typeward` / absolute-path rejection. Runtime
- * value is a plain string; the brand exists only at compile time.
+ * string (a WebDAV href) cannot be inserted without first passing the
+ * traversal / `.typeward` / absolute-path rejection. Runtime value is a plain
+ * string; the brand exists only at compile time.
  */
 export type NormalizedRelPath = string & { readonly __normalizedRemoteRelPath: unique symbol };
 

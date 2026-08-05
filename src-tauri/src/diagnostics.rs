@@ -8,8 +8,8 @@
 //! network. Payloads are scrubbed in Rust before send: the home directory
 //! collapses to `~`, any remaining absolute path collapses to its basename,
 //! no files are attached, `send_default_pii` stays false, and `server_name`
-//! is never set. Identity is a random per-install UUID (never the Supabase
-//! account id), minted lazily on the first submission.
+//! is never set. Identity is a random per-install UUID, minted lazily on the
+//! first submission.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -235,14 +235,20 @@ fn report_meta(app: &AppHandle) -> ReportMeta {
 
 /// Mint (and persist) the random install id on first use. Rust owns this
 /// field; the frontend only mirrors it so settings roundtrips don't drop it.
+///
+/// Goes through `settings::update` rather than a load/save pair so the read and
+/// the write share one lock — a concurrent `save_settings` landing between them
+/// would otherwise drop whichever edit lost the race.
 fn ensure_install_id(app: &AppHandle) -> Result<String, String> {
-    let mut s = settings::load(app).map_err(err)?;
-    if let Some(id) = s.privacy.install_id.clone() {
-        return Ok(id);
-    }
-    let id = uuid::Uuid::new_v4().to_string();
-    s.privacy.install_id = Some(id.clone());
-    settings::save(app, &s).map_err(err)?;
+    let mut id = String::new();
+    settings::update(app, |s| {
+        id = s
+            .privacy
+            .install_id
+            .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+            .clone();
+    })
+    .map_err(err)?;
     Ok(id)
 }
 

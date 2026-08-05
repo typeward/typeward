@@ -11,7 +11,7 @@
  * (typically via a follow-up `/userinfo` call) and writes to the keyring
  * under its own naming scheme. Keeping the OAuth layer free of identity
  * assumptions makes it reusable across providers with very different
- * userinfo conventions (Supabase, Google, GitHub, Dropbox, etc).
+ * userinfo conventions.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -23,13 +23,13 @@ export interface CredentialRef {
 }
 
 export interface OauthFlowOptions {
-  /** Provider's authorization endpoint, e.g. `https://www.dropbox.com/oauth2/authorize`. */
+  /** Provider's authorization endpoint, e.g. `https://api.mendeley.com/oauth/authorize`. */
   authUrl: string;
-  /** Provider's token endpoint, e.g. `https://api.dropboxapi.com/oauth2/token`. */
+  /** Provider's token endpoint, e.g. `https://api.mendeley.com/oauth/token`. */
   tokenUrl: string;
   clientId: string;
   scopes?: string[];
-  /** Provider-specific extra params (e.g. `{ token_access_type: "offline" }`). */
+  /** Provider-specific extra params (e.g. `{ prompt: "consent" }`). */
   extraAuthParams?: Record<string, string>;
   /**
    * Exact registered loopback redirect URI for providers that exact-match it

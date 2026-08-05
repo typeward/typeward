@@ -6,7 +6,6 @@ import {
   ChevronUp,
   ListTodo,
   Loader2,
-  Lock,
   MessageSquare,
   Play,
   Sparkles,
@@ -31,10 +30,7 @@ import {
 } from "solid-js";
 import { AiView } from "~/components/editor/AiView";
 import { ExportMenu } from "~/components/editor/ExportMenu";
-import { setRequestProDialog } from "~/commands/palette-store";
-import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { aiAssistantEnabled } from "~/integrations/ai/actions";
-import { hasAnyAiEntitlement } from "~/integrations/ai/registry";
 import { chatStreaming } from "~/stores/ai-chat-store";
 import { LogsView } from "~/components/editor/LogsDrawer";
 import { Switch } from "~/components/forms/Switch";
@@ -44,6 +40,7 @@ import { KbdHint } from "~/components/primitives/KbdHint";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
 import { computeFitScale, type ZoomMode } from "~/components/pdf/zoom";
+import { locateAnchorRects, type PtRect } from "~/components/pdf/annotation-rects";
 import {
   compileEngine,
   editorSettings,
@@ -61,6 +58,10 @@ import {
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 type RenderTask = ReturnType<pdfjs.PDFPageProxy["render"]>;
+// Derived rather than deep-imported from pdfjs-dist/types — those paths are
+// not part of the package's export map.
+type TextContent = Awaited<ReturnType<pdfjs.PDFPageProxy["getTextContent"]>>;
+type TextItem = Extract<TextContent["items"][number], { str: string }>;
 
 import type { PdfAnnotation, CreateThreadInput } from "~/lib/pdf-annotations/types";
 export type { PdfAnnotation, CreateThreadInput };
@@ -135,8 +136,13 @@ const RENDER_MARGIN_PX = 800;
 
 /** Approx one text line in PDF points — the vertical extent of a thread
  *  highlight band (SyncTeX resolves to a line, not a glyph box) and the
- *  tolerance for click hit-testing it. */
+ *  tolerance for click hit-testing it. Fallback only: refined word rects and
+ *  the SyncTeX hbox render (and hit-test) at their own geometry. */
 const HIGHLIGHT_BAND_PT = 13;
+
+/** Slop in pt around refined rects / the SyncTeX box when hit-testing clicks —
+ *  a glyph-tight target would be unclickable. */
+const HIT_SLOP_PT = 3;
 
 interface PageSlot {
   /** The canvas host (absolute inset-0 of the page box) the render mounts into. */
@@ -203,9 +209,9 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       ? "auto"
       : "smooth";
 
-  // AI master switch AND entitlement (all AI is Pro) — when either flips off
-  // while the chat is showing, fall back to the PDF so the pane never strands
-  // on a hidden mode. The one shared predicate every AI surface derives from.
+  // When the AI master switch flips off while the chat is showing, fall back to
+  // the PDF so the pane never strands on a hidden mode. The one shared
+  // predicate every AI surface derives from.
   const aiEnabled = aiAssistantEnabled;
   createEffect(() => {
     if (!aiEnabled() && previewMode() === "ai") setPreviewMode("pdf");
@@ -279,6 +285,20 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       if (!docRef) return null;
       p = await docRef.getPage(n);
       pageProxies.set(n, p);
+    }
+    return p;
+  };
+
+  // Per-load text-content cache: getTextContent is a worker round-trip, and
+  // the highlight refinement pass may consult the same page once per thread.
+  // Cleared wherever pageProxies is (load + path clear) — a recompile can
+  // change page text without changing the layout.
+  const textContentCache = new Map<number, Promise<TextContent | null>>();
+  const getTextContent = (n: number): Promise<TextContent | null> => {
+    let p = textContentCache.get(n);
+    if (!p) {
+      p = getPage(n).then((pg) => (pg ? pg.getTextContent() : null));
+      textContentCache.set(n, p);
     }
     return p;
   };
@@ -662,6 +682,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       taskRef = task;
       docRef = doc;
       pageProxies.clear();
+      textContentCache.clear();
       proxies.forEach((p, i) => pageProxies.set(i + 1, p));
 
       const prev = pageSizes();
@@ -721,6 +742,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           lastLoadedPath = null;
           resetSlots();
           pageProxies.clear();
+          textContentCache.clear();
           setPageSizes([]);
           return;
         }
@@ -819,6 +841,41 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     ),
   );
 
+  // Glyph-level refinement of the thread highlights: match each annotation's
+  // anchor text against the page's text items and keep per-line word rects,
+  // keyed by threadId. While a load is in flight the pass would read the
+  // OUTGOING document's text — skip and let the loading() settle re-run it;
+  // the loadGen capture (mirroring renderTextLayer) drops a pass a newer load
+  // superseded mid-flight, so stale rects can never publish over a new PDF.
+  const [refinedRects, setRefinedRects] = createSignal<Map<string, PtRect[]>>(
+    new Map(),
+  );
+  createEffect(() => {
+    const anns = props.annotations ?? [];
+    const sizes = pageSizes();
+    if (anns.length === 0 || sizes.length === 0) {
+      setRefinedRects(new Map());
+      return;
+    }
+    if (loading()) return;
+    const gen = loadGen;
+    void (async () => {
+      const next = new Map<string, PtRect[]>();
+      for (const a of anns) {
+        const size = sizes[a.page - 1];
+        if (!size) continue;
+        const content = await getTextContent(a.page);
+        if (gen !== loadGen) return;
+        if (!content) continue;
+        const items = content.items.filter((it): it is TextItem => "str" in it);
+        const rects = locateAnchorRects(items, size.h, a);
+        if (rects) next.set(a.threadId, rects);
+      }
+      if (gen !== loadGen) return;
+      setRefinedRects(next);
+    })();
+  });
+
   // Inverse search fires on double-click (double-tap on touch) — the
   // natural "take me to this" gesture — with shift+click kept as the
   // power-user shortcut. Plain single clicks stay free for text
@@ -858,10 +915,26 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     const sel = window.getSelection();
     if (sel && !sel.isCollapsed) return; // mid-selection, not a thread click
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const yPt = (e.clientY - rect.top) / scale();
-    const hit = anns.find(
-      (a) => a.page === pageNum && yPt >= a.y - HIGHLIGHT_BAND_PT && yPt <= a.y + 3,
-    );
+    const s = scale();
+    const xPt = (e.clientX - rect.left) / s;
+    const yPt = (e.clientY - rect.top) / s;
+    // Same tier order as the render: refined rects, then the SyncTeX box (both
+    // x AND y), and the y-only band test ONLY for band-fallback annotations —
+    // a full-width hit zone on a refined highlight would swallow clicks the
+    // narrow visual no longer claims.
+    const refined = refinedRects();
+    const inRect = (r: PtRect) =>
+      xPt >= r.left - HIT_SLOP_PT &&
+      xPt <= r.left + r.width + HIT_SLOP_PT &&
+      yPt >= r.top - HIT_SLOP_PT &&
+      yPt <= r.top + r.height + HIT_SLOP_PT;
+    const hit = anns.find((a) => {
+      if (a.page !== pageNum) return false;
+      const rs = refined.get(a.threadId);
+      if (rs) return rs.some(inRect);
+      if (a.box) return inRect(a.box);
+      return yPt >= a.y - HIGHLIGHT_BAND_PT && yPt <= a.y + 3;
+    });
     if (hit) {
       e.preventDefault();
       const id = hit.threadId;
@@ -1124,20 +1197,6 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
             icon={<Sparkles size={16} />}
             label="AI"
             activityDot={chatStreaming()}
-          />
-        </Show>
-        {/* Below Pro the AI toggle stays visible with a lock marker and opens
-            the ProDialog — the pane itself never opens (discovery amendment
-            2026-07-08). Not gated on the master switch: that switch lives in
-            a Pro-locked settings section. Hidden with the rest of the Pro
-            discovery layer during the free-only beta. */}
-        <Show when={PRO_DISCOVERY_ENABLED && !hasAnyAiEntitlement() && !props.embedded}>
-          <ToolbarIconToggle
-            active={false}
-            onClick={() => setRequestProDialog(true)}
-            icon={<Sparkles size={16} />}
-            label="AI — part of Typeward Pro"
-            lockMarker
           />
         </Show>
 
@@ -1407,26 +1466,72 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
                         ref={(el) => registerPage(pageNum, el)}
                         class="absolute inset-0 overflow-hidden rounded-md"
                       />
-                      {/* Thread highlights — a soft line band per open review/
-                          TODO thread SyncTeX-resolved to this page. Painted
-                          under the text layer (z:1 < z:2), pointer-events none;
-                          clicks are hit-tested on the page box (handlePageClick)
-                          so the text layer keeps selection. */}
+                      {/* Thread highlights — per open review/TODO thread
+                          SyncTeX-resolved to this page. Three tiers: refined
+                          per-line word rects when the anchor text matched the
+                          page's text items; else the SyncTeX hbox; else the
+                          full-width line band. Painted under the text layer
+                          (z:1 < z:2), pointer-events none; clicks are
+                          hit-tested on the page box (handlePageClick) so the
+                          text layer keeps selection. */}
                       <For each={props.annotations?.filter((a) => a.page === pageNum) ?? []}>
                         {(a) => {
                           const isTodo = a.kind === "todo";
                           const tint = isTodo ? "var(--color-warn)" : "var(--color-accent-1)";
                           return (
-                            <div
-                              class="pointer-events-none absolute left-0 right-0 rounded-[2px]"
-                              style={{
-                                top: `${(a.y - HIGHLIGHT_BAND_PT + 2) * scale()}px`,
-                                height: `${HIGHLIGHT_BAND_PT * 1.15 * scale()}px`,
-                                "z-index": 1,
-                                background: `color-mix(in srgb, ${tint} 20%, transparent)`,
-                                "border-left": `2px solid ${tint}`,
-                              }}
-                            />
+                            <Show
+                              when={refinedRects().get(a.threadId)}
+                              fallback={
+                                <Show
+                                  when={a.box}
+                                  fallback={
+                                    <div
+                                      class="pointer-events-none absolute left-0 right-0 rounded-[2px]"
+                                      style={{
+                                        top: `${(a.y - HIGHLIGHT_BAND_PT + 2) * scale()}px`,
+                                        height: `${HIGHLIGHT_BAND_PT * 1.15 * scale()}px`,
+                                        "z-index": 1,
+                                        background: `color-mix(in srgb, ${tint} 20%, transparent)`,
+                                        "border-left": `2px solid ${tint}`,
+                                      }}
+                                    />
+                                  }
+                                >
+                                  {(box) => (
+                                    <div
+                                      class="pointer-events-none absolute rounded-[2px]"
+                                      style={{
+                                        left: `${(box().left - 1) * scale()}px`,
+                                        top: `${(box().top - 1) * scale()}px`,
+                                        width: `${(box().width + 2) * scale()}px`,
+                                        height: `${(box().height + 2) * scale()}px`,
+                                        "z-index": 1,
+                                        background: `color-mix(in srgb, ${tint} 20%, transparent)`,
+                                        "border-left": `2px solid ${tint}`,
+                                      }}
+                                    />
+                                  )}
+                                </Show>
+                              }
+                            >
+                              {(rects) => (
+                                <For each={rects()}>
+                                  {(r) => (
+                                    <div
+                                      class="pointer-events-none absolute rounded-[2px]"
+                                      style={{
+                                        left: `${(r.left - 1) * scale()}px`,
+                                        top: `${(r.top - 1) * scale()}px`,
+                                        width: `${(r.width + 2) * scale()}px`,
+                                        height: `${(r.height + 2) * scale()}px`,
+                                        "z-index": 1,
+                                        background: `color-mix(in srgb, ${tint} 30%, transparent)`,
+                                      }}
+                                    />
+                                  )}
+                                </For>
+                              )}
+                            </Show>
                           );
                         }}
                       </For>
@@ -1612,8 +1717,6 @@ const ToolbarIconToggle: Component<{
   onClick: () => void;
   icon: any;
   label: string;
-  /** Tiny corner lock for Pro-locked affordances (quiet, no color shift). */
-  lockMarker?: boolean;
   /** Subtle corner dot — e.g. an AI stream running behind another pane. */
   activityDot?: boolean;
 }> = (props) => (
@@ -1637,9 +1740,6 @@ const ToolbarIconToggle: Component<{
     }
   >
     {props.icon}
-    <Show when={props.lockMarker}>
-      <Lock size={8} class="absolute bottom-1 right-1 text-fg-3" />
-    </Show>
     <Show when={props.activityDot}>
       <span
         class="absolute right-1 top-1 h-1.5 w-1.5 animate-pulse rounded-full"

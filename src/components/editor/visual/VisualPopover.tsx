@@ -1,6 +1,7 @@
 import katex from "katex";
 import type { Component } from "solid-js";
 import { Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { Portal } from "solid-js/web";
 
 import { Button } from "~/components/primitives/Button";
 import { installDismiss } from "~/lib/dismiss";
@@ -18,6 +19,13 @@ import { MiniLatexEditor } from "./MiniLatexEditor";
  * The click-to-edit popover — the ONE surface where LaTeX source is meant
  * to be visible in visual mode. Mounted once in CenterPane; opens when the
  * visual layer raises a popover intent (widget click, `$`).
+ *
+ * The body PORTALS to document.body (like ContextMenu and TagEditorPopover):
+ * inside CenterPane, a glass/backdrop-filter ancestor both re-anchors the
+ * `fixed` box and opens a stacking context, so a popover wider than the
+ * editor pane painted underneath the preview pane and read as cut off at
+ * the pane edge. coordsAtPos already yields viewport coordinates, so the
+ * position math is portal-agnostic.
  *
  * Apply safety (the AI-dialog guard pattern): the construct's source is
  * snapshotted at open; Apply re-validates that the snapshot still sits at
@@ -175,9 +183,10 @@ const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
   };
 
   return (
-    <div
-      ref={root!}
-      class="fixed z-50 flex w-[440px] max-w-[92vw] flex-col gap-2 rounded-lg p-3 shadow-lg"
+    <Portal>
+      <div
+        ref={root!}
+        class="fixed z-50 flex w-[440px] max-w-[92vw] flex-col gap-2 rounded-lg p-3 shadow-lg"
       style={{
         top: `${top}px`,
         left: `${left}px`,
@@ -225,7 +234,8 @@ const PopoverBody: Component<{ intent: VisualPopoverIntent }> = (props) => {
           Apply
         </Button>
       </div>
-    </div>
+      </div>
+    </Portal>
   );
 };
 

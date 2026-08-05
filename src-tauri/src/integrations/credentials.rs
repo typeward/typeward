@@ -1,9 +1,13 @@
 //! OS keyring wrapper. Stores OAuth tokens, API keys, and any other secret
 //! that must not land in `settings.json`.
 //!
-//! Service name convention: `typeward.<provider>` (e.g. `typeward.zotero`,
-//! `typeward.supabase.session`). Account identifies the user/key slot within
-//! the provider (e.g. email, library ID, "default").
+//! Service name convention: `typeward.<provider>` (e.g. `typeward.zotero`).
+//! Account identifies the user/key slot within the provider (e.g. email,
+//! library ID, "default").
+//!
+//! Secrets are never readable from the webview: the IPC surface can write,
+//! probe, and delete, while every read happens in Rust (`authRef` resolution in
+//! `http.rs` / `oauth.rs` / `vcs/git.rs` / `webdav.rs`).
 //!
 //! The keyring crate's blocking API is fine to call from async handlers via
 //! `tokio::task::spawn_blocking`, which is what the IPC commands do — the
@@ -14,15 +18,6 @@ use thiserror::Error;
 
 const SERVICE_PREFIX: &str = "typeward";
 
-// The Supabase session bundle is written by the frontend chunked-credential
-// helper (auth/chunked.ts): values over ~1024 chars split across
-// `<account>.part<i>` slots with a marker in the main slot. supabase-js needs
-// the session value in the webview, so it is read back through the dedicated
-// `supabase_session_read` command rather than the generic, allowlist-gated
-// `credential_get` (which stays locked to non-session services).
-const SESSION_SERVICE: &str = "supabase.session";
-const CHUNK_MARKER: &str = "__typeward_chunks__:";
-
 #[derive(Debug, Error)]
 pub enum CredentialError {
     #[error("invalid service name (empty or contains '/'): {0}")]
@@ -31,8 +26,6 @@ pub enum CredentialError {
     InvalidAccount(String),
     #[error("secret is empty")]
     EmptySecret,
-    #[error("frontend reads are not allowed for service: {0}")]
-    ReadForbidden(String),
     /// Only constructed on targets with no keyring backend (see
     /// `ensure_secure_storage`), so it is dead code on the supported ones.
     #[allow(dead_code)]
@@ -138,33 +131,6 @@ pub fn delete_secret(service: &str, account: &str) -> Result<(), CredentialError
     }
 }
 
-/// Parse the chunk-count marker the frontend writes for oversized values
-/// (`__typeward_chunks__:<n>`). Returns None for inline (un-chunked) values.
-fn parse_chunk_count(main: &str) -> Option<usize> {
-    let n: usize = main.strip_prefix(CHUNK_MARKER)?.parse().ok()?;
-    (n > 0).then_some(n)
-}
-
-/// Reassemble the chunked Supabase session bundle written by the frontend
-/// (auth/chunked.ts). Mirrors `getChunkedCredential`: a missing part is a torn
-/// write and yields `None` rather than corrupt JSON.
-fn read_chunked_session(account: &str) -> Result<Option<String>, CredentialError> {
-    let Some(main) = get_secret(SESSION_SERVICE, account)? else {
-        return Ok(None);
-    };
-    let Some(count) = parse_chunk_count(&main) else {
-        return Ok(Some(main));
-    };
-    let mut joined = String::new();
-    for i in 0..count {
-        match get_secret(SESSION_SERVICE, &format!("{account}.part{i}"))? {
-            Some(part) => joined.push_str(&part),
-            None => return Ok(None),
-        }
-    }
-    Ok(Some(joined))
-}
-
 // ----- IPC commands ------------------------------------------------------
 //
 // `spawn_blocking` because the secret-service backend on Linux can stall
@@ -185,29 +151,6 @@ pub async fn credential_set(
 }
 
 #[tauri::command]
-pub async fn credential_get(service: String, account: String) -> Result<Option<String>, String> {
-    if !frontend_read_allowed(&service) {
-        return Err(CredentialError::ReadForbidden(service).to_string());
-    }
-    tokio::task::spawn_blocking(move || get_secret(&service, &account))
-        .await
-        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
-        .map_err(|e| e.to_string())
-}
-
-/// Dedicated reader for the Supabase auth session. supabase-js runs in the
-/// webview and must receive the session JWT, so this one secret is readable by
-/// the renderer — but only through this purpose-specific command, keeping the
-/// generic `credential_get` locked (see `frontend_read_allowed`).
-#[tauri::command]
-pub async fn supabase_session_read(account: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || read_chunked_session(&account))
-        .await
-        .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub async fn credential_exists(service: String, account: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || secret_exists(&service, &account))
         .await
@@ -221,10 +164,6 @@ pub async fn credential_delete(service: String, account: String) -> Result<(), S
         .await
         .map_err(|e| CredentialError::Join(e.to_string()).to_string())?
         .map_err(|e| e.to_string())
-}
-
-fn frontend_read_allowed(service: &str) -> bool {
-    matches!(service, "supabase.entitlements")
 }
 
 #[cfg(test)]
@@ -247,19 +186,6 @@ mod tests {
     fn validate_produces_scoped_service() {
         let scoped = validate("zotero", "alice@example.com").unwrap();
         assert_eq!(scoped, "typeward.zotero");
-    }
-
-    #[test]
-    fn frontend_read_policy_blocks_api_key_services() {
-        assert!(!frontend_read_allowed("openai"));
-        assert!(!frontend_read_allowed("anthropic"));
-        assert!(!frontend_read_allowed("gemini"));
-        assert!(!frontend_read_allowed("dropbox"));
-        assert!(!frontend_read_allowed("microsoft"));
-        assert!(!frontend_read_allowed("google"));
-        assert!(!frontend_read_allowed("mendeley"));
-        assert!(!frontend_read_allowed("supabase.session"));
-        assert!(frontend_read_allowed("supabase.entitlements"));
     }
 
     /// A target without a real keystore must fail loudly at the boundary rather
@@ -319,14 +245,6 @@ mod tests {
                 .to_string()
                 .contains("secure storage is not available")
         );
-    }
-
-    #[test]
-    fn parse_chunk_count_handles_inline_and_marker() {
-        assert_eq!(parse_chunk_count("eyJhbGciOi.jwt.value"), None);
-        assert_eq!(parse_chunk_count("__typeward_chunks__:3"), Some(3));
-        assert_eq!(parse_chunk_count("__typeward_chunks__:0"), None);
-        assert_eq!(parse_chunk_count("__typeward_chunks__:notanumber"), None);
     }
 
     // Round-trip tests against the real OS keyring are skipped in CI because

@@ -30,9 +30,9 @@ import { integrationsSettings } from "~/stores/settings-store";
 
 /**
  * Streaming preview for the transform/continue AI editor actions. Lazy-mounted
- * at the App root (ProDialog pattern); a request from `runAiAction` opens it,
- * streams the provider's reply, then shows a read-only unified diff of
- * selection → result (via `@codemirror/merge`, dynamic-imported through
+ * at the App root (SaveTemplateDialog pattern); a request from `runAiAction`
+ * opens it, streams the provider's reply, then shows a read-only unified diff
+ * of selection → result (via `@codemirror/merge`, dynamic-imported through
  * `mountHistoryDiff`) with Replace / Insert / Copy apply mechanics.
  *
  * Stale-selection guard: the request carries `{from, to, text}` captured at

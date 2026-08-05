@@ -1,9 +1,8 @@
 # Frontend + Rust test suite. Runs on every push/PR to main so regressions
 # surface before a manual build is ever dispatched.
 #
-# Same sibling-checkout layout as build.yml: package.json depends on
-# `texlive-wasm: file:../texlive-wasm`, so the app checks out into `app/`
-# and the sibling into `texlive-wasm/` (built before `npm ci`).
+# Same layout as build.yml: the app checks out into `app/`, which every step's
+# working-directory and manifest path below is written against.
 
 name: Tests
 
@@ -17,8 +16,8 @@ concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job only reads this repo and the public texlive-wasm sibling. Nothing
-# here writes to the repo, publishes, or needs an OIDC token.
+# Every job only reads this repo. Nothing here writes to the repo, publishes,
+# or needs an OIDC token.
 permissions:
   contents: read
 
@@ -32,42 +31,12 @@ jobs:
         with:
           path: app
 
-      # Same pin as build.yml/release.yml: package.json `config.texliveWasm` is
-      # the ONE place the engine release is recorded, so the tests run against
-      # the engine that actually ships instead of the sibling's moving main.
-      - name: Read texlive-wasm pin
-        id: texlive
-        shell: bash
-        working-directory: app
-        run: |
-          ref="$(node -p "require('./package.json').config?.texliveWasm")"
-          if [ -z "$ref" ] || [ "$ref" = "undefined" ]; then
-            echo "::error::package.json is missing config.texliveWasm — the texlive-wasm sibling checkout has no pinned ref."
-            exit 1
-          fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout texlive-wasm sibling
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: typeward/texlive-wasm
-          ref: ${{ steps.texlive.outputs.ref }}
-          path: texlive-wasm
-
       - name: Set up Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: |
-            app/package-lock.json
-            texlive-wasm/package-lock.json
-
-      - name: Build texlive-wasm sibling
-        working-directory: texlive-wasm
-        run: |
-          npm ci
-          npm run build
+          cache-dependency-path: app/package-lock.json
 
       - name: Install npm deps
         working-directory: app

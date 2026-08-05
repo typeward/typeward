@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -32,15 +33,13 @@ pub struct Settings {
     #[serde(default)]
     pub integrations: IntegrationsSettings,
     #[serde(default)]
+    pub profile: ProfileSettings,
+    #[serde(default)]
     pub privacy: PrivacySettings,
     #[serde(default)]
     pub updates: UpdatesSettings,
     #[serde(default)]
-    pub sync: SyncSettings,
-    #[serde(default)]
     pub history: HistorySettings,
-    #[serde(default)]
-    pub feedback: FeedbackSettings,
     #[serde(default)]
     pub compile: CompileSettings,
 }
@@ -60,24 +59,6 @@ pub struct CompileSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub strict_offline: Option<bool>,
-}
-
-/// Occasional in-app "give us feedback" card. ON by default because the card
-/// is local UI — nothing leaves the machine unless the user presses Send.
-/// Synced across devices (a preference, not device state); the prompt's
-/// device-local pacing state lives in localStorage (feedback-prompt.ts).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeedbackSettings {
-    #[serde(rename = "promptsEnabled", default = "default_true")]
-    pub prompts_enabled: bool,
-}
-
-impl Default for FeedbackSettings {
-    fn default() -> Self {
-        Self {
-            prompts_enabled: true,
-        }
-    }
 }
 
 /// Local per-file version-history retention (history.rs). Clamped to
@@ -108,23 +89,6 @@ impl Default for HistorySettings {
     }
 }
 
-/// Settings-sync preferences. Device-local by design: the toggle governs
-/// whether THIS machine participates, so it is itself excluded from sync
-/// (see the frontend denylist in settings-sync.ts).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncSettings {
-    #[serde(rename = "syncSettings", default = "default_true")]
-    pub sync_settings: bool,
-}
-
-impl Default for SyncSettings {
-    fn default() -> Self {
-        Self {
-            sync_settings: true,
-        }
-    }
-}
-
 /// Auto-update preferences. The check is a plain HTTPS GET to the GitHub
 /// releases manifest — no identifiers, no telemetry — so this defaults ON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,10 +112,34 @@ pub struct PrivacySettings {
     #[serde(rename = "shareCrashReports", default)]
     pub share_crash_reports: bool,
     /// Random UUIDv4 attached to crash reports so Sentry can group per-install
-    /// without identifying anyone — never the Supabase account id. Minted by
-    /// Rust on the FIRST submission only (diagnostics.rs); absent until then.
+    /// without identifying anyone. Minted by Rust on the FIRST submission only
+    /// (diagnostics.rs); absent until then.
     #[serde(rename = "installId", default, skip_serializing_if = "Option::is_none")]
     pub install_id: Option<String>,
+}
+
+/// Who the user is, as far as this machine is concerned. Purely local: it
+/// pre-fills the git commit author when the explicit `vcs.git` fields are blank
+/// and seeds a template's `author` variable. Nothing here is transmitted.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProfileSettings {
+    #[serde(rename = "displayName", default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub affiliation: String,
+    /// Absolute path of the avatar image copied into `<app_data>/profile/`.
+    /// Backend-owned — only `profile::set_profile_avatar` /
+    /// `profile::clear_profile_avatar` ever write it, so a renderer save that
+    /// omits it must not clear it (see [`merge_backend_owned`]). Absent until
+    /// the user picks one.
+    #[serde(
+        rename = "avatarPath",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub avatar_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +172,12 @@ pub struct EditorSettings {
     pub tab_size: u8,
     #[serde(rename = "lineHeight", default = "default_line_height")]
     pub line_height: String,
+    /// When on, the idle debounce writes the buffer to disk; when off it only
+    /// snapshots for crash recovery. Rust never reads it — it exists here so the
+    /// renderer's choice survives the save/load roundtrip instead of being
+    /// dropped by serde and restored to the default on the next launch.
+    #[serde(rename = "autosaveEnabled", default = "default_true")]
+    pub autosave_enabled: bool,
     #[serde(rename = "autosaveDelayMs", default = "default_autosave_delay")]
     pub autosave_delay_ms: u32,
     #[serde(rename = "pdfDefaultZoom", default = "default_pdf_zoom")]
@@ -258,8 +252,6 @@ pub struct IntegrationsSettings {
     pub grammar: GrammarSettings,
     #[serde(default)]
     pub templates: TemplatesSettings,
-    #[serde(default)]
-    pub account: AccountSettings,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -330,7 +322,8 @@ pub struct CloudAccountRef {
     pub account_id: String,
     pub label: Option<String>,
     // WebDAV accounts carry their server URL + username here (the password is
-    // in the keyring). Optional + skipped for the OAuth providers (Dropbox).
+    // in the keyring). Optional so an account written by an older build still
+    // deserializes; the frontend turns a missing value into a reconnect prompt.
     #[serde(rename = "baseUrl", default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -365,11 +358,13 @@ pub struct GithubSettings {
     pub account_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AiSettings {
     /// Master switch. When off, the editor hides every AI surface (chat
     /// panel, toolbar toggle) and no provider activates — zero AI traffic.
-    #[serde(default = "default_true")]
+    /// Defaults OFF: every AI provider needs a key or a local daemon the user
+    /// has to set up first, so an opt-in switch matches the grammar checker.
+    #[serde(default)]
     pub enabled: bool,
     #[serde(rename = "activeProvider", default)]
     pub active_provider: Option<String>,
@@ -377,17 +372,6 @@ pub struct AiSettings {
     pub ollama_base_url: Option<String>,
     #[serde(rename = "perProviderModel", default)]
     pub per_provider_model: HashMap<String, String>,
-}
-
-impl Default for AiSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            active_provider: None,
-            ollama_base_url: None,
-            per_provider_model: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -402,14 +386,6 @@ pub struct GrammarSettings {
 pub struct TemplatesSettings {
     #[serde(rename = "recentTemplateIds", default)]
     pub recent_template_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct AccountSettings {
-    #[serde(rename = "signedInEmail", default)]
-    pub signed_in_email: Option<String>,
-    #[serde(rename = "lastValidatedAt", default)]
-    pub last_validated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -507,11 +483,10 @@ impl Default for Settings {
             ui: UiSettings::default(),
             workspace: WorkspaceSettings::default(),
             integrations: IntegrationsSettings::default(),
+            profile: ProfileSettings::default(),
             privacy: PrivacySettings::default(),
             updates: UpdatesSettings::default(),
-            sync: SyncSettings::default(),
             history: HistorySettings::default(),
-            feedback: FeedbackSettings::default(),
             compile: CompileSettings::default(),
         }
     }
@@ -532,6 +507,7 @@ impl Default for EditorSettings {
             auto_close_brackets: true,
             tab_size: 2,
             line_height: "normal".into(),
+            autosave_enabled: true,
             autosave_delay_ms: 500,
             pdf_default_zoom: 110,
             pdf_invert_dark: false,
@@ -646,7 +622,34 @@ fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, SettingsError
     Ok(dir.join("settings.json"))
 }
 
+/// settings.json is read-modify-written from several independent places — the
+/// renderer's debounced `save_settings` (which merges backend-owned keys off
+/// disk first), the avatar IPC, the crash reporter's install-id mint — and each
+/// of those runs on its own `spawn_blocking` thread. Without a lock the two
+/// halves of one sequence interleave with another's and whichever section the
+/// loser had just changed is silently dropped: a typed display name, or the
+/// avatar path whose picture then orphans in app data.
+///
+/// Blocking is correct here: every caller is already off the event loop, and the
+/// critical section is one small file read plus one atomic write.
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+
+/// A poisoned lock only means another writer panicked mid-sequence; settings.json
+/// is written atomically, so continuing is strictly better than wedging every
+/// settings write for the rest of the session.
+fn lock_settings() -> std::sync::MutexGuard<'static, ()> {
+    SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub fn load(app_handle: &tauri::AppHandle) -> Result<Settings, SettingsError> {
+    let _guard = lock_settings();
+    load_locked(app_handle)
+}
+
+/// The `*_locked` pair is the whole reason [`SETTINGS_LOCK`] can be taken at
+/// exactly one level: sequences that need load+save to be atomic call these,
+/// the single-shot public entry points wrap them.
+fn load_locked(app_handle: &tauri::AppHandle) -> Result<Settings, SettingsError> {
     let path = settings_path(app_handle)?;
     if !path.exists() {
         return Ok(Settings::default());
@@ -684,6 +687,11 @@ pub fn load(app_handle: &tauri::AppHandle) -> Result<Settings, SettingsError> {
 }
 
 pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), SettingsError> {
+    let _guard = lock_settings();
+    save_locked(app_handle, settings)
+}
+
+fn save_locked(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), SettingsError> {
     validate_projects_root(Path::new(&settings.projects_root))?;
     let path = settings_path(app_handle)?;
     let json = serde_json::to_vec_pretty(settings)?;
@@ -691,13 +699,33 @@ pub fn save(app_handle: &tauri::AppHandle, settings: &Settings) -> Result<(), Se
     Ok(())
 }
 
-/// Carry backend-owned keys forward into a payload that came from the renderer.
+/// Read-modify-write the stored settings as one atomic step. Anything that
+/// changes a single section must go through here rather than a `load` / mutate /
+/// `save` triple, which races every other writer (see [`SETTINGS_LOCK`]).
+pub fn update<F>(app_handle: &tauri::AppHandle, mutate: F) -> Result<(), SettingsError>
+where
+    F: FnOnce(&mut Settings),
+{
+    let _guard = lock_settings();
+    let mut settings = load_locked(app_handle)?;
+    mutate(&mut settings);
+    save_locked(app_handle, &settings)
+}
+
+/// Persist a payload that came from the renderer, carrying backend-owned keys
+/// forward from disk first. Both halves run under one lock so a concurrent
+/// backend write can't land between the read and the write and be overwritten.
 /// Called on the `save_settings` path only — a Reset writes `Settings::default()`
 /// through [`save`] and is meant to clear them.
-pub fn preserve_backend_owned(app_handle: &tauri::AppHandle, incoming: &mut Settings) {
-    if let Ok(existing) = load(app_handle) {
+pub fn save_preserving_backend_owned(
+    app_handle: &tauri::AppHandle,
+    incoming: &mut Settings,
+) -> Result<(), SettingsError> {
+    let _guard = lock_settings();
+    if let Ok(existing) = load_locked(app_handle) {
         merge_backend_owned(incoming, &existing);
     }
+    save_locked(app_handle, incoming)
 }
 
 /// The renderer's `buildSettings()` payload carries only the keys its own
@@ -708,53 +736,9 @@ fn merge_backend_owned(incoming: &mut Settings, existing: &Settings) {
     if incoming.compile.strict_offline.is_none() {
         incoming.compile.strict_offline = existing.compile.strict_offline;
     }
-}
-
-/// Per-key settings-sync bookkeeping: the last server `updated_at` seen for a
-/// key and the hash of the value last synced in either direction. The outer
-/// map is keyed by Supabase user id so account switching can't cross-apply.
-/// Persisted to its own `settings-sync.json` next to settings.json —
-/// deliberately NOT inside it, so a settings roundtrip or Reset can't clobber
-/// sync metadata. The schema is owned by the frontend engine (settings-sync.ts).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncKeyState {
-    #[serde(rename = "seenUpdatedAt")]
-    pub seen_updated_at: String,
-    pub hash: String,
-}
-
-pub type SyncStateFile = HashMap<String, HashMap<String, SyncKeyState>>;
-
-fn sync_state_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, SettingsError> {
-    let dir = app_handle
-        .path()
-        .app_data_dir()
-        .map_err(|_| SettingsError::NoAppDataDir)?;
-    fs::create_dir_all(&dir)?;
-    Ok(dir.join("settings-sync.json"))
-}
-
-pub fn load_sync_state(app_handle: &tauri::AppHandle) -> Result<SyncStateFile, SettingsError> {
-    let path = sync_state_path(app_handle)?;
-    if !path.exists() {
-        return Ok(SyncStateFile::default());
+    if incoming.profile.avatar_path.is_none() {
+        incoming.profile.avatar_path = existing.profile.avatar_path.clone();
     }
-    let bytes = fs::read(path)?;
-    // Corrupt bookkeeping degrades to empty rather than erroring: an error here
-    // would wedge sync behind an unreadable file forever, while an empty state
-    // just re-converges on the next pass (server-newer rows re-apply, local-only
-    // keys re-seed).
-    Ok(serde_json::from_slice(&bytes).unwrap_or_default())
-}
-
-pub fn save_sync_state(
-    app_handle: &tauri::AppHandle,
-    state: &SyncStateFile,
-) -> Result<(), SettingsError> {
-    let path = sync_state_path(app_handle)?;
-    let json = serde_json::to_vec_pretty(state)?;
-    fs_ops::atomic_write(&path, &json)?;
-    Ok(())
 }
 
 // Re-export for command handlers
@@ -788,6 +772,73 @@ mod tests {
 
         merge_backend_owned(&mut incoming, &existing);
         assert_eq!(incoming.compile.strict_offline, Some(false));
+    }
+
+    #[test]
+    fn the_stored_avatar_path_survives_a_frontend_settings_roundtrip() {
+        let mut existing = Settings::default();
+        existing.profile.avatar_path = Some("/data/profile/avatar.png".into());
+
+        // The renderer never invents an avatar path — it serializes the profile
+        // section without one.
+        let mut payload = serde_json::to_value(Settings::default()).unwrap();
+        payload["profile"]["displayName"] = serde_json::json!("Ada");
+        let mut incoming: Settings = serde_json::from_value(payload).unwrap();
+        assert_eq!(incoming.profile.avatar_path, None);
+
+        merge_backend_owned(&mut incoming, &existing);
+        assert_eq!(
+            incoming.profile.avatar_path.as_deref(),
+            Some("/data/profile/avatar.png")
+        );
+        assert_eq!(incoming.profile.display_name, "Ada");
+    }
+
+    #[test]
+    fn profile_defaults_are_empty_and_the_avatar_key_is_omitted() {
+        let settings = Settings::default();
+        assert_eq!(settings.profile.display_name, "");
+        assert_eq!(settings.profile.email, "");
+        assert_eq!(settings.profile.affiliation, "");
+        assert_eq!(settings.profile.avatar_path, None);
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("\"profile\""));
+        assert!(!json.contains("avatarPath"));
+    }
+
+    #[test]
+    fn profile_loads_from_a_settings_file_that_predates_it() {
+        let mut payload = serde_json::to_value(Settings::default()).unwrap();
+        payload.as_object_mut().unwrap().remove("profile");
+        let loaded: Settings = serde_json::from_value(payload).unwrap();
+        assert_eq!(loaded.profile.display_name, "");
+        assert_eq!(loaded.profile.avatar_path, None);
+    }
+
+    /// serde drops unknown keys silently, so an editor field the renderer sends
+    /// but this struct lacks is written, discarded, and restored to its default
+    /// on the next launch — the user's choice reverting itself every relaunch.
+    #[test]
+    fn an_editor_toggle_survives_a_settings_roundtrip() {
+        let mut settings = Settings::default();
+        assert!(settings.editor.autosave_enabled);
+        settings.editor.autosave_enabled = false;
+
+        let json = serde_json::to_vec_pretty(&settings).unwrap();
+        assert!(String::from_utf8_lossy(&json).contains("\"autosaveEnabled\""));
+        let reloaded: Settings = serde_json::from_slice(&json).unwrap();
+        assert!(!reloaded.editor.autosave_enabled);
+    }
+
+    #[test]
+    fn an_editor_blob_predating_the_autosave_toggle_defaults_it_on() {
+        let mut payload = serde_json::to_value(Settings::default()).unwrap();
+        payload["editor"]
+            .as_object_mut()
+            .unwrap()
+            .remove("autosaveEnabled");
+        let loaded: Settings = serde_json::from_value(payload).unwrap();
+        assert!(loaded.editor.autosave_enabled);
     }
 
     #[test]

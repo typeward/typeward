@@ -57,13 +57,6 @@ const [requestNewProject, setRequestNewProjectInternal] = createSignal(false);
 const [requestSaveTemplate, setRequestSaveTemplateInternal] = createSignal(false);
 
 /**
- * "Please open the What's-in-Pro dialog" intent. Raised by the
- * `core.whatsInPro` command and by every locked Pro affordance (chips,
- * locked panels); the dialog is rendered once at the App root.
- */
-const [requestProDialog, setRequestProDialogInternal] = createSignal(false);
-
-/**
  * "Please open the History sidebar tab" intent. Raised by the
  * `core.fileHistory` command; the editor shell owns the sidebar tab state and
  * observes this (same shape as the review-panel intent).
@@ -82,7 +75,7 @@ export interface UpdatePromptInfo {
 /**
  * "An update is available" intent. Raised by src/lib/updater.ts when a check
  * finds a newer version; the dialog is lazy-mounted once at the App root
- * (same request-signal pattern as ProDialog). `null` = closed.
+ * (same request-signal pattern as SaveTemplateDialog). `null` = closed.
  */
 const [requestUpdateDialog, setRequestUpdateDialogInternal] =
   createSignal<UpdatePromptInfo | null>(null);
@@ -115,16 +108,6 @@ const [requestAiAction, setRequestAiActionInternal] =
   createSignal<AiActionRequestInfo | null>(null);
 
 /**
- * "Open the feedback card" intent (lazy-mounted once at the App root).
- * "prompted" = raised by the occasional trigger engine (feedback-prompt.ts;
- * dismissals count toward its cap); "manual" = the core.sendFeedback command,
- * which ignores and never consumes trigger state. `null` = closed.
- */
-export type FeedbackCardMode = "prompted" | "manual";
-const [requestFeedbackCard, setRequestFeedbackCardInternal] =
-  createSignal<FeedbackCardMode | null>(null);
-
-/**
  * The navigate fn from @solidjs/router can only be obtained inside a Router
  * context. We capture it once on App mount (NavBootstrap) so module-level
  * actions can route the user without re-creating a hand-rolled router.
@@ -136,11 +119,9 @@ export const paletteSeedGeneration_ = paletteSeedGeneration;
 export const recentCommandIds_ = recentCommandIds;
 export const requestNewProject_ = requestNewProject;
 export const requestSaveTemplate_ = requestSaveTemplate;
-export const requestProDialog_ = requestProDialog;
 export const requestHistoryPanel_ = requestHistoryPanel;
 export const requestUpdateDialog_ = requestUpdateDialog;
 export const requestAiAction_ = requestAiAction;
-export const requestFeedbackCard_ = requestFeedbackCard;
 
 export const togglePalette = () =>
   setPaletteOpenInternal((v) => !v);
@@ -207,9 +188,6 @@ export const setRequestNewProject = (v: boolean) =>
 export const setRequestSaveTemplate = (v: boolean) =>
   setRequestSaveTemplateInternal(v);
 
-export const setRequestProDialog = (v: boolean) =>
-  setRequestProDialogInternal(v);
-
 export const setRequestHistoryPanel = (v: boolean) =>
   setRequestHistoryPanelInternal(v);
 
@@ -218,9 +196,6 @@ export const setRequestUpdateDialog = (v: UpdatePromptInfo | null) =>
 
 export const setRequestAiAction = (v: AiActionRequestInfo | null) =>
   setRequestAiActionInternal(v);
-
-export const setRequestFeedbackCard = (v: FeedbackCardMode | null) =>
-  setRequestFeedbackCardInternal(v);
 
 export const setNavigator = (fn: (path: string) => void) => {
   navigator = fn;

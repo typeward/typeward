@@ -4,6 +4,7 @@ import {
   Folder as FolderIcon,
   MoreHorizontal,
   Plus,
+  Settings,
   Trash2,
   Upload,
   User,
@@ -15,7 +16,6 @@ import type { Project } from "~/adapters/types";
 import type { SpaceDef } from "~/ipc";
 import { TextField } from "~/components/forms/TextField";
 import { KbdHint } from "~/components/primitives/KbdHint";
-import { currentTier } from "~/integrations/entitlements";
 import { installDismiss } from "~/lib/dismiss";
 import { setPreviousRoute } from "~/stores/nav-store";
 import { isTrashed, isYours } from "~/stores/projects-store";
@@ -204,13 +204,8 @@ export const LibrarySidebar: Component<LibrarySidebarProps> = (props) => {
           }}
           class="lift glass-soft flex h-7 w-full items-center justify-center gap-1.5 rounded-md text-xs text-fg-2 hover:bg-[var(--color-control-fill-hover)]"
         >
-          <span
-            class="h-1.5 w-1.5 rounded-full"
-            style={{ background: "var(--color-accent-1)" }}
-          />
-          <span class="capitalize">{currentTier()} plan</span>
-          <span class="mono text-fg-4">·</span>
-          <span class="text-fg-3">Manage</span>
+          <Settings size={11} style={{ opacity: 0.7 }} />
+          <span>Settings</span>
         </button>
       </div>
     </div>

@@ -25,9 +25,8 @@ import { getActiveEditorView } from "~/stores/editor-view-store";
  * Wires the AI action defs into both consumers: palette `EditorCommand`s and
  * the editor context-menu registry — each behind the identical visibility
  * predicate `aiAssistantEnabled() && (!needsSelection || hasSelection())`.
- * The palette already filters on `when` (hidden-when-locked convention) and
- * the menu drops actions whose `when` fails, so for unentitled users the AI
- * section simply doesn't exist — never a locked teaser.
+ * Both the palette and the menu drop entries whose `when` fails, so with the
+ * assistant off the AI section simply doesn't exist.
  */
 
 const ACTION_ICONS: Record<AiActionId, Component<{ size?: number; class?: string }>> = {

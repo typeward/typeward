@@ -8,7 +8,6 @@
  */
 
 import { languageForFile } from "~/adapters/languages";
-import { hasAnyAiEntitlement } from "~/integrations/ai/registry";
 import { quoteForDraft } from "~/integrations/ai/chat-text";
 import {
   type AssembledContext,
@@ -53,11 +52,10 @@ export interface AiActionDef extends ActionPromptSpec {
 /**
  * The one visibility predicate every AI surface derives from (chat pane,
  * bubble actions, attach UI, palette commands, context-menu items, the
- * action dialog trigger) — rendered nothing when false, never a locked
- * teaser, so no Pro-discovery leak exists while the flag is off.
+ * action dialog trigger) — they render nothing when false.
  */
 export function aiAssistantEnabled(): boolean {
-  return integrationsSettings().ai.enabled && hasAnyAiEntitlement();
+  return integrationsSettings().ai.enabled;
 }
 
 export const AI_ACTIONS: AiActionDef[] = [

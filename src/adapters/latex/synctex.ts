@@ -62,7 +62,7 @@ function replaceExt(filename: string, newExt: string): string {
 async function readWasmSynctex(
   projectRoot: string,
   outputPath: string,
-): Promise<import("texlive-wasm").SynctexLookup | null> {
+): Promise<import("@typeward/texlive-wasm").SynctexLookup | null> {
   const pdfRel = pathRelativeToProjectRoot(projectRoot, outputPath);
   if (!pdfRel) return null;
 
@@ -70,7 +70,7 @@ async function readWasmSynctex(
   for (const candidate of [`${synctexRel}.gz`, synctexRel]) {
     try {
       const bytes = await ipc.readProjectBinaryFile(projectRoot, candidate);
-      const { createSynctex } = await import("texlive-wasm");
+      const { createSynctex } = await import("@typeward/texlive-wasm");
       return await createSynctex(bytes);
     } catch {
       // Try the alternate gzip/plain SyncTeX spelling.
@@ -79,18 +79,33 @@ async function readWasmSynctex(
   return null;
 }
 
-/** Lookup-only forward: (source line) → (page, y in PDF pts), or null. Split
- *  from the scroll action so the annotation mapper can reuse it. */
+/** Lookup-only forward: (source line) → (page, y in PDF pts + optional hbox),
+ *  or null. Split from the scroll action so the annotation mapper can reuse
+ *  it. */
 export async function resolveForwardWithWasmSynctex(
   p: Project,
   outputPath: string,
   relPath: string,
   line: number,
-): Promise<{ page: number; y: number } | null> {
+): Promise<{
+  page: number;
+  y: number;
+  box: { left: number; top: number; width: number; height: number } | null;
+} | null> {
   try {
     const lookup = await readWasmSynctex(p.rootPath, outputPath);
     const hit = lookup?.forward(relPath, line)[0];
-    return hit ? { page: hit.page, y: hit.y } : null;
+    if (!hit) return null;
+    // Hit x/y are the hbox left/bottom in top-origin pt (same convention as
+    // the CLI's h/v); width 0 means no box was reported.
+    return {
+      page: hit.page,
+      y: hit.y,
+      box:
+        hit.width > 0
+          ? { left: hit.x, top: hit.y - hit.height, width: hit.width, height: hit.height }
+          : null,
+    };
   } catch (e) {
     recordError("synctex-forward", "wasm synctex forward lookup threw", e);
     return null;

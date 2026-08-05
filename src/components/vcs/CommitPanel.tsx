@@ -27,7 +27,7 @@ import { Button } from "~/components/primitives/Button";
 import * as ipc from "~/ipc";
 import { project } from "~/stores/editor-store";
 import { bumpGitState } from "~/stores/git-store";
-import { integrationsSettings } from "~/stores/settings-store";
+import { integrationsSettings, profile } from "~/stores/settings-store";
 
 const POLL_INTERVAL_MS = 2_000;
 
@@ -81,12 +81,14 @@ export const CommitPanel: Component = () => {
     (summary()?.files ?? []).filter((f) => f.staged === "none" && (f.unstaged !== "none" || f.untracked)),
   );
 
-  const authorFromSettings = () => {
+  // Per field, the explicit git identity wins and the local profile fills the
+  // blanks — so a user who only ever filled in Settings -> Profile can commit
+  // without configuring the same two values a second time.
+  const authorFromSettings = (): ipc.GitAuthor | undefined => {
     const g = integrationsSettings().vcs.git;
-    if (g.authorName && g.authorEmail) {
-      return { name: g.authorName, email: g.authorEmail };
-    }
-    return undefined;
+    const name = g.authorName?.trim() || profile().displayName.trim();
+    const email = g.authorEmail?.trim() || profile().email.trim();
+    return name && email ? { name, email } : undefined;
   };
 
   const wrap = async (kind: typeof busy extends () => infer T ? T : never, fn: () => Promise<void>) => {

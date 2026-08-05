@@ -95,9 +95,6 @@ pub struct TemplateManifestDoc {
     pub variables: Vec<TemplateVariable>,
     #[serde(default)]
     pub files: Vec<TemplateFile>,
-    /// Optional entitlement key (Phase 0 stub approves everything).
-    #[serde(default)]
-    pub entitlement: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -294,7 +291,6 @@ pub async fn template_save(
             root_file: project.root_file.clone(),
             variables: Vec::new(),
             files: Vec::new(),
-            entitlement: None,
         };
         // The on-disk manifest carries the bare id (source is implied by the
         // directory it lives in). serialize before qualifying the returned id.

@@ -33,7 +33,7 @@ const probe = createRoot(() => {
   const [res] = createResource(
     () => [citationProviders(), probeTick()] as const,
     async ([provs]) => {
-      // No registered providers → nothing to probe (avoids IPC on free installs).
+      // No registered providers → nothing to probe (avoids IPC when unconfigured).
       if (provs.length === 0) return [] as string[];
       const settled = await Promise.all(
         provs.map((p) =>

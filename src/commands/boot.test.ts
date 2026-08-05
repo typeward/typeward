@@ -1,13 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { bootCoreCommands, registerAdapterCommands, unregisterAdapterCommands } from "./boot";
-import { requestProDialog_, setRequestProDialog } from "./palette-store";
 import { _resetForTests, commands, getCommand } from "./registry";
 import type { EditorAdapter, Project } from "~/adapters/types";
-import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
-import {
-  resetEntitlementSource,
-  setEntitlementSource,
-} from "~/integrations/entitlements";
 import { openFile, resetTabs, setProject } from "~/stores/editor-store";
 
 // bootCoreCommands is idempotent across the entire app lifetime — calling
@@ -70,36 +64,17 @@ describe("bootCoreCommands", () => {
     setProject(null);
   });
 
-  it("core.whatsInPro follows the Pro-discovery flag and raises the ProDialog request", () => {
-    bootCoreCommands();
-    const cmd = getCommand("core.whatsInPro");
-    expect(cmd).toBeDefined();
-    // The `when` gate rides the free-only-beta flag, never the tier — while
-    // discovery is off the entry hides for everyone, once it's on it must
-    // not vanish per tier.
-    expect(cmd?.when?.()).toBe(PRO_DISCOVERY_ENABLED);
-
-    setRequestProDialog(false);
-    void cmd?.run();
-    expect(requestProDialog_()).toBe(true);
-    setRequestProDialog(false);
-  });
-
-  it("core.saveTemplate hides on the free tier (custom templates are Pro)", () => {
+  it("core.saveTemplate needs an active project", () => {
     bootCoreCommands();
     const cmd = getCommand("core.saveTemplate");
-    setProject({ rootPath: "/A", rootFile: "main.tex", format: "latex", name: "A" } as Project);
+    expect(cmd).toBeDefined();
 
+    setProject(null);
     expect(cmd?.when?.()).toBe(false);
 
-    setEntitlementSource({
-      current: () => "pro",
-      has: () => true,
-      reasonIfMissing: () => undefined,
-    });
+    setProject({ rootPath: "/A", rootFile: "main.tex", format: "latex", name: "A" } as Project);
     expect(cmd?.when?.()).toBe(true);
 
-    resetEntitlementSource();
     setProject(null);
   });
 });

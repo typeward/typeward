@@ -4,12 +4,9 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
-  BadgeCheck,
   Check,
-  Cloud,
   Cpu,
   Loader2,
-  Mail,
   Package,
   RefreshCw,
   Shield,
@@ -18,44 +15,22 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch as SolidSwitch, createMemo, createSignal, onMount } from "solid-js";
-import { SignInForm } from "~/components/account/SignInForm";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
+import { BrandMark } from "~/components/primitives/BrandMark";
 import { Button } from "~/components/primitives/Button";
-import { setRequestProDialog } from "~/commands/palette-store";
-import {
-  PRO_DISCOVERY_ENABLED,
-  PRO_FEATURES,
-  PRO_PRICING_LINE,
-} from "~/config/pro";
-import { supabaseEnabled } from "~/integrations/supabase/client";
-import {
-  supabaseSession,
-  supabaseSessionReady,
-  supabaseUser,
-} from "~/integrations/supabase/session";
 import { dismissBootSplash } from "~/lib/boot-splash";
 import * as ipc from "~/ipc";
-import {
-  setCompileEngine,
-  setOnboarded,
-  syncSettingsEnabled,
-} from "~/stores/settings-store";
+import { setCompileEngine, setOnboarded } from "~/stores/settings-store";
 
-// The Rust detector also probes pandoc (unused since Markdown-as-project was
-// dropped) and typst (Pro — its setup lives behind the gate, not in the free
-// first run). Only the LaTeX chain matters here.
+// The Rust detector also probes pandoc, which no supported project format
+// compiles through since Markdown-as-project was dropped. Everything else is
+// an engine a project can actually build with, typst included.
 const RELEVANT_ENGINES = (engines: ipc.EngineProbe["engines"]) =>
-  engines.filter((e) => e.name !== "pandoc" && e.name !== "typst");
+  engines.filter((e) => e.name !== "pandoc");
 
-type StepId = "welcome" | "engines" | "account" | "plan";
-// The account step ships in both flag states — it pitches the FREE account
-// behind settings sync, not Pro. The closing plan-awareness step ships with
-// the rest of the Pro discovery layer (skipped during the free-only beta)
-// and returns AFTER the account step when the flag flips. Exported so the
-// flag-state tests can pin both compositions.
-export const STEP_ORDER: StepId[] = PRO_DISCOVERY_ENABLED
-  ? ["welcome", "engines", "account", "plan"]
-  : ["welcome", "engines", "account"];
+type StepId = "welcome" | "engines";
+// Exported so a test can pin the composition.
+export const STEP_ORDER: StepId[] = ["welcome", "engines"];
 
 const OnboardingScreen: Component = () => {
   const navigate = useNavigate();
@@ -142,12 +117,6 @@ const OnboardingScreen: Component = () => {
                   }}
                 />
               </Match>
-              <Match when={step() === "account"}>
-                <AccountPane />
-              </Match>
-              <Match when={step() === "plan"}>
-                <PlanPane />
-              </Match>
             </SolidSwitch>
           </div>
           <Footer
@@ -172,15 +141,7 @@ export default OnboardingScreen;
 
 const StepBar: Component<{ step: number }> = (props) => (
   <div class="flex h-[56px] flex-shrink-0 items-center border-b border-glass-stroke px-[22px]">
-    <div
-      class="flex h-6 w-6 items-center justify-center rounded-[7px] text-xs font-bold"
-      style={{
-        background: "linear-gradient(135deg, var(--color-accent-2) 0%, var(--color-accent-1) 100%)",
-        color: "var(--color-accent-fg)",
-      }}
-    >
-      τ
-    </div>
+    <BrandMark size={24} class="flex-shrink-0" />
     <span class="ml-2.5 text-base font-semibold tracking-tight text-fg-1">
       Typeward
     </span>
@@ -222,13 +183,6 @@ const StepBar: Component<{ step: number }> = (props) => (
 // Footer (next/back/finish)
 // =================================================================
 
-// The plan step's two actions are deliberately equal-weight: finishing on
-// Free and reading about Pro are both fine outcomes — no preselected upsell.
-// The account step's "Skip for now" shares the same quiet weight so skipping
-// never feels like the wrong choice.
-const EQUAL_BTN =
-  "flex h-[38px] items-center gap-2 rounded-[10px] border border-glass-stroke px-[18px] text-base font-medium text-fg-1 hover:bg-[var(--color-control-fill)]";
-
 const Footer: Component<{
   step: StepId;
   stepIndex: number;
@@ -251,14 +205,8 @@ const Footer: Component<{
         if (!probe) return <span>Scanning your PATH…</span>;
         const engines = RELEVANT_ENGINES(probe.engines);
         const ready = engines.filter((e) => e.installed).length;
-        return <span>{ready} ready · {engines.length - ready} missing</span>;
+        return <span>{ready} ready · {engines.length - ready} not found</span>;
       }
-      case "account":
-        return <span>Optional — you can sign in any time in Settings → Account</span>;
-      case "plan":
-        // The "Already have an account? Sign in" escape hatch that lived here
-        // is superseded by the account step one step back.
-        return undefined;
     }
   });
 
@@ -288,42 +236,15 @@ const Footer: Component<{
             Skip setup
           </button>
         </Show>
-        <SolidSwitch
-          fallback={
-            <Button
-              variant="primary"
-              size="lg"
-              class="glow-accent font-semibold"
-              onClick={props.onNext}
-              trailingIcon={<ArrowRight size={12} stroke-width={2.2} />}
-            >
-              Continue
-            </Button>
-          }
+        <Button
+          variant="primary"
+          size="lg"
+          class="glow-accent font-semibold"
+          onClick={props.onNext}
+          trailingIcon={<ArrowRight size={12} stroke-width={2.2} />}
         >
-          {/* Signed out, the pane's Sign in button is the primary action —
-              the footer only offers the skip, which advances all the same.
-              Signing in swaps this for the regular Continue. */}
-          <Match when={props.step === "account" && !supabaseSession()}>
-            <button type="button" onClick={props.onNext} class={EQUAL_BTN}>
-              Skip for now
-              <ArrowRight size={12} stroke-width={2.2} />
-            </button>
-          </Match>
-          <Match when={props.step === "plan"}>
-            <button
-              type="button"
-              onClick={() => setRequestProDialog(true)}
-              class={EQUAL_BTN}
-            >
-              See what's in Pro
-            </button>
-            <button type="button" onClick={props.onFinish} class={EQUAL_BTN}>
-              Get started
-              <ArrowRight size={12} stroke-width={2.2} />
-            </button>
-          </Match>
-        </SolidSwitch>
+          {props.stepIndex === STEP_ORDER.length - 1 ? "Get started" : "Continue"}
+        </Button>
       </div>
     </div>
   );
@@ -342,8 +263,8 @@ const GLYPHS: Array<{ t: string; x: string; y: number; s: number; rot: number; o
 ];
 
 const FORMAT_PILLS = [
-  { icon: Sigma, label: "LaTeX", pro: false },
-  { icon: Package, label: "Typst", pro: true },
+  { icon: Sigma, label: "LaTeX" },
+  { icon: Package, label: "Typst" },
 ];
 
 const WelcomePane: Component = () => (
@@ -393,13 +314,11 @@ const WelcomePane: Component = () => (
       style={{ "text-wrap": "pretty" }}
     >
       A calm, local-first LaTeX editor. We'll check your TeX setup and get you
-      writing in under a minute — no account needed.
+      writing in under a minute.
     </p>
 
     <div class="mt-7 flex justify-center gap-2.5">
-      {/* Pro-format pills are discovery surfaces — free-only beta shows
-          only what the free tier can actually use. */}
-      <For each={FORMAT_PILLS.filter((b) => PRO_DISCOVERY_ENABLED || !b.pro)}>
+      <For each={FORMAT_PILLS}>
         {(b) => (
           <div
             class="flex h-7 items-center gap-1.5 rounded-[14px] px-2.5 text-sm text-fg-2"
@@ -410,11 +329,6 @@ const WelcomePane: Component = () => (
           >
             <b.icon size={12} style={{ color: "var(--color-accent-2)" }} />
             {b.label}
-            <Show when={b.pro}>
-              <span class="mono text-[10px] uppercase tracking-wider text-fg-3">
-                Pro
-              </span>
-            </Show>
           </div>
         )}
       </For>
@@ -426,12 +340,30 @@ const WelcomePane: Component = () => (
 // Step 2 — Engine detection
 // =================================================================
 
-const ENGINE_META: Record<string, { glyph: string; color: string; label: string; sub: string }> = {
+type EngineMeta = {
+  glyph: string;
+  color: string;
+  label: string;
+  sub: string;
+  /** Set for engines no LaTeX project needs: absence is reported in muted text
+   *  with a download link rather than as the red not-on-PATH state, since
+   *  nothing about onboarding or compiling LaTeX depends on it. */
+  optional?: { hint: string; url: string };
+};
+
+const ENGINE_META: Record<string, EngineMeta> = {
   pdflatex: { glyph: "τ", color: "var(--format-latex)", label: "pdfLaTeX", sub: "Used for LaTeX" },
   xelatex: { glyph: "τ", color: "var(--format-latex)", label: "XeLaTeX", sub: "Unicode-aware LaTeX" },
   lualatex: { glyph: "τ", color: "var(--format-latex)", label: "LuaLaTeX", sub: "LaTeX with Lua scripting" },
   latexmk: { glyph: "λ", color: "var(--format-latex)", label: "latexmk", sub: "Build manager for LaTeX" },
   tectonic: { glyph: "T", color: "var(--color-accent-2)", label: "Tectonic", sub: "Bundled with Typeward" },
+  typst: {
+    glyph: "t",
+    color: "var(--format-typst)",
+    label: "Typst",
+    sub: "Only for Typst projects",
+    optional: { hint: "Get it from typst.app", url: "https://typst.app/download" },
+  },
 };
 
 const EnginesPane: Component<{
@@ -457,11 +389,12 @@ const EnginesPane: Component<{
         </div>
         <div class="flex-1">
           <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
-            Checking your TeX setup
+            Checking your typesetting setup
           </h2>
           <p class="m-0 text-sm text-fg-2">
-            Typeward compiles with your system TeX when you have one, or its
-            bundled Tectonic engine — zero install either way.
+            Typeward compiles LaTeX with your system TeX when you have one, or
+            its bundled Tectonic engine — zero install either way. Typst is
+            optional and compiles through its own CLI.
           </p>
         </div>
         <button
@@ -503,20 +436,28 @@ const EnginesPane: Component<{
         <div class="flex flex-col gap-2">
           <For each={RELEVANT_ENGINES(props.probe!.engines)}>
             {(e) => {
-              const meta = ENGINE_META[e.name] ?? {
+              const meta: EngineMeta = ENGINE_META[e.name] ?? {
                 glyph: e.name[0]?.toUpperCase() ?? "?",
                 color: "var(--color-fg-3)",
                 label: e.name,
                 sub: "",
               };
               const ok = e.installed;
+              const optional = meta.optional;
+              const missingTone = optional ? "var(--color-fg-3)" : "var(--color-err)";
               return (
                 <div
                   class="relative flex items-center gap-3 rounded-[11px] py-3 pl-[14px] pr-3.5"
                   style={{
                     background: "var(--color-glass-soft-fill)",
                     border: "1px solid var(--color-glass-stroke)",
-                    "border-left": `2px solid ${ok ? "var(--color-ok)" : "var(--color-accent-1)"}`,
+                    "border-left": `2px solid ${
+                      ok
+                        ? "var(--color-ok)"
+                        : optional
+                          ? "var(--color-control-stroke)"
+                          : "var(--color-accent-1)"
+                    }`,
                   }}
                 >
                   <div
@@ -538,7 +479,7 @@ const EnginesPane: Component<{
                     </div>
                     <div
                       class="mono mt-0.5 truncate text-xs"
-                      style={{ color: ok ? "var(--color-fg-2)" : "var(--color-err)" }}
+                      style={{ color: ok ? "var(--color-fg-2)" : missingTone }}
                     >
                       {ok ? (e.version ?? e.path ?? "found") : `${e.name} not on PATH`}
                     </div>
@@ -546,9 +487,19 @@ const EnginesPane: Component<{
                   <Show
                     when={ok}
                     fallback={
-                      <span class="text-xs text-fg-3">
-                        Install it, then Re-scan
-                      </span>
+                      optional ? (
+                        <button
+                          type="button"
+                          onClick={() => void openUrl(optional.url)}
+                          class="flex-shrink-0 text-xs text-fg-3 underline underline-offset-2 hover:text-fg-2"
+                        >
+                          {optional.hint}
+                        </button>
+                      ) : (
+                        <span class="text-xs text-fg-3">
+                          Install it, then Re-scan
+                        </span>
+                      )
                     }
                   >
                     <div
@@ -598,188 +549,3 @@ const EnginesPane: Component<{
   );
 };
 
-// =================================================================
-// Step 3 — Account (free settings sync)
-// =================================================================
-
-const AccountPane: Component = () => (
-  <div class="px-[22px] py-6">
-    <div class="mb-[18px] flex items-start gap-3.5">
-      <div
-        class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
-        style={{
-          background:
-            "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
-          border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
-        }}
-      >
-        <Cloud size={16} style={{ color: "var(--color-accent-1)" }} />
-      </div>
-      <div>
-        <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
-          Take your settings anywhere
-        </h2>
-        <p class="m-0 text-sm text-fg-2">
-          A free account syncs your preferences — theme, editor, workspace —
-          across devices. The editor works fully without one.
-        </p>
-      </div>
-    </div>
-
-    <Show
-      when={supabaseEnabled()}
-      fallback={
-        <div
-          class="rounded-[11px] px-3.5 py-3 text-sm text-fg-2"
-          style={{
-            background: "var(--color-glass-soft-fill)",
-            border: "1px solid var(--color-glass-stroke)",
-          }}
-        >
-          Sign-in isn't configured for this build — skip ahead; everything
-          else works without it.
-        </div>
-      }
-    >
-      <Show
-        when={supabaseSessionReady()}
-        fallback={
-          <div class="flex h-24 items-center justify-center gap-2 text-sm text-fg-2">
-            <Loader2 size={14} class="animate-spin" />
-            Restoring session…
-          </div>
-        }
-      >
-        <Show when={supabaseSession()} fallback={<AccountSignedOut />}>
-          <AccountSignedIn />
-        </Show>
-      </Show>
-    </Show>
-  </div>
-);
-
-const AccountSignedOut: Component = () => (
-  <div
-    class="rounded-[11px] px-3.5 py-3"
-    style={{
-      background: "var(--color-glass-soft-fill)",
-      border: "1px solid var(--color-glass-stroke)",
-    }}
-  >
-    <SignInForm />
-  </div>
-);
-
-const AccountSignedIn: Component = () => (
-  <div class="flex flex-col gap-2">
-    <div
-      class="rounded-[11px] px-3.5 py-3"
-      style={{
-        background: "var(--color-glass-soft-fill)",
-        border: "1px solid var(--color-glass-stroke)",
-      }}
-    >
-      <div class="flex items-center gap-2.5">
-        <Mail size={14} class="flex-shrink-0 text-fg-3" />
-        <span class="min-w-0 flex-1 truncate text-base font-semibold text-fg-1">
-          {supabaseUser()?.email}
-        </span>
-        <div
-          class="flex items-center gap-1.5 rounded-[14px] px-2.5 py-1 text-xs font-medium"
-          style={{
-            background: "color-mix(in srgb, var(--color-ok) 12%, transparent)",
-            color: "var(--color-ok)",
-          }}
-        >
-          <Check size={12} stroke-width={2.5} />
-          Signed in
-        </div>
-      </div>
-    </div>
-    <Show
-      when={syncSettingsEnabled()}
-      fallback={
-        <div class="text-xs text-fg-3">
-          Settings sync is off for this device — turn it on any time in
-          Settings → Account.
-        </div>
-      }
-    >
-      <div
-        class="flex items-start gap-2.5 rounded-[9px] px-3 py-2.5"
-        style={{
-          background: "color-mix(in srgb, var(--color-ok) 8%, transparent)",
-          border: "1px solid color-mix(in srgb, var(--color-ok) 25%, transparent)",
-        }}
-      >
-        <RefreshCw size={14} class="mt-0.5" style={{ color: "var(--color-ok)" }} />
-        <div class="text-sm text-fg-2">
-          <span class="font-semibold text-fg-1">Settings sync is on — </span>
-          your preferences follow this account to any device you sign in on.
-        </div>
-      </div>
-    </Show>
-  </div>
-);
-
-// =================================================================
-// Step 4 — Plan awareness (Pro discovery layer only)
-// =================================================================
-
-const PlanPane: Component = () => (
-  <div class="px-[22px] py-6">
-    <div class="mb-[18px] flex items-start gap-3.5">
-      <div
-        class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-[9px]"
-        style={{
-          background:
-            "linear-gradient(135deg, color-mix(in srgb, var(--color-accent-1) 20%, transparent), color-mix(in srgb, var(--color-accent-2) 13%, transparent))",
-          border: "1px solid color-mix(in srgb, var(--color-accent-1) 20%, transparent)",
-        }}
-      >
-        <BadgeCheck size={16} style={{ color: "var(--color-accent-1)" }} />
-      </div>
-      <div>
-        <h2 class="m-0 mb-1 text-[18px] font-semibold tracking-tight text-fg-1">
-          You're ready to write
-        </h2>
-        <p class="m-0 text-sm text-fg-2">
-          Typeward Free is the full LaTeX editor — no account needed.
-        </p>
-      </div>
-    </div>
-
-    <div class="flex flex-col gap-2">
-      <div
-        class="rounded-[11px] px-3.5 py-3"
-        style={{
-          background: "var(--color-glass-soft-fill)",
-          border: "1px solid var(--color-glass-stroke)",
-        }}
-      >
-        <div class="text-base font-semibold text-fg-1">Typeward Free</div>
-        <div class="mt-0.5 text-xs leading-relaxed text-fg-2">
-          Edit, compile, and preview LaTeX with SyncTeX; built-in templates,
-          themes, autosave and recovery, PDF and source exports. Everything
-          works offline.
-        </div>
-      </div>
-
-      <div
-        class="rounded-[11px] px-3.5 py-3"
-        style={{
-          background: "var(--color-glass-soft-fill)",
-          border: "1px solid var(--color-glass-stroke)",
-        }}
-      >
-        <div class="flex flex-wrap items-baseline gap-x-2">
-          <span class="text-base font-semibold text-fg-1">Typeward Pro</span>
-          <span class="text-xs text-fg-3">{PRO_PRICING_LINE}</span>
-        </div>
-        <div class="mt-0.5 text-xs leading-relaxed text-fg-2">
-          {PRO_FEATURES.map((f) => f.label).join(" · ")}
-        </div>
-      </div>
-    </div>
-  </div>
-);

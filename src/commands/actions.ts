@@ -6,7 +6,7 @@ import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
 import { effectiveBuild } from "~/adapters/latex/build-config";
 import { matchSelectionToSource } from "~/lib/pdf-annotations/anchor";
 import type { CreateThreadInput } from "~/lib/pdf-annotations/types";
-import { lineRange } from "~/lib/reviews/lines";
+import { lineRange, toLF } from "~/lib/reviews/lines";
 import { createThread } from "~/lib/reviews/types";
 import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
 import { TypstAdapter } from "~/adapters/typst/TypstAdapter";
@@ -536,7 +536,11 @@ export async function resolveForward(
   outputPath: string,
   relPath: string,
   line: number,
-): Promise<{ page: number; y: number } | null> {
+): Promise<{
+  page: number;
+  y: number;
+  box: { left: number; top: number; width: number; height: number } | null;
+} | null> {
   if (effectiveBuild(p).engine === "texlive-wasm") {
     return resolveForwardWithWasmSynctex(p, outputPath, relPath, line);
   }
@@ -547,7 +551,17 @@ export async function resolveForward(
       sourceFile: relPath,
       line,
     });
-    return loc ? { page: loc.page, y: loc.y } : null;
+    if (!loc) return null;
+    // CLI h/v are the enclosing hbox's left/bottom in top-origin pt, so the
+    // box top is v minus its height. width 0 means synctex reported no box.
+    return {
+      page: loc.page,
+      y: loc.y,
+      box:
+        loc.width > 0
+          ? { left: loc.h, top: loc.v - loc.height, width: loc.width, height: loc.height }
+          : null,
+    };
   } catch (e) {
     recordError("synctex-forward", "synctex_forward IPC threw", e);
     return null;
@@ -590,10 +604,13 @@ export async function syncInverseFromPdfClick(
  * mapper and PDF-selection thread creation.
  */
 export async function readProjectSource(p: Project, rel: string): Promise<string | null> {
+  // Both branches can carry CRLF (disk reads always; a buffer until its first
+  // CM6 round-trip) while review offsets are LF-space — normalize here so no
+  // caller maps offsets over disk-flavored text.
   const buf = openFiles().find((f) => f.relPath === rel);
-  if (buf) return buf.content;
+  if (buf) return toLF(buf.content);
   try {
-    return await ipc.readProjectTextFile(p.rootPath, rel);
+    return toLF(await ipc.readProjectTextFile(p.rootPath, rel));
   } catch {
     return null;
   }

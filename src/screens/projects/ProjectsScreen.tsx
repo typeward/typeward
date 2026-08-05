@@ -32,16 +32,12 @@ import { stripMarkupForWordCount } from "~/adapters/format-tables";
 import { createCloudBackedProject } from "~/integrations/cloud/create";
 import {
   cloudProviderForAccount,
+  readCloudOrigin,
   type CloudAccountRef,
 } from "~/integrations/cloud/registry";
 import type { RemoteFolder } from "~/integrations/types";
 import { CloneDialog } from "~/components/vcs/CloneDialog";
-import { FeatureGate } from "~/components/entitlement/FeatureGate";
-import { ProChip } from "~/components/entitlement/ProChip";
-import { proGate } from "~/components/entitlement/pro-gate";
-import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { TemplateGallery } from "~/components/templates/TemplateGallery";
-import { assertEntitlement, useEntitlement } from "~/integrations/entitlements";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import * as ipc from "~/ipc";
 import type { SpaceDef } from "~/ipc";
@@ -851,7 +847,10 @@ const spaceOf = (p: Project): SpaceDef | undefined =>
 
 /** Cloud + git presence chips, shown inline in the card/row footer. */
 const SyncChips: Component<{ project: Project }> = (props) => {
-  const cloud = () => props.project.integrations?.cloudOrigin;
+  // readCloudOrigin, not the raw field: a project bound to a provider this
+  // build no longer supports still carries `cloudOrigin` on disk, and claiming
+  // it is synced when no engine will ever mount for it is worse than silence.
+  const cloud = () => readCloudOrigin(props.project);
   const git = () => props.project.integrations?.git;
   return (
     <>
@@ -1387,6 +1386,9 @@ const DeleteConfirmDialog: Component<{
           <span class="font-semibold text-fg-1">{props.project?.name}</span> from
           your library and move its folder to the {trashLabel()}?
         </p>
+        {/* Raw field, not readCloudOrigin: the reassurance holds even for a
+            project bound to a provider this build dropped — deleting the local
+            folder never reaches the remote either way. */}
         <Show when={props.project?.integrations?.cloudOrigin}>
           <p class="text-fg-3">
             The remote copy on your cloud provider stays untouched.
@@ -1486,26 +1488,6 @@ const NewProjectDialog: Component<{
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [galleryOpen, setGalleryOpen] = createSignal(false);
 
-  // Typst is Pro — with discovery on, the option stays visible with a quiet
-  // Pro chip on free tiers (discovery amendment 2026-07-08) and picking it
-  // opens the ProDialog instead of selecting, so free users always stay on
-  // LaTeX. With discovery off (free-only beta) the locked option hides.
-  const typstEntitled = useEntitlement("formats.typst");
-  // Clone stays visible when EITHER VCS is entitled: the Overleaf git-bridge
-  // branch rides the free migration-import key (repriced 2026-07-16), so free
-  // users keep a clone path even though general git is Pro.
-  const gitEntitled = useEntitlement("integrations.vcs.git");
-  const overleafImportEntitled = useEntitlement("integrations.vcs.overleaf_import");
-  const visibleFormats = () =>
-    FORMATS.filter(
-      (f) => f.id !== "typst" || typstEntitled() || PRO_DISCOVERY_ENABLED,
-    );
-  // An entitlement flip (sign-out) while the dialog is open can strand a
-  // Typst selection the tier no longer allows; drop it back to LaTeX.
-  createEffect(() => {
-    if (!typstEntitled() && format() === "typst") setFormat("latex");
-  });
-
   const importOverleafZip = async () => {
     const picked = await openFileDialog({
       title: "Pick an Overleaf-exported .zip",
@@ -1521,7 +1503,6 @@ const NewProjectDialog: Component<{
     setErr(null);
     setSubmitting(true);
     try {
-      assertEntitlement("integrations.vcs.overleaf_import");
       const projectName = inferNameFromPath(picked);
       const project = await ipc.overleafImportZip(picked, root, projectName);
       reset();
@@ -1534,7 +1515,7 @@ const NewProjectDialog: Component<{
 
   const cloudAccounts = createMemo<CloudAccountRef[]>(() =>
     integrationsSettings()
-      .cloud.accounts.filter((a) => a.provider === "dropbox" || a.provider === "webdav")
+      .cloud.accounts.filter((a) => a.provider === "webdav")
       .map((a) => ({
         provider: a.provider as CloudAccountRef["provider"],
         accountId: a.accountId,
@@ -1648,24 +1629,22 @@ const NewProjectDialog: Component<{
           <Button variant="ghost" size="sm" onClick={() => setGalleryOpen(true)}>
             Template
           </Button>
-          <Show when={ipc.gitAvailable() && (gitEntitled() || overleafImportEntitled())}>
+          <Show when={ipc.gitAvailable()}>
             <span class="text-xs text-fg-3">·</span>
             <Button variant="ghost" size="sm" onClick={() => setCloneOpen(true)}>
               Clone repository
             </Button>
           </Show>
-          <FeatureGate feature="integrations.vcs.overleaf_import">
-            <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
-              Overleaf zip
-            </Button>
-          </FeatureGate>
+          <Button variant="ghost" size="sm" onClick={() => void importOverleafZip()}>
+            Overleaf zip
+          </Button>
         </div>
 
         <Show when={cloudAccounts().length > 0}>
           <fieldset class="flex flex-col gap-2">
             <legend class="text-sm font-medium text-fg-2">Where</legend>
             <div class="grid grid-cols-2 gap-2">
-              <For each={[{ id: "local" as const, label: "Local", sub: "Folder under your projects root" }, { id: "cloud" as const, label: "Cloud", sub: "Sync with a connected provider" }]}>
+              <For each={[{ id: "local" as const, label: "Local", sub: "Folder under your projects root" }, { id: "cloud" as const, label: "Cloud", sub: "Sync with a connected WebDAV server" }]}>
                 {(opt) => (
                   <label
                     class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
@@ -1695,7 +1674,7 @@ const NewProjectDialog: Component<{
 
         <Show when={location() === "cloud"}>
           <fieldset class="flex flex-col gap-2">
-            <legend class="text-sm font-medium text-fg-2">Account</legend>
+            <legend class="text-sm font-medium text-fg-2">WebDAV server</legend>
             <div class="flex flex-col gap-1">
               <For each={cloudAccounts()}>
                 {(acc) => (
@@ -1720,9 +1699,6 @@ const NewProjectDialog: Component<{
                       }}
                       class="h-3 w-3 accent-[var(--color-accent-1)]"
                     />
-                    <span class="mono text-xs uppercase tracking-wider text-fg-3">
-                      {acc.provider}
-                    </span>
                     <span class="text-sm text-fg-1">
                       {acc.label ?? acc.accountId}
                     </span>
@@ -1744,8 +1720,7 @@ const NewProjectDialog: Component<{
                 when={(remoteRoots() ?? []).length > 0}
                 fallback={
                   <div class="text-xs text-fg-3">
-                    No folders found. Create one in the provider's web UI, then
-                    come back.
+                    No folders found. Create one on your server, then come back.
                   </div>
                 }
               >
@@ -1801,45 +1776,29 @@ const NewProjectDialog: Component<{
         <fieldset class="flex flex-col gap-2">
           <legend class="text-sm font-medium text-fg-2">Format</legend>
           <div class="grid grid-cols-2 gap-2">
-            <For each={visibleFormats()}>
-              {(f) => {
-                const locked = () => f.id === "typst" && !typstEntitled();
-                return (
-                  <label
-                    onClick={(e) => {
-                      // proGate opens the ProDialog when locked; the radio is
-                      // also disabled so the selection can't stick either way.
-                      if (f.id === "typst" && !proGate("formats.typst")) {
-                        e.preventDefault();
-                      }
-                    }}
-                    class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
-                      format() === f.id
-                        ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
-                        : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="format"
-                      value={f.id}
-                      checked={format() === f.id}
-                      disabled={locked()}
-                      onChange={() => setFormat(f.id)}
-                      class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
-                    />
-                    <div class="flex min-w-0 flex-1 flex-col">
-                      <span class="flex items-center gap-1.5 text-sm font-medium text-fg-1">
-                        {f.label}
-                        <Show when={locked()}>
-                          <ProChip />
-                        </Show>
-                      </span>
-                      <span class="text-xs text-fg-3">{f.sub}</span>
-                    </div>
-                  </label>
-                );
-              }}
+            <For each={FORMATS}>
+              {(f) => (
+                <label
+                  class={`lift flex items-start gap-2.5 rounded-md border p-2.5 ${
+                    format() === f.id
+                      ? "border-transparent bg-[var(--color-selection-bg)] shadow-[0_0_0_1.5px_var(--color-accent-1)]"
+                      : "border-glass-stroke hover:bg-[var(--color-control-fill)]"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="format"
+                    value={f.id}
+                    checked={format() === f.id}
+                    onChange={() => setFormat(f.id)}
+                    class="mt-1 h-3 w-3 accent-[var(--color-accent-1)]"
+                  />
+                  <div class="flex min-w-0 flex-1 flex-col">
+                    <span class="text-sm font-medium text-fg-1">{f.label}</span>
+                    <span class="text-xs text-fg-3">{f.sub}</span>
+                  </div>
+                </label>
+              )}
             </For>
           </div>
         </fieldset>

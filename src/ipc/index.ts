@@ -379,6 +379,9 @@ export interface SyncTexForwardLocation {
   y: number;
   h: number;
   v: number;
+  /** Enclosing hbox extents in pt; 0 when synctex did not report a box. */
+  width: number;
+  height: number;
 }
 
 export interface SyncTexInverseLocation {
@@ -427,6 +430,7 @@ export interface AppSettings {
     autoCloseBrackets: boolean;
     tabSize: number;
     lineHeight: string;
+    autosaveEnabled: boolean;
     autosaveDelayMs: number;
     pdfDefaultZoom: number;
     pdfInvertDark: boolean;
@@ -438,22 +442,14 @@ export interface AppSettings {
   ui: UiSettings;
   workspace: WorkspaceSettings;
   integrations: IntegrationsSettings;
+  // Optional: settings.json files predating the profile section lack it.
+  profile?: ProfileSettings;
   // Optional: settings.json files predating the privacy section lack it.
   privacy?: PrivacySettings;
   // Optional: settings.json files predating the updates section lack it.
   updates?: UpdatesSettings;
-  // Optional: settings.json files predating the sync section lack it.
-  sync?: SyncSettings;
   // Optional: settings.json files predating the history section lack it.
   history?: HistorySettings;
-  // Optional: settings.json files predating the feedback section lack it.
-  feedback?: FeedbackSettings;
-}
-
-/** Occasional in-app "give us feedback" card — nothing is sent without an
- *  explicit Send, so the prompt itself defaults ON. */
-export interface FeedbackSettings {
-  promptsEnabled: boolean;
 }
 
 /** Local file-history retention (versions kept per file, clamped 10–200). */
@@ -461,14 +457,21 @@ export interface HistorySettings {
   maxVersionsPerFile: number;
 }
 
-/** Settings-sync preferences — device-local (the toggle itself never syncs). */
-export interface SyncSettings {
-  syncSettings: boolean;
-}
-
 /** Auto-update preferences. The launch check is a plain HTTPS GET to GitHub. */
 export interface UpdatesSettings {
   checkAutomatically: boolean;
+}
+
+/** Who the user is on this machine. Local-only: it signs git commits and
+ *  pre-fills authorship in new projects, and never leaves the device. */
+export interface ProfileSettings {
+  displayName: string;
+  email: string;
+  affiliation: string;
+  /** Absolute path of the picture Rust copied into `<app_data>/profile/`.
+   *  Backend-owned — `buildSettings()` omits it so a settings roundtrip
+   *  can't clobber the real path. */
+  avatarPath?: string;
 }
 
 /** Egress opt-ins — everything defaults to OFF (zero reporting unless enabled). */
@@ -558,7 +561,6 @@ export interface IntegrationsSettings {
   };
   grammar: { enabled: boolean; language?: string };
   templates: { recentTemplateIds: string[] };
-  account: { signedInEmail?: string; lastValidatedAt?: string };
 }
 
 export interface ReferencesProvidersSettings {
@@ -630,23 +632,19 @@ export const exportPdfAnnotated = (
 export const saveSettings = (settings: AppSettings): Promise<void> =>
   invoke("save_settings", { settings });
 
-/** Last server `updated_at` + value hash for one synced settings key. */
-export interface SyncKeyState {
-  seenUpdatedAt: string;
-  hash: string;
-}
+// ----- Profile -------------------------------------------------------------
 
 /**
- * `<app_data>/settings-sync.json`: per-key sync bookkeeping keyed by Supabase
- * user id (account switching must not cross-apply). Lives outside settings.json
- * so a settings roundtrip or Reset can't clobber it.
+ * Copy an image into `<app_data>/profile/avatar.<ext>` and record it as the
+ * profile picture; returns the stored absolute path. Rust writes the path into
+ * settings.json itself, so the caller only mirrors the result into the store.
  */
-export type SettingsSyncState = Record<string, Record<string, SyncKeyState>>;
+export const setProfileAvatar = (sourcePath: string): Promise<string> =>
+  invoke("set_profile_avatar", { sourcePath });
 
-export const loadSyncState = (): Promise<SettingsSyncState> => invoke("load_sync_state");
-
-export const saveSyncState = (state: SettingsSyncState): Promise<void> =>
-  invoke("save_sync_state", { state });
+/** Forget the stored picture. Succeeds whether or not one was set. */
+export const clearProfileAvatar = (): Promise<void> =>
+  invoke("clear_profile_avatar");
 
 // ----- Custom themes -------------------------------------------------------
 
@@ -905,7 +903,6 @@ export interface TemplateManifest {
   rootFile: string;
   variables: TemplateVariable[];
   files: TemplateFile[];
-  entitlement: string | null;
   source: "builtin" | "custom";
 }
 

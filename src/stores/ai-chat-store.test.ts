@@ -42,7 +42,6 @@ vi.mock("~/integrations/ai/registry", () => ({
       spies.chatImpl!(messages, opts),
   }),
   activeProviderId: () => "anthropic",
-  hasAnyAiEntitlement: () => true,
 }));
 
 import { setProject } from "~/stores/editor-store";

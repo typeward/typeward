@@ -6,7 +6,6 @@ import { createEffect, createSignal, Show } from "solid-js";
 import { TextField } from "~/components/forms/TextField";
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
-import { hasEntitlement } from "~/integrations/entitlements";
 import { requestSaveTemplate_, setRequestSaveTemplate } from "~/commands/palette-store";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
@@ -44,10 +43,6 @@ export const SaveTemplateDialog: Component = () => {
     const p = project();
     if (!p) {
       setError("Open a project first.");
-      return;
-    }
-    if (!hasEntitlement("templates.custom.max")) {
-      setError("Custom templates require Typeward Pro.");
       return;
     }
     if (!name().trim()) {

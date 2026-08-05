@@ -61,6 +61,9 @@ pub struct ForwardLocation {
     pub y: f64,
     pub h: f64,
     pub v: f64,
+    /// Enclosing hbox extents in pt; 0.0 when synctex did not report a box.
+    pub width: f64,
+    pub height: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,7 +146,7 @@ pub(crate) fn inverse(
 }
 
 /// Parse `synctex view` output. Looks for the first SyncTeX result block
-/// and pulls out Page, x, y, h, v.
+/// and pulls out Page, x, y, h, v, W, H.
 fn parse_forward_result(text: &str) -> Option<ForwardLocation> {
     let mut in_block = false;
     let mut page: Option<u32> = None;
@@ -151,6 +154,8 @@ fn parse_forward_result(text: &str) -> Option<ForwardLocation> {
     let mut y: Option<f64> = None;
     let mut h: Option<f64> = None;
     let mut v: Option<f64> = None;
+    let mut width: Option<f64> = None;
+    let mut height: Option<f64> = None;
 
     for line in text.lines() {
         let line = line.trim();
@@ -181,10 +186,18 @@ fn parse_forward_result(text: &str) -> Option<ForwardLocation> {
             if h.is_none() {
                 h = rest.trim().parse().ok();
             }
-        } else if let Some(rest) = line.strip_prefix("v:")
-            && v.is_none()
+        } else if let Some(rest) = line.strip_prefix("v:") {
+            if v.is_none() {
+                v = rest.trim().parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("W:") {
+            if width.is_none() {
+                width = rest.trim().parse().ok();
+            }
+        } else if let Some(rest) = line.strip_prefix("H:")
+            && height.is_none()
         {
-            v = rest.trim().parse().ok();
+            height = rest.trim().parse().ok();
         }
     }
 
@@ -194,6 +207,8 @@ fn parse_forward_result(text: &str) -> Option<ForwardLocation> {
         y: y?,
         h: h.unwrap_or(0.0),
         v: v.unwrap_or(0.0),
+        width: width.unwrap_or(0.0),
+        height: height.unwrap_or(0.0),
     })
 }
 
@@ -327,6 +342,8 @@ mod tests {
         assert!((loc.y - 131.964).abs() < 1e-6);
         assert!((loc.h - 71.554).abs() < 1e-6);
         assert!((loc.v - 135.0).abs() < 1e-6);
+        assert!((loc.width - 469.957).abs() < 1e-6);
+        assert!((loc.height - 9.741).abs() < 1e-6);
     }
 
     #[test]

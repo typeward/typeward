@@ -15,17 +15,13 @@
 
 import type { Project } from "~/adapters/types";
 import {
-  createDropboxProvider,
-  type DropboxAccount,
-} from "~/integrations/cloud/dropbox";
-import {
   createWebdavProvider,
   type WebdavAccount,
 } from "~/integrations/cloud/webdav";
 import { projectCacheRoot } from "~/integrations/cloud/core";
 import type { CloudFsProvider } from "~/integrations/types";
 
-export type CloudProviderId = "dropbox" | "webdav";
+export type CloudProviderId = "webdav";
 
 /**
  * Registry idiom (cloud): unlike references (open reactive list) and AI
@@ -33,19 +29,20 @@ export type CloudProviderId = "dropbox" | "webdav";
  * a per-account factory with an exhaustive `switch`, because a provider is
  * instantiated on demand per active project.
  *
- * NOTE: `baseUrl`/`username`/`allowPrivateHost` are WebDAV-only and sit here as
- * optionals with an `asWebdav` runtime throw. The clean shape is a discriminated
- * union on `provider`, but the construction/copy sites live in cloud/init.ts and
- * cloud/create.ts (not owned by this change); tightening is deferred to a pass
- * that can touch those together.
+ * NOTE: `baseUrl`/`username`/`allowPrivateHost` stay optional even though WebDAV
+ * is now the only provider — they mirror `IntegrationsSettings.cloud.accounts`,
+ * where they are optional on both the TS and the Rust side, so a settings.json
+ * written by an older build (or edited by hand) can still yield an account
+ * without them. `asWebdav` is where that becomes an actionable error instead of
+ * a malformed request.
  */
 export interface CloudAccountRef {
   provider: CloudProviderId;
   accountId: string;
   /** Cached display label (email or "Display Name"). */
   label?: string;
-  // WebDAV-only: the server URL + username needed to rebuild the provider
-  // (the password is in the keyring). Absent for OAuth providers.
+  // The server URL + username needed to rebuild the provider (the password is
+  // in the keyring).
   baseUrl?: string;
   username?: string;
   allowPrivateHost?: boolean;
@@ -58,8 +55,6 @@ export interface CloudAccountRef {
  */
 export function cloudProviderForAccount(ref: CloudAccountRef): CloudFsProvider {
   switch (ref.provider) {
-    case "dropbox":
-      return createDropboxProvider(asDropbox(ref));
     case "webdav":
       return createWebdavProvider(asWebdav(ref));
     default: {
@@ -81,6 +76,10 @@ export function cacheRootForCloudProject(
  * Pull the cloud account ref off the project's persisted integrations
  * block, if any. The project carries provider + remote rootId; the
  * account credentials live in the user's IntegrationsSettings.
+ *
+ * A project bound to a provider this build no longer ships (a pre-existing
+ * Dropbox binding) reads as "not cloud-backed": the cache directory is a normal
+ * Typeward project, so it keeps opening and compiling — it just stops syncing.
  */
 export function readCloudOrigin(project: Project): {
   provider: CloudProviderId;
@@ -89,33 +88,19 @@ export function readCloudOrigin(project: Project): {
 } | null {
   const origin = project.integrations?.cloudOrigin;
   if (!origin) return null;
-  if (origin.provider !== "dropbox" && origin.provider !== "webdav") {
-    return null;
-  }
+  if (origin.provider !== "webdav") return null;
   return {
-    provider: origin.provider as CloudProviderId,
+    provider: origin.provider,
     accountId: origin.accountId,
     remotePath: origin.remotePath,
   };
 }
 
-// Coerce the lightweight CloudAccountRef into each provider's richer
-// account type. Only the id matters for the provider's HTTP path; the
-// display fields are cosmetics that surface in the provider's
-// displayName. Acceptable to default `email` to label or accountId when
-// the settings ref lost it.
+// Coerce the lightweight CloudAccountRef into the provider's richer account
+// type. WebDAV needs the server URL + username (the password is in the
+// keyring). The settings account ref carries them; if a pre-existing ref lost
+// them the user must reconnect.
 
-function asDropbox(ref: CloudAccountRef): DropboxAccount {
-  return {
-    accountId: ref.accountId,
-    email: ref.label ?? ref.accountId,
-    displayName: ref.label ?? ref.accountId,
-  };
-}
-
-// WebDAV needs the server URL + username (the password is in the keyring). The
-// settings account ref carries them; if a pre-existing ref lost them the user
-// must reconnect.
 function asWebdav(ref: CloudAccountRef): WebdavAccount {
   if (!ref.baseUrl || !ref.username) {
     throw new Error(

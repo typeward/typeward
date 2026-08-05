@@ -22,6 +22,7 @@ import {
 } from "~/commands/palette-store";
 import { commands as registryCommands } from "~/commands/registry";
 import { dispatchCommand } from "~/commands/run";
+import { BrandMark } from "~/components/primitives/BrandMark";
 import { scoreFields } from "~/lib/fuzzy";
 import { shortcutTokens } from "~/lib/shortcuts";
 import {
@@ -543,7 +544,7 @@ export const CommandPalette: Component = () => {
               run
             </span>
             <span class="ml-auto flex items-center gap-1.5">
-              <span class="h-3 w-3 rounded accent-grad" />
+              <BrandMark size={12} class="flex-shrink-0" />
               Typeward
             </span>
           </div>

@@ -19,7 +19,6 @@ import { TextField } from "~/components/forms/TextField";
 import { Button } from "~/components/primitives/Button";
 import { Dialog } from "~/components/primitives/Dialog";
 import { setCredential } from "~/integrations/auth/credentials";
-import { assertEntitlement, useEntitlement } from "~/integrations/entitlements";
 import {
   connectGithub,
   hasGithubCredential,
@@ -43,11 +42,6 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-
-  // A free user reaches this dialog via the Overleaf import entitlement, but
-  // GitHub/generic clones still need the Pro VCS key — hint before submit
-  // instead of surfacing a raw entitlement error afterward.
-  const gitEntitled = useEntitlement("integrations.vcs.git");
 
   const kind = createMemo<Kind>(() => {
     const u = url();
@@ -86,7 +80,6 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
   const connectGithubInline = async () => {
     setError(null);
     try {
-      assertEntitlement("integrations.vcs.github");
       await connectGithub();
     } catch (err) {
       setError(describeIpcError(err));
@@ -108,13 +101,6 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
     }
     setBusy(true);
     try {
-      // Overleaf's git bridge rides the git IPC but carries the free
-      // migration-import entitlement, not the Pro VCS one (repriced 2026-07-16).
-      if (kind() === "overleaf") {
-        assertEntitlement("integrations.vcs.overleaf_import");
-      } else {
-        assertEntitlement("integrations.vcs.git");
-      }
       // Stash credentials before triggering the clone so libgit2's
       // callback can find them.
       const host = hostFromUrl();
@@ -208,12 +194,6 @@ export const CloneDialog: Component<CloneDialogProps> = (props) => {
           }}
           placeholder={inferredName() || "my-thesis"}
         />
-
-        <Show when={kind() !== "overleaf" && !gitEntitled()}>
-          <div class="text-xs text-fg-3">
-            Cloning arbitrary repositories is part of Pro — Overleaf project links work on the free tier.
-          </div>
-        </Show>
 
         <Show when={kind() === "github"}>
           <div class="glass-inset flex items-center gap-2 rounded-md px-2.5 py-2">

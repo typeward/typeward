@@ -14,20 +14,18 @@ import {
 } from "./format-actions";
 import { registerCommand, unregisterCommand } from "./registry";
 import { notifyError, notifySuccess } from "~/lib/toast";
-import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
-import { hasEntitlement } from "~/integrations/entitlements";
 import { refreshLibraryBib } from "~/integrations/references/aggregator";
 import { activeFile, project } from "~/stores/editor-store";
 import {
   paletteOpen_,
-  setRequestFeedbackCard,
   setRequestHistoryPanel,
-  setRequestProDialog,
   setRequestSaveTemplate,
 } from "./palette-store";
 import { getActiveEditorView } from "~/stores/editor-view-store";
-import { createThread } from "~/lib/reviews/types";
-import { addThread, requestReviewPanelIntent } from "~/stores/review-store";
+import {
+  requestReviewCompose,
+  requestReviewPanelIntent,
+} from "~/stores/review-store";
 import { editorSettings, setEditorSettings } from "~/stores/settings-store";
 import { toggleFocusMode } from "~/stores/ui-store";
 import { isVisualEligibleFile } from "~/adapters/languages";
@@ -86,8 +84,7 @@ const CORE_COMMANDS: EditorCommand[] = [
     subtitle: "Capture the current project as a reusable custom template",
     group: "Project",
     scope: "global",
-    // Custom templates are Pro (templates.custom.max is '0' on free).
-    when: () => project() !== null && hasEntitlement("templates.custom.max"),
+    when: () => project() !== null,
     run: () => {
       setRequestSaveTemplate(true);
     },
@@ -100,21 +97,6 @@ const CORE_COMMANDS: EditorCommand[] = [
     scope: "global",
     run: () => {
       openSettings();
-    },
-  },
-  {
-    id: "core.whatsInPro",
-    title: "What's in Pro",
-    subtitle: "Plans, pricing, and what Typeward Pro unlocks",
-    group: "Navigation",
-    scope: "global",
-    // While discovery is on, deliberately visible on every tier — Pro users
-    // get the "you're on Pro" state. This is the one allowed palette entry
-    // about plans; the locked features' own commands stay hidden (palette
-    // noise rule). Hidden entirely during the free-only beta.
-    when: () => PRO_DISCOVERY_ENABLED,
-    run: () => {
-      setRequestProDialog(true);
     },
   },
   {
@@ -131,8 +113,8 @@ const CORE_COMMANDS: EditorCommand[] = [
   },
   {
     id: "core.fileHistory",
-    title: "File history",
-    subtitle: "Browse and restore earlier versions of the active file",
+    title: "Project history",
+    subtitle: "Browse and restore earlier versions across the project",
     group: "File",
     scope: "global",
     when: () => activeFile() !== null,
@@ -146,12 +128,7 @@ const CORE_COMMANDS: EditorCommand[] = [
     subtitle: "Re-pull every reference provider and rewrite .typeward/citations/library.bib",
     group: "References",
     scope: "global",
-    // All reference integrations are Pro; the local DOI store (local.bib)
-    // only ever gains entries through the Pro-gated lookup dialog.
-    when: () =>
-      project() !== null &&
-      (hasEntitlement("integrations.references.zotero.local") ||
-        hasEntitlement("integrations.references.doi_lookup")),
+    when: () => project() !== null,
     run: async () => {
       const proj = project();
       if (!proj) return;
@@ -185,12 +162,15 @@ const CORE_COMMANDS: EditorCommand[] = [
       if (!view || !f) return;
       const sel = view.state.selection.main;
       if (sel.from === sel.to) return;
-      const anchorText = view.state.doc.sliceString(sel.from, sel.to);
-      const thread = createThread(f.relPath, sel.from, sel.to, anchorText, "You", "");
-      // The store is the single source of truth; the CM decoration bridge
-      // (syncThreadsToView, driven from the shell) picks this up and renders
-      // the new anchor. No direct RangeSet dispatch here.
-      addThread(thread);
+      // Raise a compose intent instead of creating the thread outright: the
+      // popover collects the note first (matching the PDF selection flow),
+      // and only its submit adds the thread to the store.
+      requestReviewCompose({
+        kind: "comment",
+        from: sel.from,
+        to: sel.to,
+        anchorText: view.state.doc.sliceString(sel.from, sel.to),
+      });
     },
   },
   {
@@ -212,17 +192,12 @@ const CORE_COMMANDS: EditorCommand[] = [
       if (!view || !f) return;
       const sel = view.state.selection.main;
       if (sel.from === sel.to) return;
-      const anchorText = view.state.doc.sliceString(sel.from, sel.to);
-      const thread = createThread(
-        f.relPath,
-        sel.from,
-        sel.to,
-        anchorText,
-        "You",
-        "",
-        "todo",
-      );
-      addThread(thread);
+      requestReviewCompose({
+        kind: "todo",
+        from: sel.from,
+        to: sel.to,
+        anchorText: view.state.doc.sliceString(sel.from, sel.to),
+      });
     },
   },
   {
@@ -278,18 +253,6 @@ const CORE_COMMANDS: EditorCommand[] = [
     run: async () => {
       const { openBugReport } = await import("~/lib/bug-report");
       await openBugReport();
-    },
-  },
-  {
-    id: "core.sendFeedback",
-    title: "Send feedback",
-    subtitle: "Tell us what's working and what could be better",
-    group: "Help",
-    scope: "global",
-    // Manual opens ignore the occasional-prompt trigger state entirely — no
-    // cooldown check, no dismissal/shown bookkeeping (feedback-prompt.ts).
-    run: () => {
-      setRequestFeedbackCard("manual");
     },
   },
   {

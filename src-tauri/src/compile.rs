@@ -1051,7 +1051,8 @@ async fn run_engine_recipe(
         .await
         {
             Ok(output) => {
-                log.push_str(&merge_io(&output.stdout, &output.stderr));
+                let merged = merge_io(&output.stdout, &output.stderr);
+                log.push_str(&merged);
                 // A cancel aborts the whole recipe, not just the current pass.
                 if output.cancelled {
                     return Err(COMPILE_CANCELLED.into());
@@ -1064,6 +1065,18 @@ async fn run_engine_recipe(
                 }
                 if pass.is_engine {
                     last_engine_ok = output.success();
+                    // An engine pass that aborted WITHOUT producing a PDF
+                    // poisons everything after it: bibtex reads a truncated
+                    // .aux, and each rerun re-reports the same errors into the
+                    // concatenated log (duplicate cards, broken line
+                    // attribution). Later passes exist only to settle
+                    // references — there is nothing to settle without a
+                    // document. Recoverable nonstopmode errors still emit a
+                    // PDF and keep the full sequence, so compile-with-errors
+                    // workflows are unaffected.
+                    if !last_engine_ok && merged.contains("no output PDF file produced") {
+                        return Ok((log, false));
+                    }
                 } else if !output.success() {
                     log.push_str(&format!(
                         "\n[{} exit: {}]\n",
@@ -1264,38 +1277,80 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
             source: "compile".into(),
         });
     }
-    for (i, line) in log.lines().enumerate() {
+    let lines: Vec<&str> = log.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("! ") {
+            let message = trimmed.trim_start_matches("! ").trim_start().to_string();
+            // TeX's abort summary ("!  ==> Fatal error occurred, no output
+            // PDF file produced!") restates the error reported just above it;
+            // a second card carrying no independent information is noise, and
+            // the failure state is already surfaced by the errors pill.
+            if message.starts_with("==> Fatal error occurred") {
+                continue;
+            }
+            // The diagnostic's line must be a SOURCE line, never the log line
+            // index: click-to-jump feeds it to the editor. TeX prints the
+            // source position as an `l.<n>` context line shortly after the
+            // error; without one the position is unknown, and line 1 is the
+            // honest fallback.
+            let mut src_line = 1u32;
+            for follow in lines.iter().skip(i + 1).take(15) {
+                let f = follow.trim_start();
+                if f.starts_with("! ") {
+                    break;
+                }
+                if f.starts_with("l.")
+                    && let Some(n) = digits_after(f, "l.")
+                {
+                    src_line = n;
+                    break;
+                }
+            }
             out.push(Diagnostic {
                 severity: "error".into(),
-                message: trimmed.trim_start_matches("! ").to_string(),
+                message,
                 file: entry.to_string(),
-                line: (i + 1) as u32,
+                line: src_line,
                 source: "compile".into(),
             });
         } else if trimmed.contains("Warning:") {
+            // LaTeX warnings carry their own position ("on input line 12").
             out.push(Diagnostic {
                 severity: "warning".into(),
                 message: trimmed.to_string(),
                 file: entry.to_string(),
-                line: (i + 1) as u32,
+                line: digits_after(trimmed, "on input line ").unwrap_or(1),
                 source: "compile".into(),
             });
         } else if (trimmed.starts_with("Overfull") || trimmed.starts_with("Underfull"))
             && trimmed.contains("box")
         {
             // Boxes that don't fit — informational, not errors/warnings.
+            // Their position reads "in paragraph at lines 5--6".
             out.push(Diagnostic {
                 severity: "info".into(),
                 message: trimmed.to_string(),
                 file: entry.to_string(),
-                line: (i + 1) as u32,
+                line: digits_after(trimmed, "at lines ").unwrap_or(1),
                 source: "compile".into(),
             });
         }
     }
     out
+}
+
+/// First run of ASCII digits directly after `marker` in `s`, if any.
+fn digits_after(s: &str, marker: &str) -> Option<u32> {
+    let rest = &s[s.find(marker)? + marker.len()..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if end == 0 {
+        None
+    } else {
+        rest[..end].parse().ok()
+    }
 }
 
 // ---------- Typst compile -------------------------------------------------
@@ -2038,7 +2093,31 @@ Package hyperref Warning: Draft mode on.
                 .iter()
                 .all(|d| d.file == "main.tex" && d.source == "compile")
         );
-        // Line numbers are 1-based positions within the log.
-        assert!(diags.iter().all(|d| d.line >= 1));
+        // Positions are SOURCE lines: the error takes its `l.15` context
+        // line, the citation warning its "on input line 12", and the
+        // position-less LaTeX Error falls back to 1.
+        assert_eq!(errors[0].line, 15);
+        assert_eq!(errors[1].line, 1);
+        assert_eq!(warnings[0].line, 12);
+    }
+
+    #[test]
+    fn parse_latex_log_skips_the_fatal_error_summary() {
+        // TeX's abort summary restates the error above it; one error, one card.
+        let log = "! Undefined control sequence.\nl.28 \\oops\n\
+                   !  ==> Fatal error occurred, no output PDF file produced!\n";
+        let diags = parse_latex_log(log, "main.tex");
+        let errors: Vec<_> = diags.iter().filter(|d| d.severity == "error").collect();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "Undefined control sequence.");
+        assert_eq!(errors[0].line, 28);
+    }
+
+    #[test]
+    fn parse_latex_log_overfull_boxes_carry_paragraph_lines() {
+        let log = "Overfull \\hbox (12.3pt too wide) in paragraph at lines 5--6\n";
+        let diags = parse_latex_log(log, "main.tex");
+        assert_eq!(diags[0].severity, "info");
+        assert_eq!(diags[0].line, 5);
     }
 }

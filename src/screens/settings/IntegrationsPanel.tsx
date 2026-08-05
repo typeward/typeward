@@ -17,13 +17,10 @@ import {
 import type { Component, JSX } from "solid-js";
 import { Show, createResource, createSignal, For } from "solid-js";
 
-import { FeatureGate } from "~/components/entitlement/FeatureGate";
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { Button } from "~/components/primitives/Button";
 import { Switch } from "~/components/forms/Switch";
 import { TextField } from "~/components/forms/TextField";
-import { assertEntitlement, hasEntitlement } from "~/integrations/entitlements";
-import type { EntitlementKey } from "~/integrations/types";
 import {
   credentialExists,
   deleteCredential,
@@ -31,11 +28,7 @@ import {
 } from "~/integrations/auth/credentials";
 import { httpRequest } from "~/integrations/http";
 import { createOllamaProvider } from "~/integrations/ai/ollama";
-import {
-  type AiProviderId,
-  getProvider,
-  hasAnyAiEntitlement,
-} from "~/integrations/ai/registry";
+import { type AiProviderId, getProvider } from "~/integrations/ai/registry";
 import {
   connectMendeley,
   disconnectMendeley,
@@ -48,10 +41,6 @@ import {
   disconnectGithub,
   hasGithubCredential,
 } from "~/integrations/vcs/github";
-import {
-  connectDropbox,
-  disconnectDropbox,
-} from "~/integrations/cloud/dropbox";
 import { connectWebdav, disconnectWebdav } from "~/integrations/cloud/webdav";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -59,26 +48,6 @@ import { notifySuccess } from "~/lib/toast";
 import * as ipc from "~/ipc";
 
 export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
-
-/**
- * Category-level entitlement checks. Every integration is Pro (repricing
- * 2026-07-08). SettingsScreen imports these to decide per category whether
- * to render the cards or the quiet locked state (nav row + Pro chip +
- * ProLockedPanel — discovery amendment 2026-07-08; the cards themselves
- * never render on a locked tier). Reactive inside tracking scopes.
- */
-export const referencesEntitled = (): boolean =>
-  hasEntitlement("integrations.references.zotero.local") ||
-  hasEntitlement("integrations.references.zotero.web") ||
-  hasEntitlement("integrations.references.mendeley");
-export const cloudEntitled = (): boolean =>
-  hasEntitlement("integrations.cloud.dropbox") ||
-  hasEntitlement("integrations.cloud.webdav");
-export const vcsEntitled = (): boolean =>
-  hasEntitlement("integrations.vcs.git") || hasEntitlement("integrations.vcs.github");
-export const aiEntitled = (): boolean => hasAnyAiEntitlement();
-export const grammarEntitled = (): boolean =>
-  hasEntitlement("integrations.grammar.harper");
 
 /**
  * One card per integration category. The Settings nav exposes each as its
@@ -115,22 +84,14 @@ export const IntegrationsPanel: Component<{ section?: IntegrationsSection }> = (
 
 const ReferencesCard: Component = () => {
   return (
-    <Show when={referencesEntitled()}>
-      <Card
-        title="References"
-        subtitle="Connect a reference manager to autocomplete \\cite{…} keys and append the aggregated library to the project's .bib."
-      >
-        <FeatureGate feature="integrations.references.zotero.local">
-          <BetterBibTexRow />
-        </FeatureGate>
-        <FeatureGate feature="integrations.references.zotero.web">
-          <ZoteroWebRow />
-        </FeatureGate>
-        <FeatureGate feature="integrations.references.mendeley">
-          <MendeleyRow />
-        </FeatureGate>
-      </Card>
-    </Show>
+    <Card
+      title="References"
+      subtitle="Connect a reference manager to autocomplete \\cite{…} keys and append the aggregated library to the project's .bib."
+    >
+      <BetterBibTexRow />
+      <ZoteroWebRow />
+      <MendeleyRow />
+    </Card>
   );
 };
 
@@ -216,7 +177,6 @@ const ZoteroWebRow: Component = () => {
 
     setBusy(true);
     try {
-      assertEntitlement("integrations.references.zotero.web");
       // Stash the key first so the probe call uses it via the keyring.
       await setCredential({ service: "zotero-web", account: userId }, apiKey);
       const probe = await httpRequest({
@@ -383,7 +343,6 @@ const MendeleyRow: Component = () => {
     setError(null);
     setBusy(true);
     try {
-      assertEntitlement("integrations.references.mendeley");
       persistMendeley(); // keep the redirect URL even if sign-in fails
       const account = await connectMendeley(redirectInput().trim());
       persistMendeley({
@@ -501,121 +460,14 @@ const MendeleyRow: Component = () => {
 // Cloud storage card
 // =================================================================
 
-const CLOUD_PROVIDERS = [
-  {
-    id: "dropbox" as const,
-    name: "Dropbox",
-    feature: "integrations.cloud.dropbox" as const,
-    hint: "Hybrid sync — your project lives in a local cache that polls Dropbox via longpoll cursor. Conflicts surface as `.conflict-*` files.",
-    connect: connectDropbox,
-    disconnect: disconnectDropbox,
-  },
-];
-
 const CloudStorageCard: Component = () => {
   return (
-    <Show when={cloudEntitled()}>
-      <Card
-        title="Cloud storage"
-        subtitle="Open a project from your cloud root. Files stay local-first; the engine polls for remote changes and pushes on autosave."
-      >
-        <For each={CLOUD_PROVIDERS}>
-          {(provider) => (
-            <FeatureGate feature={provider.feature}>
-              <CloudProviderRow provider={provider} />
-            </FeatureGate>
-          )}
-        </For>
-        <FeatureGate feature="integrations.cloud.webdav">
-          <WebdavRow />
-        </FeatureGate>
-      </Card>
-    </Show>
-  );
-};
-
-interface CloudProviderConfig {
-  id: "dropbox";
-  name: string;
-  feature: EntitlementKey;
-  hint: string;
-  connect: () => Promise<{ accountId: string; email: string; displayName: string }>;
-  disconnect: (accountId: string) => Promise<void>;
-}
-
-const CloudProviderRow: Component<{ provider: CloudProviderConfig }> = (props) => {
-  const account = () =>
-    integrationsSettings().cloud.accounts.find((a) => a.provider === props.provider.id);
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-
-  const handleConnect = async () => {
-    setError(null);
-    setBusy(true);
-    try {
-      assertEntitlement(props.provider.feature);
-      const acc = await props.provider.connect();
-      setIntegrationsSettings({
-        ...integrationsSettings(),
-        cloud: {
-          accounts: [
-            ...integrationsSettings().cloud.accounts.filter(
-              (a) => a.provider !== props.provider.id,
-            ),
-            { provider: props.provider.id, accountId: acc.accountId, label: acc.displayName },
-          ],
-        },
-      });
-    } catch (err) {
-      setError(describeIpcError(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDisconnect = async () => {
-    const current = account();
-    if (!current) return;
-    try {
-      await props.provider.disconnect(current.accountId);
-    } catch (e) {
-      notifyError(`Couldn't disconnect ${props.provider.name}`, errorText(e));
-      return;
-    }
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      cloud: {
-        accounts: integrationsSettings().cloud.accounts.filter(
-          (a) => a.provider !== props.provider.id,
-        ),
-      },
-    });
-  };
-
-  return (
-    <ProviderRow
-      name={props.provider.name}
-      hint={account() ? `Connected as ${account()!.label}.` : props.provider.hint}
-      status={account() ? "ready" : "unconfigured"}
-      controls={
-        <Show
-          when={account()}
-          fallback={
-            <Button variant="primary" size="sm" class="h-8" onClick={handleConnect} disabled={busy()}>
-              {busy() ? "Connecting…" : "Sign in"}
-            </Button>
-          }
-        >
-          <Button variant="ghost" size="sm" class="h-8" onClick={handleDisconnect}>
-            Disconnect
-          </Button>
-        </Show>
-      }
+    <Card
+      title="Cloud storage"
+      subtitle="Open a project from a WebDAV server. Files stay local-first; the engine polls for remote changes and pushes on autosave."
     >
-      <Show when={error()}>
-        <div class="mt-3 select-text text-xs text-[var(--color-err)]">{error()}</div>
-      </Show>
-    </ProviderRow>
+      <WebdavRow />
+    </Card>
   );
 };
 
@@ -648,7 +500,6 @@ const WebdavRow: Component = () => {
     }
     setBusy(true);
     try {
-      assertEntitlement("integrations.cloud.webdav");
       const connected = await connectWebdav({
         url: normalizeWebdavUrl(url()),
         username: user,
@@ -705,7 +556,7 @@ const WebdavRow: Component = () => {
   return (
     <ProviderRow
       name="WebDAV"
-      hint="Self-hosted or hosted WebDAV — Nextcloud, ownCloud, Fastmail, mailbox.org, a NAS. Use an app password (not your account password); it's required when 2FA is on. Files sync into a local cache, like Dropbox."
+      hint="Self-hosted or hosted WebDAV — Nextcloud, ownCloud, Fastmail, mailbox.org, a NAS. Use an app password (not your account password); it's required when 2FA is on. Files sync through a local cache, so edits work offline and conflicts surface as `.conflict-*` files."
       status={accounts().length > 0 ? "ready" : "unconfigured"}
       controls={
         <Button
@@ -798,19 +649,13 @@ const WebdavRow: Component = () => {
 
 const VcsCard: Component = () => {
   return (
-    <Show when={vcsEntitled()}>
-      <Card
-        title="Git & GitHub"
-        subtitle="Commit / push / pull from inside the editor. Clone repos as new projects. Set your author identity here so commits go through with the right name and email."
-      >
-        <FeatureGate feature="integrations.vcs.git">
-          <AuthorIdentityRow />
-        </FeatureGate>
-        <FeatureGate feature="integrations.vcs.github">
-          <GithubAccountRow />
-        </FeatureGate>
-      </Card>
-    </Show>
+    <Card
+      title="Git & GitHub"
+      subtitle="Commit / push / pull from inside the editor. Clone repos as new projects. Set your author identity here so commits go through with the right name and email."
+    >
+      <AuthorIdentityRow />
+      <GithubAccountRow />
+    </Card>
   );
 };
 
@@ -958,7 +803,6 @@ const GithubAccountRow: Component = () => {
 interface AiKnownProvider {
   id: AiProviderId;
   name: string;
-  feature: EntitlementKey;
   hint: string;
   /** Keyring service for the API key. Ollama has no auth. */
   keyringService?: string;
@@ -973,7 +817,6 @@ const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
   anthropic: {
     id: "anthropic",
     name: "Claude (Anthropic)",
-    feature: "integrations.ai.anthropic",
     hint: "Paste a key from console.anthropic.com → API Keys. Streaming via the Messages API; the key never leaves the keyring.",
     keyringService: "anthropic",
     keyUrl: "https://console.anthropic.com/settings/keys",
@@ -981,7 +824,6 @@ const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
   openai: {
     id: "openai",
     name: "ChatGPT (OpenAI)",
-    feature: "integrations.ai.openai",
     hint: "Paste a key from platform.openai.com → API keys. Chat Completions endpoint with bearer auth.",
     keyringService: "openai",
     keyUrl: "https://platform.openai.com/api-keys",
@@ -989,7 +831,6 @@ const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
   gemini: {
     id: "gemini",
     name: "Gemini (Google)",
-    feature: "integrations.ai.gemini",
     hint: "Paste an API key from aistudio.google.com. The key attaches as a request header inside the Rust layer; it never leaves the keyring on the frontend side.",
     keyringService: "gemini",
     keyUrl: "https://aistudio.google.com/apikey",
@@ -997,7 +838,6 @@ const AI_PROVIDERS: Record<AiProviderId, AiKnownProvider> = {
   ollama: {
     id: "ollama",
     name: "Ollama (local)",
-    feature: "integrations.ai.ollama",
     hint: "Local models via the Ollama app — auto-detected, nothing to configure. Install from ollama.com, pull a model, and it shows up here.",
   },
 };
@@ -1027,28 +867,22 @@ const AiCard: Component = () => {
   };
 
   return (
-    <Show when={aiEntitled()}>
-      <Card
-        title="AI"
-        subtitle="Optional assistant chat in the editor, routed through the provider you pick. Turn it off to hide every AI surface — no provider runs, nothing leaves the machine."
-      >
-        <ProviderRow
-          name="AI assistant"
-          hint="Master switch. Off removes the chat panel and its toolbar button from the editor and deactivates the provider below."
-          status={ai().enabled ? "ready" : "unconfigured"}
-          controls={<Switch checked={ai().enabled} onChange={setEnabled} />}
-        />
-        <Show when={ai().enabled}>
-          <For each={AI_PROVIDER_LIST}>
-            {(p) => (
-              <FeatureGate feature={p.feature}>
-                <AiProviderRow provider={p} onActivate={setActive} />
-              </FeatureGate>
-            )}
-          </For>
-        </Show>
-      </Card>
-    </Show>
+    <Card
+      title="AI"
+      subtitle="Optional assistant chat in the editor, routed through the provider you pick. Turn it off to hide every AI surface — no provider runs, nothing leaves the machine."
+    >
+      <ProviderRow
+        name="AI assistant"
+        hint="Master switch. Off removes the chat panel and its toolbar button from the editor and deactivates the provider below."
+        status={ai().enabled ? "ready" : "unconfigured"}
+        controls={<Switch checked={ai().enabled} onChange={setEnabled} />}
+      />
+      <Show when={ai().enabled}>
+        <For each={AI_PROVIDER_LIST}>
+          {(p) => <AiProviderRow provider={p} onActivate={setActive} />}
+        </For>
+      </Show>
+    </Card>
   );
 };
 
@@ -1109,7 +943,6 @@ const AiProviderRow: Component<{
     }
     setBusy(true);
     try {
-      assertEntitlement(props.provider.feature);
       // Probe the key by hitting the provider's /models endpoint
       // through Rust so the bearer never crosses the IPC the wrong way.
       const { setCredential, deleteCredential } = await import(
@@ -1166,7 +999,6 @@ const AiProviderRow: Component<{
               size="sm"
               class="h-8"
               onClick={() => {
-                if (!isActive()) assertEntitlement(props.provider.feature);
                 props.onActivate(isActive() ? undefined : props.provider.id);
               }}
             >
@@ -1373,7 +1205,6 @@ const GrammarCard: Component = () => {
   };
 
   return (
-    <FeatureGate feature="integrations.grammar.harper">
     <Card
       title="Grammar"
       subtitle="Local Harper grammar + spell check. Runs in-process via the Rust crate — zero network, all on-device. LaTeX commands and Typst code are skipped automatically; diagnostics surface as squiggles with one-click fixes."
@@ -1480,7 +1311,6 @@ const GrammarCard: Component = () => {
         </Show>
       </ProviderRow>
     </Card>
-    </FeatureGate>
   );
 };
 

@@ -84,7 +84,6 @@ import {
   integrationsSettings,
   LINE_HEIGHT_VALUES,
 } from "~/stores/settings-store";
-import { hasEntitlement } from "~/integrations/entitlements";
 import { harperLinter } from "~/lib/grammar/cm6";
 import { clearGrammarDiagnostics, grammarTotalCount } from "~/stores/grammar-store";
 import { asGrammarDialect } from "~/ipc";
@@ -113,6 +112,7 @@ import {
   visualPopoverIntent,
 } from "~/stores/visual-store";
 import { VisualPopover } from "~/components/editor/visual/VisualPopover";
+import { ReviewComposePopover } from "~/components/reviews/ReviewComposePopover";
 import { resolveProjectAsset } from "~/lib/file-url";
 import {
   centerSplit,
@@ -157,11 +157,8 @@ import { anchoredMenuEvent } from "~/lib/menu-position";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
 
-// Harper is Pro — grammar wiring needs the entitlement on top of the user
-// toggle. Locked means zero grammar UI and zero grammar IPC.
-const grammarActive = () =>
-  integrationsSettings().grammar.enabled &&
-  hasEntitlement("integrations.grammar.harper");
+// Off means zero grammar UI and zero grammar IPC.
+const grammarActive = () => integrationsSettings().grammar.enabled;
 
 export const TextShell: Component<{
   onSelectFile: (relPath: string) => void;
@@ -438,29 +435,42 @@ const DesktopLayout: Component<ShellProps> = (props) => {
   // the persisted width (workspace.sidebarPx) wins over the content fit —
   // reactive through desiredPx, so the async settings hydrate still applies.
   const [tabsWidth, setTabsWidth] = createSignal<number | undefined>();
+  // Default/floor width of the left sidebar until the user drags the handle.
+  const SIDEBAR_DEFAULT_PX = 340;
   const clampSidebar = (px: number) => Math.min(440, Math.max(200, px));
   const fittedWidth = () => {
     const w = tabsWidth();
-    return w ? Math.max(w + 4, 340) : undefined;
+    return w ? Math.max(w + 4, SIDEBAR_DEFAULT_PX) : undefined;
+  };
+  // True only while the resize handle is held down. corvu echoes programmatic
+  // sizes (initial mount, window-resize reflow, the panel's min-clamped first
+  // paint) through onSizesChange too, and no value comparison can tell those
+  // from a drag — boot echoes used to persist phantom widths (a min-clamped
+  // 200, or the old default minus a scrollbar) and permanently freeze the
+  // content-fit behavior. The pointer is the only honest signal.
+  const [sidebarDragging, setSidebarDragging] = createSignal(false);
+  const beginSidebarDrag = () => {
+    setSidebarDragging(true);
+    const end = () => setSidebarDragging(false);
+    window.addEventListener("pointerup", end, { once: true });
+    window.addEventListener("pointercancel", end, { once: true });
   };
   const sidebar = createSidebarResize({
     minPx: 200,
     maxPx: 440,
-    defaultPx: sidebarPx() ?? 340,
+    defaultPx: sidebarPx() ?? SIDEBAR_DEFAULT_PX,
     desiredPx: () => sidebarPx() ?? fittedWidth(),
+    isDragging: sidebarDragging,
   });
-  // Mirror genuine drags into the persisted signal. corvu echoes programmatic
-  // sizes (initial mount, window-resize reflow) through onSizesChange too, so
-  // a report matching the current target within the hook's own 1px tolerance
-  // is not a drag and must not freeze the content-fit behavior.
+  // Mirror genuine drags into the persisted signal; anything reported while
+  // the handle is not held down is an echo and must not touch settings.
   let resizableEl: HTMLDivElement | undefined;
   const onSidebarSizesChange = (next: number[]) => {
     sidebar.onSizesChange(next);
+    if (!sidebarDragging()) return;
     const w = resizableEl?.getBoundingClientRect().width ?? 0;
     if (w <= 0 || next[0] === undefined) return;
-    const px = next[0] * w;
-    const target = clampSidebar(sidebarPx() ?? fittedWidth() ?? 300);
-    if (Math.abs(px - target) > 1) setSidebarPx(Math.round(clampSidebar(px)));
+    setSidebarPx(Math.round(clampSidebar(next[0] * w)));
   };
 
   // Editor/preview split — one persisted fraction (workspace.centerSplit)
@@ -566,6 +576,7 @@ const DesktopLayout: Component<ShellProps> = (props) => {
       <Resizable.Handle
         aria-label="Resize sidebar"
         class="group relative w-[6px] shrink-0"
+        onPointerDown={beginSidebarDrag}
       >
         <div class="absolute inset-y-2 left-1 right-1 rounded-sm transition group-hover:bg-[linear-gradient(180deg,var(--color-accent-1),var(--color-accent-2))] group-hover:opacity-70" />
       </Resizable.Handle>
@@ -1330,6 +1341,10 @@ const CenterPane: Component<{
       <Show when={visualPopoverIntent()}>
         <VisualPopover />
       </Show>
+
+      {/* Compose popover for editor-anchored review comments/TODOs — gates
+          itself on its own intent signal. */}
+      <ReviewComposePopover />
 
       <Show when={tabMenu.menu()}>
         {(m) => (

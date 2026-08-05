@@ -4,7 +4,7 @@
  * Every integration — reference managers, cloud storage, VCS, AI providers,
  * grammar checkers, template sources — implements one of these. The seam
  * lets the rest of the app stay format-agnostic and provider-agnostic; UI
- * code talks to interfaces, not Zotero / Dropbox / Anthropic by name.
+ * code talks to interfaces, not Zotero / WebDAV / Anthropic by name.
  *
  * Providers are registered through per-category registries (see
  * src/integrations/<category>/registry.ts files added in later phases) and
@@ -128,7 +128,7 @@ export interface CitationProvider extends IntegrationProvider {
 // ----- Cloud filesystem --------------------------------------------------
 
 export interface RemoteFolder {
-  /** Provider-scoped opaque id. For path-based providers (Dropbox), this is
+  /** Provider-scoped opaque id. For path-based providers (WebDAV), this is
    * the path; for id-based providers it's the opaque file id. */
   id: string;
   name: string;
@@ -192,8 +192,8 @@ export type SyncPhase =
   | "error"
   /** Network-shaped failure — transient, the engine retries on its own. */
   | "offline"
-  /** A cloud-bound project whose engine cannot start (credentials or
-   *  entitlement gone) — persistent until the user reconnects. */
+  /** A cloud-bound project whose engine cannot start (credentials gone) —
+   *  persistent until the user reconnects. */
   | "disconnected";
 
 export interface SyncStatus {
@@ -286,8 +286,6 @@ export interface TemplateManifest {
   thumbnail?: string;
   rootFile: string;
   variables: TemplateVariable[];
-  /** Entitlement key required to use this template; checked at instantiate time. */
-  entitlement?: string;
 }
 
 export interface TemplateProvider extends IntegrationProvider {
@@ -298,56 +296,4 @@ export interface TemplateProvider extends IntegrationProvider {
     destPath: string,
     vars: Record<string, string>,
   ): Promise<Project>;
-}
-
-// ----- Entitlements ------------------------------------------------------
-
-export type Tier = "free" | "pro";
-
-/**
- * Every known entitlement key. This is the canonical in-repo list — the free
- * matrix (`entitlements.ts`), the gating call sites, and the remote
- * `entitlements_map` (seed.sql) must all agree with it. Adding a gated feature
- * starts here so a typo at any call site is a compile error rather than a
- * silently hidden feature (sources default closed + FeatureGate renders
- * nothing for unknown keys).
- *
- * Naming rule: dot-separated, lowercase, never repurposed once shipped.
- */
-export const KNOWN_ENTITLEMENT_KEYS = [
-  // Free tier — the core LaTeX editor (repriced 2026-07-08). Everything
-  // below this group is Pro.
-  "templates.builtin.free",
-  // Pro — format extensions
-  "formats.typst",
-  // Pro — integrations
-  "integrations.references.zotero.local",
-  "integrations.references.zotero.web",
-  "integrations.references.mendeley",
-  "integrations.references.doi_lookup",
-  "integrations.vcs.git",
-  "integrations.vcs.github",
-  "integrations.vcs.overleaf_import",
-  "integrations.cloud.dropbox",
-  "integrations.cloud.webdav",
-  "integrations.ai.anthropic",
-  "integrations.ai.openai",
-  "integrations.ai.gemini",
-  "integrations.ai.ollama",
-  "integrations.grammar.harper",
-  // Pro — capped limits ('0' on Free, 'unlimited' on Pro)
-  "templates.custom.max",
-] as const;
-
-/**
- * Entitlement keys identify a gated feature. Closed union — call sites that
- * construct keys dynamically from a provider id (e.g. `integrations.ai.${id}`)
- * typecheck only because every provider id maps to a listed key.
- */
-export type EntitlementKey = (typeof KNOWN_ENTITLEMENT_KEYS)[number];
-
-export interface EntitlementSource {
-  current(): Tier;
-  has(key: EntitlementKey): boolean;
-  reasonIfMissing(key: EntitlementKey): "no-account" | "wrong-tier" | "expired" | undefined;
 }

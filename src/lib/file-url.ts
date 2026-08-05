@@ -1,9 +1,13 @@
 /**
- * Local-asset URL helpers shared by the markdown preview and the visual
- * editor's figure widgets. The security posture lives HERE, once: only
- * project-relative paths resolve (no absolute paths, no parent traversal,
- * no NULs), and callers build asset URLs exclusively from a trusted base
- * directory + a safe relative path — remote/beacon URLs never enter.
+ * Local-asset URL helpers shared by the markdown preview, the visual editor's
+ * figure widgets, and the profile avatar. The security posture lives HERE,
+ * once: a path is only ever turned into an asset URL when it is already
+ * trusted, and document-supplied paths reach `fileUrlFromPath` exclusively via
+ * `resolveProjectAsset`/`safeRelativePath` — a trusted base directory plus a
+ * project-relative path with no absolute prefix, no parent traversal and no
+ * NULs. Remote/beacon URLs never enter. The one bare `fileUrlFromPath` caller
+ * (the avatar) passes an absolute path Rust produced under `<app_data>` from a
+ * file the user picked, so no document ever chooses it.
  */
 
 import { convertFileSrc } from "@tauri-apps/api/core";

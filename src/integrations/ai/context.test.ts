@@ -10,7 +10,6 @@ vi.mock("~/stores/settings-store", () => ({
   integrationsSettings: () => ({ ai: { enabled: true, perProviderModel: {} } }),
 }));
 vi.mock("~/integrations/ai/registry", () => ({
-  hasAnyAiEntitlement: () => true,
   activeProvider: () => null,
   activeProviderId: () => null,
 }));

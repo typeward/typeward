@@ -23,6 +23,7 @@ mod integrations;
 mod ipc_guard;
 #[cfg(desktop)]
 mod lsp;
+mod profile;
 mod project;
 mod settings;
 #[cfg(desktop)]
@@ -258,9 +259,9 @@ pub fn run() {
         synctex::synctex_inverse,
         commands::load_settings,
         commands::save_settings,
-        commands::load_sync_state,
-        commands::save_sync_state,
         commands::reset_settings,
+        profile::set_profile_avatar,
+        profile::clear_profile_avatar,
         commands::export_project_zip,
         #[cfg(desktop)]
         export_pandoc::export_pandoc,
@@ -294,8 +295,6 @@ pub fn run() {
         diagnostics::scan_and_submit_crashes,
         diagnostics::collect_system_info,
         integrations::credentials::credential_set,
-        integrations::credentials::credential_get,
-        integrations::credentials::supabase_session_read,
         integrations::credentials::credential_exists,
         integrations::credentials::credential_delete,
         integrations::http::http_request,

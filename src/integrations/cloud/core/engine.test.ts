@@ -33,7 +33,7 @@ import type {
 import { SyncEngine } from "./engine";
 import { clearSyncStatus, getSyncStatus, recordConflicts } from "./sync-status";
 
-const PROVIDER_ID = "dropbox";
+const PROVIDER_ID = "webdav";
 const PROJECT_ID = "proj-1";
 const ROOT_ID = "/remote/root";
 const CACHE_ROOT = "/cache/proj-1";

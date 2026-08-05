@@ -4,17 +4,8 @@
 # (workflow_dispatch). No pushes, no PRs — CI minutes only burn when
 # you explicitly ask for a build.
 #
-# Layout note: package.json depends on `texlive-wasm: file:../texlive-wasm`,
-# so this repo is checked out into `app/` and the sibling repo into
-# `texlive-wasm/` (built before `npm ci` — without its dist/, both Vite and
-# tsc fail to resolve the package). The sibling checks out at the release tag
-# pinned in package.json `config.texliveWasm` — the ONE place the engine
-# version is recorded (_plans/41-texlive-wasm-release-ops.md §2) — so CI
-# builds a known engine release instead of tracking the sibling's main; local
-# dev keeps the file: link and is unaffected. typeward/texlive-wasm is public,
-# so the default GITHUB_TOKEN checks it out with no extra secret. (A stale
-# SIBLING_REPO_TOKEN secret used to override this and broke CI when it
-# expired — the workflows no longer reference it; delete the secret.)
+# Layout note: this repo is checked out into `app/` — every step's
+# working-directory and artifact glob below is written against that path.
 #
 # Per platform we install the right dev deps, fetch the Tectonic
 # sidecar binary (gitignored; `npm run fetch:tectonic` resolves it for
@@ -29,10 +20,7 @@
 # Run anyway."
 #
 # Secrets used at build time (all optional — the app degrades gracefully):
-#   - VITE_SUPABASE_URL              — staging Supabase project URL
-#   - VITE_SUPABASE_ANON_KEY         — staging publishable / anon key
 #   - VITE_MENDELEY_CLIENT_ID
-#   - VITE_DROPBOX_CLIENT_ID
 #   - VITE_GITHUB_CLIENT_ID
 # Set them under Settings → Secrets and variables → Actions when you
 # want sign-in / OAuth surfaces to work in the test build.
@@ -54,9 +42,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
-# Reads this repo + the public texlive-wasm sibling; the installers leave as a
-# workflow artifact (the artifact API runs off the runtime token, not this
-# scope). Nothing is written back to the repo.
+# Reads this repo; the installers leave as a workflow artifact (the artifact
+# API runs off the runtime token, not this scope). Nothing is written back to
+# the repo.
 permissions:
   contents: read
 
@@ -122,37 +110,13 @@ jobs:
         with:
           path: app
 
-      # Runner-preinstalled Node is enough here; setup-node runs later.
-      - name: Read texlive-wasm pin
-        if: steps.gate.outputs.build == 'true'
-        id: texlive
-        shell: bash
-        working-directory: app
-        run: |
-          ref="$(node -p "require('./package.json').config?.texliveWasm")"
-          if [ -z "$ref" ] || [ "$ref" = "undefined" ]; then
-            echo "::error::package.json is missing config.texliveWasm — the texlive-wasm sibling checkout has no pinned ref."
-            exit 1
-          fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout texlive-wasm sibling
-        if: steps.gate.outputs.build == 'true'
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: typeward/texlive-wasm
-          ref: ${{ steps.texlive.outputs.ref }}
-          path: texlive-wasm
-
       - name: Set up Node
         if: steps.gate.outputs.build == 'true'
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: |
-            app/package-lock.json
-            texlive-wasm/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - name: Set up Rust
         if: steps.gate.outputs.build == 'true'
@@ -185,13 +149,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Build texlive-wasm sibling
-        if: steps.gate.outputs.build == 'true'
-        working-directory: texlive-wasm
-        run: |
-          npm ci
-          npm run build
-
       - name: Install npm deps
         if: steps.gate.outputs.build == 'true'
         working-directory: app
@@ -213,13 +170,10 @@ jobs:
         if: steps.gate.outputs.build == 'true'
         working-directory: app
         env:
-          # Secrets propagate to the Vite build at compile time. Empty
-          # values are fine — the client returns null and the app stays
-          # in free-tier / no-Supabase mode.
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Secrets propagate to the Vite build at compile time. Empty values
+          # are fine — the OAuth sign-in paths surface an actionable
+          # "register your app" error instead of failing the build.
           VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
-          VITE_DROPBOX_CLIENT_ID: ${{ secrets.VITE_DROPBOX_CLIENT_ID }}
           VITE_GITHUB_CLIENT_ID: ${{ secrets.VITE_GITHUB_CLIENT_ID }}
         run: npm run tauri build
 

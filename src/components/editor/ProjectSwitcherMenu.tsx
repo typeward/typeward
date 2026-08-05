@@ -2,6 +2,7 @@ import { useNavigate } from "@solidjs/router";
 import { ArrowLeft, ChevronDown, FolderOpen } from "lucide-solid";
 import type { Component } from "solid-js";
 import { For, Show, createSignal } from "solid-js";
+import { BrandMark } from "~/components/primitives/BrandMark";
 import { installDismiss } from "~/lib/dismiss";
 import { handleMenuKeydown, useMenuOpenFocus } from "~/lib/menu-nav";
 import { project } from "~/stores/editor-store";
@@ -44,9 +45,7 @@ export const ProjectSwitcherMenu: Component<{
         aria-expanded={open()}
         class="lift flex h-7 items-center gap-1.5 rounded-md px-2.5 hover:bg-[var(--color-control-fill)]"
       >
-        <span class="flex h-4 w-4 items-center justify-center rounded-[5px] accent-grad">
-          <span class="text-[9px] font-bold">τ</span>
-        </span>
+        <BrandMark size={16} class="flex-shrink-0" />
         <span class="max-w-[220px] truncate text-sm font-semibold tracking-tight text-fg-1">
           {project()?.name ?? "—"}
         </span>

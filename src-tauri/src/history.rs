@@ -1,10 +1,9 @@
-//! Local per-file version history (FREE, no account). Every successful save
-//! records at most one version per file per five minutes into a
-//! content-addressed store under `<app_data>/history/<project-id>/` —
-//! gzip-compressed blobs named by the SHA-256 of their *uncompressed* content
-//! plus one small `index.json` mapping relative paths to ordered version
-//! entries. Restore always force-records the state it is about to overwrite,
-//! so a restore is never destructive.
+//! Local per-file version history. Every successful save records at most one
+//! version per file per five minutes into a content-addressed store under
+//! `<app_data>/history/<project-id>/` — gzip-compressed blobs named by the
+//! SHA-256 of their *uncompressed* content plus one small `index.json` mapping
+//! relative paths to ordered version entries. Restore always force-records the
+//! state it is about to overwrite, so a restore is never destructive.
 //!
 //! The store lives in app-data — NOT the `.typeward/` sidecar — on purpose:
 //! history survives the scenario it exists for (project folder deleted or
@@ -50,8 +49,7 @@ const MAX_FORCED_SNAPSHOT_BYTES: u64 = 64 * 1024 * 1024;
 const MIN_INTERVAL_MS: i64 = 5 * 60 * 1000;
 
 /// Text project sources worth versioning: the texlive-wasm walker's text set
-/// plus `typ`/`md`/`txt`, minus build artifacts like `.aux`. `.typ` is listed
-/// unconditionally — history is FREE and free users can open `.typ` files.
+/// plus `typ`/`md`/`txt`, minus build artifacts like `.aux`.
 const TRACKED_EXTS: &[&str] = &[
     "tex", "typ", "bib", "cls", "sty", "bst", "def", "ldf", "fd", "clo", "cnf", "md", "txt",
 ];
@@ -187,9 +185,9 @@ fn read_index(store: &Path) -> Result<HistoryIndex, HistoryError> {
         return Ok(HistoryIndex::default());
     }
     let bytes = fs::read(path)?;
-    // A corrupt index degrades to empty rather than wedging history forever
-    // (same convention as settings.rs::load_sync_state); writes are atomic so
-    // this is a crash-mid-rename edge, not an expected path.
+    // A corrupt index degrades to empty rather than wedging history forever;
+    // writes are atomic so this is a crash-mid-rename edge, not an expected
+    // path.
     Ok(serde_json::from_slice(&bytes).unwrap_or_default())
 }
 

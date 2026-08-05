@@ -4,7 +4,7 @@
  *
  * Phase 2.1 ships the scaffold: lifecycle, status hooks, conflict
  * detection, cursor persistence. Provider-specific transport details
- * (longpoll cadence for Dropbox) arrive with each provider.
+ * (enumeration, delta derivation, poll cadence) arrive with each provider.
  */
 
 import { createSignal } from "solid-js";
@@ -85,7 +85,7 @@ export interface SyncEngineOptions {
   projectsRoot: string;
   /** Actual local project/cache root opened by the editor. */
   cacheRoot?: string;
-  /** Default poll interval; providers can override per call (e.g. Dropbox longpoll). */
+  /** Default poll interval; providers can override per call. */
   pollIntervalMs?: number;
 }
 

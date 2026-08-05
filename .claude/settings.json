@@ -1,13 +1,11 @@
 {
   "enabledPlugins": {
     "context7@claude-plugins-official": true,
-    "superpowers@claude-plugins-official": true,
     "frontend-design@claude-plugins-official": true,
     "codex@openai-codex": true,
     "github@claude-plugins-official": true,
     "ralph-loop@claude-plugins-official": true,
     "security-guidance@claude-plugins-official": true,
-    "supabase@claude-plugins-official": true,
     "serena@claude-plugins-official": true
   }
 }

@@ -16,26 +16,21 @@ import { setupAutosave } from "~/lib/autosave";
 import { installSentryGate } from "~/lib/sentry-gate";
 import { installFrontendErrorHook, recordError } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
-import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
 import { registerAiEditorActions } from "~/integrations/ai/editor-actions";
 import { initAiProviders } from "~/integrations/ai/init";
 import { initCloudSync } from "~/integrations/cloud/init";
 import { initReferenceProviders } from "~/integrations/references/init";
 import { initCustomThemes } from "~/themes/custom-themes";
-import { loadSupabaseConfig } from "~/config/supabase";
 import {
   installGlobalShortcuts,
   uninstallGlobalShortcuts,
 } from "~/commands/keyboard";
 import {
   requestAiAction_,
-  requestFeedbackCard_,
-  requestProDialog_,
   requestSaveTemplate_,
   requestUpdateDialog_,
   setNavigator,
 } from "~/commands/palette-store";
-import { scheduleFeedbackPrompt } from "~/lib/feedback-prompt";
 import { installMenuBridge } from "~/lib/menu-bridge";
 import { installOpenWith } from "~/lib/open-with";
 import { scheduleBootUpdateCheck } from "~/lib/updater";
@@ -57,13 +52,6 @@ const SaveTemplateDialog = lazy(() =>
     default: m.SaveTemplateDialog,
   })),
 );
-// Same treatment as SaveTemplateDialog — the ProDialog chunk also pulls the
-// supabase session module, which must stay off the boot path.
-const ProDialog = lazy(() =>
-  import("~/components/entitlement/ProDialog").then((m) => ({
-    default: m.ProDialog,
-  })),
-);
 // Lazy like the others — the updater plugin JS and this dialog's chunk stay
 // off the boot path until an update is actually found.
 const UpdateDialog = lazy(() =>
@@ -71,19 +59,12 @@ const UpdateDialog = lazy(() =>
     default: m.UpdateDialog,
   })),
 );
-// Lazy like ProDialog — the diff stack (@codemirror/merge) inside stays a
-// dynamic import of its own, so nothing heavy loads until an AI editor
-// action actually runs.
+// Lazy like the other dialogs — the diff stack (@codemirror/merge) inside
+// stays a dynamic import of its own, so nothing heavy loads until an AI
+// editor action actually runs.
 const AiActionDialog = lazy(() =>
   import("~/components/editor/AiActionDialog").then((m) => ({
     default: m.AiActionDialog,
-  })),
-);
-// Lazy like the dialogs — most sessions never open the feedback card, so its
-// chunk (submission + card UI) stays off the boot path until one does.
-const FeedbackCard = lazy(() =>
-  import("~/components/feedback/FeedbackCard").then((m) => ({
-    default: m.FeedbackCard,
   })),
 );
 
@@ -101,31 +82,6 @@ initCloudSync();
 initAiProviders();
 registerAiEditorActions();
 initCustomThemes();
-
-/**
- * Supabase auth/session + entitlement boot is deferred behind a dynamic
- * import so `@supabase/supabase-js` stays out of the entry chunk and never
- * parses during cold launch (to first paint). When Supabase isn't configured
- * (no env vars) the chunk is never fetched — `loadSupabaseConfig()` only reads
- * `import.meta.env` and doesn't pull in the client. Scheduled post-first-paint
- * from AppShell's onMount. Entitlement consumers stay on the synchronous
- * free-tier default until the source swap resolves (FeatureGate defaults
- * closed and is reactive), matching the pre-existing async behavior.
- */
-function bootSupabaseDeferred(): void {
-  if (!loadSupabaseConfig()) return;
-  void (async () => {
-    const [{ startSupabaseSession }, { initSupabaseEntitlements }, { initSettingsSync }] =
-      await Promise.all([
-        import("~/integrations/supabase/session"),
-        import("~/integrations/supabase/entitlements-source"),
-        import("~/integrations/supabase/settings-sync"),
-      ]);
-    startSupabaseSession();
-    initSupabaseEntitlements();
-    initSettingsSync();
-  })();
-}
 
 /**
  * Recoverable fallback for a render/effect throw anywhere under the app shell.
@@ -288,12 +244,6 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestSaveTemplate_()) setSaveTemplateTouched(true);
   });
-  // Never latches while Pro discovery is off (free-only beta) — the dialog
-  // stays unmounted and its chunk unfetched even if a stray request fires.
-  const [proDialogTouched, setProDialogTouched] = createSignal(false);
-  createEffect(() => {
-    if (PRO_DISCOVERY_ENABLED && requestProDialog_()) setProDialogTouched(true);
-  });
   const [updateDialogTouched, setUpdateDialogTouched] = createSignal(false);
   createEffect(() => {
     if (requestUpdateDialog_()) setUpdateDialogTouched(true);
@@ -302,30 +252,20 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestAiAction_()) setAiActionTouched(true);
   });
-  const [feedbackTouched, setFeedbackTouched] = createSignal(false);
-  createEffect(() => {
-    if (requestFeedbackCard_()) setFeedbackTouched(true);
-  });
 
   let cancelBootUpdateCheck: (() => void) | undefined;
-  let cancelFeedbackPrompt: (() => void) | undefined;
   onMount(() => {
     installGlobalShortcuts();
     document.addEventListener("contextmenu", onContextMenu);
-    bootSupabaseDeferred();
     // Delayed post-paint update check — dormant until a pubkey is configured
     // AND the user leaves auto-checking on; never blocks startup.
     cancelBootUpdateCheck = scheduleBootUpdateCheck(updatesCheckAutomatically);
-    // Occasional feedback prompt — records the session, then maybe raises the
-    // card after the same post-paint deferral shape as the update check.
-    cancelFeedbackPrompt = scheduleFeedbackPrompt();
   });
 
   onCleanup(() => {
     uninstallGlobalShortcuts();
     document.removeEventListener("contextmenu", onContextMenu);
     cancelBootUpdateCheck?.();
-    cancelFeedbackPrompt?.();
   });
 
   return (
@@ -339,11 +279,6 @@ const AppShell: Component<{ children?: any }> = (props) => {
           <SaveTemplateDialog />
         </Suspense>
       </Show>
-      <Show when={proDialogTouched()}>
-        <Suspense>
-          <ProDialog />
-        </Suspense>
-      </Show>
       <Show when={updateDialogTouched()}>
         <Suspense>
           <UpdateDialog />
@@ -352,11 +287,6 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={aiActionTouched()}>
         <Suspense>
           <AiActionDialog />
-        </Suspense>
-      </Show>
-      <Show when={feedbackTouched()}>
-        <Suspense>
-          <FeedbackCard />
         </Suspense>
       </Show>
       <Toaster />

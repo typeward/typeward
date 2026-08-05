@@ -15,8 +15,9 @@ import {
 /**
  * "Update available" dialog. Non-modal by policy (privacy brand — prompt,
  * never silent-install): lazy-mounted once at the App root and driven by the
- * `requestUpdateDialog` signal, same pattern as ProDialog. Release notes render
- * as plain text — no markdown/HTML sink for release-authored content.
+ * `requestUpdateDialog` signal, same pattern as SaveTemplateDialog. Release
+ * notes render as plain text — no markdown/HTML sink for release-authored
+ * content.
  */
 export const UpdateDialog: Component = () => {
   const info = requestUpdateDialog_;

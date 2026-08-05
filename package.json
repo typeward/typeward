@@ -2,10 +2,8 @@
   "name": "typeward",
   "private": true,
   "version": "0.0.1",
+  "license": "GPL-3.0-or-later",
   "type": "module",
-  "config": {
-    "texliveWasm": "9f9beda5914e9eb78bba51792647267352cb472d"
-  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -35,13 +33,13 @@
     "@replit/codemirror-vim": "^6.4.0",
     "@sentry/browser": "^10.69.0",
     "@solidjs/router": "^1.0.0",
-    "@supabase/supabase-js": "^2.111.0",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-fs": "^2.5.1",
     "@tauri-apps/plugin-opener": "^2.5.0",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
+    "@typeward/texlive-wasm": "0.2.4-alpha",
     "corvu": "^0.7.2",
     "dompurify": "^3.4.12",
     "katex": "^0.18.1",
@@ -50,8 +48,7 @@
     "markdown-it-anchor": "^9.2.1",
     "nanoid": "^5.1.16",
     "pdfjs-dist": "^6.2.108",
-    "solid-js": "^1.9.14",
-    "texlive-wasm": "file:../texlive-wasm"
+    "solid-js": "^1.9.14"
   },
   "devDependencies": {
     "@sentry/vite-plugin": "^5.4.0",

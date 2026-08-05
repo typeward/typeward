@@ -13,23 +13,18 @@ import {
   GitBranch,
   Info,
   Keyboard,
-  Key,
-  LogOut,
   Palette,
   Shield,
   Sparkles,
   SpellCheck,
   Trash2,
   Type,
+  User,
 } from "lucide-solid";
 import { Switch as KSwitch } from "@kobalte/core/switch";
 import type { Component, JSX } from "solid-js";
-import { For, Show, createEffect, createResource, createSignal, onCleanup } from "solid-js";
-import { FeatureGate } from "~/components/entitlement/FeatureGate";
-import { ProChip, ProLockedPanel } from "~/components/entitlement/ProChip";
-import { setRequestProDialog } from "~/commands/palette-store";
-import { PRO_DISCOVERY_ENABLED } from "~/config/pro";
-import { errorText, notifyError } from "~/components/feedback/Toaster";
+import { For, Show, createResource, createSignal, onCleanup } from "solid-js";
+import { notifyError } from "~/components/feedback/Toaster";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Slider } from "~/components/forms/Slider";
@@ -42,18 +37,9 @@ import { commands } from "~/commands/registry";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
-import { currentTier } from "~/integrations/entitlements";
-import { signOut, supabaseUser } from "~/integrations/supabase/session";
-import { AccountSection } from "./AccountSection";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
-import {
-  IntegrationsPanel,
-  aiEntitled,
-  cloudEntitled,
-  grammarEntitled,
-  referencesEntitled,
-  vcsEntitled,
-} from "./IntegrationsPanel";
+import { IntegrationsPanel } from "./IntegrationsPanel";
+import { ProfileSection } from "./ProfileSection";
 import {
   type CompileEngine,
   type EditorSettings,
@@ -61,14 +47,12 @@ import {
   buildSettings,
   compileEngine,
   editorSettings,
-  feedbackPromptsEnabled,
   historyMaxVersions,
   integrationsSettings,
   projectsRoot,
   latchDensityChoice,
   setCompileEngine,
   setEditorSettings,
-  setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setIntegrationsSettings,
   setProjectsRoot,
@@ -135,7 +119,7 @@ import { isTauriMobile } from "~/lib/platform";
 import { isTabletViewport, touchAffordances } from "~/stores/viewport-store";
 
 type SectionId =
-  | "account"
+  | "profile"
   | "notifications"
   | "security"
   | "diagnostics"
@@ -155,11 +139,6 @@ interface NavItem {
   label: string;
   icon: Component<{ size?: number; class?: string }>;
   badge?: string;
-  /** While Pro discovery is on, the row stays visible when locked (discovery
-   *  amendment 2026-07-08) with a quiet Pro chip and its panel renders a
-   *  locked state instead of the cards. While it's off (free-only beta),
-   *  locked rows hide entirely — the pre-amendment behavior. */
-  locked?: () => boolean;
 }
 
 interface NavGroup {
@@ -167,13 +146,13 @@ interface NavGroup {
   items: NavItem[];
 }
 
-// Placeholder sections (Profile, Team, Language, Billing, Usage) were
-// removed from the nav entirely — they come back when their features do.
+// Placeholder sections (Team, Language, Usage) were removed from the nav
+// entirely — they come back when their features do.
 const NAV: NavGroup[] = [
   {
-    label: "Account",
+    label: "Application",
     items: [
-      { id: "account", label: "Account & plan", icon: Key },
+      { id: "profile", label: "Profile", icon: User },
       // The "Notifications" row is unlisted while delivery doesn't exist —
       // the panel was a fully inert preview. NotificationsPanel stays in this
       // file so the row can return with the real feature.
@@ -194,11 +173,11 @@ const NAV: NavGroup[] = [
   {
     label: "Integrations",
     items: [
-      { id: "int-references", label: "References", icon: BookMarked, locked: () => !referencesEntitled() },
-      { id: "int-cloud", label: "Cloud storage", icon: Cloud, locked: () => !cloudEntitled() },
-      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch, locked: () => !vcsEntitled() },
-      { id: "int-ai", label: "AI providers", icon: Sparkles, locked: () => !aiEntitled() },
-      { id: "int-grammar", label: "Grammar", icon: SpellCheck, locked: () => !grammarEntitled() },
+      { id: "int-references", label: "References", icon: BookMarked },
+      { id: "int-cloud", label: "Cloud storage", icon: Cloud },
+      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch },
+      { id: "int-ai", label: "AI providers", icon: Sparkles },
+      { id: "int-grammar", label: "Grammar", icon: SpellCheck },
     ],
   },
 ];
@@ -211,10 +190,10 @@ const SECTION_IDS: ReadonlySet<string> = new Set(
 // hand-maintained keyword list covering the settings that live inside it.
 // Substring match only — no content-level highlighting.
 const SECTION_KEYWORDS: Record<SectionId, string[]> = {
-  account: ["plan", "subscription", "pro", "sign in", "email", "billing", "sync settings"],
+  profile: ["name", "profile", "avatar", "author", "identity"],
   notifications: ["email", "push", "quiet hours"],
-  security: ["privacy", "crash reports", "telemetry", "sentry", "feedback", "two-factor", "2fa", "reset", "danger"],
-  diagnostics: ["telemetry", "log", "errors", "report", "bug", "crash"],
+  security: ["privacy", "crash reports", "telemetry", "sentry", "reset", "danger"],
+  diagnostics: ["telemetry", "log", "errors", "report", "bug", "crash", "feedback"],
   about: ["version", "updates", "release", "check for updates"],
   editor: [
     "engine", "compile", "latexmk", "tectonic", "autosave", "history", "versions",
@@ -231,7 +210,7 @@ const SECTION_KEYWORDS: Record<SectionId, string[]> = {
     "word count", "notifications panel", "workspace",
   ],
   "int-references": ["zotero", "mendeley", "bibtex", "citations", "bibliography", "doi", "arxiv"],
-  "int-cloud": ["dropbox", "webdav", "nextcloud", "owncloud", "sync", "cloud storage"],
+  "int-cloud": ["webdav", "nextcloud", "owncloud", "sync", "cloud storage"],
   "int-vcs": ["git", "github", "overleaf", "commit", "clone", "version control", "repository"],
   "int-ai": ["ai", "claude", "anthropic", "openai", "chatgpt", "gemini", "ollama", "chat", "models"],
   "int-grammar": ["harper", "grammar", "spelling", "spell check", "dictionary"],
@@ -241,6 +220,9 @@ const SECTION_KEYWORDS: Record<SectionId, string[]> = {
  *  two-pane layout and level 2 of the tablet drill-down. */
 const SectionPanel: Component<{ id: SectionId }> = (props) => (
   <>
+    <Show when={props.id === "profile"}>
+      <ProfileSection />
+    </Show>
     <Show when={props.id === "appearance"}>
       <AppearancePanel />
     </Show>
@@ -264,35 +246,20 @@ const SectionPanel: Component<{ id: SectionId }> = (props) => (
     <Show when={props.id === "about"}>
       <AboutPanel />
     </Show>
-    {/* Locked integration sections render a quiet Pro state instead
-        of their cards; entitled users see everything as before. */}
     <Show when={props.id === "int-references"}>
-      <Show when={referencesEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-        <IntegrationsPanel section="references" />
-      </Show>
+      <IntegrationsPanel section="references" />
     </Show>
     <Show when={props.id === "int-cloud"}>
-      <Show when={cloudEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-        <IntegrationsPanel section="cloud" />
-      </Show>
+      <IntegrationsPanel section="cloud" />
     </Show>
     <Show when={props.id === "int-vcs"}>
-      <Show when={vcsEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-        <IntegrationsPanel section="vcs" />
-      </Show>
+      <IntegrationsPanel section="vcs" />
     </Show>
     <Show when={props.id === "int-ai"}>
-      <Show when={aiEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-        <IntegrationsPanel section="ai" />
-      </Show>
+      <IntegrationsPanel section="ai" />
     </Show>
     <Show when={props.id === "int-grammar"}>
-      <Show when={grammarEntitled()} fallback={<ProLockedPanel class="py-16" />}>
-        <IntegrationsPanel section="grammar" />
-      </Show>
-    </Show>
-    <Show when={props.id === "account"}>
-      <AccountSection />
+      <IntegrationsPanel section="grammar" />
     </Show>
     <Show when={props.id === "shortcuts"}>
       <ShortcutsPanel />
@@ -347,10 +314,8 @@ const SettingsScreen: Component = () => {
   window.addEventListener("keydown", onEscapeKeydown);
   onCleanup(() => window.removeEventListener("keydown", onEscapeKeydown));
 
-  // One-shot deep link (e.g. onboarding's "Sign in" → Account). With Pro
-  // discovery on, locked integration rows don't hide, so no visibility
-  // bounce is needed there. On tablet the deep link lands directly on the
-  // section (level 2), not on the nav list.
+  // One-shot deep link into a named section. On tablet it lands directly on
+  // the section (level 2), not on the nav list.
   const intent = settingsSectionIntent();
   if (intent) {
     setSettingsSectionIntent(null);
@@ -360,27 +325,9 @@ const SettingsScreen: Component = () => {
     }
   }
 
-  // While Pro discovery is off, locked integration rows hide from the nav —
-  // and a group they empty out hides with them. The sidebar filter narrows
-  // the same list; a group with no matches hides through the same length gate.
-  const visibleItems = (g: NavGroup) =>
-    g.items.filter(
-      (item) => (PRO_DISCOVERY_ENABLED || !item.locked?.()) && matchesQuery(item),
-    );
-
-  // A locked section can vanish from the nav underneath the user (e.g.
-  // sign-out while an integrations panel is open); bounce off the now-blank
-  // panel instead of stranding them on it.
-  createEffect(() => {
-    if (PRO_DISCOVERY_ENABLED) return;
-    const item = NAV.flatMap((g) => g.items).find((i) => i.id === active());
-    if (item?.locked?.()) {
-      setActive("appearance");
-      // On tablet, bounce all the way back to the nav list rather than
-      // teleporting the user into a section they never opened.
-      setDrilled(false);
-    }
-  });
+  // The sidebar filter narrows each group's rows; a group with no matches
+  // hides through the same length gate.
+  const visibleItems = (g: NavGroup) => g.items.filter(matchesQuery);
 
   // Back-button label + target derived from `nav-store.previousRoute`. Falls
   // back to /projects when the user opened Settings via a fresh boot or deep
@@ -395,14 +342,6 @@ const SettingsScreen: Component = () => {
     setPreviousRoute(null);
     navigate(prev ?? "/projects");
   };
-  const handleSignOut = async () => {
-    try {
-      await signOut();
-    } catch (e) {
-      notifyError("Couldn't sign out", errorText(e));
-    }
-  };
-
   return (
     <div class="no-emoji relative h-full w-full overflow-hidden bg-bg-base">
       <AmbientBackdrop />
@@ -484,16 +423,6 @@ const SettingsScreen: Component = () => {
                                     {item.badge}
                                   </span>
                                 </Show>
-                                <Show when={item.locked?.()}>
-                                  <span class="ml-auto">
-                                    <ProChip />
-                                  </span>
-                                </Show>
-                                <Show when={item.id === "account"}>
-                                  <span class="mono ml-auto rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
-                                    {currentTier()}
-                                  </span>
-                                </Show>
                               </button>
                             );
                           }}
@@ -503,19 +432,6 @@ const SettingsScreen: Component = () => {
                   )}
                 </For>
               </div>
-              <Show when={supabaseUser()}>
-                <div class="border-t border-glass-stroke p-3">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    class="h-8 w-full"
-                    leadingIcon={<LogOut class="ui-icon-sm" />}
-                    onClick={() => void handleSignOut()}
-                  >
-                    Sign out
-                  </Button>
-                </div>
-              </Show>
             </div>
 
             {/* Main panel */}
@@ -583,14 +499,6 @@ const SettingsScreen: Component = () => {
                                         {item.badge}
                                       </span>
                                     </Show>
-                                    <Show when={item.locked?.()}>
-                                      <ProChip />
-                                    </Show>
-                                    <Show when={item.id === "account"}>
-                                      <span class="mono rounded-full accent-grad px-1.5 py-0.5 text-xs font-semibold capitalize">
-                                        {currentTier()}
-                                      </span>
-                                    </Show>
                                     <ChevronRight size={14} style={{ opacity: 0.5 }} />
                                   </span>
                                 </button>
@@ -601,19 +509,6 @@ const SettingsScreen: Component = () => {
                       )}
                     </For>
                   </div>
-                  <Show when={supabaseUser()}>
-                    <div class="border-t border-glass-stroke p-3">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="h-8 w-full"
-                        leadingIcon={<LogOut class="ui-icon-sm" />}
-                        onClick={() => void handleSignOut()}
-                      >
-                        Sign out
-                      </Button>
-                    </div>
-                  </Show>
                 </div>
               }
             >
@@ -1679,7 +1574,7 @@ const EditorPanel: Component = () => {
 
       <Card
         title="File history"
-        subtitle="Every save keeps a local version of the file (at most one per five minutes), restorable from the editor's History tab. Free, on this device only."
+        subtitle="Every save keeps a local version of the file (at most one per five minutes), restorable from the editor's History tab. On this device only."
       >
         <div class="px-5 py-4">
           <Slider
@@ -1766,33 +1661,17 @@ const EditorPanel: Component = () => {
           checked={editorSettings().visualModeLatex}
           onChange={(v) => update("visualModeLatex", v)}
         />
-        <FeatureGate
-          feature="integrations.grammar.harper"
-          // The locked row is a discovery surface — without the flag the row
-          // vanishes entirely (FeatureGate's default locked-renders-nothing).
-          fallback={
-            PRO_DISCOVERY_ENABLED ? (
-              <Row
-                label="Spell & grammar check"
-                hint="On-device grammar and spelling via Harper. Part of Typeward Pro."
-              >
-                <ProChip onClick={() => setRequestProDialog(true)} />
-              </Row>
-            ) : undefined
+        <ToggleRow
+          label="Spell & grammar check"
+          hint="Powered by Harper — configure it under Settings → Integrations → Grammar."
+          checked={integrationsSettings().grammar.enabled}
+          onChange={(v) =>
+            setIntegrationsSettings((prev) => ({
+              ...prev,
+              grammar: { ...prev.grammar, enabled: v },
+            }))
           }
-        >
-          <ToggleRow
-            label="Spell & grammar check"
-            hint="Powered by Harper — configure it under Settings → Integrations → Grammar."
-            checked={integrationsSettings().grammar.enabled}
-            onChange={(v) =>
-              setIntegrationsSettings((prev) => ({
-                ...prev,
-                grammar: { ...prev.grammar, enabled: v },
-              }))
-            }
-          />
-        </FeatureGate>
+        />
       </Card>
 
       <Card title="PDF preview" subtitle="How the compiled output is displayed.">
@@ -2033,35 +1912,6 @@ const SecurityPanel: Component = () => {
           checked={shareCrashReports()}
           onChange={setShareCrashReports}
         />
-      </Card>
-
-      <Card
-        title="Feedback"
-        subtitle="Nothing is sent unless you press Send on the feedback card."
-      >
-        <ToggleRow
-          label="Occasionally ask for feedback"
-          hint="Every once in a while (at most once a month), show a small card asking how Typeward is working for you. You can always send feedback yourself via the command palette."
-          checked={feedbackPromptsEnabled()}
-          onChange={setFeedbackPromptsEnabled}
-        />
-      </Card>
-
-      <Card
-        title="Two-factor authentication"
-        subtitle="Add a second factor to protect your account."
-        action={<SoonBadge />}
-      >
-        <Row label="Authenticator app" hint="Configured once cloud auth lands.">
-          <Button variant="secondary" size="sm" class="h-8" disabled>
-            Reconfigure
-          </Button>
-        </Row>
-        <Row label="Recovery codes" hint="One-time codes printed when 2FA is set up.">
-          <Button variant="secondary" size="sm" class="h-8" disabled>
-            View codes
-          </Button>
-        </Row>
       </Card>
 
       <Card title="Danger zone">

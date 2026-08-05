@@ -4,7 +4,7 @@ import type * as ipc from "~/ipc";
 import type { CommentThread } from "~/lib/reviews/types";
 import { ThreadCard } from "~/components/reviews/ThreadCard";
 import { activeFile, requestGotoSource } from "~/stores/editor-store";
-import { offsetToLine } from "~/lib/reviews/lines";
+import { offsetToLine, toLF } from "~/lib/reviews/lines";
 import { scannedTodos } from "~/stores/todo-store";
 import {
   allThreads,
@@ -51,8 +51,10 @@ export const TodoPanel: Component = () => {
   const lineNumberFor = (thread: CommentThread): number | null => {
     const f = activeFile();
     if (!f || f.relPath !== thread.fileRelPath) return null;
-    if (thread.fromOffset < 0 || thread.fromOffset > f.content.length) return null;
-    return offsetToLine(f.content, thread.fromOffset);
+    // Offsets are LF-space; a buffer fresh off disk may still carry CRLF.
+    const content = toLF(f.content);
+    if (thread.fromOffset < 0 || thread.fromOffset > content.length) return null;
+    return offsetToLine(content, thread.fromOffset);
   };
 
   const jumpToThread = (thread: CommentThread) => {

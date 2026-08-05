@@ -1,4 +1,4 @@
-import type { EngineConfig, EngineHandle, EngineId, VfsBackend } from "texlive-wasm";
+import type { EngineConfig, EngineHandle, EngineId, VfsBackend } from "@typeward/texlive-wasm";
 
 /**
  * Engine artifacts (glue `.js` + `.wasm`) are served from the app's OWN origin:
@@ -145,8 +145,8 @@ let enginesPromise: Promise<EngineBundle> | null = null;
 export function getEngineBundle(): Promise<EngineBundle> {
   if (enginesPromise) return enginesPromise;
   const p = (async () => {
-    const { createEngine } = await import("texlive-wasm");
-    const { createTauriFs } = await import("texlive-wasm/tauri");
+    const { createEngine } = await import("@typeward/texlive-wasm");
+    const { createTauriFs } = await import("@typeward/texlive-wasm/tauri");
     const { BaseDirectory } = await import("@tauri-apps/plugin-fs");
     const vfs: VfsBackend[] = [
       await createTauriFs({ texmfRoot: TEXMF_ROOT, baseDir: BaseDirectory.Resource }),

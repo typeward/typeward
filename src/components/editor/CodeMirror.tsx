@@ -111,9 +111,17 @@ const baseTheme = EditorView.theme({
     borderLeftColor: "var(--color-accent-1)",
     borderLeftWidth: "2px",
   },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-    background: "var(--color-text-selection)",
-  },
+  // The focused arm mirrors the package base theme's selector shape on
+  // purpose: @codemirror/view styles the focused selection with
+  // "&light.cm-focused > .cm-scroller > .cm-selectionLayer
+  // .cm-selectionBackground" (five classes), so any shorter selector loses
+  // the cascade only while focused and the stock lavender shows instead of
+  // the theme token. Matching the shape ties specificity; extension themes
+  // mount after the base theme, so the tie breaks our way in both states.
+  ".cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
+    {
+      background: "var(--color-text-selection)",
+    },
   ".cm-lineNumbers .cm-gutterElement": {
     padding: "0 14px 0 10px",
     minWidth: "32px",

@@ -124,6 +124,12 @@ export function usePerProjectBuild(active: () => boolean) {
 interface BuildConfigMenuProps {
   /** Which way the popover expands from its trigger. */
   direction: "up" | "down";
+  /**
+   * Span the trigger's full width (left-0 right-0) instead of the fixed
+   * 248px panel. Only for full-width triggers like the sidebar EnginePill;
+   * the status bar's tiny pill keeps the fixed width.
+   */
+  matchTriggerWidth?: boolean;
   onClose: () => void;
   onOpenSettings: () => void;
 }
@@ -182,9 +188,9 @@ export const BuildConfigMenu: Component<BuildConfigMenuProps> = (props) => {
       aria-label="Build configuration"
       tabindex={-1}
       onKeyDown={(e) => handleListboxKeydown(e, panelRef, props.onClose)}
-      class={`glass absolute left-0 z-50 w-[248px] rounded-lg py-1.5 ${
-        props.direction === "up" ? "bottom-full mb-1" : "top-full mt-1"
-      }`}
+      class={`glass absolute z-50 rounded-lg py-1.5 ${
+        props.matchTriggerWidth ? "left-0 right-0" : "left-0 w-[248px]"
+      } ${props.direction === "up" ? "bottom-full mb-1" : "top-full mt-1"}`}
       style={{ background: "var(--color-popover-bg)" }}
     >
       <Show when={eff()}>

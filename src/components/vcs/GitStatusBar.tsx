@@ -19,16 +19,12 @@ import {
   onCleanup,
 } from "solid-js";
 
-import { useEntitlement } from "~/integrations/entitlements";
 import * as ipc from "~/ipc";
 import { project } from "~/stores/editor-store";
 
 const POLL_INTERVAL_MS = 30_000;
 
 export const GitStatusBar: Component = () => {
-  // Git is Pro — unentitled sessions get no badge and, more importantly, no
-  // background libgit2 status walks.
-  const gitEntitled = useEntitlement("integrations.vcs.git");
   const [tick, setTick] = createSignal(0);
   let handle: ReturnType<typeof setInterval> | undefined;
   const stopPolling = () => {
@@ -47,7 +43,7 @@ export const GitStatusBar: Component = () => {
   // forever on plain folders for the whole session.
   createEffect(
     on(
-      () => [project()?.rootPath, gitEntitled()] as const,
+      () => project()?.rootPath,
       () => {
         stopPolling();
         // Slow background cadence only catches external git activity while
@@ -72,11 +68,7 @@ export const GitStatusBar: Component = () => {
   });
 
   const [summary] = createResource(
-    () =>
-      [
-        gitEntitled() && ipc.gitAvailable() ? project()?.rootPath : null,
-        tick(),
-      ] as const,
+    () => [ipc.gitAvailable() ? project()?.rootPath : null, tick()] as const,
     async ([rootPath]) => {
       if (!rootPath) {
         stopPolling();

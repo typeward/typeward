@@ -94,15 +94,15 @@ pub struct CredentialRef {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OauthBeginRequest {
-    /// Provider's authorization endpoint, e.g. `https://www.dropbox.com/oauth2/authorize`.
+    /// Provider's authorization endpoint, e.g. `https://api.mendeley.com/oauth/authorize`.
     pub auth_url: String,
-    /// Provider's token endpoint, e.g. `https://api.dropboxapi.com/oauth2/token`.
+    /// Provider's token endpoint, e.g. `https://api.mendeley.com/oauth/token`.
     pub token_url: String,
     pub client_id: String,
     #[serde(default)]
     pub scopes: Vec<String>,
-    /// Provider-specific extra params on the authorization URL (e.g.
-    /// `token_access_type=offline` for Dropbox).
+    /// Provider-specific extra params on the authorization URL (e.g. an
+    /// offline-access flag), appended after the PKCE core fields.
     #[serde(default)]
     pub extra_auth_params: HashMap<String, String>,
     /// Exact, pre-registered loopback redirect URI for providers that don't
@@ -290,14 +290,11 @@ fn validate_oauth_endpoint(raw: &str, kind: OauthEndpointKind) -> Result<(), Oau
         OauthEndpointKind::Authorization => {
             matches!(
                 (host.as_str(), path),
-                ("www.dropbox.com", "/oauth2/authorize") | ("api.mendeley.com", "/oauth/authorize")
+                ("api.mendeley.com", "/oauth/authorize")
             )
         }
         OauthEndpointKind::Token => {
-            matches!(
-                (host.as_str(), path),
-                ("api.dropboxapi.com", "/oauth2/token") | ("api.mendeley.com", "/oauth/token")
-            )
+            matches!((host.as_str(), path), ("api.mendeley.com", "/oauth/token"))
         }
     };
 
@@ -776,14 +773,14 @@ mod tests {
     fn oauth_endpoint_allowlist_accepts_known_providers() {
         assert!(
             validate_oauth_endpoint(
-                "https://www.dropbox.com/oauth2/authorize",
+                "https://api.mendeley.com/oauth/authorize",
                 OauthEndpointKind::Authorization,
             )
             .is_ok()
         );
         assert!(
             validate_oauth_endpoint(
-                "https://api.dropboxapi.com/oauth2/token",
+                "https://api.mendeley.com/oauth/token",
                 OauthEndpointKind::Token,
             )
             .is_ok()
@@ -794,15 +791,35 @@ mod tests {
     fn oauth_endpoint_allowlist_blocks_unknown_hosts_and_plain_http() {
         assert!(
             validate_oauth_endpoint(
-                "https://example.com/oauth2/authorize",
+                "https://example.com/oauth/authorize",
                 OauthEndpointKind::Authorization,
             )
             .is_err()
         );
         assert!(
             validate_oauth_endpoint(
-                "http://api.dropboxapi.com/oauth2/token",
+                "http://api.mendeley.com/oauth/token",
                 OauthEndpointKind::Token,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oauth_endpoint_allowlist_is_per_kind() {
+        // Both endpoints now live on one host, so the path is what separates an
+        // authorization endpoint from a token endpoint — a swap must not pass.
+        assert!(
+            validate_oauth_endpoint(
+                "https://api.mendeley.com/oauth/authorize",
+                OauthEndpointKind::Token,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_oauth_endpoint(
+                "https://api.mendeley.com/oauth/token",
+                OauthEndpointKind::Authorization,
             )
             .is_err()
         );

@@ -1,17 +1,33 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyRemoteSettingValue,
   buildSettings,
+  hydrateSettings,
   noteInstallId,
-  setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setShareCrashReports,
-  setSyncSettingsEnabled,
   setUiScale,
   setUpdatesCheckAutomatically,
   validEnum,
 } from "./settings-store";
+import type { AppSettings } from "~/ipc";
 import { THEMES, type Theme } from "~/themes/theme-store";
+
+/**
+ * A settings.json as the loader hands it to `hydrateSettings`: the current
+ * store state with one dotted key overridden, so each test asserts on the
+ * field it cares about while the rest of the tree stays realistic.
+ */
+function loadedWith(key: string, value: unknown): AppSettings {
+  const snapshot = buildSettings() as unknown as Record<string, unknown>;
+  const parts = key.split(".");
+  let cursor = snapshot;
+  for (const part of parts.slice(0, -1)) {
+    cursor[part] = { ...(cursor[part] as Record<string, unknown>) };
+    cursor = cursor[part] as Record<string, unknown>;
+  }
+  cursor[parts[parts.length - 1]] = value;
+  return snapshot as unknown as AppSettings;
+}
 
 // settings.json is an external boundary: values written by older builds
 // (removed themes, renamed sorts) must fall back instead of being applied
@@ -79,40 +95,9 @@ describe("settings-store updates roundtrip", () => {
   });
 });
 
-// The occasional-feedback-prompt toggle persists like any other field and is
-// synced (a preference, not device state). Default ON — the card itself sends
-// nothing without an explicit user action.
-describe("settings-store feedback roundtrip", () => {
-  it("defaults promptsEnabled on and persists changes", () => {
-    expect(buildSettings().feedback?.promptsEnabled).toBe(true);
-    setFeedbackPromptsEnabled(false);
-    expect(buildSettings().feedback?.promptsEnabled).toBe(false);
-    setFeedbackPromptsEnabled(true);
-  });
-
-  it("backfills the default for settings.json files predating the section", () => {
-    // applyRemoteSettingValue routes through the same hydrate boundary the
-    // loader uses; an absent value must land on the default (ON), not undefined.
-    setFeedbackPromptsEnabled(false);
-    expect(applyRemoteSettingValue("feedback.promptsEnabled", undefined)).toBe(true);
-    expect(buildSettings().feedback?.promptsEnabled).toBe(true);
-  });
-});
-
-// The settings-sync toggle persists like any other field but is device-local
-// (denylisted from sync itself — see settings-sync.ts). Default ON.
-describe("settings-store sync roundtrip", () => {
-  it("defaults syncSettings on and persists changes", () => {
-    expect(buildSettings().sync?.syncSettings).toBe(true);
-    setSyncSettingsEnabled(false);
-    expect(buildSettings().sync?.syncSettings).toBe(false);
-    setSyncSettingsEnabled(true);
-  });
-});
-
 // File-history retention persists like any other field; the 10–200 clamp
 // (mirroring the Rust load-boundary clamp in settings.rs) runs on every
-// hydrate path, settings sync included. Default 50.
+// hydrate path. Default 50.
 describe("settings-store history retention", () => {
   it("defaults to 50 and persists changes", () => {
     expect(buildSettings().history?.maxVersionsPerFile).toBe(50);
@@ -122,41 +107,90 @@ describe("settings-store history retention", () => {
   });
 
   it("clamps out-of-range and non-numeric persisted values", () => {
-    expect(applyRemoteSettingValue("history.maxVersionsPerFile", 3)).toBe(true);
+    hydrateSettings(loadedWith("history.maxVersionsPerFile", 3));
     expect(buildSettings().history?.maxVersionsPerFile).toBe(10);
 
-    expect(applyRemoteSettingValue("history.maxVersionsPerFile", 5000)).toBe(true);
+    hydrateSettings(loadedWith("history.maxVersionsPerFile", 5000));
     expect(buildSettings().history?.maxVersionsPerFile).toBe(200);
 
-    expect(applyRemoteSettingValue("history.maxVersionsPerFile", "plenty")).toBe(true);
+    hydrateSettings(loadedWith("history.maxVersionsPerFile", "plenty"));
+    expect(buildSettings().history?.maxVersionsPerFile).toBe(50);
+  });
+
+  it("backfills the default when settings.json predates the section", () => {
+    setHistoryMaxVersions(120);
+    hydrateSettings(loadedWith("history", undefined));
     expect(buildSettings().history?.maxVersionsPerFile).toBe(50);
   });
 });
 
-// visualModeLatex rides the (synced) `editor` key: default off, roundtrips
-// through buildSettings(), and the merge-over-defaults validate backfills it
-// for settings.json files predating the field.
+// visualModeLatex rides the `editor` key: default off, roundtrips through
+// buildSettings(), and the merge-over-defaults validate backfills it for
+// settings.json files predating the field.
 describe("settings-store visualModeLatex roundtrip", () => {
   it("defaults off and persists changes", () => {
     expect(buildSettings().editor.visualModeLatex).toBe(false);
-    expect(
-      applyRemoteSettingValue("editor", {
-        ...buildSettings().editor,
-        visualModeLatex: true,
-      }),
-    ).toBe(true);
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, visualModeLatex: true }),
+    );
     expect(buildSettings().editor.visualModeLatex).toBe(true);
-    applyRemoteSettingValue("editor", {
-      ...buildSettings().editor,
-      visualModeLatex: false,
-    });
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, visualModeLatex: false }),
+    );
     expect(buildSettings().editor.visualModeLatex).toBe(false);
   });
 
   it("backfills the default when an older editor blob lacks the field", () => {
     const { visualModeLatex: _omitted, ...older } = buildSettings().editor;
-    expect(applyRemoteSettingValue("editor", older)).toBe(true);
+    hydrateSettings(loadedWith("editor", older));
     expect(buildSettings().editor.visualModeLatex).toBe(false);
+  });
+});
+
+// The `editor` blob crosses to Rust as a single object and serde drops every
+// key its struct doesn't declare, so a field added here but not to
+// settings.rs is written on save and silently gone on the next load — the
+// setting reverting itself on every launch. Pinning the key set makes adding
+// one a deliberate three-place change (here, ipc.AppSettings, settings.rs).
+describe("settings-store editor persisted shape", () => {
+  it("persists exactly the fields the Rust struct declares", () => {
+    expect(Object.keys(buildSettings().editor).sort()).toEqual([
+      "autoCloseBrackets",
+      "autoCompile",
+      "autocomplete",
+      "autosaveDelayMs",
+      "autosaveEnabled",
+      "bracketMatching",
+      "fontSize",
+      "highlightActiveLine",
+      "lineHeight",
+      "lineNumbers",
+      "lineWrap",
+      "pdfDefaultZoom",
+      "pdfInvertDark",
+      "stopOnFirstError",
+      "tabSize",
+      "vimMode",
+      "visualModeLatex",
+    ]);
+  });
+
+  it("round-trips autosaveEnabled instead of snapping back to the default", () => {
+    expect(buildSettings().editor.autosaveEnabled).toBe(true);
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, autosaveEnabled: false }),
+    );
+    expect(buildSettings().editor.autosaveEnabled).toBe(false);
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, autosaveEnabled: true }),
+    );
+    expect(buildSettings().editor.autosaveEnabled).toBe(true);
+  });
+
+  it("backfills the default when an older editor blob lacks the toggle", () => {
+    const { autosaveEnabled: _omitted, ...older } = buildSettings().editor;
+    hydrateSettings(loadedWith("editor", older));
+    expect(buildSettings().editor.autosaveEnabled).toBe(true);
   });
 });
 
@@ -165,9 +199,9 @@ describe("settings-store visualModeLatex roundtrip", () => {
 // never the resolved theme.
 describe("settings-store theme setting", () => {
   it("accepts and round-trips the system option", () => {
-    expect(applyRemoteSettingValue("theme", "system")).toBe(true);
+    hydrateSettings(loadedWith("theme", "system"));
     expect(buildSettings().theme).toBe("system");
-    applyRemoteSettingValue("theme", "daylight");
+    hydrateSettings(loadedWith("theme", "daylight"));
     expect(buildSettings().theme).toBe("daylight");
   });
 });
@@ -183,39 +217,43 @@ describe("settings-store interface scale", () => {
   });
 
   it("snaps and clamps persisted values", () => {
-    expect(applyRemoteSettingValue("ui.uiScale", 87)).toBe(true);
+    hydrateSettings(loadedWith("ui.uiScale", 87));
     expect(buildSettings().ui.uiScale).toBe(90);
 
-    expect(applyRemoteSettingValue("ui.uiScale", 40)).toBe(true);
+    hydrateSettings(loadedWith("ui.uiScale", 40));
     expect(buildSettings().ui.uiScale).toBe(90);
 
-    expect(applyRemoteSettingValue("ui.uiScale", 500)).toBe(true);
+    hydrateSettings(loadedWith("ui.uiScale", 500));
     expect(buildSettings().ui.uiScale).toBe(150);
 
-    expect(applyRemoteSettingValue("ui.uiScale", "huge")).toBe(true);
+    hydrateSettings(loadedWith("ui.uiScale", "huge"));
     expect(buildSettings().ui.uiScale).toBe(100);
   });
 });
 
-// Settings sync applies pulled values through the same hydrate/validate
-// boundary as settings.json — a remote value from an older/newer build must
-// hit the enum fallbacks and clamps, not the signals directly.
-describe("settings-store applyRemoteSettingValue", () => {
+// hydrateSettings is the boundary a settings.json crosses on the way in — a
+// file from an older/newer build must hit the enum fallbacks and clamps, not
+// the signals directly.
+describe("settings-store hydrateSettings", () => {
   it("applies a valid value through the field's setter", () => {
-    expect(applyRemoteSettingValue("updates.checkAutomatically", false)).toBe(true);
+    hydrateSettings(loadedWith("updates.checkAutomatically", false));
     expect(buildSettings().updates?.checkAutomatically).toBe(false);
     setUpdatesCheckAutomatically(true);
   });
 
-  it("runs remote values through validation", () => {
-    expect(applyRemoteSettingValue("workspace.defaultView", "not-a-view")).toBe(true);
+  it("runs loaded values through validation", () => {
+    hydrateSettings(loadedWith("workspace.defaultView", "not-a-view"));
     expect(buildSettings().workspace.defaultView).toBe("cards");
-    expect(applyRemoteSettingValue("workspace.defaultView", "list")).toBe(true);
+    hydrateSettings(loadedWith("workspace.defaultView", "list"));
     expect(buildSettings().workspace.defaultView).toBe("list");
-    applyRemoteSettingValue("workspace.defaultView", "cards");
+    hydrateSettings(loadedWith("workspace.defaultView", "cards"));
   });
 
-  it("ignores unknown keys from newer builds", () => {
-    expect(applyRemoteSettingValue("some.future.key", 42)).toBe(false);
+  it("drops sections from newer builds instead of choking on them", () => {
+    hydrateSettings(loadedWith("someFutureSection", { enabled: true }));
+    expect(buildSettings().updates?.checkAutomatically).toBe(true);
+    expect(
+      (buildSettings() as unknown as Record<string, unknown>).someFutureSection,
+    ).toBeUndefined();
   });
 });

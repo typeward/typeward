@@ -178,10 +178,20 @@ const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
   },
   cloud: { accounts: [] },
   vcs: { git: {}, github: {} },
-  ai: { enabled: true, perProviderModel: {} },
+  // Off until the user configures a provider — every AI surface stays hidden.
+  ai: { enabled: false, perProviderModel: {} },
   grammar: { enabled: false },
   templates: { recentTemplateIds: [] },
-  account: {},
+};
+
+/** The user-editable half of the profile. `avatarPath` is deliberately absent:
+ *  Rust owns it (see `profileAvatarPath`). */
+export type ProfileFields = Omit<ipc.ProfileSettings, "avatarPath">;
+
+const DEFAULT_PROFILE: ProfileFields = {
+  displayName: "",
+  email: "",
+  affiliation: "",
 };
 
 const [editorSettings, setEditorSettings] = createSignal<EditorSettings>({
@@ -192,6 +202,16 @@ const [compileEngine, setCompileEngine] = createSignal<CompileEngine>("system-te
 const [onboarded, setOnboarded] = createSignal<boolean>(false);
 const [integrationsSettings, setIntegrationsSettings] =
   createSignal<ipc.IntegrationsSettings>(DEFAULT_INTEGRATIONS);
+const [profile, setProfile] = createSignal<ProfileFields>(DEFAULT_PROFILE);
+// Read-only mirror of profile.avatarPath: Rust copies the picked image into app
+// data and records its path there, so the TS side only reflects what it loaded
+// (or what the set/clear IPC just returned) and never serializes it back.
+// `noteProfileAvatar` records a path set mid-session.
+const [profileAvatarPath, setProfileAvatarPath] =
+  createSignal<string | undefined>(undefined);
+export function noteProfileAvatar(path: string | null | undefined): void {
+  setProfileAvatarPath(path ?? undefined);
+}
 // Egress opt-in: OFF by default — the Sentry SDK is never even fetched unless
 // the user enables this (see src/lib/sentry-gate.ts).
 const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
@@ -200,20 +220,10 @@ const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
 // until an updater pubkey is configured.
 const [updatesCheckAutomatically, setUpdatesCheckAutomatically] =
   createSignal<boolean>(true);
-// "Sync settings across devices" (Settings → Account, shown only signed-in).
-// Device-local: the toggle governs whether THIS machine participates, so it's
-// denylisted from sync itself (settings-sync.ts). Default ON — signed-out
-// users are unaffected because the engine only runs with a session.
-const [syncSettingsEnabled, setSyncSettingsEnabled] = createSignal<boolean>(true);
 // Local file-history retention (versions kept per file). Clamped 10–200 at the
 // load boundary — mirrored by the Rust clamp in settings.rs, so the store and
 // the recorder always agree on the bound.
 const [historyMaxVersions, setHistoryMaxVersions] = createSignal<number>(50);
-// Occasional in-app "give us feedback" card (feedback-prompt.ts). ON by
-// default — the card is local UI and nothing leaves the machine unless the
-// user presses Send, so it isn't an egress opt-in. Synced (a preference);
-// the prompt's device-local pacing state lives in localStorage instead.
-const [feedbackPromptsEnabled, setFeedbackPromptsEnabled] = createSignal<boolean>(true);
 // Read-only mirror of privacy.installId: Rust mints it on the first crash
 // report; the TS side only carries it through buildSettings() so a settings
 // save can't clobber it. `noteInstallId` records an id minted mid-session
@@ -237,12 +247,7 @@ const [settingsLoaded, setSettingsLoaded] = createSignal<boolean>(false);
  * store's signal and the shared `ipc.AppSettings`/serde struct).
  */
 interface FieldSpec {
-  /**
-   * Dotted settings.json path of this unit — also the row key used by
-   * settings sync (settings-sync.ts), whose denylist classifies every key as
-   * synced or device-local. A drift-guard test fails when a new entry is
-   * neither.
-   */
+  /** Dotted settings.json path of this unit. */
   key: string;
   hydrate: (s: ipc.AppSettings) => void;
   serialize: (out: ipc.AppSettings) => void;
@@ -291,8 +296,11 @@ const FIELDS: FieldSpec[] = [
   }),
   field<EditorSettings>({
     key: "editor",
-    // The IPC editor shape types lineHeight as a plain string; the validate
-    // below narrows it back to LineHeightMode at the load boundary.
+    // lineHeight is the one field the persisted shape types wider (a plain
+    // string, mirroring Rust's `String`); the validate below narrows it back to
+    // LineHeightMode at the load boundary. Every other field lines up, and the
+    // key-set test pins that — serde drops any editor key settings.rs lacks, so
+    // a field that only exists here would revert on every launch.
     read: (s) => s.editor as EditorSettings,
     value: editorSettings,
     apply: setEditorSettings,
@@ -606,6 +614,24 @@ const FIELDS: FieldSpec[] = [
       out.integrations = integrationsSettings();
     },
   },
+  // --- profile ---
+  // Not the generic field() shape: the avatar path hydrates into its own signal
+  // and is deliberately left out of the serialized object, so Rust restores the
+  // path it owns instead of taking a renderer-invented one.
+  {
+    key: "profile",
+    hydrate: (s) => {
+      setProfile({
+        displayName: s.profile?.displayName ?? "",
+        email: s.profile?.email ?? "",
+        affiliation: s.profile?.affiliation ?? "",
+      });
+      setProfileAvatarPath(s.profile?.avatarPath ?? undefined);
+    },
+    serialize: (out) => {
+      out.profile = { ...profile() };
+    },
+  },
   // --- privacy ---
   // Not the generic field() shape: privacy serializes as one object and must
   // preserve the Rust-owned installId alongside the user-facing toggle.
@@ -633,16 +659,6 @@ const FIELDS: FieldSpec[] = [
       out.updates = { checkAutomatically: v };
     },
   }),
-  // --- sync ---
-  field<boolean>({
-    key: "sync.syncSettings",
-    read: (s) => s.sync?.syncSettings ?? true,
-    value: syncSettingsEnabled,
-    apply: setSyncSettingsEnabled,
-    write: (out, v) => {
-      out.sync = { syncSettings: v };
-    },
-  }),
   // --- history ---
   field<number>({
     key: "history.maxVersionsPerFile",
@@ -653,16 +669,6 @@ const FIELDS: FieldSpec[] = [
       out.history = { maxVersionsPerFile: v };
     },
     validate: (raw) => clampNumber(raw, 10, 200, 50),
-  }),
-  // --- feedback ---
-  field<boolean>({
-    key: "feedback.promptsEnabled",
-    read: (s) => s.feedback?.promptsEnabled ?? true,
-    value: feedbackPromptsEnabled,
-    apply: setFeedbackPromptsEnabled,
-    write: (out, v) => {
-      out.feedback = { promptsEnabled: v };
-    },
   }),
 ];
 
@@ -755,49 +761,25 @@ export function buildSettings(): ipc.AppSettings {
     ui: {},
     workspace: {},
     integrations: undefined,
+    profile: undefined,
     privacy: undefined,
     updates: undefined,
-    sync: undefined,
     history: undefined,
-    feedback: undefined,
   } as unknown as ipc.AppSettings;
   for (const f of FIELDS) f.serialize(out);
   return out;
 }
 
 /**
- * Every persisted key, in FIELDS order — the classification universe for
- * settings sync (see SETTINGS_SYNC_DENYLIST in settings-sync.ts; a drift-guard
- * test asserts each key is either synced or denylisted).
+ * The load half of the roundtrip: push a settings.json into the owning stores
+ * through every FieldSpec's validate step, so enum fallbacks, clamps, and
+ * merge-over-defaults apply before any value reaches a signal. Keys FIELDS
+ * doesn't know are ignored, which is how a file written by a newer build stays
+ * loadable. Called from the boot path below; exported so the boundary is
+ * testable without a Tauri mock.
  */
-export const PERSISTED_SETTING_KEYS: readonly string[] = FIELDS.map((f) => f.key);
-
-function setAtPath(obj: Record<string, unknown>, key: string, value: unknown): void {
-  const parts = key.split(".");
-  let cursor = obj;
-  for (const part of parts.slice(0, -1)) {
-    const next = cursor[part];
-    if (typeof next !== "object" || next === null) cursor[part] = {};
-    cursor = cursor[part] as Record<string, unknown>;
-  }
-  cursor[parts[parts.length - 1]] = value;
-}
-
-/**
- * Apply a value pulled by settings sync through the same hydrate/validate
- * boundary as settings.json — remote values are the user's own data but may
- * come from a newer/older app version, so enum fallbacks, clamps, and
- * merge-over-defaults apply verbatim. Unknown keys (a newer build's fields)
- * are ignored. The value lands in a fresh `buildSettings()` snapshot, so the
- * field's `read` sees the rest of the settings tree exactly as persisted.
- */
-export function applyRemoteSettingValue(key: string, value: unknown): boolean {
-  const spec = FIELDS.find((f) => f.key === key);
-  if (!spec) return false;
-  const snapshot = buildSettings();
-  setAtPath(snapshot as unknown as Record<string, unknown>, key, value);
-  spec.hydrate(snapshot);
-  return true;
+export function hydrateSettings(s: ipc.AppSettings): void {
+  for (const f of FIELDS) f.hydrate(s);
 }
 
 function hasTauriIpc(): boolean {
@@ -819,7 +801,7 @@ createRoot(() => {
   void (async () => {
     try {
       const s = await ipc.loadSettings();
-      for (const f of FIELDS) f.hydrate(s);
+      hydrateSettings(s);
       lastSavedJson = JSON.stringify(buildSettings());
     } catch {
       // First boot or non-Tauri context (Vitest).
@@ -952,25 +934,24 @@ createRoot(() => {
 export {
   compileEngine,
   editorSettings,
-  feedbackPromptsEnabled,
   historyMaxVersions,
   integrationsSettings,
   onboarded,
+  profile,
+  profileAvatarPath,
   projectsRoot,
   settingsLoaded,
   shareCrashReports,
-  syncSettingsEnabled,
   uiScale,
   updatesCheckAutomatically,
   setCompileEngine,
   setEditorSettings,
-  setFeedbackPromptsEnabled,
   setHistoryMaxVersions,
   setIntegrationsSettings,
   setOnboarded,
+  setProfile,
   setProjectsRoot,
   setShareCrashReports,
-  setSyncSettingsEnabled,
   setUiScale,
   setUpdatesCheckAutomatically,
 };

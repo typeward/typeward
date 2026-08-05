@@ -10,7 +10,6 @@
 
 import { createEffect, createMemo, createRoot, untrack } from "solid-js";
 
-import { hasEntitlement } from "~/integrations/entitlements";
 import { integrationsSettings } from "~/stores/settings-store";
 import { project } from "~/stores/editor-store";
 import { recordError } from "~/lib/telemetry";
@@ -31,10 +30,9 @@ const PROVIDER_IDS = {
 } as const;
 
 /**
- * The reference-relevant slice, already gated by entitlement. Only the fields
- * below decide which providers exist — everything else in the coarse
- * `integrationsSettings` signal (AI model picks, grammar toggles, recent
- * template ids) is irrelevant here.
+ * The reference-relevant slice. Only the fields below decide which providers
+ * exist — everything else in the coarse `integrationsSettings` signal (AI
+ * model picks, grammar toggles, recent template ids) is irrelevant here.
  */
 interface RefsPlan {
   betterBibTex: boolean;
@@ -49,23 +47,15 @@ export function initReferenceProviders(): void {
     // A structural-equals memo so an unrelated `integrationsSettings` write does
     // not re-instantiate providers (which would drop their 60s TTL caches and
     // re-probe Zotero/Mendeley over the network). The downstream effect fires
-    // only when the reference config or its entitlement actually changes.
+    // only when the reference config actually changes.
     const plan = createMemo(
       (): RefsPlan => {
         const refs = integrationsSettings().references;
         return {
-          betterBibTex:
-            refs.betterBibTex.enabled &&
-            hasEntitlement("integrations.references.zotero.local"),
-          zoteroWebUserId:
-            refs.zoteroWeb.userId &&
-            hasEntitlement("integrations.references.zotero.web")
-              ? refs.zoteroWeb.userId
-              : undefined,
+          betterBibTex: refs.betterBibTex.enabled,
+          zoteroWebUserId: refs.zoteroWeb.userId || undefined,
           mendeley:
-            refs.mendeley.profileId &&
-            refs.mendeley.displayName &&
-            hasEntitlement("integrations.references.mendeley")
+            refs.mendeley.profileId && refs.mendeley.displayName
               ? {
                   profileId: refs.mendeley.profileId,
                   displayName: refs.mendeley.displayName,

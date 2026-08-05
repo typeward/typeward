@@ -130,7 +130,7 @@ async function missingHelpers(
   status: AssetStatus,
   files: AdditionalFile[],
 ): Promise<string[]> {
-  const { willRunBibtex, willRunBiber } = await import("texlive-wasm");
+  const { willRunBibtex, willRunBiber } = await import("@typeward/texlive-wasm");
   const needed: string[] = [];
   if (!status.engines.bibtexu && willRunBibtex(files)) needed.push("bibtexu");
   if (!status.engines.biber && willRunBiber(files)) needed.push("biber");
@@ -214,9 +214,9 @@ export async function compileWithTexliveWasm(
     );
   }
 
-  let result: import("texlive-wasm").LatexmkResult;
+  let result: import("@typeward/texlive-wasm").LatexmkResult;
   try {
-    const { latexmk } = await import("texlive-wasm");
+    const { latexmk } = await import("@typeward/texlive-wasm");
     const { tex, engineConfig } = await getEngineBundle();
     result = await latexmk({
       engine: "pdflatex",

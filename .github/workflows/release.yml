@@ -94,41 +94,12 @@ jobs:
           ref: ${{ env.TAG }}
           path: app
 
-      # typeward/texlive-wasm is public, so the default GITHUB_TOKEN checks it
-      # out with no extra secret (same tokenless sibling layout as build.yml).
-      # The sibling ref comes from package.json `config.texliveWasm` — the ONE
-      # place the engine pin is recorded (_plans/41-texlive-wasm-release-ops.md
-      # §2) — so rebuilding this tag always gets the same engine release
-      # instead of whatever the sibling's main has moved to.
-      - name: Read texlive-wasm pin
-        id: texlive
-        shell: bash
-        working-directory: app
-        run: |
-          ref="$(node -p "require('./package.json').config?.texliveWasm")"
-          if [ -z "$ref" ] || [ "$ref" = "undefined" ]; then
-            echo "::error::package.json is missing config.texliveWasm — the texlive-wasm sibling checkout has no pinned ref."
-            exit 1
-          fi
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
-
-      - name: Checkout texlive-wasm sibling
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
-        with:
-          repository: typeward/texlive-wasm
-          ref: ${{ steps.texlive.outputs.ref }}
-          path: texlive-wasm
-
       - name: Set up Node
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: '22'
           cache: 'npm'
-          # Include the sibling lockfile so a texlive-wasm pin bump busts the
-          # npm cache instead of restoring stale sibling deps.
-          cache-dependency-path: |
-            app/package-lock.json
-            texlive-wasm/package-lock.json
+          cache-dependency-path: app/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
@@ -156,16 +127,9 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      - name: Build texlive-wasm sibling
-        working-directory: texlive-wasm
-        run: |
-          npm ci
-          npm run build
-
       # Install the app's deps explicitly (mirrors build.yml). tauri-action's
-      # implicit install is not relied on — the `file:../texlive-wasm` dep must
-      # resolve against the sibling's freshly-built dist/, and beforeBuildCommand
-      # (`npm run build` = tsc + vite) needs node_modules present.
+      # implicit install is not relied on — beforeBuildCommand (`npm run build`
+      # = tsc + vite) needs node_modules already present.
       - name: Install npm deps
         working-directory: app
         run: npm ci
@@ -262,11 +226,9 @@ jobs:
           # -> no maps, no upload, just a warning.
           SENTRY_UPLOAD: 'true'
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          # Frontend secrets (empty is fine — the app degrades to free tier).
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Frontend secrets (empty is fine — the OAuth sign-in paths surface
+          # an actionable "register your app" error instead).
           VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
-          VITE_DROPBOX_CLIENT_ID: ${{ secrets.VITE_DROPBOX_CLIENT_ID }}
           VITE_GITHUB_CLIENT_ID: ${{ secrets.VITE_GITHUB_CLIENT_ID }}
           # Updater signing (absent -> no updater artifacts, no key needed).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

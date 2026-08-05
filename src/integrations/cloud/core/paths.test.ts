@@ -17,7 +17,7 @@ describe("normalizeRemoteRelPath", () => {
   });
 
   it("rejects Typeward internal state", () => {
-    expect(() => normalizeRemoteRelPath(".typeward/integrations/dropbox/cursor.json")).toThrow(
+    expect(() => normalizeRemoteRelPath(".typeward/integrations/webdav/cursor.json")).toThrow(
       /internal state/,
     );
   });
@@ -26,7 +26,7 @@ describe("normalizeRemoteRelPath", () => {
     expect(() => normalizeRemoteRelPath(".Typeward/snapshots/main.tex.snap")).toThrow(
       /internal state/,
     );
-    expect(() => normalizeRemoteRelPath(".TYPEWARD/integrations/dropbox/cursor.json")).toThrow(
+    expect(() => normalizeRemoteRelPath(".TYPEWARD/integrations/webdav/cursor.json")).toThrow(
       /internal state/,
     );
     expect(() => normalizeRemoteRelPath("nested/.TypeWard/cursor")).toThrow(/internal state/);
