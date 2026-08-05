@@ -14,6 +14,8 @@ confirm. Items tagged **[audit]** verify a fix from this remediation pass.
 - [ ] **[audit TW-S2-03]** A `.md` file with a local `![](./fig.png)` shows the image in
       preview; a LaTeX `\includegraphics` figure renders in the visual editor. *(Currently
       expected BROKEN until the asset-protocol fix lands — this is the check that proves it.)*
+- [ ] Settings → Profile: set an avatar → it renders (same `convertFileSrc`/asset-protocol
+      path as the check above, via the `$APPDATA/profile/**` scope); clearing it removes the file.
 - [ ] **[audit TW-S1-02]** Force-quit mid-edit, reopen → RecoveryDialog → "Restore"; the
       editor shows the RECOVERED text (not the pre-crash on-disk text), tab is dirty.
 - [ ] **[audit TW-S2-10]** Open the AI pane, switch projects via the switcher (pane stays
@@ -49,7 +51,8 @@ confirm. Items tagged **[audit]** verify a fix from this remediation pass.
 - [ ] deb, rpm, AppImage each install/run on a matching distro.
 - [ ] `.desktop` entry + icon appear in the launcher; MIME associations for `.tex`/`.typ`/`.bib`.
 - [ ] Runs under BOTH X11 and Wayland (window decorations, drag regions, HiDPI/fractional scaling).
-- [ ] Secret Service (keyring) available — sign-ins persist; without it, credential errors are graceful.
+- [ ] Secret Service (keyring) available — integration credentials (GitHub token, WebDAV
+      password, AI API keys) persist across restarts; without it, credential errors are graceful.
 - [ ] **[audit TW-S2-03]** WebKitGTK image loading (the figures check above is most likely to fail here).
 
 ## Updater (only once a signing keypair exists — dormant today)

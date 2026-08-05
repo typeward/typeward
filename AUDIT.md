@@ -5,14 +5,36 @@ Linux (X11+Wayland), Android/iOS tablets.
 
 Audit started: 2026-07-25 · Branch: `fix/tectonic-win-arm64-sidecar` · Auditor: Claude (Opus 4.8)
 
+> **Post-audit change of premise (2026-08-03).** Typeward went open source under
+> **GPL-3.0-or-later** with **no paid tier, no accounts, no entitlement gate and no
+> backend**. Findings below that lean on tier language ("Pro-gated", "free-tier
+> binaries") are unaffected in substance but changed in framing: the features they
+> describe are now available to every user, which *raises* the share of users who
+> pay a given cost rather than lowering it. See the annotations on TW-S2-04 and
+> TW-S2-10. The deleted modules (`src/integrations/supabase/`,
+> `src/integrations/entitlements.ts`, `src/components/entitlement/`) appear in the
+> repo map below as it stood at audit time. No finding in this file was fixed *by*
+> the removal — nothing here targeted the account layer.
+
 > **Two audit passes were run in parallel and merged 2026-07-30.** This file is the
 > **TW-S** self-review pass (ARM/Intel build fixes + TW-S1/S2/S3 remediations), merged to
 > `main` via PR #4. A second, independent modernization pass — dependency currency, the
-> H1 drag-drop arbitrary-read gate, and CI hardening — is recorded in
-> [`docs/AUDIT.md`](docs/AUDIT.md) with per-bump notes in
-> [`docs/UPGRADE_NOTES.md`](docs/UPGRADE_NOTES.md). Where the two passes fixed the same
+> H1 drag-drop arbitrary-read gate, and CI hardening — is recorded in `docs/AUDIT.md`
+> with per-bump notes in `docs/UPGRADE_NOTES.md`. Where the two passes fixed the same
 > surface (crash-recovery remount, subprocess bounding, clippy CI gate, DOMPurify/linkify
-> bumps) the merge kept the stronger of the two; see `docs/AUDIT.md` §0 for the reconciliation.
+> bumps) the merge kept the stronger of the two; `docs/AUDIT.md` §0 carries the reconciliation.
+> **Those two are maintainer-local notes, not repo content** — `docs/` is gitignored, so
+> they exist only on the maintainer's disk and are deliberately not linked here. Everything
+> a reader needs about the merged outcome is in this file.
+
+> **Later structural changes (2026-08-05) — no finding here is affected.** Dropbox was
+> deleted (provider, OAuth flow, client id, allowlisted hosts, UI), leaving **WebDAV as the
+> only cloud backend**; and `texlive-wasm` became the npm package `@typeward/texlive-wasm`
+> (pinned `0.2.4-alpha`) instead of a `file:../texlive-wasm` sibling checkout. Nothing below
+> targeted the Dropbox provider or the old dependency wiring: the two cloud findings
+> (**TW-S2-01** sync cursor, **TW-S3-30** untested `resolve.ts`) live in the generic engine and
+> apply unchanged to WebDAV, and the `texlive-wasm` references below are to the engine
+> *identifier*, which did not change — only module specifiers did.
 
 ---
 
@@ -38,8 +60,8 @@ Audit started: 2026-07-25 · Branch: `fix/tectonic-win-arm64-sidecar` · Auditor
 src/                 SolidJS frontend — 325 TS/TSX files, ~63k LOC
   screens/           onboarding | projects | editor (shells/text-shell.tsx) | settings
   adapters/          EditorAdapter impls (latex, typst) + language/format tables
-  integrations/      references, cloud, ai, supabase, vcs, grammar, http, auth, entitlements
-  components/        editor, pdf, preview, glass, entitlement, sync, vcs, templates, layout, ...
+  integrations/      references, cloud, ai, supabase*, vcs, grammar, http, auth, entitlements*
+  components/        editor, pdf, preview, glass, entitlement*, sync, vcs, templates, layout, ...
   commands/          registry, palette, boot, keyboard, actions, compile-runner
   stores/            editor, editor-view, projects, settings, lsp, watcher, ui, review, viewport
   lib/               lsp, reviews, watcher, autosave, telemetry, grammar, errors, toast, ...
@@ -58,7 +80,8 @@ src-tauri/           Rust backend — 34 files, ~17.6k LOC, 113 #[tauri::command
 .github/workflows/   build.yml, release.yml, tests.yml
 scripts/             fetch-tectonic.mjs, bump-version.mjs, check-bundle-shape.mjs
 ```
-(*) = modules newer than CLAUDE.md's documented layout — higher audit priority.
+(*) in `src-tauri/` = modules newer than CLAUDE.md's documented layout — higher audit priority.
+(*) in `src/` = deleted 2026-08-03 with the account/entitlement layer; listed as the tree stood at audit time.
 
 ### Baseline (2026-07-25, Windows-on-ARM dev host)
 | Check | Result |
@@ -196,14 +219,15 @@ return /^[A-Za-z]:\//.test(normalized) ? `file:///${encoded}` : `file://${encode
 - **Risk:** convertFileSrc requires the asset protocol scope to include the project root; if the scope is too narrow, images silently fail (same visible symptom as today). Must widen the asset scope at runtime the same way lib.rs::grant_projects_root_fs_scope widens fs scope.
 - **Verifier note:** Finding is technically correct but its cross-platform framing is off: the file://-from-non-file-origin block applies on Windows/WebView2 and in dev (localhost:1420) too, so figures break on ALL platforms, not only macOS/Linux — the feature was simply never exercised with a local image, not a mac/linux-only regression. Severity lowered S1->S2: genuine functional defect in core features (md preview images, visual-editor figures) but degrades gracefully to a broken-image icon, no security or data-loss impact. Note the '[image not shown]' placeholder path is NOT hit (as the finding itself states) because rewriteImageUrl resolves the URL successfully — it just resolves to an unloadable file:// URL. Proposed fix (assetProtocol + convertFileSrc + CSP asset:/http://asset.localhost, keeping safeRelativePath) is the correct approach.
 
-#### [S2] TW-S2-04 — Harper grammar (Pro-gated, off by default) drags the entire `burn` 0.19 deep-learning framework into every desktop build
+#### [S2] TW-S2-04 — Harper grammar (off by default) drags the entire `burn` 0.19 deep-learning framework into every desktop build
+> **2026-08-03 reframe:** written when grammar was a Pro-tier feature. It is free for everyone now, and still off by default (`integrations.grammar.enabled` = false). The defect is unchanged — the `burn` stack compiles and links into every desktop binary regardless — but the "gate it behind a Pro build" option below is void: there is only one build. The live options are a cargo feature flag, a lighter harper, or accepting the footprint (owner accepted it 2026-07-26).
 - **Location:** `src-tauri/Cargo.toml:72-74` · axis: deps · confidence: high · effort: L · platform: all
 - **Verdict:** CONFIRMED
-- **Problem:** harper-core is a hard (non-optional) dependency. Its transitive chain harper-core -> harper-brill -> harper-pos-utils depends unconditionally on `burn` 0.19.1 and `burn-ndarray` (a full ML framework used only for POS-tagging). Cargo.lock confirms burn-ndarray hard-pulls matrixmultiply, ndarray, macerator, burn-tensor, burn-autodiff, burn-ir, safetensors (via burn-store), half, float8; the graph also contains burn-cuda/burn-rocm/burn-wgpu/candle-core/cubecl-cuda/cubecl-hip (GPU backends are feature-gated off, but the CPU tensor stack compiles unconditionally). This ML stack is compiled and linked into every desktop binary even though grammar is a Pro-tier feature that is OFF by default and does zero IPC when disabled (per CLAUDE.md). Result: large compile-time and binary-size cost paid by 100% of users, ~0% of whom use it. With `lto=true, codegen-units=1` (Cargo.toml:128-131) this also dominates release link time.
+- **Problem:** harper-core is a hard (non-optional) dependency. Its transitive chain harper-core -> harper-brill -> harper-pos-utils depends unconditionally on `burn` 0.19.1 and `burn-ndarray` (a full ML framework used only for POS-tagging). Cargo.lock confirms burn-ndarray hard-pulls matrixmultiply, ndarray, macerator, burn-tensor, burn-autodiff, burn-ir, safetensors (via burn-store), half, float8; the graph also contains burn-cuda/burn-rocm/burn-wgpu/candle-core/cubecl-cuda/cubecl-hip (GPU backends are feature-gated off, but the CPU tensor stack compiles unconditionally). This ML stack is compiled and linked into every desktop binary even though grammar is OFF by default and does zero IPC when disabled (per CLAUDE.md). Result: large compile-time and binary-size cost paid by 100% of users, ~0% of whom use it. With `lto=true, codegen-units=1` (Cargo.toml:128-131) this also dominates release link time.
 - **Evidence:** ```
 harper-core = "2.5" (Cargo.toml:72); Cargo.lock: harper-pos-utils deps = [burn, burn-ndarray, ...]; burn-ndarray deps = [matrixmultiply, ndarray, macerator, burn-tensor, burn-autodiff, ...]; burn 0.19.1 lists burn-cuda/burn-rocm/burn-wgpu/burn-candle
 ```
-- **Fix:** Check whether harper-brill/harper-pos-utils expose a lighter feature that avoids the burn tensor backend, or pin to an older harper-core (pre-brill) that used a non-ML POS tagger. If the ML tagger is required, feature-gate the whole grammar module behind a Cargo feature (e.g. `grammar`) that is off in the default desktop build and only enabled when shipping the Pro grammar path, so free-tier binaries don't carry burn/ndarray/candle. At minimum, confirm via `cargo tree -e features` which burn backends actually compile and document the accepted footprint.
+- **Fix:** Check whether harper-brill/harper-pos-utils expose a lighter feature that avoids the burn tensor backend, or pin to an older harper-core (pre-brill) that used a non-ML POS tagger. If the ML tagger is required, feature-gate the whole grammar module behind a Cargo feature (e.g. `grammar`) so a build that doesn't ship grammar doesn't carry burn/ndarray/candle. *(As written this assumed a separate free-tier build; since 2026-08-03 there is one build for everyone, so the feature flag only helps if grammar is genuinely dropped from the shipped binary — otherwise the footprint is simply accepted.)* At minimum, confirm via `cargo tree -e features` which burn backends actually compile and document the accepted footprint.
 - **Risk:** Feature-gating grammar requires wiring a Cargo feature through lib.rs command registration and the Harper IPC; disabling it changes the shipped feature set. Downgrading harper may lose lint rules.
 - **Verifier note:** Claimed location Cargo.toml:72-74 is correct for the harper deps. Minor correction: harper-core is actually vendored via [patch.crates-io] path = "vendor/harper-core" (Cargo.toml:125-126) for a rustc-compat E0308 fix, but the vendored copy carries the identical dependency tree, so the burn pull-in is unchanged. Severity S2 defensible for dependency-hygiene given the lto/single-codegen-unit amplification; it is a build-footprint/compile-time concern with no correctness or security impact, so an argument for S3 exists, but S2 is reasonable. Proposed fix (feature-gate the grammar module) is sound and not already implemented.
 
@@ -307,7 +331,7 @@ onMount(() => { void ensureConversationsLoaded().then(() => { if (!activeConvers
 ```
 - **Fix:** Replace the onMount one-shot with a createEffect keyed on project()?.rootPath (e.g. createEffect(on(() => project()?.rootPath ?? null, () => { void ensureConversationsLoaded().then(...); }))), or add the same reactive load to the store's project-switch effect after resetChatState(). ensureConversationsLoaded already guards on loadedRoot === proj.rootPath, so re-running it is cheap and idempotent.
 - **Risk:** Low; the load fn is guarded and idempotent. Keep the auto-select-first-conversation branch gated on nothing being active so it doesn't yank the user off a conversation they picked.
-- **Verifier note:** S2 is defensible but on the high side: impact is a confusing empty list (looks like lost conversations) on a Pro-gated feature, but it is fully self-healing by toggling the pane closed/open and involves no data loss (JSONL files stay on disk). S3 would also be reasonable. Location cited (AiView.tsx:87-93) and the store effect (ai-chat-store.ts:424-438) are both accurate.
+- **Verifier note:** S2 is defensible but on the high side: impact is a confusing empty list (looks like lost conversations) on an opt-in feature (Pro-gated when written; free for everyone since 2026-08-03, still off by default), but it is fully self-healing by toggling the pane closed/open and involves no data loss (JSONL files stay on disk). S3 would also be reasonable. Location cited (AiView.tsx:87-93) and the store effect (ai-chat-store.ts:424-438) are both accurate.
 
 
 ### S3 findings
@@ -815,9 +839,10 @@ items are marked NEEDS-PLATFORM-VERIFY.
   CSP/security surface and is unverifiable on this host — I did not apply it blind.
   Recommended and low-code once verifiable on macOS/Linux.
 - **TW-S2-04 — Harper grammar drags the whole `burn` ML stack** into every desktop
-  binary though grammar is Pro-gated and off by default. Removing it is a feature/dep
-  change that can break grammar; options: feature-gate `harper` behind a cargo feature,
-  or accept the size. Needs a size/functionality decision + build verification.
+  binary though grammar is off by default (and, since 2026-08-03, ungated — free for
+  everyone). Removing it is a feature/dep change that can break grammar; options:
+  feature-gate `harper` behind a cargo feature, or accept the size. Needs a
+  size/functionality decision + build verification.
 - **TW-S3-21 — release `opt-level = "s"`.** Size-vs-speed tradeoff for the CPU-bound
   in-process work (harper, lopdf, sha256). Bumping to `2`/`3` speeds those up but grows
   the installer. Owner's call; I did not flip it blind.
@@ -855,7 +880,7 @@ items are marked NEEDS-PLATFORM-VERIFY.
 2. **No Intel macOS build** — TW-S2-02/07. Excludes Intel Macs from the stated macOS 12+
    target until the release matrix gains the leg.
 3. **Installer bloat from `burn`** — TW-S2-04. Ships a large ML stack for an off-by-default
-   Pro feature.
+   feature. (Declined by the owner 2026-07-26; grammar stays always-compiled.)
 4. Everything else is S3 polish/perf with no correctness or security exposure.
 
 ### Highest-leverage follow-ups
