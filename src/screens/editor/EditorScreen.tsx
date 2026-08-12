@@ -6,6 +6,7 @@ import {
 } from "lucide-solid";
 import { HistoryMenu } from "~/components/editor/HistoryMenu";
 import { LayoutMenu } from "~/components/editor/LayoutMenu";
+import { perfDiscard, perfMark } from "~/lib/perf-marks";
 import { ProjectSwitcherMenu } from "~/components/editor/ProjectSwitcherMenu";
 import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
 import type { Component } from "solid-js";
@@ -130,6 +131,7 @@ const EditorScreen: Component = () => {
     const token = loadGuard.next();
     const path = typeof params.path === "string" ? params.path : null;
     if (!path) {
+      perfDiscard("project-open");
       setOpening(false);
       void stopAllSessions();
       void stopWatching();
@@ -141,6 +143,7 @@ const EditorScreen: Component = () => {
       return;
     }
     setOpening(true);
+    perfMark("project-open");
     void (async () => {
       try {
         const p = await ipc.openProject(path);
@@ -152,6 +155,7 @@ const EditorScreen: Component = () => {
             "Project is in the trash",
             "Restore it from the library to open it.",
           );
+          perfDiscard("project-open");
           setOpening(false);
           void stopAllSessions();
           void stopWatching();

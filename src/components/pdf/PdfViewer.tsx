@@ -1,4 +1,5 @@
 import { describeIpcError } from "~/lib/errors";
+import { perfMeasure, perfRecord } from "~/lib/perf-marks";
 import { readFile } from "@tauri-apps/plugin-fs";
 import {
   AlertTriangle,
@@ -646,6 +647,21 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     if (visible.has(pageNum)) void renderTextLayer(pageNum);
   };
 
+  // Which page row sits at scroll offset `y`, and how far into it — the
+  // before/after pair around a layout-changing reload quantifies the scroll
+  // drift the raw scrollTop restore causes (Phase 0 baseline metric).
+  const topmostPageAt = (y: number): { page: number; offset: number } | null => {
+    if (!scrollEl) return null;
+    let page = 0;
+    let top = 0;
+    for (const box of scrollEl.querySelectorAll<HTMLElement>("[data-page]")) {
+      if (box.offsetTop > y) break;
+      page = Number(box.dataset.page);
+      top = box.offsetTop;
+    }
+    return page > 0 ? { page, offset: y - top } : null;
+  };
+
   const load = async (path: string) => {
     const gen = ++loadGen;
     setLoading(true);
@@ -702,17 +718,34 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           slot.renderedScale = null;
           clearTextLayer(slot);
         }
+        const renders: Promise<unknown>[] = [];
         for (const pageNum of [...visible]) {
-          void renderPage(pageNum);
+          renders.push(renderPage(pageNum));
           void renderTextLayer(pageNum);
         }
+        void Promise.allSettled(renders).then(() => {
+          if (gen !== loadGen) return;
+          perfMeasure("pdf-reload-to-rendered", "pdf-reload", `pages=${renders.length}`);
+        });
       } else {
+        const before = topmostPageAt(savedScrollTop);
         resetSlots();
         setPageSizes(dims);
         requestAnimationFrame(() => {
-          if (scrollEl) scrollEl.scrollTop = savedScrollTop;
+          if (!scrollEl) return;
+          scrollEl.scrollTop = savedScrollTop;
+          const after = topmostPageAt(scrollEl.scrollTop);
+          if (before && after) {
+            perfRecord(
+              "pdf-reload-scroll-drift",
+              Math.abs(after.page - before.page),
+              `before=p${before.page}+${Math.round(before.offset)}px after=p${after.page}+${Math.round(after.offset)}px`,
+            );
+          }
         });
       }
+      perfMeasure("pdf-reload-to-doc", "pdf-reload", `pages=${dims.length}`);
+      perfMeasure("compile-to-pdf-doc", "compile", `pages=${dims.length}`, 900_000);
       lastLoadedPath = path;
       prevTask?.destroy();
     } catch (e) {

@@ -11,6 +11,7 @@ import {
 } from "solid-js";
 import { languageForFile, lspLanguageForFile } from "~/adapters/languages";
 import { pathToFileUri } from "~/lib/lsp/cm6";
+import { perfMeasure } from "~/lib/perf-marks";
 import { requestDocumentSymbols } from "~/lib/lsp/symbols";
 import {
   type OutlineItem,
@@ -74,11 +75,16 @@ export const OutlinePanel: Component<{
         const session = findSession(lspLang);
         if (session) {
           const syms = await requestDocumentSymbols(session, pathToFileUri(f.path));
-          if (syms && syms.length > 0) return syms;
+          if (syms && syms.length > 0) {
+            perfMeasure("open-to-outline", "project-open", "lsp", 60_000);
+            return syms;
+          }
         }
       }
       const outlineLang = outlineLangFor(f.relPath);
-      return outlineLang ? parseOutline(f.content, outlineLang) : [];
+      const items = outlineLang ? parseOutline(f.content, outlineLang) : [];
+      if (items.length > 0) perfMeasure("open-to-outline", "project-open", "parse", 60_000);
+      return items;
     },
     { initialValue: [] },
   );

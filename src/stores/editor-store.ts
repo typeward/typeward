@@ -1,5 +1,7 @@
-import { createMemo, createRoot, createSignal } from "solid-js";
+import { createMemo, createRoot, createSignal, untrack } from "solid-js";
+import type { Setter } from "solid-js";
 import type { CompileResult, Project } from "~/adapters/types";
+import { perfMark } from "~/lib/perf-marks";
 
 export interface OpenFile {
   /** Absolute path. */
@@ -56,7 +58,17 @@ export interface GotoSourceIntent {
 
 const [project, setProject] = createSignal<Project | null>(null);
 const [openFiles, setOpenFiles] = createSignal<OpenFile[]>([]);
-const [activeIndex, setActiveIndex] = createSignal<number>(-1);
+const [activeIndex, setActiveIndexRaw] = createSignal<number>(-1);
+// Every tab activation lands on this setter (tab strip, cycling, tree
+// activation, close reindex), so it is the one place the tab-switch perf mark
+// can cover them all — stamped BEFORE the write because the keyed editor
+// remount runs synchronously inside it and the measure fires from onReady.
+const setActiveIndex: Setter<number> = ((arg?: number | ((p: number) => number)) => {
+  const prev = untrack(activeIndex);
+  const next = typeof arg === "function" ? arg(prev) : (arg as number);
+  if (next !== prev && next >= 0 && prev >= 0) perfMark("tab-switch");
+  return setActiveIndexRaw(next);
+}) as Setter<number>;
 const [compileState, setCompileState] = createSignal<
   "idle" | "compiling" | "ok" | "error"
 >("idle");

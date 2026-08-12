@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { describeIpcError } from "~/lib/errors";
 import { notifyError, notifyInfo } from "~/lib/toast";
+import { perfDiscard, perfMark } from "~/lib/perf-marks";
 import type { EditorAdapter, Project, ProjectFormat } from "~/adapters/types";
 import { LatexAdapter } from "~/adapters/latex/LatexAdapter";
 import { effectiveBuild } from "~/adapters/latex/build-config";
@@ -347,6 +348,7 @@ export async function compileActiveProject(): Promise<void> {
 
   setCompileState("compiling");
   setCompileStartedAtInternal(Date.now());
+  perfMark("compile");
   const compileId = beginCompileAttempt();
   try {
     // Inside the try so a failed save surfaces as a compile error in the
@@ -362,8 +364,10 @@ export async function compileActiveProject(): Promise<void> {
     setCompileState(result.ok ? "ok" : "error");
     if (result.ok) setLastSuccessAtInternal(Date.now());
     if (result.ok && result.outputPath) {
+      perfMark("pdf-reload");
       bumpPdfVersion();
     } else {
+      perfDiscard("compile");
       recordError(
         "compile-failed",
         `${p.format} compile exited non-zero`,
@@ -374,6 +378,7 @@ export async function compileActiveProject(): Promise<void> {
       );
     }
   } catch (e) {
+    perfDiscard("compile");
     if (!isCurrent()) return;
     // A user-initiated cancel is a return to idle, not an error: no
     // diagnostics, no drawer auto-open, just a quiet confirmation.

@@ -25,6 +25,7 @@ import {
   onMount,
 } from "solid-js";
 import { BuildMenu } from "~/components/editor/BuildMenu";
+import { perfMeasure } from "~/lib/perf-marks";
 import { ProjectSettingsDialog } from "~/components/editor/ProjectSettingsDialog";
 import { CodeMirror } from "~/components/editor/CodeMirror";
 import {
@@ -1324,6 +1325,8 @@ const CenterPane: Component<{
                   // the stash only matches a same-file remount.
                   restoreEditorPosition(v, f.path);
                   setReviewView(v);
+                  perfMeasure("tab-switch-to-editor", "tab-switch", f.relPath);
+                  perfMeasure("open-to-editor", "project-open", f.relPath, 60_000);
                 }}
                 extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
               />

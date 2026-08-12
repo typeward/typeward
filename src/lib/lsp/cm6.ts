@@ -25,6 +25,7 @@ import { linter, type Diagnostic } from "@codemirror/lint";
 import { StateEffect, StateField, type Extension } from "@codemirror/state";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { JsonRpcClient } from "./client";
+import { perfMeasure, perfRecord } from "../perf-marks";
 
 // ---- Session setup --------------------------------------------------------
 
@@ -247,6 +248,7 @@ interface LspCompletionList {
 }
 
 function completionSource(opts: LspDocOptions, sync: DocSync) {
+  let firstUsefulRecorded = false;
   return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     if (!ctx.view) return null;
     // Push any debounced edits to the server before asking for completions,
@@ -254,6 +256,7 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
     // during fast typing, when completion matters most.
     sync.flush();
     const pos = cmOffsetToLspPos(ctx.pos, ctx.view);
+    const t0 = performance.now();
     let raw: LspCompletionList | LspCompletionItem[] | null;
     try {
       raw = (await opts.client.request("textDocument/completion", {
@@ -267,6 +270,11 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
     if (!raw) return null;
     const items = Array.isArray(raw) ? raw : raw.items;
     if (!items?.length) return null;
+    if (!firstUsefulRecorded) {
+      firstUsefulRecorded = true;
+      perfRecord("lsp.completion.first-useful", performance.now() - t0, `items=${items.length}`);
+      perfMeasure("open-to-first-completion", "project-open", opts.uri, 120_000);
+    }
 
     // Find where the current "word" starts (back over LaTeX-friendly chars).
     const word = ctx.matchBefore(/[\\@\w][@\w]*/);
