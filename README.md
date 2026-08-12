@@ -18,7 +18,13 @@ your own credentials.
   CLI on your PATH.
 - **PDF preview with SyncTeX.** Forward search from the cursor, inverse search
   by double-clicking the page. Compile errors and warnings are parsed out of the
-  log into the editor gutter, with the raw log a click away.
+  log into the editor gutter, with the raw log a click away. On a recompile your
+  reading position is held to the content, not a pixel offset, so the preview
+  doesn't jump when the document repaginates.
+- **Chapter drafts for big documents.** After a full build, "Draft this chapter"
+  recompiles only the chapter you are editing against the last build's
+  cross-references (`\includeonly`), so one chapter of a book-length project
+  redraws in seconds with its references and page numbers intact.
 - **A visual editor for `.tex`.** A hidden-source WYSIWYG mode toggled per file:
   the document on disk stays the verbatim source, and markup is edited through a
   popover rather than rendered inline. Source mode is always one click away.
@@ -55,6 +61,64 @@ is **not** built — Typeward is a single-user editor today. Desktop
 (Windows, macOS, Linux) is what builds and ships; tablet layouts and a
 WebAssembly TeX engine for iPadOS and Android exist in the tree but there are no
 mobile builds yet.
+
+## Performance on large documents
+
+Typeward is built to stay responsive on book-length projects, not only short
+papers. The `bench/` directory holds a reproducible harness: `generate.mjs`
+builds a deterministic 143-chapter LaTeX book, and three drivers measure the
+same operations by driving each real application — Typeward, TeXstudio 4.9.6,
+and LaTeX Workshop 10.17.1 (on VS Code). The figures below are a representative
+run on one Windows 11 machine; the harness is in the repo, so you can reproduce
+them on your own.
+
+One caveat first, so the table isn't misread: **compile time is not an editor
+metric.** All three shell out to the same TeX engine (latexmk driving pdflatex
+and biber), a full build of this book takes tens of seconds in every one of
+them, and Typeward does not make TeX itself faster. The one way it shortens the
+wait is by typesetting *less* — "Draft this chapter" recompiles a single chapter
+against the last full build's cross-references (`\includeonly`), so one chapter
+of a large book redraws in seconds. What an editor otherwise controls is
+everything *around* the compile: how fast it opens, how it completes references,
+how it switches files, and what it does to your place in the PDF when a build
+lands. Those are what these measure.
+
+|                                    | Typeward                    | TeXstudio 4.9.6 | LaTeX Workshop 10.17.1 |
+| ---------------------------------- | --------------------------- | --------------- | ---------------------- |
+| Open to an editable buffer         | ~55 ms                      | ~1.1 s          | ~1.6 s                 |
+| First `\cite` / `\ref` completion  | ~0.4 ms (1287 candidates)   | ~25 ms          | ~5–120 ms              |
+| Switch to a chapter tab            | ~9 ms                       | ~1 ms           | ~23 ms                 |
+| Reading position after a recompile | content-anchored, 0 drift   | not measured    | raw pixel offset       |
+
+- **Opening** hands you a live, editable buffer in tens of milliseconds — the
+  file loads immediately while the outline and language-server index build in
+  the background — where the rivals block on parsing the whole document first.
+  The honest trade-off: Typeward's full cross-file outline (via texlab) is not
+  ready the instant the editor is; on a book this size it fills in over the next
+  several seconds.
+- **Autocomplete** for citations and references answers from an in-process index
+  of every label and citekey in the project, built in Rust and queried
+  synchronously — so the list appears in well under a millisecond and holds every
+  candidate rather than a truncated page. The rivals answer over an asynchronous
+  language-server or extension round-trip.
+- **Tab switching** is where Typeward sits in the middle: faster than LaTeX
+  Workshop, slower than TeXstudio, which holds every open file as a native
+  in-memory widget. Typeward rebuilds its editor view per tab so each file gets
+  a clean language-server session, and a single very large file — tens of
+  thousands of lines in one `.tex` — is its slowest case and the one leg it
+  clearly loses.
+- **Reading position** is the clearest preview win. After a build that
+  repaginated the document, Typeward puts you back on the same *content* — it
+  records the cursor's line via SyncTeX and scrolls the new PDF there — instead
+  of the same pixel offset. LaTeX Workshop keeps the raw scroll offset, which
+  slides off the content the moment the page count changes.
+
+Two things the harness does not yet measure cleanly, named so they aren't taken
+for wins: per-keystroke latency (single-digit milliseconds in all three on a
+normal file) and the very-large-single-file tab switch above. The drivers are
+`bench/drive-ui-baseline.mjs`, `bench/drive-texstudio-baseline.mjs`, and
+`bench/drive-latexworkshop-baseline.mjs`; the `bench` command block in
+`CLAUDE.md` explains how to run them.
 
 ## Build from source
 
