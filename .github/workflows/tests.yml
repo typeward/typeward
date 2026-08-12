@@ -64,6 +64,14 @@ jobs:
         working-directory: app
         run: npm test
 
+      # Benchmark substrate (bench/, long-document plan Phase 0): the perf
+      # regression backstops in bench/perf/ already ran inside `npm test`;
+      # this step additionally proves the corpus generator is deterministic
+      # and structurally intact (double-build hash compare, entry counts).
+      - name: Bench corpus self-check
+        working-directory: app
+        run: node bench/generate.mjs --check
+
       # Guards the load-bearing editor code-split (vite.config.ts advancedChunks):
       # a bundler bump that breaks the runtime-helpers group id match would fold
       # the helpers into a vendor chunk and drag pdfjs/codemirror/markdown into the

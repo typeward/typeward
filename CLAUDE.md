@@ -134,6 +134,24 @@ npm run release -- <x.y.z> --dry-run   # Print the plan, write nothing
 # Test
 cargo test --manifest-path src-tauri/Cargo.toml
 
+# Long-document benchmarks (bench/; plan: docs/plans/2026-08-03-long-document-performance.md, local)
+node bench/generate.mjs              # deterministic corpus -> bench/corpus/ (gitignored)
+node bench/generate.mjs --check      # structure + determinism asserts (runs in CI)
+node bench/fetch-ctan.mjs            # lshort + memoir manual -> bench/third-party/
+node bench/compile-baseline.mjs bench/corpus/book   # compile + SyncTeX CLI baselines -> bench/results/
+# Editor hot-path perf backstops ride `npm test` (bench/perf/editor-hotpaths.test.ts)
+# UI-leg session (drives the live app over CDP; perf marks in src/lib/perf-marks.ts):
+#   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333 npm run tauri dev
+#   node bench/drive-ui-baseline.mjs bench-book
+# TeXstudio rival baseline (drives its QJS macro engine; needs the portable
+# win-portable-qt6 build extracted to bench/third-party/texstudio/):
+#   node bench/drive-texstudio-baseline.mjs bench-book|bench-chapter-50k [--no-compile]
+# LaTeX Workshop rival baseline (isolated VS Code profile + Electron CDP;
+# one-time: code --user-data-dir bench/third-party/vscode/data
+#           --extensions-dir bench/third-party/vscode/ext
+#           --install-extension james-yu.latex-workshop):
+#   node bench/drive-latexworkshop-baseline.mjs bench-book|bench-chapter-50k [--no-compile]
+
 # Sidecar binary
 npm run fetch:tectonic       # Downloads Tectonic 0.15.0 for the host platform
                              # to src-tauri/binaries/tectonic-<triple>[.exe].
