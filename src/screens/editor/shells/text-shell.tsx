@@ -155,6 +155,7 @@ import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { installSwipeListener } from "~/lib/gestures";
 import { pathToFileUri } from "~/lib/lsp/cm6";
 import { refCiteCompletionExtension } from "~/lib/lsp/ref-cite-completion";
+import { refCiteGotoExtension } from "~/lib/lsp/ref-cite-goto";
 import { anchoredMenuEvent } from "~/lib/menu-position";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
@@ -1258,6 +1259,12 @@ const CenterPane: Component<{
             // so completion works with no language server installed.
             if (lang === "latex" && !lspSession) {
               extrasList.push(refCiteCompletionExtension());
+            }
+            // Go-to-definition for \ref/\cite from the project index (Mod+click
+            // or F12) — index-based, so it works with or without texlab and
+            // reaches labels defined in other chapter files.
+            if (lang === "latex") {
+              extrasList.push(refCiteGotoExtension(f.relPath));
             }
             const grammarExt = grammarOn
               ? [
