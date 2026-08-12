@@ -1,4 +1,4 @@
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, hoverTooltip, keymap } from "@codemirror/view";
 import { Prec, type Extension } from "@codemirror/state";
 import { indexCitations, indexLabels } from "~/stores/index-store";
 import { requestGotoSource } from "~/stores/editor-store";
@@ -29,6 +29,9 @@ export interface DefTarget {
   line: number;
   key: string;
   kind: "ref" | "cite";
+  /** The label's section title or the citation's bib title, when the index has
+   *  one (absent for a label resolved from the active buffer). */
+  context?: string;
 }
 
 function escapeRegExp(s: string): string {
@@ -123,7 +126,14 @@ export function resolveRefCiteTarget(
 
   if (isRef) {
     const hit = find(labels, key);
-    if (hit) return { relPath: hit.file, line: hit.line, key, kind: "ref" };
+    if (hit)
+      return {
+        relPath: hit.file,
+        line: hit.line,
+        key,
+        kind: "ref",
+        context: hit.context || undefined,
+      };
     // A label defined in the file being edited may not be in the disk index yet.
     const line = bufferLabelLine(doc, key);
     if (line != null) return { relPath: activeRelPath, line, key, kind: "ref" };
@@ -131,24 +141,64 @@ export function resolveRefCiteTarget(
   }
   const hit = find(citations, key);
   if (!hit) return null;
-  return { relPath: hit.file, line: hit.line, key, kind: "cite" };
+  return {
+    relPath: hit.file,
+    line: hit.line,
+    key,
+    kind: "cite",
+    context: hit.context || undefined,
+  };
 }
 
-/** CM6 extension: Mod+click and F12 jump to a `\ref`/`\cite` key's definition. */
+/** Tooltip contents for a resolved reference/citation target. */
+function hoverDom(t: DefTarget): HTMLElement {
+  const dom = document.createElement("div");
+  dom.className = "cm-refcite-hover px-2 py-1 text-xs";
+  const head = document.createElement("div");
+  head.style.fontWeight = "600";
+  head.textContent = t.key;
+  dom.appendChild(head);
+  if (t.context) {
+    const ctx = document.createElement("div");
+    ctx.textContent = t.context;
+    dom.appendChild(ctx);
+  }
+  const loc = document.createElement("div");
+  loc.style.opacity = "0.7";
+  loc.textContent = `${t.kind === "cite" ? "citation" : "label"} · ${t.relPath}:${t.line}`;
+  dom.appendChild(loc);
+  return dom;
+}
+
+/**
+ * CM6 extension: navigate `\ref`/`\cite` keys from the project index. Mod+click
+ * or F12 jumps to the definition; a hover previews the target's section title
+ * or bib title without leaving the current file.
+ */
 export function refCiteGotoExtension(activeRelPath: string): Extension {
-  const tryGoto = (view: EditorView, pos: number): boolean => {
-    const t = resolveRefCiteTarget(
+  const resolve = (view: EditorView, pos: number): DefTarget | null =>
+    resolveRefCiteTarget(
       view.state.doc.toString(),
       pos,
       activeRelPath,
       indexLabels(),
       indexCitations(),
     );
+  const tryGoto = (view: EditorView, pos: number): boolean => {
+    const t = resolve(view, pos);
     if (!t) return false;
     requestGotoSource(t.relPath, t.line);
     return true;
   };
   return [
+    hoverTooltip(
+      (view, pos) => {
+        const t = resolve(view, pos);
+        if (!t) return null;
+        return { pos, above: true, create: () => ({ dom: hoverDom(t) }) };
+      },
+      { hoverTime: 300 },
+    ),
     EditorView.domEventHandlers({
       mousedown(event, view) {
         if (event.button !== 0 || !(event.metaKey || event.ctrlKey)) return false;

@@ -25,6 +25,7 @@ describe("resolveRefCiteTarget", () => {
       line: 3,
       key: "sec:intro",
       kind: "ref",
+      context: "Introduction",
     });
   });
 
@@ -40,6 +41,7 @@ describe("resolveRefCiteTarget", () => {
       line: 10,
       key: "knuth1984",
       kind: "cite",
+      context: "The TeXbook",
     });
   });
 
