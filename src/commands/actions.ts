@@ -28,13 +28,16 @@ import {
   appendLiveLog,
   bumpPdfVersion,
   clearLiveLog,
+  clearScrollAnchor,
   compileState,
   lastResult,
   markFileCleanIfUnchanged,
   openFiles,
+  pdfViewportTop,
   project,
   requestGotoSource,
   requestPdfScroll,
+  requestScrollAnchor,
   setCompileState,
   setFileBaseHash,
   setLastResult,
@@ -328,6 +331,29 @@ function notifyCompileFailureIfHidden(errorCount: number): void {
 }
 
 /**
+ * Inverse-search the current PDF viewport top to a source (relPath, line) and
+ * stash it as the pending scroll anchor. Called at compile start so the reader's
+ * position is captured against the OLD PDF before the recompile replaces it.
+ */
+function captureScrollAnchor(isCurrent: () => boolean): void {
+  // Drop any anchor left by a prior compile (a no-op or failed build never
+  // reloads, so its anchor is never consumed) — only THIS compile's anchor may
+  // apply to the reload it produces.
+  clearScrollAnchor();
+  const top = pdfViewportTop();
+  if (!top || !lastResult()?.outputPath) return;
+  // x at the left text margin (~72pt = 1in) so the anchor is the line whose
+  // text sits at the top-left of the viewport.
+  void resolveInverse(top.page, 72, top.y)
+    .then((src) => {
+      if (src && isCurrent()) requestScrollAnchor(src.relPath, src.line);
+    })
+    .catch(() => {
+      /* best-effort; the raw scrollTop restore remains the fallback */
+    });
+}
+
+/**
  * Orchestrates the full compile path: save-if-dirty, kick the adapter,
  * record results, push diagnostics into the store, and bump the PDF
  * version so the preview pane re-renders. Errors are reported via
@@ -363,6 +389,14 @@ export async function compileActiveProject(): Promise<void> {
   const logListener = listen<string>("compile:log", (ev) => {
     if (isCurrent()) appendLiveLog(ev.payload);
   });
+  // SyncTeX scroll content anchor: inverse-search the current viewport top to
+  // the source line the reader is looking at, so the recompile can restore
+  // that line's position (not a raw pixel offset) after the page count shifts.
+  // Fire-and-forget in parallel with the build; it reads the OLD PDF (still on
+  // disk — latexmk doesn't overwrite it until near the end) and lands well
+  // before the compile finishes. Skipped for texlive-wasm and when SyncTeX is
+  // unavailable (resolveInverse returns null → no anchor → raw restore).
+  captureScrollAnchor(isCurrent);
   try {
     // Inside the try so a failed save surfaces as a compile error in the
     // Issues tab instead of an unhandled rejection.

@@ -64,12 +64,14 @@ import {
   activeIndex,
   closeFile,
   compileState,
+  consumeScrollAnchor,
   lastResult,
   openFiles,
   pdfScrollTarget,
   pdfVersion,
   project,
   setActiveIndex,
+  setPdfViewportTop,
   updateActiveFile,
 } from "~/stores/editor-store";
 import { LIGHT_THEMES, theme } from "~/themes/theme-store";
@@ -405,6 +407,18 @@ const PreviewPane: Component<{
             fromLastBuild={lastResult()?.seeded === true}
             onShowErrors={revealCompileErrors}
             scrollTarget={pdfScrollTarget()}
+            onViewportTop={(page, y) => setPdfViewportTop({ page, y })}
+            consumeScrollAnchor={() => {
+              const a = consumeScrollAnchor();
+              return a ? { relPath: a.relPath, line: a.line } : null;
+            }}
+            resolveScrollAnchor={async (relPath, line) => {
+              const p = project();
+              const out = lastResult()?.outputPath;
+              if (!p || !out) return null;
+              const loc = await resolveForward(p, out, relPath, line);
+              return loc ? { page: loc.page, y: loc.y } : null;
+            }}
             onPageClick={(page, x, y, selectedText) => {
               void syncInverseFromPdfClick(page, x, y, selectedText);
             }}

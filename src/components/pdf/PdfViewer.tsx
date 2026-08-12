@@ -103,6 +103,23 @@ interface PdfViewerProps {
    */
   scrollTarget?: { page: number; y: number; generation: number } | null;
   /**
+   * Reports the current viewport-top position (1-based page + PDF-point y) as
+   * the user scrolls, so the host can inverse-search it into a source line for
+   * the reload content anchor.
+   */
+  onViewportTop?: (page: number, y: number) => void;
+  /**
+   * Read-and-clear the pending scroll content anchor (a source line captured
+   * at compile start) after a reload. Returning null falls back to the raw
+   * scrollTop restore.
+   */
+  consumeScrollAnchor?: () => { relPath: string; line: number } | null;
+  /** Forward-search an anchored source line to its position in the new PDF. */
+  resolveScrollAnchor?: (
+    relPath: string,
+    line: number,
+  ) => Promise<{ page: number; y: number } | null>;
+  /**
    * Create a review/TODO thread from the current PDF text selection. When
    * absent, the selection chip's Comment/TODO actions are hidden (e.g. a
    * read-only host). The host owns SyncTeX inverse + source anchoring.
@@ -604,6 +621,13 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         window.clearTimeout(holdTimer);
       }
       setCurrentPage(page);
+      // Keep the viewport-top position (page + PDF-point y) current so the
+      // compile flow can inverse-search it into a source line for the scroll
+      // content anchor. The TOP edge, not the 35% probe, is what the reader is
+      // looking at; convert the px offset into that page to PDF points.
+      const topPage = pageIndexAt(layout.tops, scrollEl.scrollTop);
+      const yPts = (scrollEl.scrollTop - layout.tops[topPage - 1]) / scale();
+      props.onViewportTop?.(topPage, Math.max(0, yPts));
     });
   };
 
@@ -710,6 +734,55 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     return { page, offset: y - layout.tops[page - 1] };
   };
 
+  // Restore the viewport after a reload. The raw scrollTop goes back first
+  // (immediate, no flash), then — if the compile flow captured a SyncTeX
+  // content anchor (the source line that was at the viewport top) — the
+  // position is refined to wherever that line landed in the new PDF, so the
+  // reader keeps looking at the same content even when the page count shifted
+  // above them. Falls back silently to the raw restore when no anchor is
+  // available (no SyncTeX, texlive-wasm, or the lookup missed).
+  const restoreScrollAfterReload = (
+    before: { page: number; offset: number } | null,
+    gen: number,
+  ) => {
+    requestAnimationFrame(() => {
+      if (!scrollEl || gen !== loadGen) return;
+      scrollEl.scrollTop = savedScrollTop;
+      const after = topmostPageAt(scrollEl.scrollTop);
+      if (before && after) {
+        perfRecord(
+          "pdf-reload-scroll-drift",
+          Math.abs(after.page - before.page),
+          `before=p${before.page}+${Math.round(before.offset)}px after=p${after.page}+${Math.round(after.offset)}px`,
+        );
+      }
+      const anchor = props.consumeScrollAnchor?.();
+      const resolve = props.resolveScrollAnchor;
+      if (!anchor || !resolve) return;
+      void resolve(anchor.relPath, anchor.line).then((loc) => {
+        if (!loc || !scrollEl || gen !== loadGen) return;
+        const layout = getRowLayout();
+        if (!layout || loc.page < 1 || loc.page > layout.tops.length) return;
+        // Put the anchored source line ~60px below the viewport top, matching
+        // the forward-search scroll target's framing.
+        const target = layout.tops[loc.page - 1] + loc.y * scale() - 60;
+        scrollEl.scrollTop = Math.max(0, target);
+        const settled = topmostPageAt(scrollEl.scrollTop);
+        if (before && settled) {
+          // `ms` = pages the anchor moved to keep the reader's source line in
+          // view (i.e. how far the content shifted — and how far a raw
+          // scrollTop restore would have left them off). The reader's exact
+          // line is now at the viewport top, so residual reading drift is ~0.
+          perfRecord(
+            "pdf-reload-anchor-follow",
+            Math.abs(settled.page - before.page),
+            `anchored ${anchor.relPath}:${anchor.line} p${before.page}->p${settled.page}`,
+          );
+        }
+      });
+    });
+  };
+
   const load = async (path: string) => {
     const gen = ++loadGen;
     setLoading(true);
@@ -804,34 +877,12 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           if (gen !== loadGen) return;
           perfMeasure("pdf-reload-to-rendered", "pdf-reload", `pages=${renders.length}`);
         });
-        requestAnimationFrame(() => {
-          if (!scrollEl || gen !== loadGen) return;
-          scrollEl.scrollTop = savedScrollTop;
-          const after = topmostPageAt(scrollEl.scrollTop);
-          if (before && after) {
-            perfRecord(
-              "pdf-reload-scroll-drift",
-              Math.abs(after.page - before.page),
-              `before=p${before.page}+${Math.round(before.offset)}px after=p${after.page}+${Math.round(after.offset)}px`,
-            );
-          }
-        });
+        restoreScrollAfterReload(before, gen);
       } else {
         const before = topmostPageAt(savedScrollTop);
         resetSlots();
         setPageSizes(dims);
-        requestAnimationFrame(() => {
-          if (!scrollEl) return;
-          scrollEl.scrollTop = savedScrollTop;
-          const after = topmostPageAt(scrollEl.scrollTop);
-          if (before && after) {
-            perfRecord(
-              "pdf-reload-scroll-drift",
-              Math.abs(after.page - before.page),
-              `before=p${before.page}+${Math.round(before.offset)}px after=p${after.page}+${Math.round(after.offset)}px`,
-            );
-          }
-        });
+        restoreScrollAfterReload(before, gen);
       }
       perfMeasure("pdf-reload-to-doc", "pdf-reload", `pages=${dims.length}`);
       perfMeasure("compile-to-pdf-doc", "compile", `pages=${dims.length}`, 900_000);

@@ -174,21 +174,34 @@ if (doCompile) {
     "The resulting estimate constrains each auxiliary component and every " +
     "associated invariant, so the corresponding decomposition satisfies the " +
     "stated bound for every admissible configuration of the model. ";
-  await c.send("Input.insertText", { text: "\n\n" + para.repeat(14) + "\n\n" });
+  // Enough to reliably push past a page boundary in an early chapter, so the
+  // page count changes and the scroll-drift / content-anchor legs are exercised.
+  await c.send("Input.insertText", { text: "\n\n" + para.repeat(50) + "\n\n" });
   await sleep(400);
   before = Date.now();
   await chord("Enter", "Enter", 13);
   console.log("recompile for drift leg...");
   const warm = await ui.waitForEntry("compile-to-pdf-doc", 300_000, before);
   results.legs.warmCompileToPdfDocMs = +warm.ms.toFixed(0);
-  await sleep(2500);
+  // The SyncTeX content anchor resolves ~one CLI-forward (~0.4s) after the
+  // reload; wait long enough to catch it.
+  await sleep(4000);
   const entries = await ui.perfEntries();
   const drift = entries.filter((e) => e.name === "pdf-reload-scroll-drift" && e.at > before).pop();
   if (drift) {
     results.legs.scrollDrift = { pages: drift.ms, detail: drift.detail };
-    console.log("pdf-reload-scroll-drift:", drift.ms, drift.detail);
+    console.log("pdf-reload-scroll-drift (raw scrollTop):", drift.ms, drift.detail);
   } else {
     console.log("drift: no entry (page count unchanged — same-layout fast path taken)");
+  }
+  const anchorFollow = entries
+    .filter((e) => e.name === "pdf-reload-anchor-follow" && e.at > before)
+    .pop();
+  if (anchorFollow) {
+    results.legs.anchorFollow = { pages: anchorFollow.ms, detail: anchorFollow.detail };
+    console.log("pdf-reload-anchor-follow (SyncTeX content anchor):", anchorFollow.ms, anchorFollow.detail);
+  } else {
+    console.log("anchor-follow: no entry (SyncTeX unavailable, or no viewport-top captured)");
   }
 }
 

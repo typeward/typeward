@@ -103,6 +103,41 @@ export const requestPdfScroll = (page: number, y: number): void => {
   setPdfScrollTargetInternal({ page, y, generation: _scrollGen });
 };
 
+// --- SyncTeX scroll content anchor ----------------------------------------
+// The source line at the top of the PDF viewport, so a page-count-changing
+// recompile can restore the READING POSITION (the same source line stays at
+// the top) instead of a raw pixel offset. The PdfViewer keeps `pdfViewportTop`
+// current on scroll (page + y in PDF points); at compile start the compile
+// flow inverse-searches it to a source (relPath, line) and stores it as
+// `pendingScrollAnchor`, which the PdfViewer forward-resolves after the reload.
+
+/** Current viewport-top position in the PDF (page + PDF-point y), or null. */
+const [pdfViewportTop, setPdfViewportTop] = createSignal<{ page: number; y: number } | null>(null);
+
+export interface ScrollAnchor {
+  relPath: string;
+  line: number;
+  generation: number;
+}
+const [pendingScrollAnchor, setPendingScrollAnchorInternal] =
+  createSignal<ScrollAnchor | null>(null);
+let _anchorGen = 0;
+
+/** Record the source line to restore the viewport to after the next reload. */
+export const requestScrollAnchor = (relPath: string, line: number): void => {
+  _anchorGen++;
+  setPendingScrollAnchorInternal({ relPath, line, generation: _anchorGen });
+};
+/** Read + clear the pending anchor (the PdfViewer consumes it once). */
+export const consumeScrollAnchor = (): ScrollAnchor | null => {
+  const a = pendingScrollAnchor();
+  if (a) setPendingScrollAnchorInternal(null);
+  return a;
+};
+export const clearScrollAnchor = (): void => {
+  setPendingScrollAnchorInternal(null);
+};
+
 export const requestGotoSource = (
   relPath: string,
   line: number,
@@ -355,7 +390,10 @@ export {
   openFiles,
   pdfScrollTarget,
   pdfVersion,
+  pdfViewportTop,
+  pendingScrollAnchor,
   project,
+  setPdfViewportTop,
   remapOpenFilesUnderDir,
   renameOpenFile,
   resetCompileState,
