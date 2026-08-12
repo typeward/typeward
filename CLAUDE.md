@@ -139,6 +139,8 @@ node bench/generate.mjs              # deterministic corpus -> bench/corpus/ (gi
 node bench/generate.mjs --check      # structure + determinism asserts (runs in CI)
 node bench/fetch-ctan.mjs            # lshort + memoir manual -> bench/third-party/
 node bench/compile-baseline.mjs bench/corpus/book   # compile + SyncTeX CLI baselines -> bench/results/
+# Phase 3 chapter-scoped-build gate (falsification harness; needs a TeX distro):
+#   node bench/chapter-scoped-harness.mjs ch010,ch011   # VIABLE if all 4 assertions pass
 # Editor hot-path perf backstops ride `npm test` (bench/perf/editor-hotpaths.test.ts)
 # UI-leg session (drives the live app over CDP; perf marks in src/lib/perf-marks.ts):
 #   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333 npm run tauri dev
