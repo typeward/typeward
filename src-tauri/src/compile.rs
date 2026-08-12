@@ -269,6 +269,10 @@ pub struct CompileResult {
     pub log: String,
     #[serde(rename = "durationMs")]
     pub duration_ms: u64,
+    /// True when the build succeeded but left the output PDF byte-identical
+    /// (a no-op recompile). The frontend then skips the viewer reload.
+    #[serde(rename = "pdfUnchanged", default)]
+    pub pdf_unchanged: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -474,6 +478,12 @@ pub async fn compile_latex(
     // and the listener is scoped to the active attempt.
     let sink = Some(LogSink::tauri(app.clone(), "compile:log"));
 
+    // Snapshot the output PDF's identity before the build so a no-op recompile
+    // (latexmk "Nothing to do") can be detected: an unchanged PDF must not
+    // trigger a viewer reload, which is otherwise most of a no-op's wall time.
+    let pdf_path_pre = root.join(latex_output_rel(&root_file, opts.engine));
+    let pdf_sig_before = pdf_signature(&pdf_path_pre);
+
     let (log, success) = match opts.engine {
         // Tectonic runs its own bibliography passes, so the recipe is ignored
         // (the UI states this) — it always takes its own path.
@@ -552,6 +562,10 @@ pub async fn compile_latex(
     let pdf_path = root.join(latex_output_rel(&root_file, opts.engine));
     let ok = success && pdf_path.exists();
     let diagnostics = parse_latex_log(&log, &root_file, Some(&root));
+    // A successful build whose PDF is byte-for-byte the one already on disk
+    // (latexmk decided nothing changed) needs no viewer reload — the frontend
+    // skips bumping pdfVersion, which is most of a no-op recompile's cost.
+    let pdf_unchanged = ok && pdf_signature(&pdf_path) == pdf_sig_before && pdf_sig_before.is_some();
 
     Ok(CompileResult {
         ok,
@@ -563,7 +577,24 @@ pub async fn compile_latex(
         diagnostics,
         log,
         duration_ms: started.elapsed().as_millis() as u64,
+        pdf_unchanged,
     })
+}
+
+/// A cheap identity for the output PDF (mtime + size) used to detect a no-op
+/// recompile. `None` when the file is absent; two equal `Some` values mean the
+/// build did not rewrite it. Not a content hash — latexmk rewrites the PDF
+/// (new timestamp) whenever it actually recompiles, so mtime+size is a
+/// sufficient and O(1) discriminator.
+fn pdf_signature(path: &Path) -> Option<(u64, u128)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((meta.len(), mtime))
 }
 
 /// Build the shared flag list for a latexmk / direct-binary invocation. Every
@@ -1806,6 +1837,8 @@ pub async fn compile_typst(
         diagnostics,
         log,
         duration_ms: started.elapsed().as_millis() as u64,
+        // `typst compile` always rewrites the PDF, so there is no no-op to skip.
+        pdf_unchanged: false,
     })
 }
 

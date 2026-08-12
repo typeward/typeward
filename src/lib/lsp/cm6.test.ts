@@ -1,7 +1,8 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, Text } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import {
+  changesToLspContentChanges,
   cmOffsetToLspPos,
   kindToType,
   lspPosToOffset,
@@ -52,6 +53,61 @@ describe("cmOffsetToLspPos", () => {
       const pos = cmOffsetToLspPos(offset, view);
       expect(lspPosToOffset(pos, view)).toBe(offset);
     }
+  });
+});
+
+describe("changesToLspContentChanges", () => {
+  // Applying the emitted content-changes to startDoc (in the order given, each
+  // range against the doc resulting from the prior changes) must reproduce the
+  // final document — the LSP mirror contract. We simulate that here.
+  const applyLsp = (
+    startText: string,
+    changes: Array<{ range: { start: { line: number; character: number }; end: { line: number; character: number } }; text: string }>,
+  ): string => {
+    let doc = Text.of(startText.split("\n"));
+    for (const c of changes) {
+      const from = doc.line(c.range.start.line + 1).from + c.range.start.character;
+      const to = doc.line(c.range.end.line + 1).from + c.range.end.character;
+      doc = doc.replace(from, to, Text.of(c.text.split("\n")));
+    }
+    return doc.toString();
+  };
+
+  it("reproduces a single insertion", () => {
+    const start = Text.of(["hello world"]);
+    const cs = EditorState.create({ doc: "hello world" }).changes({ from: 5, insert: " brave" });
+    const lsp = changesToLspContentChanges(cs, start);
+    expect(applyLsp("hello world", lsp as never)).toBe("hello brave world");
+  });
+
+  it("reproduces multiple edits in one changeset applied top-to-bottom", () => {
+    const startStr = "aaa\nbbb\nccc";
+    const start = Text.of(startStr.split("\n"));
+    // Two edits: delete the first char of line 1, insert 'X' at end of line 3.
+    const cs = EditorState.create({ doc: startStr }).changes([
+      { from: 0, to: 1 },
+      { from: startStr.length, insert: "X" },
+    ]);
+    const lsp = changesToLspContentChanges(cs, start);
+    // Highest-position-first ordering: the line-3 insert must precede the
+    // line-1 delete so its range stays valid.
+    expect(lsp[0].range.start).toEqual({ line: 2, character: 3 });
+    expect(applyLsp(startStr, lsp as never)).toBe("aa\nbbb\ncccX");
+  });
+
+  it("reproduces a composed multi-keystroke window", () => {
+    const startStr = "x = 1\ny = 2";
+    let state = EditorState.create({ doc: startStr });
+    // Simulate three keystrokes typed into line 1, composing the changesets.
+    let composed = state.changes({ from: 5, insert: "0" });
+    state = state.update({ changes: composed }).state;
+    let c2 = state.changes({ from: 6, insert: "0" });
+    composed = composed.compose(c2);
+    state = state.update({ changes: c2 }).state;
+    const c3 = state.changes({ from: 7, insert: "0" });
+    composed = composed.compose(c3);
+    const lsp = changesToLspContentChanges(composed, Text.of(startStr.split("\n")));
+    expect(applyLsp(startStr, lsp as never)).toBe("x = 1000\ny = 2");
   });
 });
 

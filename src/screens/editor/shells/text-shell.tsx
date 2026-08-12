@@ -77,8 +77,6 @@ import {
   cursorCol,
   cursorLine,
   getActiveEditorView,
-  noteActiveEditorFile,
-  restoreEditorPosition,
 } from "~/stores/editor-view-store";
 import {
   editorSettings,
@@ -1228,9 +1226,6 @@ const CenterPane: Component<{
         >
           {(_key) => {
             const f = activeFile()!;
-            // Stamp the mounted file for the position stash — the cleanup-time
-            // stash (editor-view-store) reads it while the old view is alive.
-            noteActiveEditorFile(f.path);
             const lang = languageForFile(f.relPath);
             const lspLang = lspLanguageForFile(f.relPath);
             const lspSession = lspLang ? findSession(lspLang) : undefined;
@@ -1319,12 +1314,11 @@ const CenterPane: Component<{
                   return resolveProjectAsset(root, rel);
                 }}
                 lspActive={!!lspSession}
+                stashKey={f.path}
                 onReady={(v) => {
-                  // The keyed remount (LSP attach, grammar toggle) rebuilds
-                  // CM6 state — losing undo history there is accepted, losing
-                  // the cursor + scroll position is not. No-op on tab switch:
-                  // the stash only matches a same-file remount.
-                  restoreEditorPosition(v, f.path);
+                  // Undo, cursor, and scroll are preserved across the keyed
+                  // remount (LSP attach, grammar toggle) and multi-file tab
+                  // switches by CodeMirror's per-path state stash (stashKey).
                   setReviewView(v);
                   perfMeasure("tab-switch-to-editor", "tab-switch", f.relPath);
                   perfMeasure("open-to-editor", "project-open", f.relPath, 60_000);

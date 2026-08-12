@@ -22,7 +22,7 @@ import {
   type CompletionResult,
 } from "@codemirror/autocomplete";
 import { linter, type Diagnostic } from "@codemirror/lint";
-import { StateEffect, StateField, type Extension } from "@codemirror/state";
+import { ChangeSet, StateEffect, StateField, type Extension, type Text } from "@codemirror/state";
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { JsonRpcClient } from "./client";
 import { perfMeasure, perfRecord } from "../perf-marks";
@@ -62,6 +62,14 @@ export async function initSession(
   })) as { capabilities?: Record<string, unknown> } | null;
   client.notify("initialized", {});
   const serverCapabilities = initResult?.capabilities ?? null;
+  // textDocumentSync is either a kind number or { change: kind }. Kind 2 =
+  // Incremental; anything else (Full, None, or absent) uses full-content sync.
+  const syncCap = serverCapabilities?.textDocumentSync;
+  const changeKind =
+    typeof syncCap === "number"
+      ? syncCap
+      : ((syncCap as { change?: number } | undefined)?.change ?? 1);
+  const changeSync: ChangeSync = changeKind === 2 ? "incremental" : "full";
 
   let stopped = false;
   return {
@@ -69,7 +77,7 @@ export async function initSession(
     rootUri,
     serverCapabilities,
     document(opts) {
-      return lspDocumentExtensions({ client, ...opts });
+      return lspDocumentExtensions({ client, changeSync, ...opts });
     },
     async stop() {
       if (stopped) return;
@@ -87,10 +95,14 @@ export async function initSession(
 
 // ---- Document extension ---------------------------------------------------
 
+type ChangeSync = "full" | "incremental";
+
 interface LspDocOptions {
   client: JsonRpcClient;
   uri: string;
   languageId: string;
+  /** How to sync edits — from the server's advertised textDocumentSync. */
+  changeSync?: ChangeSync;
 }
 
 /** Lets the completion source force-flush the lifecycle plugin's pending
@@ -119,29 +131,76 @@ const diagnosticsField = StateField.define<Diagnostic[]>({
   },
 });
 
+/** LSP 0-based line/character position for a UTF-16 offset in `doc`. CM6
+ *  offsets and LSP's default UTF-16 positionEncoding share code-unit indexing,
+ *  so no re-encoding is needed. */
+function offsetToLspPos(doc: Text, pos: number): { line: number; character: number } {
+  const line = doc.lineAt(pos);
+  return { line: line.number - 1, character: pos - line.from };
+}
+
+/**
+ * Convert a composed ChangeSet (against `startDoc`) into LSP incremental
+ * contentChanges. Every range is expressed in `startDoc` coordinates, and the
+ * changes are emitted HIGHEST-position-first so the server applies them
+ * top-to-bottom without an earlier edit shifting a later range's coordinates.
+ */
+export function changesToLspContentChanges(
+  changes: ChangeSet,
+  startDoc: Text,
+): Array<{ range: { start: object; end: object }; text: string }> {
+  const out: Array<{ range: { start: object; end: object }; text: string }> = [];
+  changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    out.push({
+      range: {
+        start: offsetToLspPos(startDoc, fromA),
+        end: offsetToLspPos(startDoc, toA),
+      },
+      text: inserted.toString(),
+    });
+  });
+  return out.reverse();
+}
+
 function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
+  const incremental = opts.changeSync === "incremental";
   return ViewPlugin.define((view: EditorView) => {
     let version = 1;
     let debounce: ReturnType<typeof setTimeout> | undefined;
+    // Full-sync path: a boolean is enough (the whole doc is re-serialized).
     let dirty = false;
+    // Incremental path: accumulate the raw edits and the doc they apply to, so
+    // one debounced notification carries every keystroke as tiny ranges
+    // instead of the megabyte doc.toString() a large file would otherwise
+    // send on every flush.
+    let pending: ChangeSet | null = null;
+    let pendingStartDoc: Text | null = null;
 
-    // Serializes the doc lazily at send time — doing it per keystroke would
-    // be an O(n) rope→string walk discarded by the next edit.
     const sendDidChange = (): void => {
-      opts.client.notify("textDocument/didChange", {
-        textDocument: { uri: opts.uri, version: version++ },
-        // Full-content sync — keeps the wire shape simple. Texlab and friends
-        // accept this even when they advertise incremental sync.
-        contentChanges: [{ text: view.state.doc.toString() }],
-      });
-      dirty = false;
+      if (incremental) {
+        if (!pending || !pendingStartDoc) return;
+        opts.client.notify("textDocument/didChange", {
+          textDocument: { uri: opts.uri, version: version++ },
+          contentChanges: changesToLspContentChanges(pending, pendingStartDoc),
+        });
+        pending = null;
+        pendingStartDoc = null;
+      } else {
+        // Serialized lazily at send time — doing it per keystroke would be an
+        // O(n) rope→string walk discarded by the next edit.
+        opts.client.notify("textDocument/didChange", {
+          textDocument: { uri: opts.uri, version: version++ },
+          contentChanges: [{ text: view.state.doc.toString() }],
+        });
+        dirty = false;
+      }
     };
     const flushPending = (): void => {
       if (debounce) {
         clearTimeout(debounce);
         debounce = undefined;
       }
-      if (dirty) sendDidChange();
+      if (incremental ? pending !== null : dirty) sendDidChange();
     };
     sync.flush = flushPending;
 
@@ -171,11 +230,18 @@ function lifecyclePlugin(opts: LspDocOptions, sync: DocSync) {
     return {
       update(update: ViewUpdate) {
         if (!update.docChanged) return;
-        dirty = true;
+        if (incremental) {
+          // Compose successive edits so the flush sends one consistent delta.
+          // The window's anchor doc is the state before the first edit.
+          if (pending === null) pendingStartDoc = update.startState.doc;
+          pending = pending ? pending.compose(update.changes) : update.changes;
+        } else {
+          dirty = true;
+        }
         if (debounce) clearTimeout(debounce);
         debounce = setTimeout(() => {
           debounce = undefined;
-          if (dirty) sendDidChange();
+          sendDidChange();
         }, 200);
       },
       destroy() {

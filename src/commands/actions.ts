@@ -376,9 +376,13 @@ export async function compileActiveProject(): Promise<void> {
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");
     if (result.ok) setLastSuccessAtInternal(Date.now());
-    if (result.ok && result.outputPath) {
+    if (result.ok && result.outputPath && !result.pdfUnchanged) {
       perfMark("pdf-reload");
       bumpPdfVersion();
+    } else if (result.ok && result.outputPath) {
+      // No-op recompile: the PDF on disk is byte-identical, so skip the viewer
+      // reload entirely (the on-screen render is already current).
+      perfDiscard("compile");
     } else {
       perfDiscard("compile");
       recordError(

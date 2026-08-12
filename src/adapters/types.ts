@@ -119,6 +119,12 @@ export interface CompileResult {
    * skip seeded results; the preview pane shows a "from last build" chip.
    */
   seeded?: boolean;
+  /**
+   * True when a successful build left the output PDF byte-identical (latexmk
+   * "Nothing to do"). The compile orchestration skips the viewer reload,
+   * which is most of a no-op recompile's cost.
+   */
+  pdfUnchanged?: boolean;
 }
 
 /**

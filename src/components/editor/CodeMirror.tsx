@@ -3,7 +3,7 @@ import {
   closeBrackets,
   closeBracketsKeymap,
 } from "@codemirror/autocomplete";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, history, historyField, historyKeymap } from "@codemirror/commands";
 import {
   StreamLanguage,
   syntaxHighlighting,
@@ -80,6 +80,39 @@ interface CodeMirrorProps {
    * path) to swap these out when switching files.
    */
   extraExtensions?: Extension[];
+  /**
+   * Stable identity for the buffer this editor shows (the file path). The
+   * editor remounts on tab switch and again when the LSP session attaches;
+   * this key lets it stash and restore undo history, cursor, and scroll
+   * across those remounts, so switching away and back does not throw away
+   * undo. Restoration only applies when the stashed document still matches
+   * `value` (an out-of-editor content replace mounts fresh). Omit to opt out.
+   */
+  stashKey?: string;
+}
+
+/**
+ * Serialized editor state (doc + selection + history) plus scroll offset, kept
+ * per file across the editor's remounts, bounded LRU. `doc` is retained
+ * separately so restoration can verify the buffer hasn't diverged before
+ * replaying stale history. Scroll is DOM state, not part of EditorState, so it
+ * rides alongside and is re-applied after the first layout pass.
+ */
+interface StashEntry {
+  json: unknown;
+  doc: string;
+  scrollTop: number;
+}
+const STASH_LIMIT = 12;
+const stateStash = new Map<string, StashEntry>();
+function stashPut(key: string, entry: StashEntry): void {
+  stateStash.delete(key);
+  stateStash.set(key, entry);
+  while (stateStash.size > STASH_LIMIT) {
+    const oldest = stateStash.keys().next().value;
+    if (oldest === undefined) break;
+    stateStash.delete(oldest);
+  }
 }
 
 /**
@@ -286,9 +319,7 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
     on ? ext() : [];
 
   onMount(() => {
-    const state = EditorState.create({
-      doc: props.value,
-      extensions: [
+    const extensions: Extension[] = [
         // Vim must precede the other keymaps so its handlers win in
         // normal/visual mode. Loaded on demand once vim is enabled.
         vimCompartment.of([]),
@@ -355,11 +386,30 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
           }
         }),
         ...(props.extraExtensions ?? []),
-      ],
-    });
+    ];
+
+    // Restore undo/selection from the last time this file was mounted, but
+    // only when the buffer hasn't diverged since (an out-of-editor content
+    // replace or a stale stash falls through to a fresh state on `value`).
+    const stashed = props.stashKey ? stateStash.get(props.stashKey) : undefined;
+    const restoring = !!stashed && stashed.doc === props.value;
+    const state = restoring
+      ? EditorState.fromJSON(stashed.json, { extensions }, { history: historyField })
+      : EditorState.create({ doc: props.value, extensions });
 
     view = new EditorView({ state, parent });
     setActiveEditorView(view);
+    if (restoring && stashed) {
+      // Scroll is DOM state — re-apply after CM6's first layout pass, or the
+      // initial measure clobbers it back to the top.
+      const top = stashed.scrollTop;
+      view.requestMeasure({
+        read: () => null,
+        write: () => {
+          if (view) view.scrollDOM.scrollTop = top;
+        },
+      });
+    }
     props.onReady?.(view);
 
     onCleanup(() => {
@@ -368,6 +418,16 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
       // instance has already taken over before this cleanup runs.
       const mine = view;
       if (mine) {
+        // Stash undo + selection + scroll so a tab switch away and back (or an
+        // LSP-attach remount) preserves them. Runs before destroy, while the
+        // view and its scroll DOM are still live.
+        if (props.stashKey) {
+          stashPut(props.stashKey, {
+            json: mine.state.toJSON({ history: historyField }),
+            doc: mine.state.doc.toString(),
+            scrollTop: mine.scrollDOM.scrollTop,
+          });
+        }
         if (getActiveEditorView() === mine) setActiveEditorView(null);
         mine.destroy();
       }

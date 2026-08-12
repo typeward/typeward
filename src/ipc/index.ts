@@ -284,6 +284,7 @@ interface BackendCompileResult {
   diagnostics: Array<Diagnostic & { source: string }>;
   log: string;
   durationMs: number;
+  pdfUnchanged?: boolean;
 }
 
 /** Structured, resolved build options passed to `compile_latex`. */
@@ -323,6 +324,7 @@ export const compileLatex = async (
     diagnostics: result.diagnostics,
     log: result.log,
     durationMs: result.durationMs,
+    pdfUnchanged: result.pdfUnchanged ?? false,
   };
 };
 
@@ -363,6 +365,7 @@ export const compileTypst = async (
     diagnostics: result.diagnostics,
     log: result.log,
     durationMs: result.durationMs,
+    pdfUnchanged: result.pdfUnchanged ?? false,
   };
 };
 

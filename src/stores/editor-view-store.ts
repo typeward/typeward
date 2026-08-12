@@ -27,65 +27,12 @@ let _view: EditorView | null = null;
 const [cursorLine, setCursorLineSignal] = createSignal<number | null>(null);
 const [cursorCol, setCursorColSignal] = createSignal<number | null>(null);
 
-/**
- * Selection + scroll stash across the keyed CodeMirror remount. The editor
- * key folds LSP session readiness and grammar state into the file path, so an
- * LSP handshake landing 1-2s after a file opens remounts the editor — CM6
- * state (including undo history) is rebuilt by design there, which is an
- * acceptable loss; silently teleporting the cursor and scroll back to the top
- * is not. The shell stamps the outgoing file via `noteActiveEditorFile`;
- * `setActiveEditorView(null)` (called by CodeMirror's cleanup while the view
- * is still alive, before destroy) records the position; the next mount
- * restores it only when it shows the SAME file — a genuine tab switch lands
- * on a different path and starts fresh. Every unmount overwrites the stash,
- * so a stale position can never outlive a newer one for the same file.
- */
-interface StashedEditorPosition {
-  path: string;
-  anchor: number;
-  head: number;
-  scrollTop: number;
-}
-let _activeEditorPath: string | null = null;
-let _positionStash: StashedEditorPosition | null = null;
-
-/** Called from the shell's keyed editor branch when a file (re)mounts. */
-export const noteActiveEditorFile = (path: string): void => {
-  _activeEditorPath = path;
-};
-
-/**
- * Re-apply a stashed position after a same-file remount. Selection offsets
- * are clamped to the (possibly replaced) document; the scroll restore goes
- * through requestMeasure so it lands after CM6's initial layout pass instead
- * of being clobbered by it.
- */
-export const restoreEditorPosition = (view: EditorView, path: string): void => {
-  const stash = _positionStash;
-  if (!stash || stash.path !== path) return;
-  _positionStash = null;
-  const len = view.state.doc.length;
-  const anchor = Math.min(stash.anchor, len);
-  const head = Math.min(stash.head, len);
-  view.dispatch({ selection: { anchor, head } });
-  view.requestMeasure({
-    read: () => null,
-    write: () => {
-      view.scrollDOM.scrollTop = stash.scrollTop;
-    },
-  });
-};
-
+// Undo history, cursor, and scroll are preserved across the keyed CodeMirror
+// remount (LSP attach, grammar toggle) and multi-file tab switches by
+// CodeMirror's own per-path state stash (see `stashKey` there), which keeps
+// the full serialized EditorState for up to a dozen recent files. This store
+// only tracks the live view handle + cursor signals.
 export const setActiveEditorView = (v: EditorView | null): void => {
-  if (!v && _view && _activeEditorPath) {
-    const sel = _view.state.selection.main;
-    _positionStash = {
-      path: _activeEditorPath,
-      anchor: sel.anchor,
-      head: sel.head,
-      scrollTop: _view.scrollDOM.scrollTop,
-    };
-  }
   _view = v;
   if (!v) {
     setCursorLineSignal(null);
