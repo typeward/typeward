@@ -61,6 +61,7 @@ pub async fn export_pandoc(project: Project, format: String) -> Result<String, S
         EXPORT_TIMEOUT,
         EXPORT_OUTPUT_CAP,
         None,
+        None,
     )
     .await?;
 

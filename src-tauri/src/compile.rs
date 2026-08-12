@@ -278,6 +278,12 @@ pub struct Diagnostic {
     pub file: String,
     pub line: u32,
     pub source: String,
+    /// How `file` was attributed, which decides whether it is a jump target:
+    /// - "project": validated project-relative path — jumpable.
+    /// - "root-fallback": attribution unknown, `file` is the entry file.
+    /// - "external": a distro/package file outside the project (`file` is its
+    ///   basename); no jump target, collapsed by default in the UI.
+    pub scope: String,
 }
 
 /// Auxiliary-artifact extensions latexmk/pdflatex regenerate freely. A stale
@@ -370,13 +376,61 @@ fn remove_aux_recursive(dir: &std::path::Path, depth: u32, removed: &mut u32) {
     }
 }
 
+/// Finds the PDF a previous build left on disk without compiling anything.
+/// The engines disagree on where output lands — latexmk and the raw engines
+/// write `<stem>.pdf` into the project root, Tectonic (and typst) beside the
+/// source file, texlive-wasm under `.typeward/build/` — so all three spots
+/// are probed and the newest regular file wins. Registered-root gated via
+/// `checked_project_root_and_file`; symlinks are rejected. Lets a freshly
+/// opened project seed its preview from the last build instead of showing an
+/// empty pane until a full recompile.
+#[tauri::command]
+pub async fn probe_last_build_output(project: Project) -> CmdResult<Option<String>> {
+    let (root, root_file) = checked_project_root_and_file(&project)?;
+    tokio::task::spawn_blocking(move || {
+        let stem = Path::new(&root_file)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root_file.clone());
+        let mut candidates = vec![
+            root.join(latex_output_rel(&root_file, LatexEngine::Pdflatex)),
+            root.join(replace_ext(&root_file, "pdf")),
+            root.join(".typeward").join("build").join(format!("{stem}.pdf")),
+        ];
+        candidates.dedup();
+        let newest = candidates
+            .into_iter()
+            .filter_map(|p| {
+                let meta = std::fs::symlink_metadata(&p).ok()?;
+                if !meta.is_file() {
+                    return None;
+                }
+                Some((p, meta.modified().ok()?))
+            })
+            .max_by_key(|(_, mtime)| *mtime);
+        Ok::<Option<String>, String>(newest.map(|(p, _)| p.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Exposes the existing `parse_latex_log` diagnostic extractor over IPC
 /// so the WASM CompileProvider can produce diagnostics in the same
 /// shape as the desktop path without duplicating the parser in TS.
+/// `project_root` enables path validation for file attribution, but only
+/// when it names a root the user actually opened — an unregistered root is
+/// ignored rather than handing the renderer an existence-probe primitive.
 #[tauri::command]
-pub async fn parse_latex_log_cmd(log: String, entry: String) -> Vec<Diagnostic> {
+pub async fn parse_latex_log_cmd(
+    log: String,
+    entry: String,
+    project_root: Option<String>,
+) -> Vec<Diagnostic> {
+    let root = project_root
+        .map(std::path::PathBuf::from)
+        .filter(|r| crate::project::is_registered_root(r));
     // A full texlive-wasm log can run to megabytes; scan it off the event loop.
-    tokio::task::spawn_blocking(move || parse_latex_log(&log, &entry))
+    tokio::task::spawn_blocking(move || parse_latex_log(&log, &entry, root.as_deref()))
         .await
         .unwrap_or_default()
 }
@@ -415,6 +469,11 @@ pub async fn compile_latex(
         return Err("shell-escape requested but this project is not trusted on this machine — approve it in the build menu".into());
     }
 
+    // Live log streaming to the LogsDrawer while the build runs. One event
+    // name is enough: the frontend serializes compiles (compileState guard),
+    // and the listener is scoped to the active attempt.
+    let sink = Some(LogSink::tauri(app.clone(), "compile:log"));
+
     let (log, success) = match opts.engine {
         // Tectonic runs its own bibliography passes, so the recipe is ignored
         // (the UI states this) — it always takes its own path.
@@ -427,6 +486,7 @@ pub async fn compile_latex(
                 shell_escape,
                 strict_offline(&app, &opts),
                 &cancel,
+                sink,
             )
             .await?
         }
@@ -440,6 +500,7 @@ pub async fn compile_latex(
                     opts.synctex,
                     shell_escape,
                     &cancel,
+                    sink,
                 )
                 .await?
             }
@@ -453,6 +514,7 @@ pub async fn compile_latex(
                     shell_escape,
                     None,
                     &cancel,
+                    sink,
                 )
                 .await?
             }
@@ -466,6 +528,7 @@ pub async fn compile_latex(
                     shell_escape,
                     Some(BibTool::Bibtex),
                     &cancel,
+                    sink,
                 )
                 .await?
             }
@@ -479,6 +542,7 @@ pub async fn compile_latex(
                     shell_escape,
                     Some(BibTool::Biber),
                     &cancel,
+                    sink,
                 )
                 .await?
             }
@@ -487,7 +551,7 @@ pub async fn compile_latex(
 
     let pdf_path = root.join(latex_output_rel(&root_file, opts.engine));
     let ok = success && pdf_path.exists();
-    let diagnostics = parse_latex_log(&log, &root_file);
+    let diagnostics = parse_latex_log(&log, &root_file, Some(&root));
 
     Ok(CompileResult {
         ok,
@@ -654,13 +718,80 @@ fn trim_partial_utf8_suffix(buf: &mut Vec<u8>) -> usize {
     }
 }
 
-async fn read_capped<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, buf: Arc<Mutex<CappedBuffer>>) {
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    mut pipe: R,
+    buf: Arc<Mutex<CappedBuffer>>,
+    sink: Option<Arc<LogSink>>,
+) {
     let mut chunk = [0u8; 8192];
     loop {
         match pipe.read(&mut chunk).await {
             Ok(0) | Err(_) => break,
-            Ok(n) => buf.lock().unwrap().append(&chunk[..n]),
+            Ok(n) => {
+                buf.lock().unwrap().append(&chunk[..n]);
+                if let Some(s) = &sink {
+                    s.push(&chunk[..n]);
+                }
+            }
         }
+    }
+}
+
+/// Streams compile output to a consumer while the subprocess runs. Shared by
+/// both pipe readers; flushes at 64 KiB or 100 ms of accumulation — per-read
+/// emission is exactly the event storm the watcher's coalesce window exists
+/// to prevent. Chunk boundaries may split a UTF-8 sequence; the lossy
+/// conversion only affects the LIVE view — the final log goes through
+/// `CappedBuffer`, which trims partial sequences properly.
+///
+/// Deliberately Tauri-free: it holds an emit closure, not an `AppHandle`, so
+/// `run_bounded` (reachable from `synctex`/`export_pandoc` and every test
+/// module) never names the window runtime. The Tauri wiring lives in the
+/// command entry points, which build the sink via [`LogSink::tauri`].
+pub(crate) struct LogSink {
+    emit: Box<dyn Fn(String) + Send + Sync>,
+    buf: Mutex<(String, Instant)>,
+}
+
+impl LogSink {
+    pub(crate) fn new(emit: impl Fn(String) + Send + Sync + 'static) -> Arc<Self> {
+        Arc::new(Self {
+            emit: Box::new(emit),
+            buf: Mutex::new((String::new(), Instant::now())),
+        })
+    }
+
+    /// Builds a sink that emits each chunk to the main window on `event`.
+    pub(crate) fn tauri(app: tauri::AppHandle, event: impl Into<String>) -> Arc<Self> {
+        let event = event.into();
+        Self::new(move |text| {
+            use tauri::Emitter;
+            let _ = app.emit_to(crate::ipc_guard::MAIN_LABEL, &event, text);
+        })
+    }
+
+    fn push(&self, chunk: &[u8]) {
+        let text = {
+            let mut g = self.buf.lock().unwrap();
+            g.0.push_str(&String::from_utf8_lossy(chunk));
+            if g.0.len() < 64 * 1024 && g.1.elapsed() < Duration::from_millis(100) {
+                return;
+            }
+            g.1 = Instant::now();
+            std::mem::take(&mut g.0)
+        };
+        (self.emit)(text);
+    }
+
+    pub(crate) fn flush(&self) {
+        let text = {
+            let mut g = self.buf.lock().unwrap();
+            if g.0.is_empty() {
+                return;
+            }
+            std::mem::take(&mut g.0)
+        };
+        (self.emit)(text);
     }
 }
 
@@ -714,6 +845,7 @@ pub(crate) async fn run_bounded(
     timeout: Duration,
     cap: usize,
     mut cancel: Option<watch::Receiver<bool>>,
+    sink: Option<Arc<LogSink>>,
 ) -> Result<BoundedOutput, String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args)
@@ -743,14 +875,12 @@ pub(crate) async fn run_bounded(
     let tail_cap = cap.min(COMPILE_TAIL_CAP);
     let stdout_buf = Arc::new(Mutex::new(CappedBuffer::new(cap, tail_cap)));
     let stderr_buf = Arc::new(Mutex::new(CappedBuffer::new(cap, tail_cap)));
-    let stdout_task = child
-        .stdout
-        .take()
-        .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stdout_buf))));
-    let stderr_task = child
-        .stderr
-        .take()
-        .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stderr_buf))));
+    let stdout_task = child.stdout.take().map(|pipe| {
+        tokio::spawn(read_capped(pipe, Arc::clone(&stdout_buf), sink.clone()))
+    });
+    let stderr_task = child.stderr.take().map(|pipe| {
+        tokio::spawn(read_capped(pipe, Arc::clone(&stderr_buf), sink.clone()))
+    });
 
     // The select handlers only classify the outcome — `child.wait()` holds a
     // mutable borrow of `child` for as long as the select's futures live, so
@@ -797,6 +927,9 @@ pub(crate) async fn run_bounded(
     // default left behind by `take`, so its writes stay bounded and ignored.
     let stdout = std::mem::take(&mut *stdout_buf.lock().unwrap()).finalize();
     let stderr = std::mem::take(&mut *stderr_buf.lock().unwrap()).finalize();
+    if let Some(s) = &sink {
+        s.flush();
+    }
     Ok(BoundedOutput {
         stdout,
         stderr,
@@ -815,6 +948,7 @@ fn latex_timeout_line(tool: &str) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_system_tex(
     root_file: &str,
     root: &Path,
@@ -823,6 +957,7 @@ async fn run_system_tex(
     synctex: bool,
     shell_escape: bool,
     cancel: &Option<watch::Receiver<bool>>,
+    sink: Option<Arc<LogSink>>,
 ) -> Result<(String, bool), String> {
     let mut accumulated_log = String::new();
 
@@ -851,6 +986,7 @@ async fn run_system_tex(
             COMPILE_TIMEOUT,
             COMPILE_OUTPUT_CAP,
             cancel.clone(),
+            sink.clone(),
         )
         .await
         {
@@ -910,6 +1046,7 @@ async fn run_system_tex(
         COMPILE_TIMEOUT,
         COMPILE_OUTPUT_CAP,
         cancel.clone(),
+        sink.clone(),
     )
     .await
     {
@@ -1015,6 +1152,7 @@ async fn run_engine_recipe(
     shell_escape: bool,
     bib: Option<BibTool>,
     cancel: &Option<watch::Receiver<bool>>,
+    sink: Option<Arc<LogSink>>,
 ) -> Result<(String, bool), String> {
     let recipe = match bib {
         None => BuildRecipe::EngineOnly,
@@ -1059,6 +1197,7 @@ async fn run_engine_recipe(
             COMPILE_TIMEOUT,
             COMPILE_OUTPUT_CAP,
             cancel.clone(),
+            sink.clone(),
         )
         .await
         {
@@ -1146,6 +1285,7 @@ fn tectonic_args(
     args
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tectonic(
     app: &tauri::AppHandle,
     root_file: &str,
@@ -1154,6 +1294,7 @@ async fn run_tectonic(
     shell_escape: bool,
     strict_offline: bool,
     cancel: &Option<watch::Receiver<bool>>,
+    sink: Option<Arc<LogSink>>,
 ) -> Result<(String, bool), String> {
     let tectonic_args = tectonic_args(root_file, synctex, shell_escape, strict_offline);
     // Try the bundled sidecar first.
@@ -1192,10 +1333,18 @@ async fn run_tectonic(
                         Ok(Some(CommandEvent::Stdout(line))) => {
                             stdout.append(&line);
                             stdout.append(b"\n");
+                            if let Some(s) = &sink {
+                                s.push(&line);
+                                s.push(b"\n");
+                            }
                         }
                         Ok(Some(CommandEvent::Stderr(line))) => {
                             stderr.append(&line);
                             stderr.append(b"\n");
+                            if let Some(s) = &sink {
+                                s.push(&line);
+                                s.push(b"\n");
+                            }
                         }
                         Ok(Some(CommandEvent::Error(e))) => {
                             stderr.append(e.as_bytes());
@@ -1215,6 +1364,9 @@ async fn run_tectonic(
                             break;
                         }
                     }
+                }
+                if let Some(s) = &sink {
+                    s.flush();
                 }
                 let mut log = merge_io(&stdout.finalize(), &stderr.finalize());
                 if timed_out {
@@ -1244,6 +1396,7 @@ async fn run_tectonic(
         COMPILE_TIMEOUT,
         COMPILE_OUTPUT_CAP,
         cancel.clone(),
+        sink.clone(),
     )
     .await
     .map_err(|e| format!("failed to spawn tectonic: {}", e))?;
@@ -1268,10 +1421,18 @@ fn merge_io(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
-/// Minimal LaTeX log scanner: flags lines starting with `! ` (TeX errors) and
-/// `Warning:` patterns. A real implementation would track file pushes/pops to
-/// resolve the source file; this v0 just attributes everything to the entry.
-pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
+/// Hard ceiling on diagnostics per parse — a pathological log (an 800-page
+/// book can emit thousands of box notices) must not flood the IPC payload or
+/// the Issues pane. The tail is summarized in one closing info diagnostic.
+const MAX_DIAGNOSTICS: usize = 400;
+
+/// LaTeX log scanner with file attribution: joins `max_print_line`-wrapped
+/// lines back together (the wrap splits paths and even line numbers), tracks
+/// TeX's `(file` push / `)` pop stream, and resolves each diagnostic to a
+/// validated project-relative path, the entry-file fallback, or an external
+/// distro file (see [`Diagnostic::scope`]). `root` enables validation; without
+/// it relative paths are trusted as project files but never canonicalized.
+pub fn parse_latex_log(log: &str, entry: &str, root: Option<&Path>) -> Vec<Diagnostic> {
     let mut out = Vec::new();
     // Stale-aux wedge: biblatex macros in the .aux with no biblatex in the
     // current preamble (backend/package switch), or latexmk refusing to act
@@ -1287,9 +1448,17 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
             file: entry.to_string(),
             line: 1,
             source: "compile".into(),
+            scope: "root-fallback".into(),
         });
     }
-    let lines: Vec<&str> = log.lines().collect();
+    let lines = join_wrapped_lines(log);
+    let mut stack: Vec<Option<String>> = Vec::new();
+    let mut cache: HashMap<String, (String, String)> = HashMap::new();
+    // Lines still inside an error's source-context block (between `! ` and
+    // its `l.<n>` line) — they quote user text whose parens would corrupt
+    // the file stack, so they are excluded from stack scanning.
+    let mut skip_stack_until = 0usize;
+
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
         if trimmed.starts_with("! ") {
@@ -1307,7 +1476,7 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
             // error; without one the position is unknown, and line 1 is the
             // honest fallback.
             let mut src_line = 1u32;
-            for follow in lines.iter().skip(i + 1).take(15) {
+            for (j, follow) in lines.iter().enumerate().skip(i + 1).take(15) {
                 let f = follow.trim_start();
                 if f.starts_with("! ") {
                     break;
@@ -1316,40 +1485,240 @@ pub fn parse_latex_log(log: &str, entry: &str) -> Vec<Diagnostic> {
                     && let Some(n) = digits_after(f, "l.")
                 {
                     src_line = n;
+                    skip_stack_until = j + 1;
                     break;
                 }
             }
+            let (file, scope) = resolve_diag_file(&stack, entry, root, &mut cache);
             out.push(Diagnostic {
                 severity: "error".into(),
                 message,
-                file: entry.to_string(),
+                file,
                 line: src_line,
                 source: "compile".into(),
+                scope,
             });
         } else if trimmed.contains("Warning:") {
-            // LaTeX warnings carry their own position ("on input line 12").
+            // The position may sit on the warning line itself or on one of
+            // its `(package)`-prefixed continuation lines (Font warnings put
+            // "on input line N" on the continuation).
+            let mut src_line = digits_after(trimmed, "on input line ");
+            if src_line.is_none() {
+                for follow in lines.iter().skip(i + 1).take(4) {
+                    let f = follow.trim_start();
+                    if !f.starts_with('(') {
+                        break;
+                    }
+                    src_line = digits_after(f, "on input line ");
+                    if src_line.is_some() {
+                        break;
+                    }
+                }
+            }
+            let (file, scope) = resolve_diag_file(&stack, entry, root, &mut cache);
             out.push(Diagnostic {
                 severity: "warning".into(),
                 message: trimmed.to_string(),
-                file: entry.to_string(),
-                line: digits_after(trimmed, "on input line ").unwrap_or(1),
+                file,
+                line: src_line.unwrap_or(1),
                 source: "compile".into(),
+                scope,
             });
         } else if (trimmed.starts_with("Overfull") || trimmed.starts_with("Underfull"))
             && trimmed.contains("box")
         {
             // Boxes that don't fit — informational, not errors/warnings.
             // Their position reads "in paragraph at lines 5--6".
+            let (file, scope) = resolve_diag_file(&stack, entry, root, &mut cache);
             out.push(Diagnostic {
                 severity: "info".into(),
                 message: trimmed.to_string(),
-                file: entry.to_string(),
+                file,
                 line: digits_after(trimmed, "at lines ").unwrap_or(1),
                 source: "compile".into(),
+                scope,
             });
         }
+        if i >= skip_stack_until {
+            scan_parens_into_stack(line, &mut stack);
+        }
+    }
+    if out.len() > MAX_DIAGNOSTICS {
+        let dropped = out.len() - MAX_DIAGNOSTICS;
+        out.truncate(MAX_DIAGNOSTICS);
+        out.push(Diagnostic {
+            severity: "info".into(),
+            message: format!(
+                "{dropped} further diagnostic{} omitted — see the full build log.",
+                if dropped == 1 { "" } else { "s" }
+            ),
+            file: entry.to_string(),
+            line: 1,
+            source: "compile".into(),
+            scope: "root-fallback".into(),
+        });
     }
     out
+}
+
+/// Re-joins the log's hard-wrapped lines. TeX wraps at `max_print_line`,
+/// which MiKTeX configures in miktex.ini — never assume 79. Detection: the
+/// modal length among long lines; a wrapped log has hundreds of lines at
+/// exactly that width (splitting paths and even digits), an unwrapped log
+/// has none, and requiring several occurrences keeps a lone naturally-long
+/// line from triggering false joins.
+fn join_wrapped_lines(log: &str) -> Vec<String> {
+    let raw: Vec<&str> = log.lines().collect();
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for l in &raw {
+        if l.len() >= 79 && l.len() <= 2048 {
+            *counts.entry(l.len()).or_default() += 1;
+        }
+    }
+    let wrap = counts
+        .into_iter()
+        .filter(|&(_, c)| c >= 5)
+        .max_by_key(|&(_, c)| c)
+        .map(|(len, _)| len);
+    let Some(wrap) = wrap else {
+        return raw.into_iter().map(String::from).collect();
+    };
+    let mut out = Vec::with_capacity(raw.len());
+    let mut cur = String::new();
+    for l in raw {
+        cur.push_str(l);
+        if l.len() == wrap {
+            continue;
+        }
+        out.push(std::mem::take(&mut cur));
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Feeds one (joined) log line into the `(file` push / `)` pop stack. Every
+/// `(` pushes — `Some(path)` when the following token looks like a file,
+/// `None` for grouping/message parens — and every `)` pops, so message-level
+/// pairs like `(Font)` or `(DPC,SPQR)` self-balance. Quoted opens
+/// (`("C:/path with spaces/f.tex"`) are consumed as one token. Filenames
+/// containing parens defeat any log parser, including this one.
+fn scan_parens_into_stack(line: &str, stack: &mut Vec<Option<String>>) {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => {
+                i += 1;
+                let token = if i < bytes.len() && bytes[i] == b'"' {
+                    let start = i + 1;
+                    let end = line[start..]
+                        .find('"')
+                        .map(|e| start + e)
+                        .unwrap_or(bytes.len());
+                    i = (end + 1).min(bytes.len());
+                    &line[start..end.min(bytes.len())]
+                } else {
+                    let start = i;
+                    while i < bytes.len()
+                        && !matches!(bytes[i], b'(' | b')' | b' ' | b'\t' | b'"')
+                    {
+                        i += 1;
+                    }
+                    &line[start..i]
+                };
+                stack.push(file_candidate(token));
+            }
+            b')' => {
+                stack.pop();
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+}
+
+/// Whether a post-`(` token plausibly names a file: it carries a path
+/// separator, or a dotted extension that starts with a letter (so `1.2pt`
+/// and bare words like `Font` stay out).
+fn file_candidate(token: &str) -> Option<String> {
+    if token.is_empty() {
+        return None;
+    }
+    let has_sep = token.contains('/') || token.contains('\\');
+    let ext_ok = token.contains('.')
+        && token
+            .rsplit('.')
+            .next()
+            .map(|e| {
+                (2..=12).contains(&e.len())
+                    && e.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                    && e.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+            .unwrap_or(false);
+    if has_sep || ext_ok {
+        Some(token.to_string())
+    } else {
+        None
+    }
+}
+
+/// Resolves the file stack's innermost real file into a `(file, scope)` pair
+/// (see [`Diagnostic::scope`]). Relative paths are TeX's own view from the
+/// compile CWD (the project root); with a root they are existence+containment
+/// validated, without one they are trusted. Absolute paths inside the root
+/// become project-relative; outside it they are external (basename only —
+/// never leak distro paths into the UI).
+fn resolve_diag_file(
+    stack: &[Option<String>],
+    entry: &str,
+    root: Option<&Path>,
+    cache: &mut HashMap<String, (String, String)>,
+) -> (String, String) {
+    let Some(raw) = stack.iter().rev().find_map(|s| s.as_deref()) else {
+        return (entry.to_string(), "root-fallback".into());
+    };
+    if let Some(hit) = cache.get(raw) {
+        return hit.clone();
+    }
+    let norm = raw.replace('\\', "/");
+    let norm = norm.strip_prefix("./").unwrap_or(&norm).to_string();
+    let is_abs = norm.starts_with('/') || (norm.len() >= 2 && norm.as_bytes()[1] == b':');
+    let resolved: (String, String) = if is_abs {
+        let external = || -> (String, String) {
+            let base = norm.rsplit('/').next().unwrap_or(&norm).to_string();
+            (base, "external".into())
+        };
+        match root {
+            Some(r) => {
+                let canon_root = r.canonicalize().unwrap_or_else(|_| r.to_path_buf());
+                match std::path::Path::new(&norm).canonicalize() {
+                    Ok(abs) if abs.starts_with(&canon_root) => {
+                        let rel = abs
+                            .strip_prefix(&canon_root)
+                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .unwrap_or_else(|_| norm.clone());
+                        (rel, "project".into())
+                    }
+                    _ => external(),
+                }
+            }
+            None => external(),
+        }
+    } else {
+        match root {
+            Some(r) => match crate::project::resolve_existing_project_path(r, &norm) {
+                Ok(_) => (norm.clone(), "project".into()),
+                Err(_) => (entry.to_string(), "root-fallback".into()),
+            },
+            // No root to validate against (e.g. the wasm provider running
+            // without a registered root): trust TeX's own relative path.
+            None => (norm.clone(), "project".into()),
+        }
+    };
+    cache.insert(raw.to_string(), resolved.clone());
+    resolved
 }
 
 /// First run of ASCII digits directly after `marker` in `s`, if any.
@@ -1377,6 +1746,7 @@ fn digits_after(s: &str, marker: &str) -> Option<u32> {
 /// `--diagnostic-format=json` output once it stabilizes.
 #[tauri::command]
 pub async fn compile_typst(
+    app: tauri::AppHandle,
     project: Project,
     compile_id: Option<String>,
 ) -> CmdResult<CompileResult> {
@@ -1403,6 +1773,7 @@ pub async fn compile_typst(
         COMPILE_TIMEOUT,
         COMPILE_OUTPUT_CAP,
         cancel,
+        Some(LogSink::tauri(app.clone(), "compile:log")),
     )
     .await
     .map_err(|e| format!("failed to spawn typst: {}", e))?;
@@ -1488,6 +1859,7 @@ fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
             // so the entry file stays the anchor there.
             if !Path::new(&file).is_absolute() {
                 d.file = file.replace('\\', "/");
+                d.scope = "project".into();
             }
             pending = None;
             continue;
@@ -1507,6 +1879,7 @@ fn parse_typst_log(log: &str, entry: &str) -> Vec<Diagnostic> {
             file: entry.to_string(),
             line: 1,
             source: "typst".into(),
+            scope: "root-fallback".into(),
         });
         pending = Some(out.len() - 1);
     }
@@ -1701,11 +2074,12 @@ warning: this is deprecated
     fn parse_latex_log_flags_errors_and_warnings() {
         let log =
             "ok line\n! Undefined control sequence.\nPackage hyperref Warning: token\nplain\n";
-        let diags = parse_latex_log(log, "main.tex");
+        let diags = parse_latex_log(log, "main.tex", None);
         assert_eq!(diags.len(), 2);
         assert_eq!(diags[0].severity, "error");
         assert_eq!(diags[0].message, "Undefined control sequence.");
         assert_eq!(diags[0].file, "main.tex");
+        assert_eq!(diags[0].scope, "root-fallback");
         assert_eq!(diags[1].severity, "warning");
         assert_eq!(diags[0].source, "compile");
     }
@@ -1714,7 +2088,7 @@ warning: this is deprecated
     fn parse_latex_log_hints_stale_aux_recovery() {
         // The biblatex-macro-in-aux signature (backend switch wedge).
         let log = "! Undefined control sequence.\nl.7 \\abx@aux@refcontext\n";
-        let diags = parse_latex_log(log, "main.tex");
+        let diags = parse_latex_log(log, "main.tex", None);
         assert!(
             diags
                 .iter()
@@ -1723,7 +2097,7 @@ warning: this is deprecated
 
         // latexmk exit-12 refusal after a previously failed run.
         let log2 = "Latexmk: Nothing to do for 'main.tex'.\n  pdflatex: gave an error in previous invocation of latexmk.\n";
-        let diags2 = parse_latex_log(log2, "main.tex");
+        let diags2 = parse_latex_log(log2, "main.tex", None);
         assert!(
             diags2
                 .iter()
@@ -1732,7 +2106,7 @@ warning: this is deprecated
 
         // A clean log gets no hint.
         assert!(
-            parse_latex_log("all good\n", "main.tex")
+            parse_latex_log("all good\n", "main.tex", None)
                 .iter()
                 .all(|d| !d.message.contains("Clean auxiliary files"))
         );
@@ -1742,8 +2116,153 @@ warning: this is deprecated
     fn parse_latex_log_flags_overfull_boxes_as_info() {
         let log = "Overfull \\hbox (12.3pt too wide) in paragraph at lines 5--6\n\
                    Underfull \\vbox (badness 10000) has occurred\nplain line\n";
-        let diags = parse_latex_log(log, "main.tex");
+        let diags = parse_latex_log(log, "main.tex", None);
         assert_eq!(diags.iter().filter(|d| d.severity == "info").count(), 2);
+    }
+
+    // ---- Log attribution (file stack + wrap joining) -----------------------
+
+    #[test]
+    fn parse_latex_log_attributes_to_the_open_file() {
+        // Shapes lifted from a real MiKTeX log: root opens as `(main.tex`
+        // (no ./), chapters as ` (chapters/chNNN.tex`, package banners carry
+        // self-balancing parens like (DPC,SPQR).
+        let log = "(main.tex\n\
+                   (C:\\MiKTeX\\tex/latex/graphics\\graphicx.sty\n\
+                   Package: graphicx 2024/12/31 v1.2e Enhanced (DPC,SPQR)\n\
+                   )\n\
+                   Chapter 1.\n (chapters/ch001.tex\n\
+                   Overfull \\hbox (3.2pt too wide) in paragraph at lines 40--41\n\
+                   ) (chapters/ch002.tex\n\
+                   LaTeX Warning: Reference `sec:x' on page 9 undefined on input line 12.\n\
+                   ! Undefined control sequence.\n\
+                   l.77 \\badmacro\n\
+                   ))\n";
+        let diags = parse_latex_log(log, "main.tex", None);
+        assert_eq!(diags.len(), 3);
+        assert_eq!(diags[0].file, "chapters/ch001.tex");
+        assert_eq!(diags[0].scope, "project");
+        assert_eq!(diags[0].line, 40);
+        assert_eq!(diags[1].file, "chapters/ch002.tex");
+        assert_eq!(diags[1].line, 12);
+        assert_eq!(diags[2].file, "chapters/ch002.tex");
+        assert_eq!(diags[2].line, 77);
+    }
+
+    #[test]
+    fn parse_latex_log_marks_distro_files_external_by_basename() {
+        // Absolute distro paths (MiKTeX's mixed separators) must never leak
+        // into the UI as jump targets — basename + external scope only.
+        let log = "(main.tex\n\
+                   (C:\\MiKTeX\\tex/latex/hyperref\\hyperref.sty\n\
+                   Package hyperref Warning: Draft mode on. on input line 33.\n\
+                   ))\n";
+        let diags = parse_latex_log(log, "main.tex", None);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].file, "hyperref.sty");
+        assert_eq!(diags[0].scope, "external");
+        assert_eq!(diags[0].line, 33);
+    }
+
+    #[test]
+    fn parse_latex_log_joins_wrapped_lines_before_parsing() {
+        // TeX hard-wraps at max_print_line (79 here); the wrap splits paths
+        // mid-token. Pad with enough wrapped filler that the modal width
+        // detection (>= 5 occurrences) engages, then check the split path is
+        // reassembled before the stack sees it.
+        let mut log = String::from("(main.tex\n");
+        for _ in 0..6 {
+            log.push_str(&"x".repeat(79));
+            log.push('\n');
+            log.push_str("filler\n");
+        }
+        let full_open = format!("(chapters/{}.tex", "c".repeat(90));
+        log.push_str(&full_open[..79]);
+        log.push('\n');
+        log.push_str(&full_open[79..]);
+        log.push('\n');
+        log.push_str("LaTeX Warning: Citation `k' on page 2 undefined on input line 55.\n");
+        let diags = parse_latex_log(&log, "main.tex", None);
+        let w = diags
+            .iter()
+            .find(|d| d.message.contains("Citation"))
+            .expect("warning parsed");
+        assert_eq!(w.file, full_open[1..].to_string());
+        assert_eq!(w.line, 55);
+    }
+
+    #[test]
+    fn parse_latex_log_reads_warning_position_from_continuation_lines() {
+        // Font warnings put "on input line N" on the (Font) continuation.
+        let log = "(main.tex\n\
+                   LaTeX Font Warning: Font shape `T1/psy/m/n' undefined\n\
+                   (Font)              using `T1/cmr/m/n' instead on input line 5528.\n\
+                   )\n";
+        let diags = parse_latex_log(log, "main.tex", None);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].line, 5528);
+        // The (Font) continuation's parens self-balance: the stack must be
+        // back at main.tex, not corrupted by the marker.
+        assert_eq!(diags[0].file, "main.tex");
+    }
+
+    #[test]
+    fn parse_latex_log_validates_relative_paths_against_the_root() {
+        // With a real root, a relative path that doesn't exist degrades to
+        // the entry-file fallback instead of a broken jump target.
+        let dir = std::env::temp_dir().join(format!("tw-logattr-{}", std::process::id()));
+        let chapters = dir.join("chapters");
+        std::fs::create_dir_all(&chapters).unwrap();
+        std::fs::write(dir.join("main.tex"), "x").unwrap();
+        std::fs::write(chapters.join("ch001.tex"), "x").unwrap();
+        let log = "(main.tex\n (chapters/ch001.tex\n\
+                   LaTeX Warning: Real file on input line 3.\n\
+                   ) (chapters/ghost.tex\n\
+                   LaTeX Warning: Ghost file on input line 4.\n\
+                   ))\n";
+        let diags = parse_latex_log(log, "main.tex", Some(&dir));
+        assert_eq!(diags.len(), 2);
+        assert_eq!(diags[0].file, "chapters/ch001.tex");
+        assert_eq!(diags[0].scope, "project");
+        assert_eq!(diags[1].file, "main.tex");
+        assert_eq!(diags[1].scope, "root-fallback");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_latex_log_caps_diagnostics_with_a_summary() {
+        let mut log = String::from("(main.tex\n");
+        for i in 0..(MAX_DIAGNOSTICS + 50) {
+            log.push_str(&format!(
+                "Overfull \\hbox (1.0pt too wide) in paragraph at lines {}--{}\n",
+                i + 1,
+                i + 2
+            ));
+        }
+        let diags = parse_latex_log(&log, "main.tex", None);
+        assert_eq!(diags.len(), MAX_DIAGNOSTICS + 1);
+        let last = diags.last().unwrap();
+        assert!(last.message.contains("50 further diagnostics omitted"));
+    }
+
+    #[test]
+    fn parse_latex_log_skips_error_context_parens() {
+        // The quoted source context after an error can contain unbalanced
+        // parens; they must not corrupt the file stack.
+        let log = "(main.tex\n (chapters/ch001.tex\n\
+                   ! Missing $ inserted.\n\
+                   <inserted text>\n\
+                   l.10 some user text with a stray ( paren\n\
+                   ) \n\
+                   LaTeX Warning: After context on input line 20.\n\
+                   )\n";
+        let diags = parse_latex_log(log, "main.tex", None);
+        assert_eq!(diags[0].severity, "error");
+        assert_eq!(diags[0].file, "chapters/ch001.tex");
+        assert_eq!(diags[0].line, 10);
+        // The `)` line after the context closed ch001; the warning belongs
+        // to main.tex.
+        assert_eq!(diags[1].file, "main.tex");
     }
 
     #[test]
@@ -1894,6 +2413,7 @@ warning: this is deprecated
             Duration::from_secs(30),
             COMPILE_OUTPUT_CAP,
             None,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1913,6 +2433,7 @@ warning: this is deprecated
             &std::env::temp_dir(),
             Duration::from_secs(30),
             8,
+            None,
             None,
         )
         .await
@@ -1942,6 +2463,7 @@ warning: this is deprecated
             Duration::from_secs(30),
             32,
             None,
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -1949,7 +2471,7 @@ warning: this is deprecated
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(text.contains("[output truncated"));
         assert!(text.contains("! boom"), "the tail must keep the fatal line");
-        let diags = parse_latex_log(&text, "main.tex");
+        let diags = parse_latex_log(&text, "main.tex", None);
         assert!(
             diags
                 .iter()
@@ -1971,6 +2493,7 @@ warning: this is deprecated
             &std::env::temp_dir(),
             Duration::from_millis(400),
             COMPILE_OUTPUT_CAP,
+            None,
             None,
         )
         .await
@@ -1999,6 +2522,7 @@ warning: this is deprecated
             &std::env::temp_dir(),
             Duration::from_millis(500),
             COMPILE_OUTPUT_CAP,
+            None,
             None,
         )
         .await
@@ -2032,6 +2556,7 @@ warning: this is deprecated
             Duration::from_secs(5),
             COMPILE_OUTPUT_CAP,
             None,
+            None,
         )
         .await;
         assert!(result.is_err());
@@ -2054,6 +2579,7 @@ warning: this is deprecated
                 Duration::from_secs(30),
                 COMPILE_OUTPUT_CAP,
                 Some(rx),
+                None,
             )
             .await
         });
@@ -2089,6 +2615,7 @@ warning: this is deprecated
             Duration::from_secs(30),
             COMPILE_OUTPUT_CAP,
             Some(rx),
+            None,
         )
         .await
         .expect("spawn should succeed");
@@ -2190,7 +2717,7 @@ warning: this is deprecated
 
     #[test]
     fn latex_timeout_line_parses_as_an_error_diagnostic() {
-        let diags = parse_latex_log(&latex_timeout_line("latexmk"), "main.tex");
+        let diags = parse_latex_log(&latex_timeout_line("latexmk"), "main.tex", None);
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, "error");
         assert!(diags[0].message.contains("timed out"));
@@ -2224,7 +2751,7 @@ l.15 \\badcommand
 Package hyperref Warning: Draft mode on.
 ! LaTeX Error: File `missing.sty' not found.
 ";
-        let diags = parse_latex_log(log, "main.tex");
+        let diags = parse_latex_log(log, "main.tex", None);
         let errors: Vec<_> = diags.iter().filter(|d| d.severity == "error").collect();
         let warnings: Vec<_> = diags.iter().filter(|d| d.severity == "warning").collect();
         assert_eq!(errors.len(), 2, "expected two `! ` error lines");
@@ -2250,7 +2777,7 @@ Package hyperref Warning: Draft mode on.
         // TeX's abort summary restates the error above it; one error, one card.
         let log = "! Undefined control sequence.\nl.28 \\oops\n\
                    !  ==> Fatal error occurred, no output PDF file produced!\n";
-        let diags = parse_latex_log(log, "main.tex");
+        let diags = parse_latex_log(log, "main.tex", None);
         let errors: Vec<_> = diags.iter().filter(|d| d.severity == "error").collect();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].message, "Undefined control sequence.");
@@ -2260,7 +2787,7 @@ Package hyperref Warning: Draft mode on.
     #[test]
     fn parse_latex_log_overfull_boxes_carry_paragraph_lines() {
         let log = "Overfull \\hbox (12.3pt too wide) in paragraph at lines 5--6\n";
-        let diags = parse_latex_log(log, "main.tex");
+        let diags = parse_latex_log(log, "main.tex", None);
         assert_eq!(diags[0].severity, "info");
         assert_eq!(diags[0].line, 5);
     }

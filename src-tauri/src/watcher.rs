@@ -225,13 +225,22 @@ const MAX_COALESCED_EVENTS: usize = 512;
 
 /// True for paths under Typeward's own sidecar (`.typeward/`) or VCS metadata
 /// (`.git/`) — churn the FileTree never needs to react to, and the source of
-/// the autosave feedback loop.
+/// the autosave feedback loop. Compile artifacts (aux/log/synctex/...) are
+/// dropped for the same reason: one latexmk pass otherwise turns into a
+/// FileTree refetch + whole-project TODO rescan storm. The PDF itself still
+/// passes (it is user-visible state, and its reload is driven by the compile
+/// result, not the watcher).
 fn is_internal_path(path: &str) -> bool {
     let norm = path.replace('\\', "/");
-    norm.contains("/.typeward/")
+    if norm.contains("/.typeward/")
         || norm.contains("/.git/")
         || norm.ends_with("/.typeward")
         || norm.ends_with("/.git")
+    {
+        return true;
+    }
+    let name = norm.rsplit('/').next().unwrap_or(&norm);
+    crate::integrations::templates::is_build_artifact(name)
 }
 
 fn classify(kind: &EventKind) -> String {
@@ -272,6 +281,22 @@ mod tests {
         // A file whose name merely starts with .typeward is not the sidecar dir.
         assert!(!is_internal_path("/proj/.typeward-notes.txt"));
         assert!(!is_internal_path("/proj/mygit/config"));
+    }
+
+    #[test]
+    fn is_internal_path_drops_compile_artifact_churn() {
+        // One latexmk pass writes aux/log/fls/fdb/synctex next to the root —
+        // none of it may reach the frontend as FileTree churn.
+        assert!(is_internal_path("/home/u/proj/main.aux"));
+        assert!(is_internal_path("C:\\Users\\u\\proj\\main.fdb_latexmk"));
+        assert!(is_internal_path("/home/u/proj/main.synctex.gz"));
+        assert!(is_internal_path("/home/u/proj/main.synctex(busy)"));
+        assert!(is_internal_path("/home/u/proj/chapters/ch010.aux"));
+        // The PDF is user-visible output, not churn.
+        assert!(!is_internal_path("/home/u/proj/main.pdf"));
+        // Sources whose extension merely contains an artifact string pass.
+        assert!(!is_internal_path("/home/u/proj/notes.tex"));
+        assert!(!is_internal_path("/home/u/proj/data.auxiliary"));
     }
 
     #[test]

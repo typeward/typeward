@@ -46,6 +46,7 @@ fn run_synctex_bounded(
         SYNCTEX_TIMEOUT,
         SYNCTEX_OUTPUT_CAP,
         None,
+        None,
     ))?;
     if out.timed_out || !out.status.map(|s| s.success()).unwrap_or(false) {
         return Ok(None);

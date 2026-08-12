@@ -22,9 +22,12 @@ import { notifyLocalSave } from "~/integrations/cloud/init";
 import * as ipc from "~/ipc";
 import { sha256Hex } from "~/lib/hash";
 import { recordError } from "~/lib/telemetry";
+import { listen } from "@tauri-apps/api/event";
 import {
   activeFile,
+  appendLiveLog,
   bumpPdfVersion,
+  clearLiveLog,
   compileState,
   lastResult,
   markFileCleanIfUnchanged,
@@ -350,6 +353,16 @@ export async function compileActiveProject(): Promise<void> {
   setCompileStartedAtInternal(Date.now());
   perfMark("compile");
   const compileId = beginCompileAttempt();
+  // Live log: Rust's LogSink streams compiler output over compile:log while
+  // the build runs. Subscribe in parallel (not awaited before the compile, so
+  // the compile isn't gated on the listener attaching) and always unlisten in
+  // finally — one compile at a time by the compiling guard above. The save +
+  // subprocess-spawn latency is orders of magnitude longer than the listener
+  // attach, so the first chunks are caught in practice.
+  clearLiveLog();
+  const logListener = listen<string>("compile:log", (ev) => {
+    if (isCurrent()) appendLiveLog(ev.payload);
+  });
   try {
     // Inside the try so a failed save surfaces as a compile error in the
     // Issues tab instead of an unhandled rejection.
@@ -407,6 +420,7 @@ export async function compileActiveProject(): Promise<void> {
   } finally {
     // Settle bookkeeping runs on every path — including the stale-project
     // early returns — so the elapsed pill and cancel handle can't leak.
+    void logListener.then((un) => un()).catch(() => {});
     endCompileAttempt(compileId);
     setCompileStartedAtInternal(null);
   }

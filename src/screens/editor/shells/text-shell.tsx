@@ -403,6 +403,7 @@ const PreviewPane: Component<{
             onCancelCompile={() => void cancelActiveCompile()}
             compileStartedAt={compileStartedAt()}
             stale={compileState() === "error" && props.pdfPath !== null}
+            fromLastBuild={lastResult()?.seeded === true}
             onShowErrors={revealCompileErrors}
             scrollTarget={pdfScrollTarget()}
             onPageClick={(page, x, y, selectedText) => {

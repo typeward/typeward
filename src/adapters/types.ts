@@ -85,7 +85,7 @@ export type DiagnosticSeverity = "error" | "warning" | "info" | "hint";
 export interface Diagnostic {
   severity: DiagnosticSeverity;
   message: string;
-  /** Path relative to project.rootPath. */
+  /** Path relative to project.rootPath (basename only for external scope). */
   file: string;
   /** 1-based. */
   line: number;
@@ -95,6 +95,13 @@ export interface Diagnostic {
   endCol?: number;
   /** e.g. "texlab", "compile", "tinymist". */
   source?: string;
+  /**
+   * How `file` was attributed (compile diagnostics only; absent elsewhere):
+   * "project" = validated project-relative path, jumpable; "root-fallback" =
+   * attribution unknown, `file` is the entry file; "external" = a distro or
+   * package file outside the project — no jump target, collapsed by default.
+   */
+  scope?: "project" | "root-fallback" | "external";
 }
 
 export interface CompileResult {
@@ -105,6 +112,13 @@ export interface CompileResult {
   /** Raw compiler stdout/stderr; useful for the build log pane. */
   log: string;
   durationMs: number;
+  /**
+   * True when this result was synthesized from a previous build's PDF found
+   * on disk at project open — nothing was compiled. Consumers that report on
+   * the build itself (duration pills, "compiled successfully" cards) must
+   * skip seeded results; the preview pane shows a "from last build" chip.
+   */
+  seeded?: boolean;
 }
 
 /**

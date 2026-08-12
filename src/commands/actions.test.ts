@@ -46,6 +46,12 @@ vi.mock("~/stores/settings-store", () => ({
   compileEngine: () => h.compileEngineValue,
 }));
 
+// compileActiveProject subscribes to the Rust log stream; the mock returns a
+// no-op unlisten so the finally block's cleanup is callable.
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
+
 import {
   compileActiveProject,
   pathRelativeToProjectRoot,

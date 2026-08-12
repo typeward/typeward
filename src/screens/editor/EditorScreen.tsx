@@ -33,6 +33,7 @@ import {
   resetCompileState,
   resetTabs,
   restoreFileContent,
+  setLastResult,
   setProject,
 } from "~/stores/editor-store";
 import { sha256Hex } from "~/lib/hash";
@@ -200,6 +201,27 @@ const EditorScreen: Component = () => {
         // the binary isn't installed or the format ships no language server.
         const lspLang = asLspLanguage(adapter.languageId);
         if (lspLang) void startSession(lspLang, p, token.isCurrent);
+        // Seed the preview from a previous build's PDF still on disk, so the
+        // first thirty seconds show the document instead of an empty pane.
+        // Fire-and-forget; loses the race to a real compile on purpose — a
+        // non-null lastResult means one already finished and must not be
+        // clobbered with a stale disk probe.
+        void (async () => {
+          try {
+            const found = await ipc.probeLastBuildOutput(p);
+            if (!token.isCurrent() || !found || lastResult() !== null) return;
+            setLastResult({
+              ok: true,
+              outputPath: found,
+              diagnostics: [],
+              log: "",
+              durationMs: 0,
+              seeded: true,
+            });
+          } catch {
+            /* probe best-effort */
+          }
+        })();
         // Recovery is fire-and-forget so the snapshot-dir walk never gates
         // the root file's first paint; the dialog opening a beat later is
         // fine (handleRestore replaces content in already-open tabs).
@@ -581,7 +603,9 @@ const EditorTopBar: Component<{
 
   const compileDuration = createMemo(() => {
     const r = lastResult();
-    return r ? `${(r.durationMs / 1000).toFixed(2)}s` : "—";
+    // A seeded result carries no real build duration — showing "0.00s" would
+    // claim a compile that never ran.
+    return r && !r.seeded ? `${(r.durationMs / 1000).toFixed(2)}s` : "—";
   });
 
   return (

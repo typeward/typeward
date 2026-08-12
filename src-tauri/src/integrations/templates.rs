@@ -359,7 +359,11 @@ fn collect_template_walk(
 }
 
 /// LaTeX/compile leftovers that shouldn't pollute a captured template.
-fn is_build_artifact(file_name: &str) -> bool {
+/// Also consumed by `watcher::is_internal_path` to drop the per-pass artifact
+/// churn a compile writes into the project root — extend, don't fork, when a
+/// new artifact extension shows up. Deliberately excludes `pdf`: the compiled
+/// PDF appearing in the FileTree is user-visible state, not churn.
+pub(crate) fn is_build_artifact(file_name: &str) -> bool {
     let lower = file_name.to_ascii_lowercase();
     if lower.contains(".synctex") {
         return true; // .synctex, .synctex.gz, .synctex(busy)

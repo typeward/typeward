@@ -32,6 +32,15 @@ function findSession(language: LspLanguage): LspSession | null {
 }
 
 /**
+ * The active session's server-advertised capabilities (initialize result),
+ * or null when no session is up or the server sent none. The gate for every
+ * capability-dependent feature: incremental didChange, rename, references...
+ */
+function serverCapabilities(language: LspLanguage): Record<string, unknown> | null {
+  return findSession(language)?.serverCapabilities ?? null;
+}
+
+/**
  * Start an LSP session for `language` rooted at `project.rootPath`. Returns
  * null silently if the server binary isn't installed — callers should treat
  * this as "LSP not available for this file" rather than an error.
@@ -151,4 +160,4 @@ async function stopAllSessions(): Promise<void> {
   );
 }
 
-export { findSession, sessions, startSession, stopAllSessions };
+export { findSession, serverCapabilities, sessions, startSession, stopAllSessions };

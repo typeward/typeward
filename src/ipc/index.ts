@@ -267,8 +267,9 @@ export const moveProjectPath = (
 export const parseLatexLog = (
   log: string,
   entry: string,
+  projectRoot?: string,
 ): Promise<Array<Diagnostic & { source: string }>> =>
-  invoke("parse_latex_log_cmd", { log, entry });
+  invoke("parse_latex_log_cmd", { log, entry, projectRoot });
 
 // ----- Compile -------------------------------------------------------------
 
@@ -301,6 +302,10 @@ export interface BuildOptionsWire {
  */
 export const compileClean = (project: Project): Promise<number> =>
   invoke<number>("compile_clean", { project });
+
+/** Absolute path of a previous build's PDF still on disk, or null. */
+export const probeLastBuildOutput = (project: Project): Promise<string | null> =>
+  invoke<string | null>("probe_last_build_output", { project });
 
 export const compileLatex = async (
   project: Project,

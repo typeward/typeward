@@ -73,6 +73,20 @@ const [compileState, setCompileState] = createSignal<
   "idle" | "compiling" | "ok" | "error"
 >("idle");
 const [lastResult, setLastResult] = createSignal<CompileResult | null>(null);
+// Compiler output streamed live while a build runs (Rust LogSink chunks over
+// the compile:log event). Bounded: keep the newest window; the FULL log
+// arrives with the CompileResult, this only feeds the in-flight view.
+const LIVE_LOG_CAP = 2 * 1024 * 1024;
+const [liveLog, setLiveLog] = createSignal("");
+function appendLiveLog(chunk: string): void {
+  setLiveLog((cur) => {
+    const next = cur + chunk;
+    return next.length > LIVE_LOG_CAP ? next.slice(next.length - LIVE_LOG_CAP) : next;
+  });
+}
+function clearLiveLog(): void {
+  setLiveLog("");
+}
 const [pdfVersion, bumpPdfVersion] = (() => {
   const [v, set] = createSignal(0);
   return [v, () => set((n) => n + 1)];
@@ -318,6 +332,7 @@ function resetTabs(): void {
 function resetCompileState(): void {
   setCompileState("idle");
   setLastResult(null);
+  clearLiveLog();
   bumpPdfVersion();
 }
 
@@ -326,10 +341,13 @@ export {
   activeFile,
   activeIndex,
   adoptDiskContent,
+  appendLiveLog,
   bumpPdfVersion,
+  clearLiveLog,
   closeFile,
   closeFileByRelPath,
   compileState,
+  liveLog,
   gotoSourceIntent,
   lastResult,
   markFileCleanIfUnchanged,

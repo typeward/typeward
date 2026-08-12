@@ -84,6 +84,8 @@ interface PdfViewerProps {
   compileStartedAt?: number | null;
   /** The PDF on screen predates a failed compile — shows the stale ribbon. */
   stale?: boolean;
+  /** The PDF was restored from disk at open, nothing compiled yet this session. */
+  fromLastBuild?: boolean;
   /** Opens the errors surface from the stale ribbon's "View errors". */
   onShowErrors?: () => void;
   /**
@@ -280,6 +282,17 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   const renderDpr = (): number =>
     Math.min(window.devicePixelRatio || 1, isTabletViewport() ? 2 : 3);
 
+  // PDF.js refuses (or silently blanks) canvases above its pixel guard — 2^25
+  // on desktop defaults, and iOS webviews cap lower still (~16.7 Mpx). Scale
+  // dpr down so width*height*dpr² stays inside the budget: a tablet at
+  // 400%/dpr2 otherwise asks for ~32 Mpx and renders an empty page.
+  const clampedDpr = (w: number, h: number): number => {
+    const dpr = renderDpr();
+    const budget = isTabletViewport() ? 1 << 23 : 1 << 25;
+    const px = w * h * dpr * dpr;
+    return px <= budget ? dpr : Math.max(0.25, dpr * Math.sqrt(budget / px));
+  };
+
   const getPage = async (n: number): Promise<pdfjs.PDFPageProxy | null> => {
     let p = pageProxies.get(n);
     if (!p) {
@@ -319,7 +332,7 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         return;
       }
       const viewport = page.getViewport({ scale: s });
-      const dpr = renderDpr();
+      const dpr = clampedDpr(viewport.width, viewport.height);
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
       canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
@@ -523,27 +536,67 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       heldTarget = null;
     }, 1000);
   };
+  // Page-row geometry cache: one DOM read per layout change instead of a
+  // querySelectorAll walk per scroll frame. Rows are the <For> boxes in page
+  // order, so index i ↔ page i+1. Reads happen inside scroll/rAF handlers,
+  // i.e. post-layout; the effect below invalidates on anything that can move
+  // rows (page set, zoom, pane resize).
+  let rowLayout: { tops: number[]; heights: number[] } | null = null;
+  const getRowLayout = (): { tops: number[]; heights: number[] } | null => {
+    if (rowLayout) return rowLayout;
+    if (!scrollEl) return null;
+    const boxes = scrollEl.querySelectorAll<HTMLElement>("[data-page]");
+    if (boxes.length === 0) return null;
+    const tops = new Array<number>(boxes.length);
+    const heights = new Array<number>(boxes.length);
+    for (let i = 0; i < boxes.length; i++) {
+      tops[i] = boxes[i].offsetTop;
+      heights[i] = boxes[i].offsetHeight;
+    }
+    rowLayout = { tops, heights };
+    return rowLayout;
+  };
+  createEffect(() => {
+    pageSizes();
+    scale();
+    containerSize();
+    rowLayout = null;
+  });
+
+  /** Last row whose top sits at or above `y`, as a 1-based page (1 when above all). */
+  const pageIndexAt = (tops: number[], y: number): number => {
+    let lo = 0;
+    let hi = tops.length - 1;
+    let ans = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (tops[mid] <= y) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return ans + 1;
+  };
+
   const trackScrollPage = () => {
     if (scrollRaf) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = 0;
       if (!scrollEl) return;
+      const layout = getRowLayout();
+      if (!layout) return;
       // The page ~35% down the viewport reads as "the page you're on" — the
       // top edge flips too early, the midpoint too late on short viewports.
+      // A probe inside a gap resolves to the page above (binary search takes
+      // the last row starting at or above the probe line).
       const y = scrollEl.scrollTop + scrollEl.clientHeight * 0.35;
-      const boxes = scrollEl.querySelectorAll<HTMLElement>("[data-page]");
-      if (boxes.length === 0) return;
-      // Boxes are in document order; take the last one starting at or above
-      // the probe line, so a probe inside the gap resolves to the page above.
-      let page = Number(boxes[0].dataset.page);
-      for (const box of boxes) {
-        if (box.offsetTop > y) break;
-        page = Number(box.dataset.page);
-      }
+      let page = pageIndexAt(layout.tops, y);
       // A short trailing page can leave the probe stuck on its predecessor at
       // max scroll — pinned to the bottom means the last page, full stop.
       if (scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 1) {
-        page = Number(boxes[boxes.length - 1].dataset.page);
+        page = layout.tops.length;
       }
       if (heldTarget !== null) {
         if (page !== heldTarget) return;
@@ -651,15 +704,10 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   // before/after pair around a layout-changing reload quantifies the scroll
   // drift the raw scrollTop restore causes (Phase 0 baseline metric).
   const topmostPageAt = (y: number): { page: number; offset: number } | null => {
-    if (!scrollEl) return null;
-    let page = 0;
-    let top = 0;
-    for (const box of scrollEl.querySelectorAll<HTMLElement>("[data-page]")) {
-      if (box.offsetTop > y) break;
-      page = Number(box.dataset.page);
-      top = box.offsetTop;
-    }
-    return page > 0 ? { page, offset: y - top } : null;
+    const layout = getRowLayout();
+    if (!layout) return null;
+    const page = pageIndexAt(layout.tops, y);
+    return { page, offset: y - layout.tops[page - 1] };
   };
 
   const load = async (path: string) => {
@@ -702,8 +750,9 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       proxies.forEach((p, i) => pageProxies.set(i + 1, p));
 
       const prev = pageSizes();
+      const samePath = path === lastLoadedPath;
       const sameLayout =
-        path === lastLoadedPath &&
+        samePath &&
         dims.length === prev.length &&
         dims.every((d, i) => d.w === prev[i].w && d.h === prev[i].h);
       if (sameLayout) {
@@ -726,6 +775,46 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
         void Promise.allSettled(renders).then(() => {
           if (gen !== loadGen) return;
           perfMeasure("pdf-reload-to-rendered", "pdf-reload", `pages=${renders.length}`);
+        });
+      } else if (samePath && prev.length > 0) {
+        // Recompile with a changed layout (a page-count shift is the common
+        // case). Update the rows IN PLACE instead of tearing the column down:
+        // reusing the previous size object wherever dims are unchanged keeps
+        // <For> from unmounting those rows, so their slots and canvases —
+        // and the scroll container itself — survive. Only rows whose size
+        // actually changed (plus appended/removed tail) remount.
+        const before = topmostPageAt(savedScrollTop);
+        const merged = dims.map((d, i) => {
+          const p = prev[i];
+          return p && p.w === d.w && p.h === d.h ? p : d;
+        });
+        setPageSizes(merged);
+        for (const slot of slots.values()) {
+          slot.renderedScale = null;
+          clearTextLayer(slot);
+        }
+        const renders: Promise<unknown>[] = [];
+        for (const pageNum of [...visible]) {
+          if (pageNum <= dims.length && slots.has(pageNum)) {
+            renders.push(renderPage(pageNum));
+            void renderTextLayer(pageNum);
+          }
+        }
+        void Promise.allSettled(renders).then(() => {
+          if (gen !== loadGen) return;
+          perfMeasure("pdf-reload-to-rendered", "pdf-reload", `pages=${renders.length}`);
+        });
+        requestAnimationFrame(() => {
+          if (!scrollEl || gen !== loadGen) return;
+          scrollEl.scrollTop = savedScrollTop;
+          const after = topmostPageAt(scrollEl.scrollTop);
+          if (before && after) {
+            perfRecord(
+              "pdf-reload-scroll-drift",
+              Math.abs(after.page - before.page),
+              `before=p${before.page}+${Math.round(before.offset)}px after=p${after.page}+${Math.round(after.offset)}px`,
+            );
+          }
         });
       } else {
         const before = topmostPageAt(savedScrollTop);
@@ -1389,6 +1478,9 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
       <Show when={props.stale && previewMode() === "pdf"}>
         <StaleRibbon onShowErrors={props.onShowErrors} />
       </Show>
+      <Show when={props.fromLastBuild && !props.stale && previewMode() === "pdf"}>
+        <FromLastBuildRibbon onCompile={props.onCompile} />
+      </Show>
 
       {/* Content area. The PDF scroll container stays mounted at all times so
           the IntersectionObserver root + per-page slots survive preview-mode
@@ -1688,6 +1780,33 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
  * opacity transition; the global motion kill-switch (motion.css) zeroes the
  * duration under reduced motion, so no per-surface guard is needed.
  */
+const FromLastBuildRibbon: Component<{ onCompile?: () => void }> = (props) => {
+  const [shown, setShown] = createSignal(false);
+  onMount(() => requestAnimationFrame(() => setShown(true)));
+  return (
+    <div
+      class={`flex flex-shrink-0 items-center gap-2 border-b border-glass-stroke px-3 py-1.5 text-xs text-fg-1 transition-opacity duration-200 ${
+        shown() ? "opacity-100" : "opacity-0"
+      }`}
+      style={{
+        background: "color-mix(in srgb, var(--color-accent) 10%, transparent)",
+      }}
+    >
+      <span class="min-w-0 flex-1 truncate">From last build — nothing compiled yet this session</span>
+      <Show when={props.onCompile}>
+        <button
+          type="button"
+          onClick={() => props.onCompile?.()}
+          class="flex-shrink-0 font-medium underline-offset-2 hover:underline"
+          style={{ color: "var(--color-accent)" }}
+        >
+          Compile
+        </button>
+      </Show>
+    </div>
+  );
+};
+
 const StaleRibbon: Component<{ onShowErrors?: () => void }> = (props) => {
   const [shown, setShown] = createSignal(false);
   onMount(() => requestAnimationFrame(() => setShown(true)));

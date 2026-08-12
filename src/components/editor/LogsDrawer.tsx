@@ -20,7 +20,7 @@ import {
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on } from "solid-js";
-import { compileState, lastResult, requestGotoSource } from "~/stores/editor-store";
+import { compileState, lastResult, liveLog, requestGotoSource } from "~/stores/editor-store";
 import { grammarTotalCount } from "~/stores/grammar-store";
 import { logsTabIntent } from "~/stores/ui-store";
 import { formatShortcutForDisplay } from "~/lib/shortcuts";
@@ -194,8 +194,9 @@ export const LogsDrawer: Component<{ embedded?: boolean }> = (props) => {
         </div>
 
         <div class="ml-auto flex items-center gap-1.5">
-          {/* Inline status pills — always visible, even when minimized */}
-          <Show when={lastResult()}>
+          {/* Inline status pills — always visible, even when minimized.
+              A seeded result never compiled, so it gets no duration pill. */}
+          <Show when={lastResult() && !lastResult()!.seeded}>
             <StatusPill
               dot={
                 compileState() === "ok"
@@ -299,21 +300,55 @@ const TabBody: Component<{ tab: LogsTabId }> = (props) => (
 // All logs tab — raw build output
 // =================================================================
 
+/** Line ceiling for the rendered log view — the full text still lives in
+ *  `lastResult().log`; a verbose build must degrade to a tail, not a frozen
+ *  pane (one giant text node re-laid-out per update). */
+const MAX_LOG_LINES = 5000;
+
 const LogsTabBody: Component = () => {
-  const log = createMemo(() => lastResult()?.log ?? "");
+  // While a build runs, show the live stream (Rust LogSink chunks); after it
+  // lands, the result's full (cap-annotated) log takes over.
+  const text = createMemo(() =>
+    compileState() === "compiling" ? liveLog() : (lastResult()?.log ?? ""),
+  );
+  const view = createMemo(() => {
+    const all = text().split("\n");
+    return all.length > MAX_LOG_LINES
+      ? { lines: all.slice(all.length - MAX_LOG_LINES), dropped: all.length - MAX_LOG_LINES }
+      : { lines: all, dropped: 0 };
+  });
+  let bottom: HTMLDivElement | undefined;
+  // Follow the stream: per-line <For> reconciliation keeps the shared prefix
+  // mounted, so this only scrolls, never re-renders the whole pane.
+  createEffect(() => {
+    liveLog();
+    if (compileState() === "compiling") bottom?.scrollIntoView({ block: "end" });
+  });
   return (
     <Show
-      when={log().trim().length > 0}
+      when={text().trim().length > 0}
       fallback={
         <EmptyTab
-          title="No build log yet"
-          body={`Hit Compile (${formatShortcutForDisplay("Mod+Enter")}) to see compiler output here.`}
+          title={compileState() === "compiling" ? "Compiling…" : "No build log yet"}
+          body={
+            compileState() === "compiling"
+              ? "Waiting for compiler output."
+              : `Hit Compile (${formatShortcutForDisplay("Mod+Enter")}) to see compiler output here.`
+          }
         />
       }
     >
-      <pre class="mono select-text whitespace-pre-wrap p-3 text-xs leading-[1.55] text-fg-2">
-        {log()}
-      </pre>
+      <div class="mono select-text p-3 text-xs leading-[1.55] text-fg-2">
+        <Show when={view().dropped > 0}>
+          <div class="pb-2 italic opacity-70">
+            … {view().dropped} earlier lines hidden — export the log for the full output
+          </div>
+        </Show>
+        <For each={view().lines}>
+          {(l) => <div class="whitespace-pre-wrap">{l || " "}</div>}
+        </For>
+        <div ref={bottom} />
+      </div>
     </Show>
   );
 };
@@ -331,9 +366,14 @@ const SEVERITY_ICON: Record<DiagSeverity, Component<{ size?: number }>> = {
 
 const DiagnosticsTab: Component<{ severity: DiagSeverity; primary?: boolean }> = (props) => {
   const result = lastResult;
-  const items = createMemo(
+  const all = createMemo(
     () => result()?.diagnostics.filter((d) => d.severity === props.severity) ?? [],
   );
+  // Distro/package diagnostics (hyperref.sty and friends) have no jump target
+  // and rarely concern the user's own document — collapsed behind a count.
+  const items = createMemo(() => all().filter((d) => d.scope !== "external"));
+  const external = createMemo(() => all().filter((d) => d.scope === "external"));
+  const [showExternal, setShowExternal] = createSignal(false);
   const errs = createMemo(
     () => result()?.diagnostics.filter((d) => d.severity === "error") ?? [],
   );
@@ -360,21 +400,65 @@ const DiagnosticsTab: Component<{ severity: DiagSeverity; primary?: boolean }> =
               icon={<Icon size={12} />}
               title={d.message}
               meta={`${d.file}:${d.line}`}
-              onJump={d.file ? () => requestGotoSource(d.file, d.line) : undefined}
+              onJump={
+                d.file && d.scope !== "external"
+                  ? () => requestGotoSource(d.file, d.line)
+                  : undefined
+              }
             />
           )}
         </For>
+        <Show when={external().length > 0}>
+          <button
+            type="button"
+            class="w-full rounded-lg px-3 py-2 text-left text-xs text-fg-2 transition-colors hover:text-fg-1"
+            style={{
+              background: "var(--color-control-fill)",
+              border: "1px solid var(--color-control-stroke)",
+            }}
+            onClick={() => setShowExternal((v) => !v)}
+          >
+            {showExternal() ? "Hide" : "Show"} {external().length} from packages and classes
+          </button>
+          <Show when={showExternal()}>
+            <For each={external()}>
+              {(d) => (
+                <IssueCard
+                  severity={props.severity}
+                  icon={<Icon size={12} />}
+                  title={d.message}
+                  meta={`${d.file}:${d.line} (external)`}
+                />
+              )}
+            </For>
+          </Show>
+        </Show>
         {/* Non-primary tabs: a quiet empty state when this severity is clear. */}
-        <Show when={!props.primary && items().length === 0}>
+        <Show when={!props.primary && items().length === 0 && external().length === 0}>
           <EmptyTab title="Nothing here" body="No diagnostics of this kind." />
         </Show>
-        {/* Errors tab only: success + failure summary cards. */}
-        <Show when={props.primary && result()!.ok && errs().length === 0 && warns().length === 0}>
+        {/* Errors tab only: success + failure summary cards. A seeded result
+            never compiled, so claiming "Compiled successfully" would lie. */}
+        <Show
+          when={
+            props.primary &&
+            result()!.ok &&
+            !result()!.seeded &&
+            errs().length === 0 &&
+            warns().length === 0
+          }
+        >
           <IssueCard
             severity="success"
             icon={<CheckCircle2 size={12} />}
             title="Compiled successfully"
             meta={`${result()!.durationMs}ms`}
+          />
+        </Show>
+        <Show when={props.primary && result()!.seeded === true}>
+          <EmptyTab
+            title="Showing the last build"
+            body="The preview was restored from disk. Compile to refresh it and surface diagnostics."
           />
         </Show>
         <Show when={props.primary && !result()!.ok && errs().length === 0}>

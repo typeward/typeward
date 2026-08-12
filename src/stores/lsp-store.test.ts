@@ -83,6 +83,7 @@ beforeEach(() => {
     async (client: unknown, rootUri: string): Promise<LspSession> => ({
       client: client as LspSession["client"],
       rootUri,
+      serverCapabilities: null,
       document: vi.fn(),
       stop: vi.fn().mockResolvedValue(undefined),
     }),

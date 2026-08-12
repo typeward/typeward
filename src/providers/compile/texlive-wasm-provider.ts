@@ -281,7 +281,7 @@ export async function compileWithTexliveWasm(
 
   let diagnostics: CompileResult["diagnostics"] = [];
   try {
-    const parsed = await ipc.parseLatexLog(result.log, project.rootFile);
+    const parsed = await ipc.parseLatexLog(result.log, project.rootFile, project.rootPath);
     diagnostics = parsed.map((d) => ({
       severity: d.severity,
       message: d.message,

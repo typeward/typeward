@@ -280,6 +280,7 @@ pub fn run() {
         commands::write_project_binary_file,
         compile::parse_latex_log_cmd,
         compile::compile_clean,
+        compile::probe_last_build_output,
         compile::compile_latex,
         compile::compile_typst,
         compile::compile_cancel,

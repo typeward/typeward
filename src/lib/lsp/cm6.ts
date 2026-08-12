@@ -32,6 +32,13 @@ import { perfMeasure, perfRecord } from "../perf-marks";
 export interface LspSession {
   client: JsonRpcClient;
   rootUri: string;
+  /**
+   * The server's advertised capabilities from the initialize result —
+   * `textDocumentSync`, provider flags, etc. Null only if the server answered
+   * with a shape that carried none. Feature gates (incremental sync, rename,
+   * references) must read this instead of assuming.
+   */
+  serverCapabilities: Record<string, unknown> | null;
   /** Build a CodeMirror Extension set that hooks the given document into this session. */
   document(opts: { uri: string; languageId: string }): Extension;
   /** Send shutdown/exit and tear down the transport. Safe to call once. */
@@ -47,18 +54,20 @@ export async function initSession(
   rootUri: string,
   capabilities: Record<string, unknown> = DEFAULT_CLIENT_CAPABILITIES,
 ): Promise<LspSession> {
-  await client.request("initialize", {
+  const initResult = (await client.request("initialize", {
     processId: null,
     rootUri,
     capabilities,
     workspaceFolders: [{ uri: rootUri, name: "project" }],
-  });
+  })) as { capabilities?: Record<string, unknown> } | null;
   client.notify("initialized", {});
+  const serverCapabilities = initResult?.capabilities ?? null;
 
   let stopped = false;
   return {
     client,
     rootUri,
+    serverCapabilities,
     document(opts) {
       return lspDocumentExtensions({ client, ...opts });
     },
