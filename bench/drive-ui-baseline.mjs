@@ -128,7 +128,12 @@ console.log("tab-switch samples:", JSON.stringify(switches));
 
 if (doCompile) {
   // --- compile -> visible PDF ----------------------------------------------
+  // A benign edit first: the app skips the viewer reload on a no-op recompile
+  // (byte-identical PDF), so without an actual source change the
+  // compile-to-pdf-doc mark never fires. This measures a real recompile.
   await focusEditor();
+  await c.send("Input.insertText", { text: "% bench recompile marker\n" });
+  await sleep(300);
   let before = Date.now();
   await chord("Enter", "Enter", 13);
   console.log("compile dispatched...");
