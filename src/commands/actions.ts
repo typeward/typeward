@@ -359,7 +359,9 @@ function captureScrollAnchor(isCurrent: () => boolean): void {
  * version so the preview pane re-renders. Errors are reported via
  * telemetry — callers don't need to wrap in try/catch.
  */
-export async function compileActiveProject(): Promise<void> {
+export async function compileActiveProject(opts?: {
+  includeOnly?: string[];
+}): Promise<void> {
   const p = project();
   if (!p) return;
   const adapter = adapterFor(p);
@@ -405,7 +407,7 @@ export async function compileActiveProject(): Promise<void> {
     // adapter is about to raise) lands before Rust ever registers the id —
     // honor it here instead of starting the subprocess it meant to prevent.
     if (wasCancelledEarly(compileId)) throw COMPILE_CANCELLED;
-    const result = await adapter.compile(p);
+    const result = await adapter.compile(p, opts);
     if (!isCurrent()) return;
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");
@@ -714,9 +716,29 @@ export async function createThreadFromPdfSelection(input: CreateThreadInput): Pr
   requestReviewPanelIntent(thread.id, input.kind === "todo" ? "todo" : "review");
 }
 
+/**
+ * Chapter-draft compile: typeset only the active `.tex` file's include target,
+ * reusing the full build's `.aux` set (fast redraws of one chapter in a big
+ * book). The active file's project-relative path minus `.tex` is the include
+ * stem; refuses the root file itself (drafting the whole document is a normal
+ * compile) and non-`.tex` files.
+ */
+export async function draftActiveChapter(): Promise<void> {
+  const p = project();
+  const f = activeFile();
+  if (!p || !f) return;
+  if (!f.relPath.endsWith(".tex") || f.relPath === p.rootFile) {
+    await compileActiveProject();
+    return;
+  }
+  const stem = f.relPath.replace(/\.tex$/, "");
+  await compileActiveProject({ includeOnly: [stem] });
+}
+
 // Inject the orchestration into the compile-runner leaf so adapter build/sync
 // commands can trigger it without importing this module (see compile-runner.ts).
 setCompileRunners({
   compile: compileActiveProject,
   syncForward: syncForwardFromCursor,
+  draftChapter: draftActiveChapter,
 });

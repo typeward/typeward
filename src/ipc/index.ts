@@ -294,6 +294,8 @@ export interface BuildOptionsWire {
   shellEscape: boolean;
   synctex: boolean;
   haltOnError: boolean;
+  /** Chapter-draft include stems (`chapters/ch010`); omitted for a full build. */
+  includeOnly?: string[];
 }
 
 /**

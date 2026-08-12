@@ -5,7 +5,12 @@ import type {
   Project,
 } from "~/adapters/types";
 import * as ipc from "~/ipc";
-import { currentCompileId, runCompile, runSyncForward } from "~/commands/compile-runner";
+import {
+  currentCompileId,
+  runCompile,
+  runDraftChapter,
+  runSyncForward,
+} from "~/commands/compile-runner";
 import { buildOptionsWire, effectiveBuild } from "~/adapters/latex/build-config";
 
 /**
@@ -26,15 +31,20 @@ export const ensureShellEscapeTrust = async (project: Project): Promise<boolean>
   return decision === "granted";
 };
 
-const compile = async (project: Project): Promise<CompileResult> => {
+const compile = async (
+  project: Project,
+  opts?: { includeOnly?: string[] },
+): Promise<CompileResult> => {
   const eff = effectiveBuild(project);
   if (eff.engine === "texlive-wasm") {
+    // The WASM engine has no \includeonly fast path; a draft request compiles
+    // the whole document there.
     const { compileWithTexliveWasm } = await import(
       "~/providers/compile/texlive-wasm-provider"
     );
     return compileWithTexliveWasm(project);
   }
-  const wire = buildOptionsWire(eff);
+  const wire = buildOptionsWire(eff, opts?.includeOnly);
   // Prompt for shell-escape trust the first time; declining compiles without it
   // rather than erroring.
   if (wire.shellEscape && !(await ensureShellEscapeTrust(project))) {
@@ -75,6 +85,17 @@ const commands: EditorCommand[] = [
     when: () => true,
     run: async () => {
       await runSyncForward();
+    },
+  },
+  {
+    id: "latex.draftChapter",
+    title: "Draft this chapter",
+    subtitle: "Typeset only the current chapter (\\includeonly), reusing the last full build",
+    group: "Build",
+    scope: "editor",
+    when: () => true,
+    run: async () => {
+      await runDraftChapter();
     },
   },
 ];

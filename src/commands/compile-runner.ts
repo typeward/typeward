@@ -18,17 +18,21 @@ type Runner = () => Promise<void> | void;
 
 let compile: Runner = () => {};
 let syncForward: Runner = () => {};
+let draftChapter: Runner = () => {};
 
 export function setCompileRunners(runners: {
   compile: Runner;
   syncForward: Runner;
+  draftChapter: Runner;
 }): void {
   compile = runners.compile;
   syncForward = runners.syncForward;
+  draftChapter = runners.draftChapter;
 }
 
 export const runCompile = (): Promise<void> | void => compile();
 export const runSyncForward = (): Promise<void> | void => syncForward();
+export const runDraftChapter = (): Promise<void> | void => draftChapter();
 
 // ----- Compile cancellation --------------------------------------------------
 

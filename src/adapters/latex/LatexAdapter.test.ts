@@ -10,8 +10,15 @@ describe("LatexAdapter", () => {
     expect(sync?.group).toBe("Navigation");
   });
 
-  it("has compile + syncForward as its registered commands", () => {
+  it("registers the compile, forward-search, and chapter-draft commands", () => {
     const ids = LatexAdapter.commands.map((c) => c.id).sort();
-    expect(ids).toEqual(["latex.compile", "latex.syncForward"]);
+    expect(ids).toEqual(["latex.compile", "latex.draftChapter", "latex.syncForward"]);
+  });
+
+  it("publishes a chapter-draft command in the Build group", () => {
+    const draft = LatexAdapter.commands.find((c) => c.id === "latex.draftChapter");
+    expect(draft).toBeDefined();
+    expect(draft?.group).toBe("Build");
+    expect(draft?.scope).toBe("editor");
   });
 });

@@ -61,12 +61,16 @@ export function effectiveBuild(p: Project): EffectiveBuild {
 
 /** Wire options for `ipc.compileLatex`. texlive-wasm never reaches this (it
  * routes through the WASM provider), so it maps to pdflatex defensively. */
-export function buildOptionsWire(eff: EffectiveBuild): BuildOptionsWire {
+export function buildOptionsWire(
+  eff: EffectiveBuild,
+  includeOnly?: string[],
+): BuildOptionsWire {
   return {
     engine: eff.engine === "texlive-wasm" ? "pdflatex" : eff.engine,
     recipe: eff.recipe,
     shellEscape: eff.shellEscape,
     synctex: eff.synctex,
     haltOnError: eff.stopOnFirstError,
+    includeOnly: includeOnly && includeOnly.length > 0 ? includeOnly : undefined,
   };
 }

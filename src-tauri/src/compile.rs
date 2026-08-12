@@ -208,6 +208,13 @@ pub struct BuildOptions {
     /// persisted `compile.strictOffline` setting then decides (default off).
     #[serde(default)]
     pub strict_offline: Option<bool>,
+    /// Chapter-draft build: only the named `\include` targets are typeset
+    /// (`\includeonly{...}`), reusing the full build's `.aux` set for the rest.
+    /// Names are project-relative include stems (`chapters/ch010`), validated
+    /// against a strict grammar before they reach the engine command line.
+    /// `None`/empty = a normal full build.
+    #[serde(default, rename = "includeOnly")]
+    pub include_only: Option<Vec<String>>,
 }
 
 fn default_true() -> bool {
@@ -223,7 +230,65 @@ impl Default for BuildOptions {
             synctex: true,
             halt_on_error: true,
             strict_offline: None,
+            include_only: None,
         }
+    }
+}
+
+/// The non-empty, validated `\includeonly` targets, or None. Every name must be
+/// a project-relative include stem made of the SAME safe characters as a
+/// project-relative path AND free of any TeX-special byte — the names are
+/// spliced into `\includeonly{...}` TeX code on the command line, so a stray
+/// `\`, `{`, `}`, `$`, `%`, `#`, `~`, `^`, `&`, or a leading `-` would be code
+/// injection or argument injection, not a filename. (Mirrors the leading-dash
+/// rule in the security invariants; documented there.)
+fn validated_include_only(opts: &BuildOptions) -> Result<Option<Vec<String>>, String> {
+    let Some(raw) = &opts.include_only else {
+        return Ok(None);
+    };
+    let names: Vec<&String> = raw.iter().filter(|n| !n.trim().is_empty()).collect();
+    if names.is_empty() {
+        return Ok(None);
+    }
+    let mut out = Vec::with_capacity(names.len());
+    for name in names {
+        let n = name.trim();
+        if n.starts_with('-')
+            || n.starts_with('/')
+            || n.contains("..")
+            || n.bytes().any(|b| {
+                matches!(
+                    b,
+                    b'\\' | b'{' | b'}' | b'$' | b'%' | b'#' | b'~' | b'^' | b'&' | b'"'
+                ) || b.is_ascii_control()
+            })
+            || n.contains(':')
+        {
+            return Err(format!("unsafe \\includeonly target: {n}"));
+        }
+        out.push(n.to_string());
+    }
+    Ok(Some(out))
+}
+
+/// The positional/input arguments an engine pass takes. Normally just the root
+/// file. For a chapter draft, `-jobname=<stem>` plus a code argument that
+/// declares `\includeonly{...}` before `\input`ing the root — so the source is
+/// never edited and the jobname (hence `.aux`/`.pdf` names) stays the root's.
+fn engine_input_args(root_file: &str, include_only: &Option<Vec<String>>) -> Vec<String> {
+    match include_only {
+        Some(names) if !names.is_empty() => {
+            let stem = Path::new(root_file)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root_file.to_string());
+            let list = names.join(",");
+            vec![
+                format!("-jobname={stem}"),
+                format!("\\includeonly{{{list}}}\\input{{{stem}}}"),
+            ]
+        }
+        _ => vec![root_file.to_string()],
     }
 }
 
@@ -473,6 +538,10 @@ pub async fn compile_latex(
         return Err("shell-escape requested but this project is not trusted on this machine — approve it in the build menu".into());
     }
 
+    // Validate any chapter-draft `\includeonly` targets before they can reach
+    // the engine command line (argument/code injection guard).
+    let include_only = validated_include_only(&opts)?;
+
     // Live log streaming to the LogsDrawer while the build runs. One event
     // name is enough: the frontend serializes compiles (compileState guard),
     // and the listener is scoped to the active attempt.
@@ -484,37 +553,20 @@ pub async fn compile_latex(
     let pdf_path_pre = root.join(latex_output_rel(&root_file, opts.engine));
     let pdf_sig_before = pdf_signature(&pdf_path_pre);
 
-    let (log, success) = match opts.engine {
-        // Tectonic runs its own bibliography passes, so the recipe is ignored
-        // (the UI states this) — it always takes its own path.
-        LatexEngine::Tectonic => {
-            run_tectonic(
-                &app,
-                &root_file,
-                &root,
-                opts.synctex,
-                shell_escape,
-                strict_offline(&app, &opts),
-                &cancel,
-                sink,
-            )
-            .await?
-        }
-        engine => match opts.recipe {
-            BuildRecipe::LatexmkAuto => {
-                run_system_tex(
-                    &root_file,
-                    &root,
-                    engine,
-                    opts.halt_on_error,
-                    opts.synctex,
-                    shell_escape,
-                    &cancel,
-                    sink,
-                )
-                .await?
+    let (log, success) = if include_only.is_some() {
+        // Chapter draft: always the direct engine (latexmk's fingerprinting and
+        // the `\includeonly…\input` code-argument form don't compose), two
+        // engine passes, and NO bib pass — the prior full build's `.bbl` is
+        // reused (drafts want speed; the plan's fallback documents the
+        // "citations may renumber" caveat that the UI badge carries).
+        match opts.engine {
+            LatexEngine::Tectonic => {
+                return Err(
+                    "chapter drafts need a latexmk/pdflatex engine (Tectonic has no \\includeonly fast path)"
+                        .into(),
+                );
             }
-            BuildRecipe::EngineOnly => {
+            engine => {
                 run_engine_recipe(
                     &root_file,
                     &root,
@@ -525,38 +577,65 @@ pub async fn compile_latex(
                     None,
                     &cancel,
                     sink,
+                    &include_only,
                 )
                 .await?
             }
-            BuildRecipe::EngineBibtex => {
-                run_engine_recipe(
+        }
+    } else {
+        match opts.engine {
+            // Tectonic runs its own bibliography passes, so the recipe is
+            // ignored (the UI states this) — it always takes its own path.
+            LatexEngine::Tectonic => {
+                run_tectonic(
+                    &app,
                     &root_file,
                     &root,
-                    engine,
-                    opts.halt_on_error,
                     opts.synctex,
                     shell_escape,
-                    Some(BibTool::Bibtex),
+                    strict_offline(&app, &opts),
                     &cancel,
                     sink,
                 )
                 .await?
             }
-            BuildRecipe::EngineBiber => {
-                run_engine_recipe(
-                    &root_file,
-                    &root,
-                    engine,
-                    opts.halt_on_error,
-                    opts.synctex,
-                    shell_escape,
-                    Some(BibTool::Biber),
-                    &cancel,
-                    sink,
-                )
-                .await?
-            }
-        },
+            engine => match opts.recipe {
+                BuildRecipe::LatexmkAuto => {
+                    run_system_tex(
+                        &root_file,
+                        &root,
+                        engine,
+                        opts.halt_on_error,
+                        opts.synctex,
+                        shell_escape,
+                        &cancel,
+                        sink,
+                    )
+                    .await?
+                }
+                BuildRecipe::EngineOnly => {
+                    run_engine_recipe(
+                        &root_file, &root, engine, opts.halt_on_error, opts.synctex,
+                        shell_escape, None, &cancel, sink, &None,
+                    )
+                    .await?
+                }
+                BuildRecipe::EngineBibtex => {
+                    run_engine_recipe(
+                        &root_file, &root, engine, opts.halt_on_error, opts.synctex,
+                        shell_escape, Some(BibTool::Bibtex), &cancel, sink, &None,
+                    )
+                    .await?
+                }
+                BuildRecipe::EngineBiber => {
+                    run_engine_recipe(
+                        &root_file, &root, engine, opts.halt_on_error, opts.synctex,
+                        shell_escape, Some(BibTool::Biber), &cancel, sink, &None,
+                    )
+                    .await?
+                }
+            },
+        }
     };
 
     let pdf_path = root.join(latex_output_rel(&root_file, opts.engine));
@@ -1116,6 +1195,7 @@ struct CompilePass {
 /// constant selected by a fixed match plus the validated positional file/stem —
 /// the argument-injection invariant. `<base>` is the entry file stem (its last
 /// component is already leading-dash-guarded by `validate_project_relative_path`).
+#[allow(clippy::too_many_arguments)]
 fn recipe_passes(
     recipe: BuildRecipe,
     root_file: &str,
@@ -1123,6 +1203,7 @@ fn recipe_passes(
     halt_on_error: bool,
     synctex: bool,
     shell_escape: bool,
+    include_only: &Option<Vec<String>>,
 ) -> Vec<CompilePass> {
     let base = Path::new(root_file)
         .file_stem()
@@ -1133,7 +1214,10 @@ fn recipe_passes(
             .into_iter()
             .map(String::from)
             .collect();
-        args.push(root_file.to_string());
+        // The positional file, or a chapter-draft `-jobname=<stem>` +
+        // `\includeonly{...}\input{stem}` code argument (fixed shape;
+        // names pre-validated in `validated_include_only`).
+        args.extend(engine_input_args(root_file, include_only));
         CompilePass {
             program: engine_binary(engine).to_string(),
             args,
@@ -1184,6 +1268,7 @@ async fn run_engine_recipe(
     bib: Option<BibTool>,
     cancel: &Option<watch::Receiver<bool>>,
     sink: Option<Arc<LogSink>>,
+    include_only: &Option<Vec<String>>,
 ) -> Result<(String, bool), String> {
     let recipe = match bib {
         None => BuildRecipe::EngineOnly,
@@ -1197,6 +1282,7 @@ async fn run_engine_recipe(
         halt_on_error,
         synctex,
         shell_escape,
+        include_only,
     );
 
     let mut log = String::new();
@@ -2307,6 +2393,61 @@ warning: this is deprecated
     }
 
     #[test]
+    fn validated_include_only_accepts_safe_stems_and_rejects_injection() {
+        let ok = BuildOptions {
+            include_only: Some(vec!["chapters/ch010".into(), "chapters/ch011".into()]),
+            ..Default::default()
+        };
+        assert_eq!(
+            validated_include_only(&ok).unwrap(),
+            Some(vec!["chapters/ch010".into(), "chapters/ch011".into()])
+        );
+        // Empty / whitespace-only collapses to None (a full build).
+        let empty = BuildOptions {
+            include_only: Some(vec!["".into(), "   ".into()]),
+            ..Default::default()
+        };
+        assert_eq!(validated_include_only(&empty).unwrap(), None);
+        // Every TeX-special byte, traversal, absolute, colon, and leading dash
+        // is rejected — these would be code or argument injection.
+        for bad in [
+            "ch010}\\input{/etc/passwd",
+            "a\\write18",
+            "a$b",
+            "a%b",
+            "a#b",
+            "a~b",
+            "a^b",
+            "a&b",
+            "../secret",
+            "/abs/path",
+            "-shell-escape",
+            "c:drive",
+        ] {
+            let o = BuildOptions {
+                include_only: Some(vec![bad.into()]),
+                ..Default::default()
+            };
+            assert!(validated_include_only(&o).is_err(), "should reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn engine_input_args_injects_includeonly_code_with_a_fixed_shape() {
+        // Normal build: just the positional file.
+        assert_eq!(engine_input_args("main.tex", &None), vec!["main.tex".to_string()]);
+        // Chapter draft: jobname + includeonly-then-input code, jobname is the
+        // root stem so the .aux/.pdf keep their names.
+        let names = Some(vec!["chapters/ch010".to_string(), "chapters/ch011".to_string()]);
+        let args = engine_input_args("main.tex", &names);
+        assert_eq!(args[0], "-jobname=main");
+        assert_eq!(
+            args[1],
+            "\\includeonly{chapters/ch010,chapters/ch011}\\input{main}"
+        );
+    }
+
+    #[test]
     fn recipe_passes_engine_only_runs_two_engine_passes() {
         let passes = recipe_passes(
             BuildRecipe::EngineOnly,
@@ -2315,6 +2456,7 @@ warning: this is deprecated
             true,
             true,
             false,
+            &None
         );
         assert_eq!(passes.len(), 2);
         assert!(
@@ -2339,6 +2481,7 @@ warning: this is deprecated
             true,
             true,
             false,
+            &None
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes.iter().filter(|p| p.is_engine).count(), 3);
@@ -2363,6 +2506,7 @@ warning: this is deprecated
             false,
             false,
             true,
+            &None
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes[1].program, "biber");
@@ -2387,6 +2531,7 @@ warning: this is deprecated
             true,
             true,
             false,
+            &None
         );
         assert!(passes.is_empty());
     }

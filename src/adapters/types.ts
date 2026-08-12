@@ -166,8 +166,13 @@ export interface EditorAdapter {
    */
   languageId: string;
   format: ProjectFormat;
-  /** Compiles the project to its output artifact (PDF today). */
-  compile(project: Project): Promise<CompileResult>;
+  /**
+   * Compiles the project to its output artifact (PDF today). `opts.includeOnly`
+   * requests a chapter-scoped draft (`\includeonly` over the named include
+   * stems, reusing the full build's `.aux`); adapters that don't support it
+   * ignore the option and do a full build.
+   */
+  compile(project: Project, opts?: { includeOnly?: string[] }): Promise<CompileResult>;
   commands: EditorCommand[];
   /**
    * Vestigial seam members. Preview kind is decided per-file
