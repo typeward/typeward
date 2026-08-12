@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { notifyInfo } from "~/lib/toast";
 import { watchProject, type WatchHandle } from "~/lib/watcher/client";
+import { noteProjectFilesChanged } from "~/stores/index-store";
 
 /**
  * `fsVersion` bumps every time the unified file watcher emits an event we
@@ -62,6 +63,9 @@ async function startWatching(
       const touchesRealFile = ev.paths.some((p) => !TYPEWARD_DIR_PATTERN.test(p));
       if (!touchesRealFile) return;
       setFsVersion((n) => n + 1);
+      // Same "project files changed" signal drives a label/citation reindex
+      // (no-ops when no project index is loaded; debounced internally).
+      noteProjectFilesChanged();
     });
   } catch (e) {
     // Watcher is best-effort; an unsupported filesystem or permission error

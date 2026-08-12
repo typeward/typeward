@@ -152,6 +152,7 @@ import {
 import { errorText, notifyError } from "~/components/feedback/Toaster";
 import { installSwipeListener } from "~/lib/gestures";
 import { pathToFileUri } from "~/lib/lsp/cm6";
+import { refCiteCompletionExtension } from "~/lib/lsp/ref-cite-completion";
 import { anchoredMenuEvent } from "~/lib/menu-position";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
@@ -1237,6 +1238,13 @@ const CenterPane: Component<{
               : [];
             const grammarOn = grammarActive();
             const extrasList = Array.isArray(extras) ? extras : [extras];
+            // Local \ref/\cite completion from the project index. When texlab
+            // owns the editor it composes the source into its own override
+            // (cm6.ts); here it covers the texlab-absent case for LaTeX files
+            // so completion works with no language server installed.
+            if (lang === "latex" && !lspSession) {
+              extrasList.push(refCiteCompletionExtension());
+            }
             const grammarExt = grammarOn
               ? [
                   harperLinter({

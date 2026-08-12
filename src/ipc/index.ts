@@ -308,6 +308,37 @@ export const compileClean = (project: Project): Promise<number> =>
 export const probeLastBuildOutput = (project: Project): Promise<string | null> =>
   invoke<string | null>("probe_last_build_output", { project });
 
+/** A `\label` or citation key with where it is defined. */
+export interface IndexEntry {
+  key: string;
+  /** Project-relative path, forward slashes. */
+  file: string;
+  /** 1-based line. */
+  line: number;
+  /** Section title (labels) or bib entry title (citations); may be empty. */
+  context: string;
+}
+export interface ProjectIndexResult {
+  labels: IndexEntry[];
+  citations: IndexEntry[];
+  /** A cap was hit and the index is partial. */
+  truncated: boolean;
+}
+
+/**
+ * Scan (or return the cached) project-wide `\label` + citation-key index.
+ * Pass `refresh: true` to force a rescan after files change on disk.
+ */
+export const indexProject = (
+  projectRoot: string,
+  refresh: boolean,
+): Promise<ProjectIndexResult> =>
+  invoke("index_project", { projectRoot, refresh });
+
+/** Drop a project's cached index (on project close). */
+export const unindexProject = (projectRoot: string): Promise<void> =>
+  invoke("unindex_project", { projectRoot });
+
 export const compileLatex = async (
   project: Project,
   options: BuildOptionsWire,

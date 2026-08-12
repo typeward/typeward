@@ -52,6 +52,7 @@ import {
 } from "~/stores/review-store";
 import { startSession, stopAllSessions } from "~/stores/lsp-store";
 import { startWatching, stopWatching } from "~/stores/watcher-store";
+import { clearProjectIndex, loadProjectIndex } from "~/stores/index-store";
 import { TextShell } from "./shells/text-shell";
 import { DropImport } from "~/components/editor/DropImport";
 import { createAsyncGenerationGuard } from "~/lib/async-generation";
@@ -141,6 +142,7 @@ const EditorScreen: Component = () => {
       setProject(null);
       resetTabs();
       resetCompileState();
+      clearProjectIndex();
       return;
     }
     setOpening(true);
@@ -197,6 +199,11 @@ const EditorScreen: Component = () => {
         // Start the file watcher so external edits / new files / deletions
         // refresh the FileTree (it reads `fsVersion` as a resource source).
         void startWatching(p.rootPath, token.isCurrent);
+        // Load the project label/citation index for local \ref/\cite
+        // completion (LaTeX). Cheap and cached in Rust; refreshed on watcher
+        // events by the FileTree/index effect.
+        if (p.format === "latex") loadProjectIndex(p.rootPath);
+        else clearProjectIndex();
         // Start the LSP for the adapter's primary language. Silently no-ops if
         // the binary isn't installed or the format ships no language server.
         const lspLang = asLspLanguage(adapter.languageId);

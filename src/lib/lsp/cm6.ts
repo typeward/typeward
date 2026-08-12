@@ -26,6 +26,7 @@ import { ChangeSet, StateEffect, StateField, type Extension, type Text } from "@
 import { EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import type { JsonRpcClient } from "./client";
 import { perfMeasure, perfRecord } from "../perf-marks";
+import { isRefCiteContext, refCiteSource } from "./ref-cite-completion";
 
 // ---- Session setup --------------------------------------------------------
 
@@ -114,9 +115,17 @@ interface DocSync {
 function lspDocumentExtensions(opts: LspDocOptions): Extension {
   const sync: DocSync = { flush: () => {} };
   // StateField + Effect for LSP-pushed diagnostics. linter() reads from here.
+  // Completion override runs both sources: the local index source (owns
+  // \ref/\cite, uncapped, synchronous) and the texlab source (everything else;
+  // it yields \ref/\cite to the local one). LaTeX only — Typst keeps texlab/
+  // tinymist as the sole source.
+  const sources =
+    opts.languageId === "latex"
+      ? [refCiteSource, completionSource(opts, sync)]
+      : [completionSource(opts, sync)];
   return [diagnosticsField, lifecyclePlugin(opts, sync), linter((view) =>
     view.state.field(diagnosticsField),
-  ), autocompletion({ override: [completionSource(opts, sync)] })];
+  ), autocompletion({ override: sources })];
 }
 
 const setLspDiagnostics = StateEffect.define<Diagnostic[]>();
@@ -326,6 +335,11 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
   let firstUsefulRecorded = false;
   return async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     if (!ctx.view) return null;
+    // \ref/\cite are owned by the local index source (uncapped, synchronous,
+    // no server round trip) — yield those contexts so texlab's slow, 50-capped
+    // list doesn't also surface for them.
+    const before = ctx.state.doc.sliceString(Math.max(0, ctx.pos - 400), ctx.pos);
+    if (isRefCiteContext(before)) return null;
     // Push any debounced edits to the server before asking for completions,
     // otherwise it resolves positions against text up to 200ms stale — exactly
     // during fast typing, when completion matters most.
@@ -344,6 +358,10 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
     }
     if (!raw) return null;
     const items = Array.isArray(raw) ? raw : raw.items;
+    // An incomplete list means the server truncated (texlab caps at 50) — the
+    // remainder is only reachable by re-querying as more is typed, so don't
+    // pin the truncated set with validFor.
+    const incomplete = !Array.isArray(raw) && raw.isIncomplete === true;
     if (!items?.length) return null;
     if (!firstUsefulRecorded) {
       firstUsefulRecorded = true;
@@ -363,7 +381,10 @@ function completionSource(opts: LspDocOptions, sync: DocSync) {
       type: kindToType(i.kind),
     }));
 
-    return { from, options, validFor: /^[\\@\w][@\w]*$/ };
+    // validFor lets CM6 filter client-side while typing WITHOUT re-querying —
+    // correct only when the list is complete. A truncated list omits it so the
+    // server is re-asked with the longer prefix.
+    return incomplete ? { from, options } : { from, options, validFor: /^[\\@\w][@\w]*$/ };
   };
 }
 

@@ -19,6 +19,7 @@ mod export_annotated;
 mod export_pandoc;
 mod fs_ops;
 mod history;
+mod index;
 mod integrations;
 mod ipc_guard;
 #[cfg(desktop)]
@@ -229,6 +230,7 @@ pub fn run() {
             Ok(())
         })
         .manage(watcher::WatcherManager::default())
+        .manage(index::IndexManager::default())
         .manage(integrations::oauth::OauthManager::default())
         .manage(integrations::grammar::GrammarState::default())
         .manage(std::sync::Arc::new(
@@ -274,6 +276,8 @@ pub fn run() {
         trust::shell_escape_trust_set,
         trust::trust_clear_shell_escape,
         todo_scan::scan_project_todos,
+        index::index_project,
+        index::unindex_project,
         commands::read_project_text_file,
         commands::read_project_binary_file,
         commands::write_project_text_file,
