@@ -10,9 +10,21 @@ describe("LatexAdapter", () => {
     expect(sync?.group).toBe("Navigation");
   });
 
-  it("registers the compile, forward-search, and chapter-draft commands", () => {
+  it("registers the compile, forward-search, chapter-draft, and rename commands", () => {
     const ids = LatexAdapter.commands.map((c) => c.id).sort();
-    expect(ids).toEqual(["latex.compile", "latex.draftChapter", "latex.syncForward"]);
+    expect(ids).toEqual([
+      "latex.compile",
+      "latex.draftChapter",
+      "latex.renameLabel",
+      "latex.syncForward",
+    ]);
+  });
+
+  it("publishes a rename-label command in the Refactor group", () => {
+    const rename = LatexAdapter.commands.find((c) => c.id === "latex.renameLabel");
+    expect(rename).toBeDefined();
+    expect(rename?.group).toBe("Refactor");
+    expect(rename?.scope).toBe("editor");
   });
 
   it("publishes a chapter-draft command in the Build group", () => {

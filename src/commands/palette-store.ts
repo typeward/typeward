@@ -56,6 +56,10 @@ const [requestNewProject, setRequestNewProjectInternal] = createSignal(false);
  */
 const [requestSaveTemplate, setRequestSaveTemplateInternal] = createSignal(false);
 
+/** "Open the rename-label dialog" intent, raised by the `latex.renameLabel`
+ *  command; RenameLabelDialog (App root) reads the cursor + drives the rename. */
+const [requestRenameLabelSignal, setRequestRenameLabelInternal] = createSignal(0);
+
 /**
  * "Please open the History sidebar tab" intent. Raised by the
  * `core.fileHistory` command; the editor shell owns the sidebar tab state and
@@ -119,6 +123,7 @@ export const paletteSeedGeneration_ = paletteSeedGeneration;
 export const recentCommandIds_ = recentCommandIds;
 export const requestNewProject_ = requestNewProject;
 export const requestSaveTemplate_ = requestSaveTemplate;
+export const requestRenameLabel_ = requestRenameLabelSignal;
 export const requestHistoryPanel_ = requestHistoryPanel;
 export const requestUpdateDialog_ = requestUpdateDialog;
 export const requestAiAction_ = requestAiAction;
@@ -187,6 +192,10 @@ export const setRequestNewProject = (v: boolean) =>
 
 export const setRequestSaveTemplate = (v: boolean) =>
   setRequestSaveTemplateInternal(v);
+/** Bump to open the rename-label dialog (a nonce, so repeated invocations
+ *  re-trigger even without an intervening close). */
+export const requestRenameLabel = () =>
+  setRequestRenameLabelInternal((n) => n + 1);
 
 export const setRequestHistoryPanel = (v: boolean) =>
   setRequestHistoryPanelInternal(v);

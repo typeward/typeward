@@ -12,6 +12,7 @@ import {
   runSyncForward,
 } from "~/commands/compile-runner";
 import { buildOptionsWire, effectiveBuild } from "~/adapters/latex/build-config";
+import { requestRenameLabel } from "~/commands/palette-store";
 
 /**
  * Shell-escape is dangerous (arbitrary program execution during compile), so
@@ -96,6 +97,17 @@ const commands: EditorCommand[] = [
     when: () => true,
     run: async () => {
       await runDraftChapter();
+    },
+  },
+  {
+    id: "latex.renameLabel",
+    title: "Rename label",
+    subtitle: "Rename the \\label under the cursor and every \\ref to it across the project",
+    group: "Refactor",
+    scope: "editor",
+    when: () => true,
+    run: () => {
+      requestRenameLabel();
     },
   },
 ];

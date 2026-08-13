@@ -27,6 +27,7 @@ import {
 } from "~/commands/keyboard";
 import {
   requestAiAction_,
+  requestRenameLabel_,
   requestSaveTemplate_,
   requestUpdateDialog_,
   setNavigator,
@@ -50,6 +51,11 @@ const SettingsScreen = lazy(() => import("~/screens/settings/SettingsScreen"));
 const SaveTemplateDialog = lazy(() =>
   import("~/components/templates/SaveTemplateDialog").then((m) => ({
     default: m.SaveTemplateDialog,
+  })),
+);
+const RenameLabelDialog = lazy(() =>
+  import("~/components/editor/RenameLabelDialog").then((m) => ({
+    default: m.RenameLabelDialog,
   })),
 );
 // Lazy like the others — the updater plugin JS and this dialog's chunk stay
@@ -252,6 +258,10 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestAiAction_()) setAiActionTouched(true);
   });
+  const [renameLabelTouched, setRenameLabelTouched] = createSignal(false);
+  createEffect(() => {
+    if (requestRenameLabel_()) setRenameLabelTouched(true);
+  });
 
   let cancelBootUpdateCheck: (() => void) | undefined;
   onMount(() => {
@@ -277,6 +287,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={saveTemplateTouched()}>
         <Suspense>
           <SaveTemplateDialog />
+        </Suspense>
+      </Show>
+      <Show when={renameLabelTouched()}>
+        <Suspense>
+          <RenameLabelDialog />
         </Suspense>
       </Show>
       <Show when={updateDialogTouched()}>
