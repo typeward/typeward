@@ -159,6 +159,11 @@ import { pathToFileUri } from "~/lib/lsp/cm6";
 import { refCiteCompletionExtension } from "~/lib/lsp/ref-cite-completion";
 import { refCiteGotoExtension } from "~/lib/lsp/ref-cite-goto";
 import { refDiagnosticsExtension } from "~/lib/lsp/ref-diagnostics";
+import {
+  prunePool,
+  withActiveEntry,
+  type PoolEntry,
+} from "~/screens/editor/editor-pool";
 import { anchoredMenuEvent } from "~/lib/menu-position";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
@@ -1011,19 +1016,9 @@ const CenterPane: Component<{
   // --- Editor view pool -----------------------------------------------------
   // Keep several files' EditorViews mounted at once (display-toggled) so a tab
   // switch to an already-open file never rebuilds CodeMirror's height-map (the
-  // ~30ms cost on a 50k-line file — the one benchmark leg we lose). Entries are
-  // keyed on editorKey but capped to AT MOST ONE live view per file PATH: an
-  // LSP attach / grammar toggle / adoptGeneration bump mints a new editorKey
-  // for the same path and must SUPERSEDE that path's view, never run two — or
-  // the LSP sees two didOpen for one URI and the crash-restore adopt guard
-  // (which relies on a fresh EditorState) is defeated. Eviction is FIFO with
-  // the active entry protected; insertion order is never shuffled so revealing
-  // a view is a pure CSS display flip (no DOM move, no re-measure).
-  interface PoolEntry {
-    key: string;
-    path: string;
-    relPath: string;
-  }
+  // ~30ms→~9ms win on a 50k-line file). The reducer logic (one live view per
+  // file PATH, FIFO eviction that protects the active view, stable insertion
+  // order) lives in editor-pool.ts and is unit-tested there.
   const POOL_LIMIT = 4;
   const [pool, setPool] = createSignal<PoolEntry[]>([]);
 
@@ -1031,25 +1026,19 @@ const CenterPane: Component<{
     const key = editorKey();
     const f = activeFile();
     if (!key || !f) return;
-    setPool((prev) => {
-      if (prev.some((e) => e.key === key)) return prev; // already live, keep order
-      const next = prev.filter((e) => e.path !== f.path); // supersede same path
-      next.push({ key, path: f.path, relPath: f.relPath });
-      while (next.length > POOL_LIMIT) {
-        const victim = next.findIndex((e) => e.key !== key);
-        if (victim < 0) break;
-        next.splice(victim, 1);
-      }
-      return next;
-    });
+    setPool((prev) =>
+      withActiveEntry(
+        prev,
+        { key, path: f.path, relPath: f.relPath },
+        POOL_LIMIT,
+      ),
+    );
   });
 
   // Drop a view when its file's tab closes (openFiles no longer lists it).
   createEffect(() => {
     const open = new Set(openFiles().map((f) => f.path));
-    setPool((prev) =>
-      prev.some((e) => !open.has(e.path)) ? prev.filter((e) => open.has(e.path)) : prev,
-    );
+    setPool((prev) => prunePool(prev, open));
   });
 
   // Closing a dirty buffer silently discards it (the autosave snapshot only
