@@ -26,6 +26,7 @@ mod ipc_guard;
 mod lsp;
 mod profile;
 mod project;
+mod rename;
 mod settings;
 #[cfg(desktop)]
 mod synctex;
@@ -278,6 +279,8 @@ pub fn run() {
         todo_scan::scan_project_todos,
         index::index_project,
         index::unindex_project,
+        rename::rename_project_label,
+        rename::find_project_references,
         commands::read_project_text_file,
         commands::read_project_binary_file,
         commands::write_project_text_file,

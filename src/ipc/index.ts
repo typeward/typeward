@@ -341,6 +341,39 @@ export const indexProject = (
 export const unindexProject = (projectRoot: string): Promise<void> =>
   invoke("unindex_project", { projectRoot });
 
+export interface RenameResult {
+  /** Project-relative paths of the files that were rewritten. */
+  filesChanged: string[];
+  totalOccurrences: number;
+}
+
+/**
+ * Rename a `\label` and every `\ref`-family reference to it across the
+ * project's `.tex` files. Only changed files are rewritten (atomically). The
+ * caller must save dirty buffers first and reload the affected open files after.
+ */
+export const renameProjectLabel = (
+  projectRoot: string,
+  oldKey: string,
+  newKey: string,
+): Promise<RenameResult> =>
+  invoke("rename_project_label", { projectRoot, oldKey, newKey });
+
+export interface ReferenceHit {
+  file: string;
+  line: number;
+  /** "label" (the definition) or "ref" (a use). */
+  kind: string;
+  context: string;
+}
+
+/** Every occurrence of a label key (definition + uses) across the project. */
+export const findProjectReferences = (
+  projectRoot: string,
+  key: string,
+): Promise<ReferenceHit[]> =>
+  invoke("find_project_references", { projectRoot, key });
+
 export const compileLatex = async (
   project: Project,
   options: BuildOptionsWire,
