@@ -1,6 +1,7 @@
 import { linter, type Diagnostic } from "@codemirror/lint";
 import type { Extension } from "@codemirror/state";
 import { indexLabels, indexLoaded } from "~/stores/index-store";
+import type { IndexEntry } from "~/ipc";
 
 /**
  * In-editor "undefined reference" diagnostics for LaTeX, sourced from the same
@@ -90,30 +91,89 @@ export function findDanglingRefs(doc: string, labels: Set<string>): DanglingRef[
   return out;
 }
 
-/** CM6 linter emitting an undefined-reference warning per dangling `\ref` key. */
-export function refDiagnosticsExtension(): Extension {
+/** Every `\label{...}` occurrence in the buffer with its key's range, skipping
+ *  commented-out lines (a commented label is not a real definition). */
+function bufferLabelOccurrences(doc: string): DanglingRef[] {
+  const out: DanglingRef[] = [];
+  let m: RegExpExecArray | null;
+  let guard = 0;
+  LABEL_G.lastIndex = 0;
+  while ((m = LABEL_G.exec(doc)) !== null && guard++ < 50_000) {
+    if (inComment(doc, m.index)) continue;
+    const key = m[1].trim();
+    if (!key) continue;
+    const from = m.index + m[0].indexOf("{") + 1;
+    out.push({ from, to: from + m[1].length, key });
+  }
+  return out;
+}
+
+/**
+ * Every `\label` in the buffer that is defined more than once in the project —
+ * either repeated within this file, or also defined in another file (per the
+ * index). Both make `\ref` resolve to an arbitrary one, so LaTeX warns.
+ * `activeRelPath` excludes this file's own index entries from the cross-file
+ * test (they are the same labels being scanned here, not duplicates).
+ */
+export function findDuplicateLabels(
+  doc: string,
+  activeRelPath: string,
+  index: IndexEntry[],
+): DanglingRef[] {
+  const occ = bufferLabelOccurrences(doc);
+  const counts = new Map<string, number>();
+  for (const o of occ) counts.set(o.key, (counts.get(o.key) ?? 0) + 1);
+  const definedElsewhere = new Set<string>();
+  for (const e of index) {
+    if (e.file !== activeRelPath) definedElsewhere.add(e.key);
+  }
+  return occ.filter(
+    (o) => (counts.get(o.key) ?? 0) >= 2 || definedElsewhere.has(o.key),
+  );
+}
+
+/**
+ * CM6 linter emitting an undefined-reference warning per dangling `\ref` key
+ * and a duplicate-label warning per `\label` defined more than once in the
+ * project. Both are index-backed and high-confidence; see the module header for
+ * why this is references-only and no-LSP-only.
+ */
+export function refDiagnosticsExtension(activeRelPath: string): Extension {
   return linter(
     (view): readonly Diagnostic[] => {
       // Can't validate against an index that hasn't finished its first scan —
-      // every cross-file label would look undefined.
+      // every cross-file label would look undefined / non-duplicate.
       if (!indexLoaded()) return [];
       const doc = view.state.doc.toString();
-      const labels = new Set<string>(indexLabels().map((e) => e.key));
+      const index = indexLabels();
+      const labels = new Set<string>(index.map((e) => e.key));
       for (const key of bufferLabels(doc)) labels.add(key);
+      const out: Diagnostic[] = [];
       // A project with no labels at all can't meaningfully validate references
-      // (and is more likely a not-yet-populated index than a real all-dangling
-      // document) — stay quiet.
-      if (labels.size === 0) return [];
-      return findDanglingRefs(doc, labels).map(
-        (d): Diagnostic => ({
+      // (more likely a not-yet-populated index than a real all-dangling doc).
+      if (labels.size > 0) {
+        for (const d of findDanglingRefs(doc, labels)) {
+          out.push({
+            from: d.from,
+            to: d.to,
+            severity: "warning",
+            source: "ref-check",
+            message: `Reference to undefined label "${d.key}"`,
+            markClass: "cm-lint-ref-undefined",
+          });
+        }
+      }
+      for (const d of findDuplicateLabels(doc, activeRelPath, index)) {
+        out.push({
           from: d.from,
           to: d.to,
           severity: "warning",
           source: "ref-check",
-          message: `Reference to undefined label "${d.key}"`,
-          markClass: "cm-lint-ref-undefined",
-        }),
-      );
+          message: `Label "${d.key}" is defined more than once`,
+          markClass: "cm-lint-label-duplicate",
+        });
+      }
+      return out;
     },
     { delay: 500 },
   );

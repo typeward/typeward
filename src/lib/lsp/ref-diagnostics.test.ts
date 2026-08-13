@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { findDanglingRefs } from "./ref-diagnostics";
+import { findDanglingRefs, findDuplicateLabels } from "./ref-diagnostics";
+import type { IndexEntry } from "~/ipc";
 
 const labels = new Set(["sec:intro", "eq:euler", "fig:plot"]);
 
@@ -44,5 +45,38 @@ describe("findDanglingRefs", () => {
 
   it("does not flag \\label definitions themselves", () => {
     expect(dangling("\\label{brand:new}\ntext")).toEqual([]);
+  });
+});
+
+describe("findDuplicateLabels", () => {
+  const ACTIVE = "chapters/ch010.tex";
+  const idx = (rows: Array<[string, string]>): IndexEntry[] =>
+    rows.map(([key, file]) => ({ key, file, line: 1, context: "" }));
+
+  const dupes = (doc: string, index: IndexEntry[]): string[] =>
+    findDuplicateLabels(doc, ACTIVE, index).map((d) => d.key);
+
+  it("flags a label repeated within the same file", () => {
+    expect(dupes("\\label{a}\n\\label{a}\n\\label{b}", [])).toEqual(["a", "a"]);
+  });
+
+  it("flags a label also defined in another file", () => {
+    // `intro` is defined in this buffer and in ch001 -> duplicate.
+    const index = idx([
+      ["intro", "chapters/ch001.tex"],
+      ["local", "chapters/ch010.tex"],
+    ]);
+    expect(dupes("\\label{intro}\n\\label{local}", index)).toEqual(["intro"]);
+  });
+
+  it("does not flag a label unique to this file (its own index entry aside)", () => {
+    // The index carries this file's own saved `local` entry; that is the same
+    // label being scanned, not a duplicate.
+    const index = idx([["local", "chapters/ch010.tex"]]);
+    expect(dupes("\\label{local}", index)).toEqual([]);
+  });
+
+  it("ignores a commented-out label", () => {
+    expect(dupes("% \\label{a}\n\\label{a}", [])).toEqual([]);
   });
 });

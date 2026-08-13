@@ -1260,9 +1260,9 @@ const CenterPane: Component<{
             // so completion works with no language server installed.
             if (lang === "latex" && !lspSession) {
               extrasList.push(refCiteCompletionExtension());
-              // Undefined-reference warnings from the project index. Only when
-              // texlab is absent — it ships its own such diagnostics.
-              extrasList.push(refDiagnosticsExtension());
+              // Undefined-reference + duplicate-label warnings from the project
+              // index. Only when texlab is absent — it ships its own.
+              extrasList.push(refDiagnosticsExtension(f.relPath));
             }
             // Go-to-definition for \ref/\cite from the project index (Mod+click
             // or F12) — index-based, so it works with or without texlab and
