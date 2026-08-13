@@ -7,7 +7,7 @@
 import type { VisualDoc } from "./nodes";
 import type { Budget } from "./scan-blocks";
 import { ScanAborted, parseDocument } from "./scan-blocks";
-import type { ChangeAdapter, UpdateResult } from "./incremental";
+import type { ChangeAdapter, Doc, UpdateResult } from "./incremental";
 import { updateVisualDoc } from "./incremental";
 
 export type {
@@ -33,7 +33,7 @@ export {
   blockIndexAt,
   coverage,
 } from "./nodes";
-export type { ChangeAdapter, UpdateResult } from "./incremental";
+export type { ChangeAdapter, Doc, UpdateResult } from "./incremental";
 export { mapVisualDoc } from "./incremental";
 export { findPreambleEnd } from "./scan-blocks";
 export { MAX_OPT_ARG, matchBrace, scanInline, skipInlineSpace } from "./scan-inline";
@@ -101,13 +101,13 @@ export function parseVisualDoc(text: string, opts: ParseOptions = {}): VisualDoc
 export function updateDoc(
   oldDoc: VisualDoc,
   changes: ChangeAdapter,
-  newText: string,
+  doc: Doc,
   opts: ParseOptions = {},
 ): UpdateResult {
   return updateVisualDoc(
     oldDoc,
     changes,
-    newText,
+    doc,
     makeBudget(opts, RESCAN_BUDGET_MS),
   );
 }

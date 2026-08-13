@@ -30,6 +30,30 @@ export interface ChangeAdapter {
   ): void;
 }
 
+/**
+ * The new document as a random-access text source — the CM6 `Text` shape we
+ * consume, kept as a local interface so the parse layer stays CM-free and
+ * unit-testable on a plain string. The incremental path materializes only the
+ * REGION it rescans (not the whole document) via `sliceString`, so a keystroke
+ * in a large file no longer allocates a megabyte string per transaction.
+ */
+export interface Doc {
+  readonly length: number;
+  sliceString(from: number, to: number): string;
+  /** Start offset of the line containing `pos` (0-based). */
+  lineStartAt(pos: number): number;
+}
+
+/**
+ * Extra characters materialized past the rescan `to` limit. The region scanner
+ * loops strictly `while (i < to)` and only over-reads by the `charCodeAt(i + 1)`
+ * peeks (one char); no top-level environment spans a blank anchor, so `\end`
+ * searches stay within the region. A generous margin keeps that guarantee even
+ * against a peek we missed — the `updateDoc ≡ full reparse` property test is the
+ * falsifier if a region ever needs more.
+ */
+const REGION_MARGIN = 256;
+
 /* ------------------------------------------------------------------ */
 /* Deep offset mapping                                                 */
 /* ------------------------------------------------------------------ */
@@ -187,7 +211,7 @@ export interface UpdateResult {
 export function updateVisualDoc(
   oldDoc: VisualDoc,
   changes: ChangeAdapter,
-  newText: string,
+  doc: Doc,
   budget: Budget,
 ): UpdateResult {
   let dFromA = Infinity;
@@ -199,45 +223,51 @@ export function updateVisualDoc(
     if (toB > dToB) dToB = toB;
   });
   if (dToA < 0) {
-    return { doc: { ...oldDoc, length: newText.length }, stale: oldDoc.stale };
+    return { doc: { ...oldDoc, length: doc.length }, stale: oldDoc.stale };
   }
 
   try {
-    const doc = spliceUpdate(oldDoc, changes, newText, budget, {
+    const result = spliceUpdate(oldDoc, changes, doc, budget, {
       dFromA,
       dToA,
       dToB,
     });
-    return { doc, stale: false };
+    return { doc: result, stale: false };
   } catch (e) {
     if (e instanceof ScanAborted) {
-      return { doc: mapVisualDoc(oldDoc, changes, newText.length), stale: true };
+      return { doc: mapVisualDoc(oldDoc, changes, doc.length), stale: true };
     }
     throw e;
   }
 }
 
-function fullParse(newText: string, budget: Budget): VisualDoc {
-  const { blocks, preambleEnd } = parseDocument(newText, budget);
-  return { length: newText.length, blocks, preambleEnd, stale: false };
+function fullParse(doc: Doc, budget: Budget): VisualDoc {
+  const { blocks, preambleEnd } = parseDocument(doc.sliceString(0, doc.length), budget);
+  return { length: doc.length, blocks, preambleEnd, stale: false };
 }
 
 function spliceUpdate(
   oldDoc: VisualDoc,
   changes: ChangeAdapter,
-  newText: string,
+  doc: Doc,
   budget: Budget,
   damage: { dFromA: number; dToA: number; dToB: number },
 ): VisualDoc {
   const { dFromA, dToA, dToB } = damage;
 
+  // Materialize only [0, to + margin) for a region rescan — positions stay
+  // absolute (the slice starts at 0), so the scanner is untouched, but the
+  // untouched tail is never allocated. `parseTopRegion` scans strictly `< to`.
+  const sliceTo = (to: number): string =>
+    doc.sliceString(0, Math.min(to + REGION_MARGIN, doc.length));
+
   // A stale tree has unreliable geometry — never splice on top of it.
-  if (oldDoc.stale) return fullParse(newText, budget);
+  if (oldDoc.stale) return fullParse(doc, budget);
 
   // Damage in or before the preamble/doc-begin region → full reparse (the
   // preamble boundary itself may have moved).
   const oldBodyStart = bodyStartOf(oldDoc);
-  if (dFromA < oldBodyStart) return fullParse(newText, budget);
+  if (dFromA < oldBodyStart) return fullParse(doc, budget);
 
   // Restart point. Construct decisions look ahead: a FAILED math-close scan
   // reads up to MAX_MATH_SPAN chars past its opener, and a failed \verb
@@ -245,15 +275,15 @@ function spliceUpdate(
   // parse differently once the damage changes what those windows saw. The
   // restart must therefore clear both windows: at or before
   // dFromA - MAX_MATH_SPAN, and at or before the damage line's start.
-  // Text before dFromA is unchanged, so newText serves for old-side lookups.
-  const lineStartA = newText.lastIndexOf("\n", Math.max(0, dFromA - 1)) + 1;
+  // Text before dFromA is unchanged, so the new doc serves for old-side lookups.
+  const lineStartA = doc.lineStartAt(dFromA);
   const safePos = Math.min(dFromA - MAX_MATH_SPAN, lineStartA);
-  if (safePos <= oldBodyStart) return fullParse(newText, budget);
+  if (safePos <= oldBodyStart) return fullParse(doc, budget);
   const startIdx = blockIndexAt(oldDoc, Math.min(safePos, oldDoc.length - 1));
-  if (startIdx < 0) return fullParse(newText, budget);
+  if (startIdx < 0) return fullParse(doc, budget);
   const restart = oldDoc.blocks[startIdx];
   if (restart === undefined || restart.from < oldBodyStart) {
-    return fullParse(newText, budget);
+    return fullParse(doc, budget);
   }
   // Positions before the damage map identically.
   const restartPos = restart.from;
@@ -281,7 +311,7 @@ function spliceUpdate(
     const b = oldDoc.blocks[i];
     if (b.kind !== "blank" || b.from < dToA) continue;
     const posB = changes.mapPos(b.from, 1);
-    if (posB >= dToB && (posB === 0 || newText.charCodeAt(posB - 1) === 10)) {
+    if (posB >= dToB && (posB === 0 || doc.sliceString(posB - 1, posB).charCodeAt(0) === 10)) {
       anchorIdx = i;
       anchorPosB = posB;
       break;
@@ -290,18 +320,19 @@ function spliceUpdate(
 
   if (anchorIdx === -1) {
     // No anchor after the damage — rescan to the end of the document.
-    const region = parseTopRegion(newText, restartPos, newText.length, budget, stopEnv);
+    const full = sliceTo(doc.length);
+    const region = parseTopRegion(full, restartPos, doc.length, budget, stopEnv);
     const head = oldDoc.blocks.slice(0, startIdx);
     const blocks = [...head, ...region.blocks];
     if (region.stopToken) {
       blocks.push({ kind: "docEnd", from: region.stopToken.from, to: region.stopToken.to });
-      if (region.end < newText.length) {
-        const tail = parseTopRegion(newText, region.end, newText.length, budget, null);
+      if (region.end < doc.length) {
+        const tail = parseTopRegion(full, region.end, doc.length, budget, null);
         blocks.push(...tail.blocks);
       }
     }
     return {
-      length: newText.length,
+      length: doc.length,
       blocks,
       preambleEnd: oldDoc.preambleEnd,
       stale: false,
@@ -311,18 +342,18 @@ function spliceUpdate(
   // The replaced region carrying the old \end{document} would flip the
   // tail's parse context — not splice-safe.
   for (let i = startIdx; i < anchorIdx; i++) {
-    if (oldDoc.blocks[i].kind === "docEnd") return fullParse(newText, budget);
+    if (oldDoc.blocks[i].kind === "docEnd") return fullParse(doc, budget);
   }
 
   // Region parse up to the anchor; splice the shifted tail on when clean.
-  const region = parseTopRegion(newText, restartPos, anchorPosB, budget, stopEnv);
+  const region = parseTopRegion(sliceTo(anchorPosB), restartPos, anchorPosB, budget, stopEnv);
   if (
     region.stopToken !== null ||
     !regionEndsClean(region.blocks, restartPos, anchorPosB)
   ) {
     // \end{document} inside the damaged region, or a construct truncated by
     // the anchor — the anchor is not equivalence-safe here.
-    return fullParse(newText, budget);
+    return fullParse(doc, budget);
   }
 
   const m: PosMap = (pos, assoc) => changes.mapPos(pos, assoc);
@@ -336,7 +367,7 @@ function spliceUpdate(
     tail.shift();
   }
   return {
-    length: newText.length,
+    length: doc.length,
     blocks: [...oldDoc.blocks.slice(0, startIdx), ...middle, ...tail],
     preambleEnd: oldDoc.preambleEnd,
     stale: false,

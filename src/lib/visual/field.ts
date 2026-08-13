@@ -21,15 +21,27 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 
+import type { Text } from "@codemirror/state";
+
 import type { AtomicMarker, BuiltDecorations } from "./decorations";
 import { buildDecorations } from "./decorations";
-import type { VisualDoc } from "./parse";
+import type { Doc, VisualDoc } from "./parse";
 import {
   assertTotalCoverage,
   parseVisualDoc,
   passesSizeGate,
   updateDoc,
 } from "./parse";
+
+/** Adapt a CM6 `Text` to the parse layer's CM-free `Doc` source, so the
+ *  incremental update materializes only the region it rescans. */
+function docSource(text: Text): Doc {
+  return {
+    length: text.length,
+    sliceString: (from, to) => text.sliceString(from, to),
+    lineStartAt: (pos) => text.lineAt(pos).from,
+  };
+}
 
 export interface VisualConfig {
   /** Parse budget blown for good — host pauses the file. */
@@ -108,7 +120,7 @@ export const visualField = StateField.define<VisualState>({
     }
     if (!tr.docChanged || value.doc === null) return value;
 
-    const result = updateDoc(value.doc, tr.changes, tr.newDoc.toString());
+    const result = updateDoc(value.doc, tr.changes, docSource(tr.newDoc));
     if (result.stale) {
       // Never clear: mapped decorations keep every unchanged region hidden
       // (offsets shift exactly); the changed region may render approximately

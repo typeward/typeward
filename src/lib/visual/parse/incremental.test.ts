@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ChangeAdapter } from "./incremental";
+import type { ChangeAdapter, Doc } from "./incremental";
 import { mapVisualDoc } from "./incremental";
 import {
   assertTotalCoverage,
@@ -9,6 +9,17 @@ import {
   updateDoc,
   type VisualDoc,
 } from "./index";
+
+/** String-backed Doc source (production passes a CM6 Text adapter). Matches the
+ *  original `newText` string semantics exactly, so this test still verifies the
+ *  update logic — and now also that the region slice is never too small. */
+function stringDoc(s: string): Doc {
+  return {
+    length: s.length,
+    sliceString: (from, to) => s.slice(from, to),
+    lineStartAt: (pos) => (pos <= 0 ? 0 : s.lastIndexOf("\n", pos - 1) + 1),
+  };
+}
 
 /** Constant clock — budgets never expire, parses are deterministic. */
 const OPTS = { now: () => 0 };
@@ -182,6 +193,37 @@ Another paragraph with \\textcolor{red}{colour} in it.
 `,
 ];
 
+/** One random edit against `text`, returning the change + the new text. */
+function randomEdit(
+  text: string,
+  random: () => number,
+): { change: ChangeAdapter; newText: string; from: number; to: number; insert: string } {
+  const roll = random();
+  let from: number;
+  let to: number;
+  let insert: string;
+  if (roll < 0.5 || text.length === 0) {
+    from = Math.floor(random() * (text.length + 1));
+    to = from;
+    insert = SNIPPETS[Math.floor(random() * SNIPPETS.length)];
+  } else if (roll < 0.8) {
+    from = Math.floor(random() * text.length);
+    to = Math.min(text.length, from + 1 + Math.floor(random() * 24));
+    insert = "";
+  } else {
+    from = Math.floor(random() * text.length);
+    to = Math.min(text.length, from + 1 + Math.floor(random() * 12));
+    insert = SNIPPETS[Math.floor(random() * SNIPPETS.length)];
+  }
+  return {
+    change: makeChange(from, to, insert),
+    newText: text.slice(0, from) + insert + text.slice(to),
+    from,
+    to,
+    insert,
+  };
+}
+
 describe("incremental equivalence — updateDoc ≡ full reparse", () => {
   for (let d = 0; d < BASE_DOCS.length; d++) {
     it(`holds under 200 chained random edits (doc ${d})`, { timeout: 30_000 }, () => {
@@ -190,30 +232,8 @@ describe("incremental equivalence — updateDoc ≡ full reparse", () => {
       let doc = parse(text);
 
       for (let step = 0; step < 200; step++) {
-        const roll = random();
-        let from: number;
-        let to: number;
-        let insert: string;
-        if (roll < 0.5 || text.length === 0) {
-          // Insert a snippet at a random offset.
-          from = Math.floor(random() * (text.length + 1));
-          to = from;
-          insert = SNIPPETS[Math.floor(random() * SNIPPETS.length)];
-        } else if (roll < 0.8) {
-          // Delete a random small range.
-          from = Math.floor(random() * text.length);
-          to = Math.min(text.length, from + 1 + Math.floor(random() * 24));
-          insert = "";
-        } else {
-          // Replace a range with a snippet.
-          from = Math.floor(random() * text.length);
-          to = Math.min(text.length, from + 1 + Math.floor(random() * 12));
-          insert = SNIPPETS[Math.floor(random() * SNIPPETS.length)];
-        }
-
-        const change = makeChange(from, to, insert);
-        const newText = text.slice(0, from) + insert + text.slice(to);
-        const result = updateDoc(doc, change, newText, OPTS);
+        const { change, newText, from, to, insert } = randomEdit(text, random);
+        const result = updateDoc(doc, change, stringDoc(newText), OPTS);
         expect(result.stale, `step ${step}: stale with constant clock`).toBe(false);
 
         const full = parse(newText);
@@ -229,6 +249,27 @@ describe("incremental equivalence — updateDoc ≡ full reparse", () => {
       }
     });
   }
+
+  // Region-slice stress: the incremental path now feeds the scanner only
+  // [0, anchor + margin) instead of the whole document, so a splice whose
+  // scanner needed more than the slice would diverge from the full parse. Many
+  // seeds over the large splice-exercising docs make that boundary get hit.
+  it("region-slice equivalence over many seeds (fuzz)", { timeout: 60_000 }, () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const random = rng(50_000 + seed);
+      let text = BASE_DOCS[2 + (seed % 2)]; // docs 2 & 3 take the splice path
+      let doc = parse(text);
+      for (let step = 0; step < 80; step++) {
+        const { change, newText } = randomEdit(text, random);
+        const result = updateDoc(doc, change, stringDoc(newText), OPTS);
+        if (result.stale) break; // constant clock shouldn't abort, but be safe
+        expectDocsEqual(result.doc, parse(newText), `seed ${seed} step ${step}`);
+        assertTotalCoverage(result.doc);
+        text = newText;
+        doc = result.doc;
+      }
+    }
+  });
 });
 
 describe("incremental — stale fallback", () => {
@@ -246,7 +287,7 @@ describe("incremental — stale fallback", () => {
     const at = text.indexOf("Hello");
     const change = makeChange(at, at, insert);
     const newText = text.slice(0, at) + insert + text.slice(at);
-    const result = updateDoc(doc, change, newText, { now: abortNow });
+    const result = updateDoc(doc, change, stringDoc(newText), { now: abortNow });
     expect(result.stale).toBe(true);
     expect(result.doc.length).toBe(newText.length);
     // Coverage of a distorted tree must still be sorted and tiling.
