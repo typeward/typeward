@@ -16,7 +16,8 @@
       "identifier": "fs:allow-read-file",
       "allow": [
         { "path": "$DOCUMENT/Typeward/**" },
-        { "path": "$RESOURCE/texlive-wasm/**" }
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
       ]
     },
     {
@@ -47,14 +48,16 @@
       "identifier": "fs:allow-read-dir",
       "allow": [
         { "path": "$DOCUMENT/Typeward/**" },
-        { "path": "$RESOURCE/texlive-wasm/**" }
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
       ]
     },
     {
       "identifier": "fs:allow-stat",
       "allow": [
         { "path": "$DOCUMENT/Typeward/**" },
-        { "path": "$RESOURCE/texlive-wasm/**" }
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
       ]
     },
     {
@@ -73,7 +76,8 @@
       "identifier": "fs:allow-exists",
       "allow": [
         { "path": "$DOCUMENT/Typeward/**" },
-        { "path": "$RESOURCE/texlive-wasm/**" }
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
       ]
     },
     "dialog:default",

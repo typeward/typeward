@@ -169,6 +169,11 @@ jobs:
             runner: ubuntu-24.04
           - os: windows
             runner: windows-latest
+          # macOS-only Rust (install_macos_menu, RunEvent::Opened / open_with)
+          # never compiled in per-PR CI before, so a macOS break surfaced only at
+          # release time. This leg compiles + tests it on every PR.
+          - os: macos
+            runner: macos-latest
     steps:
       - name: Checkout app
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1

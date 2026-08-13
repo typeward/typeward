@@ -12,8 +12,32 @@ const ENGINE_BASE_URL = "/texlive-wasm";
 
 /** The TeX Live tree, by contrast, is read lazily off disk through TauriFS
  * (`bundle.resources`) rather than the webview origin — it is far too large to
- * ship through the bundle graph. Path is relative to the Tauri resource dir. */
-const TEXMF_ROOT = "texlive-wasm/texmf";
+ * ship through the bundle graph. Bundled resources land under
+ * `<resource>/resources/...` (per `bundle.resources`), while a dev-tree download
+ * (`npx texlive-wasm download-assets ... ./src-tauri/resources/texlive-wasm`)
+ * resolves as `texlive-wasm/...` — so probe both candidates, the same tolerant
+ * pattern templates.rs uses for the built-in templates. */
+const TEXMF_CANDIDATES = ["texlive-wasm/texmf", "resources/texlive-wasm/texmf"];
+let texmfRootPromise: Promise<string | null> | null = null;
+
+/** The first TDS candidate that actually exists under the resource dir, or null
+ * if the tree wasn't bundled. Cached — the assets ship with the app. */
+async function resolveTexmfRoot(): Promise<string | null> {
+  if (!texmfRootPromise) {
+    texmfRootPromise = (async () => {
+      const { exists, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+      for (const root of TEXMF_CANDIDATES) {
+        try {
+          if (await exists(root, { baseDir: BaseDirectory.Resource })) return root;
+        } catch {
+          // try the next candidate
+        }
+      }
+      return null;
+    })();
+  }
+  return texmfRootPromise;
+}
 
 /** Engines the mobile compile path can use. `pdflatex` is required; the rest
  * are only needed by documents that cite, index, or use biblatex. */
@@ -73,9 +97,10 @@ async function engineAvailable(id: WasmEngine): Promise<boolean> {
 
 async function texmfAvailable(): Promise<boolean> {
   try {
-    const { exists, readDir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
-    if (!(await exists(TEXMF_ROOT, { baseDir: BaseDirectory.Resource }))) return false;
-    const entries = await readDir(TEXMF_ROOT, { baseDir: BaseDirectory.Resource });
+    const root = await resolveTexmfRoot();
+    if (!root) return false;
+    const { readDir, BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const entries = await readDir(root, { baseDir: BaseDirectory.Resource });
     return entries.some((e) => e.isDirectory && e.name === "tex");
   } catch {
     return false;
@@ -148,8 +173,9 @@ export function getEngineBundle(): Promise<EngineBundle> {
     const { createEngine } = await import("@typeward/texlive-wasm");
     const { createTauriFs } = await import("@typeward/texlive-wasm/tauri");
     const { BaseDirectory } = await import("@tauri-apps/plugin-fs");
+    const texmfRoot = (await resolveTexmfRoot()) ?? TEXMF_CANDIDATES[0];
     const vfs: VfsBackend[] = [
-      await createTauriFs({ texmfRoot: TEXMF_ROOT, baseDir: BaseDirectory.Resource }),
+      await createTauriFs({ texmfRoot, baseDir: BaseDirectory.Resource }),
     ];
     const engineConfig = (id: EngineId): EngineConfig => ({
       enginePath: enginePathFor(id as WasmEngine),
