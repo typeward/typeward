@@ -87,7 +87,7 @@ lands. Those are what these measure.
 | ---------------------------------- | --------------------------- | --------------- | ---------------------- |
 | Open to an editable buffer         | ~55 ms                      | ~1.1 s          | ~1.6 s                 |
 | First `\cite` / `\ref` completion  | ~0.4 ms (1287 candidates)   | ~25 ms          | ~5–120 ms              |
-| Switch to a chapter tab            | ~9 ms                       | ~1 ms           | ~23 ms                 |
+| Switch to a chapter tab            | ~1 ms                       | ~1 ms           | ~23 ms                 |
 | Reading position after a recompile | content-anchored, 0 drift   | not measured    | raw pixel offset       |
 
 - **Opening** hands you a live, editable buffer in tens of milliseconds — the
@@ -103,10 +103,11 @@ lands. Those are what these measure.
   language-server or extension round-trip.
 - **Tab switching** keeps several files' editors mounted at once and just shows
   the active one, so returning to an already-open file never rebuilds the
-  editor. A normal chapter switches in ~9 ms; even the worst case — a single
-  50,000-line `.tex` — switches in ~9 ms (it was ~30 ms before the editor pool).
-  That beats LaTeX Workshop (~30–40 ms) and trails only TeXstudio's native
-  in-memory widgets (~1–5 ms).
+  editor. A normal chapter switches in ~1 ms and even the worst case — a single
+  50,000-line `.tex` — in ~9 ms (both were ~9 ms and ~30 ms before the editor
+  pool). That ties TeXstudio's native in-memory widgets on a normal file, stays
+  far ahead of LaTeX Workshop (~23–40 ms), and trails TeXstudio only on the
+  50,000-line file — where ~9 ms is still one frame, imperceptibly instant.
 - **Reading position** is the clearest preview win. After a build that
   repaginated the document, Typeward puts you back on the same *content* — it
   records the cursor's line via SyncTeX and scrolls the new PDF there — instead
