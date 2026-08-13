@@ -8,7 +8,7 @@
 //! last 1000 entries so the log doesn't grow without limit.
 
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -144,12 +144,14 @@ pub fn read_all_events() -> Result<Vec<Event>, String> {
 /// `Err` for an undecodable line, and stopping there (the former
 /// `map_while(Result::ok)`) hid every event after it — including the newest.
 fn read_events_from(path: &std::path::Path) -> std::io::Result<Vec<Event>> {
-    let f = fs::File::open(path)?;
-    let reader = BufReader::new(f);
-    Ok(reader
+    // Lossy-decode the whole file so a non-UTF-8 line (a partial write from a
+    // prior crash) is tolerated, not treated as end-of-file — stopping there
+    // hid every event after it, including the newest. `fs::read` still
+    // propagates a real I/O error; only the UTF-8 decoding is lossy.
+    let content = String::from_utf8_lossy(&fs::read(path)?).into_owned();
+    Ok(content
         .lines()
-        .filter_map(Result::ok)
-        .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
+        .filter_map(|l| serde_json::from_str::<Event>(l).ok())
         .collect())
 }
 
@@ -181,7 +183,13 @@ pub async fn read_telemetry_log() -> Result<String, String> {
         if !path.exists() {
             return Ok(String::new());
         }
-        fs::read_to_string(&path).map_err(|e| e.to_string())
+        // Lossy-decode rather than read_to_string: one non-UTF-8 byte (a partial
+        // write from a prior crash) would otherwise fail the WHOLE export with
+        // InvalidData, and since trim() only rewrites past MAX_ENTRIES the
+        // corrupt line can persist, breaking every future export. U+FFFD-replace
+        // the bad bytes so the user still gets the full log to attach.
+        let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -218,12 +226,11 @@ fn append(event: &Event) -> std::io::Result<()> {
 }
 
 fn trim(path: &std::path::Path) -> std::io::Result<()> {
-    let f = fs::File::open(path)?;
-    let reader = BufReader::new(f);
-    // Skip a corrupt/non-UTF-8 line rather than stopping at it (map_while would
-    // drop every line after the first bad one, then rewrite the log without
-    // them — silently discarding the newest events trim is meant to keep).
-    let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
+    // Lossy-decode so a corrupt/non-UTF-8 line doesn't end the read: the former
+    // map_while dropped every line after the first bad one, then rewrote the log
+    // without them — silently discarding the newest events trim exists to keep.
+    let content = String::from_utf8_lossy(&fs::read(path)?).into_owned();
+    let lines: Vec<&str> = content.lines().collect();
     if lines.len() <= MAX_ENTRIES {
         return Ok(());
     }

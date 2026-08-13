@@ -671,7 +671,7 @@ describe("SyncEngine sync-state load", () => {
     // These tests override the fs mocks; restore the factory defaults for the
     // rest of the suite (clearAllMocks resets calls, not implementations).
     vi.mocked(exists).mockImplementation(
-      async (p: string) => !String(p).includes("new-from-remote"),
+      async (p: string | URL) => !String(p).includes("new-from-remote"),
     );
     vi.mocked(readTextFile).mockImplementation(async () => "");
   });
@@ -681,7 +681,7 @@ describe("SyncEngine sync-state load", () => {
     // must be preserved, not laundered into an empty (whole-project re-sync)
     // state.
     vi.mocked(exists).mockImplementation(async () => true);
-    vi.mocked(readTextFile).mockImplementation(async (p: string) => {
+    vi.mocked(readTextFile).mockImplementation(async (p: string | URL) => {
       if (String(p).includes("sync-state")) throw new Error("EIO: transient");
       return "";
     });
@@ -701,9 +701,32 @@ describe("SyncEngine sync-state load", () => {
     await engine.stop();
   });
 
+  it("does not start when an existing cursor fails to read", async () => {
+    // The cursor is the other half of the sync baseline: an undefined cursor
+    // makes the poll-and-diff provider emit zero deletions, resurrecting
+    // remotely-deleted files. An existing-but-unreadable cursor must back out,
+    // not launder to undefined.
+    vi.mocked(exists).mockImplementation(async () => true);
+    vi.mocked(readTextFile).mockImplementation(async (p: string | URL) => {
+      if (String(p).includes("cursor")) throw new Error("EIO: transient");
+      return "";
+    });
+    const provider = makeProvider([{ changes: [], nextCursor: "c0" }]);
+    const engine = makeEngine(provider);
+    await engine.start();
+
+    expect(["error", "offline"]).toContain(
+      getSyncStatus(PROVIDER_ID, PROJECT_ID).phase,
+    );
+    engine.queuePush(["a.tex"]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(provider.uploadFile).not.toHaveBeenCalled();
+    await engine.stop();
+  });
+
   it("also refuses to start on a corrupt (unparseable) existing manifest", async () => {
     vi.mocked(exists).mockImplementation(async () => true);
-    vi.mocked(readTextFile).mockImplementation(async (p: string) =>
+    vi.mocked(readTextFile).mockImplementation(async (p: string | URL) =>
       String(p).includes("sync-state") ? "{ not json" : "",
     );
     const provider = makeProvider([{ changes: [], nextCursor: "c0" }]);
@@ -717,7 +740,7 @@ describe("SyncEngine sync-state load", () => {
   });
 
   it("starts fresh (empty state) when the manifest is simply absent", async () => {
-    vi.mocked(exists).mockImplementation(async (p: string) =>
+    vi.mocked(exists).mockImplementation(async (p: string | URL) =>
       String(p).includes("sync-state") ? false : true,
     );
     vi.mocked(readTextFile).mockImplementation(async () => "");

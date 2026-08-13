@@ -192,17 +192,22 @@ export class SyncEngine {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    await this.ensureCursorLoaded();
     try {
+      // Both halves of the sync baseline (cursor + sync-state manifest) must
+      // load from disk, or NOT start — an existing-but-unreadable cursor or
+      // manifest that gets laundered into a clean slate forces a destructive
+      // whole-project re-sync (an undefined cursor makes a poll-and-diff
+      // provider emit zero deletions, resurrecting remotely-deleted files; an
+      // empty manifest drops conflict detection).
+      await this.ensureCursorLoaded();
       await this.ensureSyncStateLoaded();
     } catch (err) {
-      // Reading an existing sync-state manifest failed. Do NOT start on a wiped
-      // baseline — back out (clearing `running` so a later start() can retry on
-      // project reopen / re-instantiation) and surface the error on the badge.
+      // Back out (clearing `running` so a later start() can retry on project
+      // reopen / re-instantiation) and surface the error on the badge.
       this.running = false;
       recordError(
         "cloud-sync",
-        `sync-state load failed for ${this.opts.projectId}`,
+        `sync baseline load failed for ${this.opts.projectId}`,
         err,
       );
       this.reportPassFailure(err);
@@ -740,11 +745,17 @@ export class SyncEngine {
   private async ensureCursorLoaded(): Promise<void> {
     if (this.cursor !== undefined) return;
     const path = cursorPathForCacheRoot(this.cacheRoot(), this.opts.providerId);
-    try {
-      this.cursor = (await readTextFile(path)).trim() || undefined;
-    } catch {
+    // A missing cursor is a first run (undefined = full enumerate). But an
+    // EXISTING cursor that fails to read must NOT be laundered into undefined:
+    // a poll-and-diff provider derives deletions only from the prior snapshot,
+    // so an undefined cursor emits zero "removed" changes and resurrects
+    // remotely-deleted files. Propagate so start() backs out and retries —
+    // the same not-found-vs-read-failure split as ensureSyncStateLoaded.
+    if (!(await exists(path))) {
       this.cursor = undefined;
+      return;
     }
+    this.cursor = (await readTextFile(path)).trim() || undefined;
   }
 
   private async persistCursor(value: string): Promise<void> {
