@@ -10,11 +10,12 @@ describe("LatexAdapter", () => {
     expect(sync?.group).toBe("Navigation");
   });
 
-  it("registers the compile, forward-search, chapter-draft, and rename commands", () => {
+  it("registers the compile, forward-search, chapter-draft, rename, and find-refs commands", () => {
     const ids = LatexAdapter.commands.map((c) => c.id).sort();
     expect(ids).toEqual([
       "latex.compile",
       "latex.draftChapter",
+      "latex.findReferences",
       "latex.renameLabel",
       "latex.syncForward",
     ]);

@@ -12,7 +12,7 @@ import {
   runSyncForward,
 } from "~/commands/compile-runner";
 import { buildOptionsWire, effectiveBuild } from "~/adapters/latex/build-config";
-import { requestRenameLabel } from "~/commands/palette-store";
+import { requestFindReferences, requestRenameLabel } from "~/commands/palette-store";
 
 /**
  * Shell-escape is dangerous (arbitrary program execution during compile), so
@@ -108,6 +108,17 @@ const commands: EditorCommand[] = [
     when: () => true,
     run: () => {
       requestRenameLabel();
+    },
+  },
+  {
+    id: "latex.findReferences",
+    title: "Find references",
+    subtitle: "List every \\label / \\ref of the key under the cursor across the project",
+    group: "Refactor",
+    scope: "editor",
+    when: () => true,
+    run: () => {
+      requestFindReferences();
     },
   },
 ];

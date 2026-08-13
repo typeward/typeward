@@ -60,6 +60,10 @@ const [requestSaveTemplate, setRequestSaveTemplateInternal] = createSignal(false
  *  command; RenameLabelDialog (App root) reads the cursor + drives the rename. */
 const [requestRenameLabelSignal, setRequestRenameLabelInternal] = createSignal(0);
 
+/** "Open the find-references list" intent, raised by `latex.findReferences`;
+ *  FindReferencesDialog (App root) reads the cursor + lists every occurrence. */
+const [requestFindReferencesSignal, setRequestFindReferencesInternal] = createSignal(0);
+
 /**
  * "Please open the History sidebar tab" intent. Raised by the
  * `core.fileHistory` command; the editor shell owns the sidebar tab state and
@@ -124,6 +128,7 @@ export const recentCommandIds_ = recentCommandIds;
 export const requestNewProject_ = requestNewProject;
 export const requestSaveTemplate_ = requestSaveTemplate;
 export const requestRenameLabel_ = requestRenameLabelSignal;
+export const requestFindReferences_ = requestFindReferencesSignal;
 export const requestHistoryPanel_ = requestHistoryPanel;
 export const requestUpdateDialog_ = requestUpdateDialog;
 export const requestAiAction_ = requestAiAction;
@@ -196,6 +201,9 @@ export const setRequestSaveTemplate = (v: boolean) =>
  *  re-trigger even without an intervening close). */
 export const requestRenameLabel = () =>
   setRequestRenameLabelInternal((n) => n + 1);
+/** Bump to open the find-references list. */
+export const requestFindReferences = () =>
+  setRequestFindReferencesInternal((n) => n + 1);
 
 export const setRequestHistoryPanel = (v: boolean) =>
   setRequestHistoryPanelInternal(v);

@@ -27,6 +27,7 @@ import {
 } from "~/commands/keyboard";
 import {
   requestAiAction_,
+  requestFindReferences_,
   requestRenameLabel_,
   requestSaveTemplate_,
   requestUpdateDialog_,
@@ -56,6 +57,11 @@ const SaveTemplateDialog = lazy(() =>
 const RenameLabelDialog = lazy(() =>
   import("~/components/editor/RenameLabelDialog").then((m) => ({
     default: m.RenameLabelDialog,
+  })),
+);
+const FindReferencesDialog = lazy(() =>
+  import("~/components/editor/FindReferencesDialog").then((m) => ({
+    default: m.FindReferencesDialog,
   })),
 );
 // Lazy like the others — the updater plugin JS and this dialog's chunk stay
@@ -262,6 +268,10 @@ const AppShell: Component<{ children?: any }> = (props) => {
   createEffect(() => {
     if (requestRenameLabel_()) setRenameLabelTouched(true);
   });
+  const [findReferencesTouched, setFindReferencesTouched] = createSignal(false);
+  createEffect(() => {
+    if (requestFindReferences_()) setFindReferencesTouched(true);
+  });
 
   let cancelBootUpdateCheck: (() => void) | undefined;
   onMount(() => {
@@ -292,6 +302,11 @@ const AppShell: Component<{ children?: any }> = (props) => {
       <Show when={renameLabelTouched()}>
         <Suspense>
           <RenameLabelDialog />
+        </Suspense>
+      </Show>
+      <Show when={findReferencesTouched()}>
+        <Suspense>
+          <FindReferencesDialog />
         </Suspense>
       </Show>
       <Show when={updateDialogTouched()}>
