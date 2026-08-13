@@ -101,24 +101,23 @@ lands. Those are what these measure.
   synchronously — so the list appears in well under a millisecond and holds every
   candidate rather than a truncated page. The rivals answer over an asynchronous
   language-server or extension round-trip.
-- **Tab switching** is where Typeward sits in the middle: faster than LaTeX
-  Workshop, slower than TeXstudio, which holds every open file as a native
-  in-memory widget. Typeward rebuilds its editor view per tab so each file gets
-  a clean language-server session, and a single very large file — tens of
-  thousands of lines in one `.tex` — is its slowest case and the one leg it
-  clearly loses.
+- **Tab switching** keeps several files' editors mounted at once and just shows
+  the active one, so returning to an already-open file never rebuilds the
+  editor. A normal chapter switches in ~9 ms; even the worst case — a single
+  50,000-line `.tex` — switches in ~9 ms (it was ~30 ms before the editor pool).
+  That beats LaTeX Workshop (~30–40 ms) and trails only TeXstudio's native
+  in-memory widgets (~1–5 ms).
 - **Reading position** is the clearest preview win. After a build that
   repaginated the document, Typeward puts you back on the same *content* — it
   records the cursor's line via SyncTeX and scrolls the new PDF there — instead
   of the same pixel offset. LaTeX Workshop keeps the raw scroll offset, which
   slides off the content the moment the page count changes.
 
-Two things the harness does not yet measure cleanly, named so they aren't taken
-for wins: per-keystroke latency (single-digit milliseconds in all three on a
-normal file) and the very-large-single-file tab switch above. The drivers are
-`bench/drive-ui-baseline.mjs`, `bench/drive-texstudio-baseline.mjs`, and
-`bench/drive-latexworkshop-baseline.mjs`; the `bench` command block in
-`CLAUDE.md` explains how to run them.
+One thing the harness does not yet measure cleanly, named so it isn't taken for
+a win: per-keystroke latency (single-digit milliseconds in all three on a normal
+file). The drivers are `bench/drive-ui-baseline.mjs`,
+`bench/drive-texstudio-baseline.mjs`, and `bench/drive-latexworkshop-baseline.mjs`;
+the `bench` command block in `CLAUDE.md` explains how to run them.
 
 ## Build from source
 

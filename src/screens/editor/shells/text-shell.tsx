@@ -11,6 +11,7 @@ import {
 } from "lucide-solid";
 import type { Component, JSX } from "solid-js";
 import {
+  For,
   Index,
   Match,
   Show,
@@ -67,6 +68,7 @@ import {
   consumeScrollAnchor,
   lastResult,
   openFiles,
+  updateFileContentByPath,
   pdfScrollTarget,
   pdfVersion,
   project,
@@ -1006,6 +1008,50 @@ const CenterPane: Component<{
     return `${f.path}::a${f.adoptGeneration ?? 0}::${lspReady ? "lsp" : "nolsp"}::${grammarOn ? "g1" : "g0"}::${grammarLang}`;
   });
 
+  // --- Editor view pool -----------------------------------------------------
+  // Keep several files' EditorViews mounted at once (display-toggled) so a tab
+  // switch to an already-open file never rebuilds CodeMirror's height-map (the
+  // ~30ms cost on a 50k-line file — the one benchmark leg we lose). Entries are
+  // keyed on editorKey but capped to AT MOST ONE live view per file PATH: an
+  // LSP attach / grammar toggle / adoptGeneration bump mints a new editorKey
+  // for the same path and must SUPERSEDE that path's view, never run two — or
+  // the LSP sees two didOpen for one URI and the crash-restore adopt guard
+  // (which relies on a fresh EditorState) is defeated. Eviction is FIFO with
+  // the active entry protected; insertion order is never shuffled so revealing
+  // a view is a pure CSS display flip (no DOM move, no re-measure).
+  interface PoolEntry {
+    key: string;
+    path: string;
+    relPath: string;
+  }
+  const POOL_LIMIT = 4;
+  const [pool, setPool] = createSignal<PoolEntry[]>([]);
+
+  createEffect(() => {
+    const key = editorKey();
+    const f = activeFile();
+    if (!key || !f) return;
+    setPool((prev) => {
+      if (prev.some((e) => e.key === key)) return prev; // already live, keep order
+      const next = prev.filter((e) => e.path !== f.path); // supersede same path
+      next.push({ key, path: f.path, relPath: f.relPath });
+      while (next.length > POOL_LIMIT) {
+        const victim = next.findIndex((e) => e.key !== key);
+        if (victim < 0) break;
+        next.splice(victim, 1);
+      }
+      return next;
+    });
+  });
+
+  // Drop a view when its file's tab closes (openFiles no longer lists it).
+  createEffect(() => {
+    const open = new Set(openFiles().map((f) => f.path));
+    setPool((prev) =>
+      prev.some((e) => !open.has(e.path)) ? prev.filter((e) => open.has(e.path)) : prev,
+    );
+  });
+
   // Closing a dirty buffer silently discards it (the autosave snapshot only
   // resurfaces on the next project open), so any close that drops unsaved work
   // funnels through one confirm. Falls back to window.confirm when the Tauri
@@ -1233,133 +1279,175 @@ const CenterPane: Component<{
         onContextMenu={onEditorContextMenu}
       >
         <Show
-          when={editorKey()}
-          keyed
+          when={pool().length > 0}
           fallback={
             <div class="flex h-full items-center justify-center text-sm text-fg-3">
               Open a file from the sidebar.
             </div>
           }
         >
-          {(_key) => {
-            const f = activeFile()!;
-            const lang = languageForFile(f.relPath);
-            const lspLang = lspLanguageForFile(f.relPath);
-            const lspSession = lspLang ? findSession(lspLang) : undefined;
-            const extras = lspSession
-              ? lspSession.document({
-                  uri: pathToFileUri(f.path),
-                  languageId: lang,
-                }) ?? []
-              : [];
-            const grammarOn = grammarActive();
-            const extrasList = Array.isArray(extras) ? extras : [extras];
-            // Local \ref/\cite completion from the project index. When texlab
-            // owns the editor it composes the source into its own override
-            // (cm6.ts); here it covers the texlab-absent case for LaTeX files
-            // so completion works with no language server installed.
-            if (lang === "latex" && !lspSession) {
-              extrasList.push(refCiteCompletionExtension());
-              // Undefined-reference + duplicate-label warnings from the project
-              // index. Only when texlab is absent — it ships its own.
-              extrasList.push(refDiagnosticsExtension(f.relPath));
-            }
-            // Go-to-definition for \ref/\cite from the project index (Mod+click
-            // or F12) — index-based, so it works with or without texlab and
-            // reaches labels defined in other chapter files.
-            if (lang === "latex") {
-              extrasList.push(refCiteGotoExtension(f.relPath));
-            }
-            const grammarExt = grammarOn
-              ? [
-                  harperLinter({
-                    syntax: grammarSyntaxForLanguage(lang),
-                    file: f.relPath,
-                    dialect: asGrammarDialect(integrationsSettings().grammar.language),
-                  }),
-                ]
-              : [];
-            const reviewExt = reviewExtension({
-              // Close over the file captured at mount, not the global active
-              // file at debounce-fire time: the editor is keyed per file, so
-              // this closure always belongs to the file it was created for.
-              onOffsetsChanged: (updates) =>
-                updateThreadOffsets(
-                  f.relPath,
-                  updates.map((u) => ({
-                    id: u.id,
-                    fromOffset: u.from,
-                    toOffset: u.to,
-                    anchorText: u.anchorText,
-                  })),
-                ),
-              onGutterClick: (threadId: string) =>
-                requestThreadPanel(threadId),
-            });
-            // The review store is the single source of truth for anchors; the
-            // CM decorations are derived. Seed on ready and re-derive on any
-            // store change (add / resolve / reopen / delete / re-anchor) so the
-            // gutter never shows a stale open/resolved state after a mutation.
-            const [reviewView, setReviewView] = createSignal<EditorView | null>(
-              null,
-            );
-            createEffect(() => {
-              const v = reviewView();
-              const threads = allThreads();
-              if (!v) return;
-              syncThreadsToView(v, threads, f.relPath, activeFile()?.content ?? f.content);
-            });
-            // The document surface needs word-processor geometry: no gutter,
-            // no active-line wash, always soft-wrapped. Forced at the prop
-            // level (the compartments already exist) so the user's source-mode
-            // preferences survive untouched underneath.
-            const visualOn = () =>
-              editorSettings().visualModeLatex &&
-              isVisualEligibleFile(f.relPath) &&
-              !visualPaused(f.relPath);
-            return (
-              <CodeMirror
-                value={f.content}
-                onChange={props.onEditorChange}
-                language={lang}
-                fontSize={editorSettings().fontSize}
-                lineHeight={LINE_HEIGHT_VALUES[editorSettings().lineHeight]}
-                lineWrap={visualOn() || editorSettings().lineWrap}
-                lineNumbers={!visualOn() && editorSettings().lineNumbers}
-                highlightActiveLine={
-                  !visualOn() && editorSettings().highlightActiveLine
+          <div class="relative h-full w-full">
+            <For each={pool()}>
+              {(entry) => {
+                const lang = languageForFile(entry.relPath);
+                const lspLang = lspLanguageForFile(entry.relPath);
+                const lspSession = lspLang ? findSession(lspLang) : undefined;
+                const extras = lspSession
+                  ? lspSession.document({
+                      uri: pathToFileUri(entry.path),
+                      languageId: lang,
+                    }) ?? []
+                  : [];
+                const extrasList = Array.isArray(extras) ? extras : [extras];
+                // Local \ref/\cite completion from the project index. When
+                // texlab owns the editor it composes the source into its own
+                // override (cm6.ts); here it covers the texlab-absent case.
+                if (lang === "latex" && !lspSession) {
+                  extrasList.push(refCiteCompletionExtension());
+                  // Undefined-reference + duplicate-label warnings; only when
+                  // texlab is absent — it ships its own.
+                  extrasList.push(refDiagnosticsExtension(entry.relPath));
                 }
-                autocomplete={editorSettings().autocomplete}
-                bracketMatching={editorSettings().bracketMatching}
-                autoCloseBrackets={editorSettings().autoCloseBrackets}
-                tabSize={editorSettings().tabSize}
-                vimMode={editorSettings().vimMode}
-                visualMode={visualOn()}
-                onVisualPause={() => markVisualPaused(f.relPath)}
-                onVisualPopover={requestVisualPopover}
-                visualResolveAsset={(rel) => {
-                  // \includegraphics paths resolve against the project root
-                  // (the compiler's working directory).
-                  const root = f.path.slice(
-                    0,
-                    Math.max(0, f.path.length - f.relPath.length),
-                  );
-                  return resolveProjectAsset(root, rel);
-                }}
-                lspActive={!!lspSession}
-                stashKey={f.path}
-                onReady={(v) => {
-                  // Undo, cursor, and scroll are preserved across the keyed
-                  // remount (LSP attach, grammar toggle) and multi-file tab
-                  // switches by CodeMirror's per-path state stash (stashKey).
-                  setReviewView(v);
-                  perfMeasure("tab-switch-to-editor", "tab-switch", f.relPath);
-                  perfMeasure("open-to-editor", "project-open", f.relPath, 60_000);
-                }}
-                extraExtensions={[...extrasList, ...grammarExt, ...reviewExt]}
-              />
-            );
-          }}
+                // Go-to-definition for \ref/\cite from the project index — works
+                // with or without texlab, reaches labels in other chapter files.
+                if (lang === "latex") {
+                  extrasList.push(refCiteGotoExtension(entry.relPath));
+                }
+                // Read once per pooled view: a grammar toggle / LSP attach mints
+                // a new editorKey, so a fresh entry (with fresh extras) replaces
+                // this one — computing at entry creation is correct.
+                const grammarExt = grammarActive()
+                  ? [
+                      harperLinter({
+                        syntax: grammarSyntaxForLanguage(lang),
+                        file: entry.relPath,
+                        dialect: asGrammarDialect(
+                          integrationsSettings().grammar.language,
+                        ),
+                      }),
+                    ]
+                  : [];
+                const reviewExt = reviewExtension({
+                  // Bound to THIS pooled view's own file — several views are
+                  // live, so a background debounced flush must touch only its
+                  // own file's threads.
+                  onOffsetsChanged: (updates) =>
+                    updateThreadOffsets(
+                      entry.relPath,
+                      updates.map((u) => ({
+                        id: u.id,
+                        fromOffset: u.from,
+                        toOffset: u.to,
+                        anchorText: u.anchorText,
+                      })),
+                    ),
+                  onGutterClick: (threadId: string) =>
+                    requestThreadPanel(threadId),
+                });
+                const isActive = () => entry.key === editorKey();
+                // This entry's OWN live content (a memo, so a keystroke in the
+                // active file doesn't re-run every pooled view's review effect).
+                const fileContent = createMemo(
+                  () =>
+                    openFiles().find((of) => of.path === entry.path)?.content ??
+                    "",
+                );
+                const [reviewView, setReviewView] =
+                  createSignal<EditorView | null>(null);
+                // The review store is the single source of truth for anchors;
+                // the CM decorations are derived. Seed on ready and re-derive on
+                // any store change so the gutter never shows a stale state.
+                createEffect(() => {
+                  const v = reviewView();
+                  const threads = allThreads();
+                  if (!v) return;
+                  syncThreadsToView(v, threads, entry.relPath, fileContent());
+                });
+                const visualOn = () =>
+                  editorSettings().visualModeLatex &&
+                  isVisualEligibleFile(entry.relPath) &&
+                  !visualPaused(entry.relPath);
+                // A fast-path reveal (an already-built view shown again) fires no
+                // onReady, so stamp the tab-switch measure when this entry
+                // becomes active. perfMeasure dedups per mark instance.
+                createEffect(
+                  on(
+                    isActive,
+                    (active) => {
+                      if (active && reviewView()) {
+                        perfMeasure(
+                          "tab-switch-to-editor",
+                          "tab-switch",
+                          entry.relPath,
+                        );
+                      }
+                    },
+                    { defer: true },
+                  ),
+                );
+                return (
+                  <div
+                    class="absolute inset-0"
+                    style={{ display: isActive() ? undefined : "none" }}
+                  >
+                    <CodeMirror
+                      value={fileContent()}
+                      active={isActive()}
+                      onChange={(text) =>
+                        updateFileContentByPath(entry.path, text)
+                      }
+                      language={lang}
+                      fontSize={editorSettings().fontSize}
+                      lineHeight={LINE_HEIGHT_VALUES[editorSettings().lineHeight]}
+                      lineWrap={visualOn() || editorSettings().lineWrap}
+                      lineNumbers={!visualOn() && editorSettings().lineNumbers}
+                      highlightActiveLine={
+                        !visualOn() && editorSettings().highlightActiveLine
+                      }
+                      autocomplete={editorSettings().autocomplete}
+                      bracketMatching={editorSettings().bracketMatching}
+                      autoCloseBrackets={editorSettings().autoCloseBrackets}
+                      tabSize={editorSettings().tabSize}
+                      vimMode={editorSettings().vimMode}
+                      visualMode={visualOn()}
+                      onVisualPause={() => markVisualPaused(entry.relPath)}
+                      onVisualPopover={requestVisualPopover}
+                      visualResolveAsset={(rel) => {
+                        // \includegraphics paths resolve against the project
+                        // root (the compiler's working directory).
+                        const root = entry.path.slice(
+                          0,
+                          Math.max(0, entry.path.length - entry.relPath.length),
+                        );
+                        return resolveProjectAsset(root, rel);
+                      }}
+                      lspActive={!!lspSession}
+                      stashKey={entry.path}
+                      onReady={(v) => {
+                        setReviewView(v);
+                        perfMeasure(
+                          "tab-switch-to-editor",
+                          "tab-switch",
+                          entry.relPath,
+                        );
+                        perfMeasure(
+                          "open-to-editor",
+                          "project-open",
+                          entry.relPath,
+                          60_000,
+                        );
+                      }}
+                      extraExtensions={[
+                        ...extrasList,
+                        ...grammarExt,
+                        ...reviewExt,
+                      ]}
+                    />
+                  </div>
+                );
+              }}
+            </For>
+          </div>
         </Show>
       </div>
 

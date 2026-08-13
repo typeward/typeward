@@ -222,6 +222,23 @@ function markFileCleanIfUnchanged(path: string, content: string): void {
 }
 
 /**
+ * Update an open file's buffer content by path (marking it dirty), regardless
+ * of which tab is active. The editor pool keeps several files' EditorViews live
+ * at once, so a background view's onChange must write to ITS OWN file — not the
+ * globally-active one (which `updateActiveFile` targets). No-op if the tab was
+ * closed meanwhile or the content is unchanged.
+ */
+function updateFileContentByPath(path: string, content: string): void {
+  setOpenFiles((prev) => {
+    const i = prev.findIndex((f) => f.path === path);
+    if (i < 0 || prev[i].content === content) return prev;
+    const next = prev.slice();
+    next[i] = { ...next[i], content, dirty: true };
+    return next;
+  });
+}
+
+/**
  * Record the disk base hash for an open tab after a successful write, so the
  * save-time conflict guard measures against what actually hit disk. No-op if
  * the tab was closed meanwhile.
@@ -405,4 +422,5 @@ export {
   setLastResult,
   setProject,
   updateActiveFile,
+  updateFileContentByPath,
 };

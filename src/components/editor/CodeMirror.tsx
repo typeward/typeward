@@ -89,6 +89,15 @@ interface CodeMirrorProps {
    * `value` (an out-of-editor content replace mounts fresh). Omit to opt out.
    */
   stashKey?: string;
+  /**
+   * Whether this view is the visible/active one. The editor pool keeps several
+   * views mounted at once (display-toggled) so switching tabs never rebuilds
+   * the height-map; only the active view owns the shared editor handle
+   * (editor-view-store) and feeds the global cursor signals. Defaults to true
+   * for a stand-alone mount. When it flips true (a pooled view is revealed) the
+   * view claims the handle and re-pushes its cursor.
+   */
+  active?: boolean;
 }
 
 /**
@@ -226,6 +235,28 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   // Last string we emitted via onChange. Lets the value-sync effect skip a
   // full doc.toString() when props.value is just our own echo coming back.
   let lastEmitted: string | null = null;
+  // True while a programmatic value-sync dispatch applies store content, so the
+  // updateListener doesn't echo it back as a user edit (marking the file dirty)
+  // nor push it as a cursor move — critical once background pooled views take
+  // external edits.
+  let applyingExternal = false;
+  // Whether this view currently owns the shared active-view handle. Only the
+  // active pooled view feeds the global cursor signals and answers
+  // getActiveEditorView(); a background view stays silent.
+  let selfActive = false;
+
+  // Take ownership of the shared active-view handle and refresh the cursor
+  // signals for the now-visible file. A display-toggle reveal fires no
+  // selection event, so without this the status bar keeps the previous file's
+  // Ln/Col until the caret moves.
+  const claimActiveView = () => {
+    if (!view) return;
+    selfActive = true;
+    setActiveEditorView(view);
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    pushCursor(line.number, head - line.from + 1);
+  };
 
   const langCompartment = new Compartment();
   const lineWrapCompartment = new Compartment();
@@ -374,12 +405,19 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
           metricsExtension(props.fontSize ?? 13, props.lineHeight ?? "1.65"),
         ),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
+          if (update.docChanged && !applyingExternal) {
             const text = update.state.doc.toString();
             lastEmitted = text;
             props.onChange(text);
           }
-          if (update.selectionSet || update.docChanged) {
+          // Only the active view drives the shared cursor signals — a background
+          // pooled view applying an external edit must not clobber the status
+          // bar with a non-visible file's position.
+          if (
+            (update.selectionSet || update.docChanged) &&
+            selfActive &&
+            !applyingExternal
+          ) {
             const pos = update.state.selection.main.head;
             const lineInfo = update.state.doc.lineAt(pos);
             pushCursor(lineInfo.number, pos - lineInfo.from + 1);
@@ -398,7 +436,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
       : EditorState.create({ doc: props.value, extensions });
 
     view = new EditorView({ state, parent });
-    setActiveEditorView(view);
+    // Claim the active handle only when this view is the visible one; a pooled
+    // view pre-warmed in the background must not steal it from the active view.
+    if (props.active ?? true) claimActiveView();
     if (restoring && stashed) {
       // Scroll is DOM state — re-apply after CM6's first layout pass, or the
       // initial measure clobbers it back to the top.
@@ -445,9 +485,29 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
         if (next === lastEmitted) return;
         const current = view.state.doc.toString();
         if (current === next) return;
-        view.dispatch({
-          changes: { from: 0, to: current.length, insert: next },
-        });
+        // Store-driven content replace, not a user edit: flag it so the update
+        // listener doesn't echo it back as a dirty-marking change.
+        applyingExternal = true;
+        try {
+          view.dispatch({
+            changes: { from: 0, to: current.length, insert: next },
+          });
+        } finally {
+          applyingExternal = false;
+        }
+      },
+      { defer: true },
+    ),
+  );
+
+  // Claim the active handle when the pool reveals this view (display toggled
+  // on). Losing active is a no-op — the newly-revealed view claims it.
+  createEffect(
+    on(
+      () => props.active ?? true,
+      (active) => {
+        if (active) claimActiveView();
+        else selfActive = false;
       },
       { defer: true },
     ),

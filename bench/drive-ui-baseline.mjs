@@ -61,7 +61,12 @@ const mouseClickAt = async (x, y) => {
 
 const focusEditor = async (lineIndex = 8) => {
   const box = await c.evaluate(`(() => {
-    const line = document.querySelectorAll(".cm-line")[${lineIndex}] ?? document.querySelector(".cm-line");
+    // The editor pool keeps several CodeMirror views mounted (display-toggled),
+    // so scope to the VISIBLE one — a display:none view has a null offsetParent.
+    const content = [...document.querySelectorAll(".cm-content")].find((el) => el.offsetParent !== null)
+      ?? document.querySelector(".cm-content");
+    const lines = content ? content.querySelectorAll(".cm-line") : [];
+    const line = lines[${lineIndex}] ?? lines[0];
     if (!line) return null;
     line.scrollIntoView({ block: "center" });
     const r = line.getBoundingClientRect();
@@ -114,6 +119,12 @@ for (const ch of new Set([chapterA, chapterB])) {
 }
 const tabA = `chapters/${chapterA}.tex`;
 const tabB = chapterA === chapterB ? "main.tex" : `chapters/${chapterB}.tex`;
+// Prime the alternation from tabB so the first loop iteration (i=0 -> tabA) is a
+// real switch. Otherwise, for the single-chapter corpus where the last-opened
+// tab IS tabA, iteration 0 clicks the already-active tab, stamps no tab-switch
+// mark, and the wait for the perf entry times out.
+if (!(await tabClick(tabB))) throw new Error(`tab not found: ${tabB}`);
+await sleep(400);
 const switches = [];
 for (let i = 0; i < SWITCHES; i++) {
   const name = i % 2 === 0 ? tabA : tabB;
