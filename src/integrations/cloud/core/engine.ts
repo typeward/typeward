@@ -193,7 +193,21 @@ export class SyncEngine {
     if (this.running) return;
     this.running = true;
     await this.ensureCursorLoaded();
-    await this.ensureSyncStateLoaded();
+    try {
+      await this.ensureSyncStateLoaded();
+    } catch (err) {
+      // Reading an existing sync-state manifest failed. Do NOT start on a wiped
+      // baseline — back out (clearing `running` so a later start() can retry on
+      // project reopen / re-instantiation) and surface the error on the badge.
+      this.running = false;
+      recordError(
+        "cloud-sync",
+        `sync-state load failed for ${this.opts.projectId}`,
+        err,
+      );
+      this.reportPassFailure(err);
+      return;
+    }
     // Re-queue any local edits that diverged from sync-state while no engine
     // was running (a push dropped by a project switch, an offline save, or an
     // app quit mid-debounce). Fire-and-forget so it doesn't gate the first poll.
@@ -741,14 +755,30 @@ export class SyncEngine {
   private async ensureSyncStateLoaded(): Promise<void> {
     if (this.syncState) return;
     const path = syncStatePathForCacheRoot(this.cacheRoot(), this.opts.providerId);
-    try {
-      const raw = (await readTextFile(path)).trim();
-      if (!raw) throw new Error("empty sync state");
-      const parsed = JSON.parse(raw) as SyncStateManifest;
-      this.syncState = parsed.version === 1 && parsed.files ? parsed : emptySyncState();
-    } catch {
+    // A missing manifest is a first run — start empty. But a manifest that
+    // EXISTS and fails to read or parse must NOT be laundered into an empty
+    // state: that silently drops the conflict-detection baseline and forces a
+    // whole-project re-sync, which can resurrect a remotely-deleted file or
+    // clobber the local side of a conflict that would otherwise be detected.
+    // Let the failure propagate so the pass aborts and retries next cycle with
+    // the on-disk baseline intact.
+    if (!(await exists(path))) {
       this.syncState = emptySyncState();
+      return;
     }
+    const raw = (await readTextFile(path)).trim();
+    if (!raw) {
+      // Present but empty is degenerate, not a transient failure — first run.
+      this.syncState = emptySyncState();
+      return;
+    }
+    let parsed: SyncStateManifest;
+    try {
+      parsed = JSON.parse(raw) as SyncStateManifest;
+    } catch (e) {
+      throw new Error(`cloud sync-state is unreadable: ${describeIpcError(e)}`);
+    }
+    this.syncState = parsed.version === 1 && parsed.files ? parsed : emptySyncState();
   }
 
   private async persistSyncState(): Promise<void> {

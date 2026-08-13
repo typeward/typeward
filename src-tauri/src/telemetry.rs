@@ -136,11 +136,19 @@ pub fn read_all_events() -> Result<Vec<Event>, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let f = fs::File::open(&path).map_err(|e| e.to_string())?;
+    read_events_from(&path).map_err(|e| e.to_string())
+}
+
+/// Parse every well-formed event line in `path`, oldest first. A corrupt or
+/// non-UTF-8 line is SKIPPED, not treated as end-of-file: `lines()` yields an
+/// `Err` for an undecodable line, and stopping there (the former
+/// `map_while(Result::ok)`) hid every event after it — including the newest.
+fn read_events_from(path: &std::path::Path) -> std::io::Result<Vec<Event>> {
+    let f = fs::File::open(path)?;
     let reader = BufReader::new(f);
     Ok(reader
         .lines()
-        .map_while(Result::ok)
+        .filter_map(Result::ok)
         .filter_map(|l| serde_json::from_str::<Event>(&l).ok())
         .collect())
 }
@@ -212,7 +220,10 @@ fn append(event: &Event) -> std::io::Result<()> {
 fn trim(path: &std::path::Path) -> std::io::Result<()> {
     let f = fs::File::open(path)?;
     let reader = BufReader::new(f);
-    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+    // Skip a corrupt/non-UTF-8 line rather than stopping at it (map_while would
+    // drop every line after the first bad one, then rewrite the log without
+    // them — silently discarding the newest events trim is meant to keep).
+    let lines: Vec<String> = reader.lines().filter_map(Result::ok).collect();
     if lines.len() <= MAX_ENTRIES {
         return Ok(());
     }
@@ -276,5 +287,74 @@ mod tests {
         assert!(content.chars().all(|c| c == 'a'));
         // Result stays valid UTF-8 (would panic here otherwise).
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
+    }
+
+    fn scratch_path(name: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "typeward-telemetry-{}-{}.log",
+            std::process::id(),
+            name
+        ));
+        let _ = fs::remove_file(&p);
+        p
+    }
+
+    fn ev(summary: &str) -> Event {
+        Event {
+            at: "t".into(),
+            kind: "panic".into(),
+            summary: summary.into(),
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn read_skips_a_corrupt_line_and_keeps_later_events() {
+        let path = scratch_path("read-corrupt");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(serde_json::to_string(&ev("first")).unwrap().as_bytes());
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&[0xff, 0xfe, 0x9f]); // non-UTF-8 line
+        bytes.push(b'\n');
+        bytes.extend_from_slice(serde_json::to_string(&ev("third")).unwrap().as_bytes());
+        bytes.push(b'\n');
+        fs::write(&path, &bytes).unwrap();
+
+        let events = read_events_from(&path).unwrap();
+        let summaries: Vec<_> = events.iter().map(|e| e.summary.as_str()).collect();
+        // The event AFTER the corrupt line must survive (map_while dropped it).
+        assert_eq!(summaries, vec!["first", "third"]);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn trim_skips_a_corrupt_line_instead_of_dropping_the_tail() {
+        let path = scratch_path("trim-corrupt");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(serde_json::to_string(&ev("oldest")).unwrap().as_bytes());
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&[0xff, 0xfe]); // corrupt line near the start
+        bytes.push(b'\n');
+        for i in 0..(MAX_ENTRIES + 4) {
+            bytes.extend_from_slice(
+                serde_json::to_string(&ev(&format!("e{i}"))).unwrap().as_bytes(),
+            );
+            bytes.push(b'\n');
+        }
+        fs::write(&path, &bytes).unwrap();
+
+        trim(&path).unwrap();
+
+        let events = read_events_from(&path).unwrap();
+        // Trimmed to the cap, and the NEWEST event survived — the old map_while
+        // stopped at the corrupt line, so trim saw only two lines and never
+        // rewrote, leaving the newest events unbounded and unread.
+        assert!(events.len() <= MAX_ENTRIES);
+        assert_eq!(
+            events.last().unwrap().summary,
+            format!("e{}", MAX_ENTRIES + 3)
+        );
+        let _ = fs::remove_file(&path);
     }
 }

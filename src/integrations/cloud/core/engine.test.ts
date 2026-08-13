@@ -658,3 +658,79 @@ describe("SyncEngine local-wins replay", () => {
     await engine.stop();
   });
 });
+
+describe("SyncEngine sync-state load", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearSyncStatus(PROVIDER_ID, PROJECT_ID);
+    vi.clearAllMocks();
+    // These tests override the fs mocks; restore the factory defaults for the
+    // rest of the suite (clearAllMocks resets calls, not implementations).
+    vi.mocked(exists).mockImplementation(
+      async (p: string) => !String(p).includes("new-from-remote"),
+    );
+    vi.mocked(readTextFile).mockImplementation(async () => "");
+  });
+
+  it("does not start on a wiped baseline when an existing manifest fails to read", async () => {
+    // The manifest exists, but a transient read error hits it — the baseline
+    // must be preserved, not laundered into an empty (whole-project re-sync)
+    // state.
+    vi.mocked(exists).mockImplementation(async () => true);
+    vi.mocked(readTextFile).mockImplementation(async (p: string) => {
+      if (String(p).includes("sync-state")) throw new Error("EIO: transient");
+      return "";
+    });
+    const provider = makeProvider([{ changes: [], nextCursor: "c0" }]);
+    const engine = makeEngine(provider);
+    await engine.start();
+
+    // Backed out with an error/offline badge rather than proceeding.
+    expect(["error", "offline"]).toContain(
+      getSyncStatus(PROVIDER_ID, PROJECT_ID).phase,
+    );
+    // Engine is not running, so a queued push is a no-op — nothing syncs on a
+    // lost baseline.
+    engine.queuePush(["a.tex"]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(provider.uploadFile).not.toHaveBeenCalled();
+    await engine.stop();
+  });
+
+  it("also refuses to start on a corrupt (unparseable) existing manifest", async () => {
+    vi.mocked(exists).mockImplementation(async () => true);
+    vi.mocked(readTextFile).mockImplementation(async (p: string) =>
+      String(p).includes("sync-state") ? "{ not json" : "",
+    );
+    const provider = makeProvider([{ changes: [], nextCursor: "c0" }]);
+    const engine = makeEngine(provider);
+    await engine.start();
+
+    expect(["error", "offline"]).toContain(
+      getSyncStatus(PROVIDER_ID, PROJECT_ID).phase,
+    );
+    await engine.stop();
+  });
+
+  it("starts fresh (empty state) when the manifest is simply absent", async () => {
+    vi.mocked(exists).mockImplementation(async (p: string) =>
+      String(p).includes("sync-state") ? false : true,
+    );
+    vi.mocked(readTextFile).mockImplementation(async () => "");
+    const provider = makeProvider([{ changes: [], nextCursor: "c0" }]);
+    const engine = makeEngine(provider);
+    await engine.start();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(getSyncStatus(PROVIDER_ID, PROJECT_ID).phase).not.toBe("error");
+    // A first-run engine syncs normally.
+    engine.queuePush(["a.tex"]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(provider.uploadFile).toHaveBeenCalledTimes(1);
+    await engine.stop();
+  });
+});
