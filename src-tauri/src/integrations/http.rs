@@ -44,6 +44,23 @@ fn client() -> &'static Client {
     })
 }
 
+/// A no-redirect client for OAuth token POSTs. A token endpoint must never
+/// bounce our request — following a 3xx would re-send the client secret /
+/// refresh token (and the Basic auth header) to the redirect target, even one
+/// on an allowlisted host. The initial code exchange already refuses redirects
+/// (`OutboundRedirect::None`); the refresh POST must match, not ride the shared
+/// allowlist client.
+fn token_client() -> &'static Client {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        outbound_client_builder(OutboundRedirect::None)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("reqwest token client init")
+    })
+}
+
 /// Redirect handling for an outbound client. There is intentionally no
 /// "unscreened" variant — every constructible client either re-validates each
 /// hop against the allowlist, refuses redirects outright, or follows only a
@@ -607,7 +624,7 @@ async fn refresh_oauth_token(
         form.finish()
     };
 
-    let mut builder = client()
+    let mut builder = token_client()
         .post(token_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Accept", "application/json")

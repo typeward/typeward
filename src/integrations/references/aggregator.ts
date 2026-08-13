@@ -13,7 +13,8 @@
  *   3. Per-project libraries stay isolated — different projects can bind
  *      different Zotero collections without cross-contamination.
  *
- * The file is overwritten in full on every refresh. A leading comment
+ * The file is rewritten on every refresh whose result differs from disk (an
+ * identical result is a no-op so the language server doesn't reparse). A leading comment
  * marks it as auto-generated so users don't hand-edit and lose changes.
  */
 
@@ -75,7 +76,16 @@ export async function refreshLibraryBib(project: Project): Promise<RefreshResult
 
   const { bibtex, duplicates } = dedupeBibTex(sources);
 
-  await ipc.writeProjectTextFile(project.rootPath, LIBRARY_REL_PATH, bibtex);
+  // Content-address the write: the language server reparses library.bib on
+  // every on-disk change, so a refresh that produced identical bytes (the
+  // common case — nothing changed in Zotero since last time) must not touch the
+  // file and spuriously invalidate texlab's parse.
+  const existing = await ipc
+    .readProjectTextFile(project.rootPath, LIBRARY_REL_PATH)
+    .catch(() => null);
+  if (existing !== bibtex) {
+    await ipc.writeProjectTextFile(project.rootPath, LIBRARY_REL_PATH, bibtex);
+  }
 
   return {
     providersOk,

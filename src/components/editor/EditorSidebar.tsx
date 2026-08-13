@@ -1016,10 +1016,17 @@ const NamePromptDialog: Component<{
           }
         }}
         placeholder={props.request?.placeholder}
+        aria-invalid={error() !== null}
+        aria-describedby={error() ? "name-prompt-error" : undefined}
         class="glass-inset w-full rounded-md px-2.5 py-2 text-sm text-fg-1 placeholder:text-fg-2 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent-1)]"
       />
       <Show when={error()}>
-        <div class="mt-2 text-xs" style={{ color: "var(--color-err)" }}>
+        <div
+          id="name-prompt-error"
+          role="alert"
+          class="mt-2 text-xs"
+          style={{ color: "var(--color-err)" }}
+        >
           {error()}
         </div>
       </Show>

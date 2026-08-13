@@ -140,4 +140,7 @@ panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"
-strip = true
+# Strip debuginfo but KEEP the symbol table, so shipped-build panic backtraces
+# (and the Rust-side Sentry crash reports) carry function names instead of bare
+# addresses. `strip = true` would drop the symbols too.
+strip = "debuginfo"
