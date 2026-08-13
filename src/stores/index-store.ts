@@ -16,6 +16,7 @@ const EMPTY: ProjectIndexResult = { labels: [], citations: [], truncated: false 
 
 const [projectIndex, setProjectIndex] = createSignal<ProjectIndexResult>(EMPTY);
 const [indexRoot, setIndexRoot] = createSignal<string | null>(null);
+const [indexLoaded_, setIndexLoaded] = createSignal(false);
 
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let inFlight = false;
@@ -26,6 +27,10 @@ export const indexLabels = (): IndexEntry[] => projectIndex().labels;
 /** Citation keys for the active project. */
 export const indexCitations = (): IndexEntry[] => projectIndex().citations;
 export const indexTruncated = (): boolean => projectIndex().truncated;
+/** True once the first scan for the active project has completed — consumers
+ *  that validate against the index (e.g. undefined-reference checks) must wait
+ *  for this so they don't flag every reference while the index is still empty. */
+export const indexLoaded = (): boolean => indexLoaded_();
 
 async function runRefresh(root: string, refresh: boolean): Promise<void> {
   if (inFlight) {
@@ -36,7 +41,10 @@ async function runRefresh(root: string, refresh: boolean): Promise<void> {
   try {
     const result = await ipc.indexProject(root, refresh);
     // Drop a result that landed after the project switched away.
-    if (indexRoot() === root) setProjectIndex(result);
+    if (indexRoot() === root) {
+      setProjectIndex(result);
+      setIndexLoaded(true);
+    }
   } catch (e) {
     recordError("project-index", "failed to index project labels/citations", e);
   } finally {
@@ -52,6 +60,7 @@ async function runRefresh(root: string, refresh: boolean): Promise<void> {
 export function loadProjectIndex(root: string): void {
   setIndexRoot(root);
   setProjectIndex(EMPTY);
+  setIndexLoaded(false);
   void runRefresh(root, false);
 }
 
@@ -60,6 +69,7 @@ export function clearProjectIndex(): void {
   const root = indexRoot();
   setIndexRoot(null);
   setProjectIndex(EMPTY);
+  setIndexLoaded(false);
   if (refreshTimer) clearTimeout(refreshTimer);
   if (root) void ipc.unindexProject(root).catch(() => {});
 }

@@ -156,6 +156,7 @@ import { installSwipeListener } from "~/lib/gestures";
 import { pathToFileUri } from "~/lib/lsp/cm6";
 import { refCiteCompletionExtension } from "~/lib/lsp/ref-cite-completion";
 import { refCiteGotoExtension } from "~/lib/lsp/ref-cite-goto";
+import { refDiagnosticsExtension } from "~/lib/lsp/ref-diagnostics";
 import { anchoredMenuEvent } from "~/lib/menu-position";
 import { createSidebarResize } from "~/lib/sidebar-resize";
 import { findSession } from "~/stores/lsp-store";
@@ -1259,6 +1260,9 @@ const CenterPane: Component<{
             // so completion works with no language server installed.
             if (lang === "latex" && !lspSession) {
               extrasList.push(refCiteCompletionExtension());
+              // Undefined-reference warnings from the project index. Only when
+              // texlab is absent — it ships its own such diagnostics.
+              extrasList.push(refDiagnosticsExtension());
             }
             // Go-to-definition for \ref/\cite from the project index (Mod+click
             // or F12) — index-based, so it works with or without texlab and
