@@ -664,7 +664,7 @@ async fn exchange_code(flow: &PendingFlow, code: &str) -> Result<OauthTokens, Oa
 
     // Don't embed the raw body in the error: a 2xx token response that fails
     // to deserialize contains access/refresh tokens, which would otherwise
-    // leak into the frontend error path and telemetry.log.
+    // leak into the frontend error path.
     let body = crate::integrations::http::read_body_capped(response, MAX_TOKEN_RESPONSE_BYTES)
         .await
         .map_err(|e| OauthError::TokenExchange(e.to_string()))?;

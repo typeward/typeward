@@ -56,7 +56,6 @@ redistributed here in source form. The notable ones and their licenses:
 | Inter, JetBrains Mono (`@fontsource-variable/*`) | SIL Open Font License 1.1 |
 | lucide-solid | ISC |
 | `@typeward/texlive-wasm` (the JS/wasm wrapper package) | MIT |
-| Sentry browser SDK and Rust crate | MIT |
 | `git2` (Rust bindings) | MIT OR Apache-2.0 |
 | libgit2 (C library) | GPL-2.0-only WITH a linking exception |
 
@@ -109,20 +108,6 @@ they are copied into the packaged application, so their notices travel with it.
 Typeward shells out to TeX and Typst toolchains the user installs themselves
 (`latexmk`, `pdflatex`, `typst`, `texlab`, `tinymist`, `synctex`). Those are
 separate programs under their own licenses and are not part of this work.
-
-## Build-time tooling, not distributed
-
-Development and release tooling is not linked into or copied alongside any
-shipped binary, so it does not bear on the license of the distributed work.
-One package is worth naming because it is *not* GPL-compatible:
-
-- **`@sentry/cli`** (and its `@sentry/cli-<platform>` binaries) is
-  **FSL-1.1-MIT** — the Functional Source License, which is source-available
-  with a non-compete restriction, not OSI-approved, and not GPL-compatible
-  until its two-year conversion to MIT. It arrives transitively through the
-  `@sentry/vite-plugin` devDependency and runs only during source-map upload,
-  which is itself opt-in behind `SENTRY_UPLOAD=true`. It is never linked,
-  bundled, or redistributed.
 
 ## Completeness
 

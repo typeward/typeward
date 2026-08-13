@@ -43,15 +43,16 @@ interface CodeMirrorProps {
   autoCloseBrackets?: boolean;
   /** Indent width in spaces (also the Tab display width). */
   tabSize?: number;
-  /** Modal Vim bindings via @replit/codemirror-vim. */
-  vimMode?: boolean;
+  /** Source-pane keybinding engine: standard bindings, @replit/codemirror-vim,
+   *  or @replit/codemirror-emacs. */
+  keybindings?: "none" | "vim" | "emacs";
   /**
    * Visual editing mode (LaTeX): a hidden-source WYSIWYG layer — StateField
    * decorations + atomic ranges over the real source. Markup never renders
    * inline; edits always hit the source text through normal transactions.
-   * While visual is on, vim is force-suspended (modal bindings and atomic
-   * widget navigation are incoherent together); the vim setting itself is
-   * untouched and restores when visual turns off.
+   * While visual is on, vim/emacs are force-suspended (modal/chorded bindings
+   * and atomic widget navigation are incoherent together); the keybindings
+   * setting itself is untouched and restores when visual turns off.
    */
   visualMode?: boolean;
   /**
@@ -262,7 +263,7 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   const lineWrapCompartment = new Compartment();
   const visualCompartment = new Compartment();
   const metricsCompartment = new Compartment();
-  const vimCompartment = new Compartment();
+  const keybindingsCompartment = new Compartment();
   const lineNumbersCompartment = new Compartment();
   const activeLineCompartment = new Compartment();
   const completionCompartment = new Compartment();
@@ -270,23 +271,32 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   const closeBracketsCompartment = new Compartment();
   const indentCompartment = new Compartment();
 
-  // Vim is dynamically imported so the engine stays out of the editor's
-  // critical chunk for the default (vim-off) config; it loads only when the
-  // user turns vim on.
-  let vimFactory: (() => Extension) | null = null;
-  const vimWanted = () =>
-    (props.vimMode ?? false) && !(props.visualMode ?? false);
-  const applyVim = async (on: boolean) => {
-    if (!on) {
-      view?.dispatch({ effects: vimCompartment.reconfigure([]) });
+  // The binding engines are dynamically imported so they stay out of the
+  // editor's critical chunk for the default ("none") config; each loads only
+  // when the user first selects it.
+  const bindingFactories: Partial<Record<"vim" | "emacs", () => Extension>> = {};
+  const keybindingsWanted = (): "none" | "vim" | "emacs" =>
+    (props.visualMode ?? false) ? "none" : (props.keybindings ?? "none");
+  // Generation counter: a setting change while a chunk is still loading must
+  // win over the stale import resolving after it.
+  let keybindingsGen = 0;
+  const applyKeybindings = async () => {
+    const gen = ++keybindingsGen;
+    const want = keybindingsWanted();
+    if (want === "none") {
+      view?.dispatch({ effects: keybindingsCompartment.reconfigure([]) });
       return;
     }
-    if (!vimFactory) {
-      vimFactory = (await import("@replit/codemirror-vim")).vim;
+    if (!bindingFactories[want]) {
+      bindingFactories[want] =
+        want === "vim"
+          ? (await import("@replit/codemirror-vim")).vim
+          : (await import("@replit/codemirror-emacs")).emacs;
     }
-    // A toggle-off may have landed while the chunk was loading.
-    if (!vimWanted()) return;
-    view?.dispatch({ effects: vimCompartment.reconfigure(vimFactory()) });
+    if (gen !== keybindingsGen) return;
+    view?.dispatch({
+      effects: keybindingsCompartment.reconfigure(bindingFactories[want]!()),
+    });
   };
 
   // Visual mode follows the vim pattern: dynamic-imported on first enable so
@@ -351,9 +361,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
 
   onMount(() => {
     const extensions: Extension[] = [
-        // Vim must precede the other keymaps so its handlers win in
-        // normal/visual mode. Loaded on demand once vim is enabled.
-        vimCompartment.of([]),
+        // Vim/emacs must precede the other keymaps so their handlers win.
+        // Loaded on demand once an engine is selected.
+        keybindingsCompartment.of([]),
         lineNumbersCompartment.of(toggle(props.lineNumbers ?? true, lineNumbers)),
         history(),
         drawSelection(),
@@ -530,7 +540,9 @@ export const CodeMirror: Component<CodeMirrorProps> = (props) => {
   });
 
   createEffect(() => {
-    void applyVim(vimWanted());
+    // Read synchronously so the effect tracks keybindings + visualMode.
+    keybindingsWanted();
+    void applyKeybindings();
   });
 
   createEffect(() => {

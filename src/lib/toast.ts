@@ -7,7 +7,7 @@
  * The `<Toaster>` component (components/feedback/Toaster.tsx) owns the Kobalte
  * rendering and drains this queue reactively. `notifyError` in particular is
  * how previously-silent async failures reach the user instead of vanishing
- * into telemetry.
+ * into the console.
  */
 
 import { createSignal } from "solid-js";
@@ -55,12 +55,12 @@ export const notifyError = (
   description?: string,
   action?: ToastAction,
 ): void => {
-  // Mirror every error toast into the local telemetry log so a dismissed toast
-  // is still recoverable from Settings -> Diagnostics.
+  // Mirror every error toast to the console so a dismissed toast still
+  // leaves a local debugging trace.
   try {
     recordError("toast-error", title, description);
   } catch {
-    /* telemetry must never block the toast itself */
+    /* logging must never block the toast itself */
   }
   enqueue("error", title, description, action);
 };

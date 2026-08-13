@@ -1,7 +1,7 @@
 import type { Project } from "~/adapters/types";
 import * as ipc from "~/ipc";
 import { recordError } from "~/lib/telemetry";
-import { requestGotoSource, requestPdfScroll } from "~/stores/editor-store";
+import { requestPdfScroll } from "~/stores/editor-store";
 
 /**
  * SyncTeX glue that only makes sense for LaTeX (Typst has no SyncTeX) and, in
@@ -141,15 +141,4 @@ export async function resolveInverseWithWasmSynctex(
     recordError("synctex-inverse", "wasm synctex inverse lookup threw", e);
     return null;
   }
-}
-
-export async function syncInverseWithWasmSynctex(
-  p: Project,
-  outputPath: string,
-  pageNum: number,
-  x: number,
-  y: number,
-): Promise<void> {
-  const hit = await resolveInverseWithWasmSynctex(p, outputPath, pageNum, x, y);
-  if (hit) requestGotoSource(hit.relPath, hit.line);
 }

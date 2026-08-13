@@ -412,8 +412,7 @@ fn clear_store(store: &Path) -> Result<(), HistoryError> {
 
 /// Serialize history mutations per project: the TS side serializes saves per
 /// file (`chainOnPath`), but different files save concurrently and every
-/// record/restore read-modify-writes the one `index.json`. Same spirit as
-/// `diagnostics.rs` serializing Sentry sends behind a lock.
+/// record/restore read-modify-writes the one `index.json`.
 fn project_mutex(id: &str) -> Arc<Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
     let map = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));

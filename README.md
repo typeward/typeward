@@ -7,7 +7,7 @@ nothing to subscribe to, and no server holding your work. Projects are ordinary
 folders on your disk that you can back up, version, and open with any other tool.
 
 Everything Typeward can do is available to everyone. Third-party services
-(Zotero, Mendeley, WebDAV storage, GitHub, AI providers) are optional and use
+(Zotero, Mendeley, WebDAV storage, git remotes, AI providers) are optional and use
 your own credentials.
 
 ## What works today
@@ -40,7 +40,8 @@ your own credentials.
 - **Templates.** Built-in LaTeX and Typst starters with variable substitution,
   plus saving any open project back out as your own template.
 - **Local git.** Stage, commit, branch, clone, push, and pull over HTTPS via
-  libgit2. Pulls are fast-forward only, and there is no merge-conflict UI yet.
+  libgit2, riding your own git setup (gitconfig identity, credential helper).
+  Pulls are fast-forward only, and there is no merge-conflict UI yet.
 - **Overleaf import.** Import a project `.zip`, or clone the premium git bridge
   at `git.overleaf.com` with the same clone dialog.
 - **References.** Zotero (local or Web) and Mendeley are aggregated into a single
@@ -175,11 +176,12 @@ Integrations are off until you configure them, and nothing is configured for
 you. API keys, OAuth tokens, and the WebDAV password go into the **OS keyring**
 (Credential Manager, Keychain, Secret Service) — never into a file in the repo,
 never into `settings.json`, and the frontend has no way to read them back; Rust
-resolves them at request time. The only thing `.env` holds is OAuth *client ids*
-for apps you register yourself (`VITE_MENDELEY_CLIENT_ID`,
-`VITE_GITHUB_CLIENT_ID`); see `.env.example`. Without them those two sign-in
-buttons fail with a message telling you where to register, and nothing else is
-affected.
+resolves them at request time. The only thing `.env` holds is the OAuth
+*client id* for an app you register yourself (`VITE_MENDELEY_CLIENT_ID`); see
+`.env.example`. Without it the Mendeley sign-in button fails with a message
+telling you where to register, and nothing else is affected. Git needs no
+in-app credentials at all — commits use the identity from your gitconfig, and
+push/pull/clone authenticate through your git credential helper.
 
 ## Contributing
 

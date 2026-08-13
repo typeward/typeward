@@ -9,8 +9,8 @@ import { installDismiss } from "~/lib/dismiss";
  * neutered globally by `<html data-motion="reduced">`).
  *
  * Notifications themselves are in-memory for now — a backing store lands
- * alongside the real notifications surface (telemetry events, compile
- * failures, sync conflicts, license renewals).
+ * alongside the real notifications surface (compile failures, sync
+ * conflicts, update notices).
  */
 
 export interface Notification {

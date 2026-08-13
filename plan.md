@@ -33,10 +33,10 @@ Approved plan: `~/.claude/plans/research-and-completely-plan-resilient-brook.md`
 
 | Integ Phase | State | Summary |
 |---|---|---|
-| 0 — Foundations | **complete** (2026-05-22; hardened 2026-05-24) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + scoped capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), `runOauthFlow` driver. HTTP IPC is host allowlisted; `authRef` is host-bound. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). Since Dropbox's removal (2026-08-05) **Mendeley is the only OAuth provider wired up**, and it is a *confidential* client (client secret in the keyring, fixed loopback redirect the user pastes from their registration) — the PKCE machinery stays intact but no shipped provider drives it; GitHub signs in through its own device flow. *(This phase also shipped the free-tier entitlement fallback plus `<FeatureGate>`/`<UpgradePrompt>`; deleted 2026-08-03.)* |
+| 0 — Foundations | **complete** (2026-05-22; hardened 2026-05-24) | Rust integrations module: `reqwest` HTTPS, OS keyring (`keyring` v3), PKCE OAuth via `axum` loopback on `127.0.0.1:0`, `opener` plugin + scoped capability. Frontend provider interfaces (`CitationProvider`, `CloudFsProvider`, `AiProvider`, `GrammarProvider`, `TemplateProvider`), `runOauthFlow` driver. HTTP IPC is host allowlisted; `authRef` is host-bound. `IntegrationsSettings` + `ProjectIntegrations` schemas (both `#[serde(default)]`-additive). Since Dropbox's removal (2026-08-05) **Mendeley is the only OAuth provider wired up**, and it is a *confidential* client (client secret in the keyring, fixed loopback redirect the user pastes from their registration) — the PKCE machinery stays intact but no shipped provider drives it; GitHub signed in through its own device flow *(removed 2026-08-13 — Mendeley is now the only OAuth client of any kind; git credentials come from the user's credential helper)*. *(This phase also shipped the free-tier entitlement fallback plus `<FeatureGate>`/`<UpgradePrompt>`; deleted 2026-08-03.)* |
 | 1 — References | **complete** (2026-05-22; Zotero local-API fallback 2026-06-11; JabRef removed 2026-06-13) | Zotero local (Better BibTeX probe, falling back to Zotero 7's built-in local API — BBT no longer required), Zotero Web (API key), Mendeley (OAuth PKCE; flagged maintenance-mode), DOI / arXiv / CrossRef lookup (no auth — `doi.org` content negotiation). Aggregator writes `<project>/.typeward/citations/library.bib` which texlive-wasm + texlab/tinymist pick up automatically. ReferencesPanel sidebar tab + DoiLookupDialog + per-provider settings card. (The JabRef `.bib`-file provider was cut — Zotero's local library covers it.) |
 | 2 — Cloud storage | **complete** (2026-05-22; hardened 2026-05-24; OneDrive + Google Drive removed 2026-06-14; iCloud removed 2026-06-20; Dropbox removed 2026-08-05) | **WebDAV is the only cloud backend** — Nextcloud, ownCloud or any WebDAV host, via the dedicated SSRF-screened Rust client. It needs no registered app and no client id, only a URL and an account, which is why it is the one that survived. WebDAV has no usable change cursor, so `delta()` re-walks with PROPFIND and diffs ETags against a snapshot serialized into the engine cursor. Generic sync engine + local cache under `<projectsRoot>/.remote-cache/<provider>/<projectId>/`, conflict resolution writes `<name>.conflict-<ISO>.<ext>` siblings. Remote paths are normalized before cache IO and `.typeward/` targets are rejected. New-project Cloud branch + SyncStatusBadge + ConflictResolverDialog. Removed backends — Dropbox (longpoll cursor), OneDrive (Graph `delta`), Google Drive (`changes.list`, `drive.file`) — are covered by pointing their native desktop sync apps at a local folder under the projects root instead (OneDrive ships on Windows by default). A project whose `.typeward/project.json` still names a removed provider reads as **not cloud-backed**: it opens, edits and compiles as a plain local folder, nothing on disk is rewritten, and no sync chip is shown. |
-| 3 — Git / GitHub / Overleaf | **complete** (2026-05-22; hardened 2026-05-24) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only and refuses dirty worktrees. SSH out of scope for now. |
+| 3 — Git / GitHub / Overleaf | **complete** (2026-05-22; hardened 2026-05-24) | libgit2 via `git2` (12 IPCs, all `spawn_blocking`); GitHub device-flow OAuth shares its token with libgit2's HTTPS callbacks via the keyring slot `git.github.com`; Overleaf zip import (zip-slip guarded) + git-bridge clone via `git_clone`. CommitPanel (SCM sidebar tab), GitStatusBar (TopBar branch chip + ahead/behind), CloneDialog with provider sniffing, Author identity + GitHub sign-in cards in Settings. Pull is fast-forward only and refuses dirty worktrees. SSH out of scope for now. *(The GitHub sign-in, the Settings cards, and the keyring token were removed 2026-08-13 — git now uses the user's gitconfig identity + credential helper, and the CloneDialog is URL + name only.)* |
 | 4 — AI providers | **complete** (2026-05-22; hardened 2026-05-24) | One Rust streaming task with format-specific parsers (Anthropic SSE / OpenAI SSE / Gemini SSE / Ollama NDJSON); abortable via `ai_stream_abort`. Frontend AsyncIterable adapter `aiStream`. Four providers (Claude / ChatGPT / Gemini / Ollama) share the same `AiProvider` shape; one active at a time per `integrations.ai.activeProvider`. The master switch `integrations.ai.enabled` defaults **off** (2026-08-03) — the surface was previously masked by the entitlement, and every provider needs a key or a local daemon first. OpenAI / Anthropic / Gemini keys attach in Rust via `authRef`; status UI uses `credential_exists`. |
 | 5 — Grammar | **complete** (2026-05-23) | Harper via `harper-core` — Rust-native, in-process, zero network. `grammar_check` IPC + CM6 `@codemirror/lint` linter (400ms debounce, 3 quick-fix actions per lint). Gated on `integrations.grammar.enabled` so off = zero IPC. American English only for now. |
 | 6 — Templates | **complete** (2026-05-23) | Manifest-driven (`template.json` with `variables[]` + `files[]`), Handlebars-subset `{{var}}` substitution. 4 built-in templates shipped under `src-tauri/resources/templates/`: latex/article, latex/ieee-conference, latex/beamer, typst/typst-article. `<TemplateGallery>` two-stage dialog wired into new-project flow. Custom templates load from `<app_data>/templates/custom/<id>/`. |
@@ -88,7 +88,10 @@ longer lists `supabase_session_read`.
 it POSTed to a Supabase edge function. The GitHub-issue path stays —
 `BUG_REPORT_ISSUE_URL` in `src/config/feedback.ts`, `src/lib/bug-report.ts`, the
 `core.reportBug` command, Diagnostics' "Report a bug" and "Report this error".
-Sentry is untouched and still opt-in.
+Sentry is untouched and still opt-in. *(superseded 2026-08-13 — the GitHub-issue
+path, the Diagnostics tab, and Sentry were all deleted with the full
+telemetry/crash-reporting removal; there is no in-app feedback, telemetry, or
+crash reporting of any kind.)*
 
 **What replaced the Account section:** a **local user profile**. Persisted
 settings section `profile` (`displayName`, `email`, `affiliation`, plus a
@@ -100,9 +103,9 @@ rejects symlinks and non-regular files, caps at 8 MiB, copies into
 `clear_profile_avatar`. `tauri.conf.json`'s `assetProtocol.scope` gained
 `$APPDATA/profile/**` so `convertFileSrc` can render the avatar. UI is
 `src/screens/settings/ProfileSection.tsx`, mounted in the Settings slot Account
-used. The profile name+email are the **fallback** git commit author (explicit
-`integrations.vcs.git.authorName`/`authorEmail` still win) and seed a template's
-`author` variable default.
+used. The profile name+email seed a template's `author` variable default and
+nothing else *(the git-author fallback was removed 2026-08-13 — commit identity
+comes from the user's gitconfig)*.
 
 **Defaults changed:** `integrations.ai.enabled` now defaults to `false` on both
 the TS and Rust sides. The AI surface used to be masked by the entitlement, so
@@ -223,6 +226,8 @@ Sidecars (TeX, LSPs) raise the crash surface significantly. From Phase 1:
 
 ### 7. Telemetry & error reporting (opt-in)
 
+> **Removed 2026-08-13.** All telemetry and crash reporting were deleted — no panic capture, no on-disk log, no submission path; `recordError()` is a local console.error wrapper only. Do not reintroduce.
+
 Not analytics. Structured reports for:
 
 - crashes (Sentry-compatible format) — frontend + Rust panic capture
@@ -244,7 +249,7 @@ src/                          # Solid frontend
     editor/                   # Hosts the editor shell
       shells/
         text-shell.tsx        # 3-pane text editor (LaTeX/Typst; .md files get MarkdownPreview)
-    settings/                 # Themes, editor opts, integrations, local profile, diagnostics
+    settings/                 # Themes, editor opts, integrations, local profile
   adapters/                   # EditorAdapter implementations
     latex/                    # LatexAdapter, latex CM extensions, snippets
     typst/
@@ -271,7 +276,7 @@ src/                          # Solid frontend
     fs/                       # Tauri file I/O wrappers
     watcher/                  # Frontend client for unified file-watcher events
     autosave/                 # Snapshot writer + recovery probe
-    telemetry/                # Crash/error report builder
+    telemetry/                # recordError() — local console.error wrapper (nothing persisted or transmitted)
   ipc/                        # Typed Tauri command + event-channel wrappers
 src-tauri/
   src/
@@ -289,7 +294,7 @@ src-tauri/
       tinymist.rs
     detect.rs                 # System TeX/engine detection
     autosave.rs               # Snapshot store
-    telemetry.rs              # Panic hook + structured error capture
+    telemetry.rs              # Panic hook + structured error capture (removed 2026-08-13)
     main.rs
   binaries/                   # Sidecar binaries (Tectonic, optionally LSPs/typst)
   tauri.conf.json
@@ -345,7 +350,7 @@ What landed:
 - **LSP transport** (`src-tauri/src/lsp.rs` + `src/lib/lsp/client.ts` + `src/lib/lsp/cm6.ts`): Rust spawns texlab/tinymist as a child process, parses Content-Length-framed JSON-RPC, emits inbound payloads as Tauri events. Outbound traffic via `send_lsp_message` invoke. Lifecycle ops (`start_lsp` / `stop_lsp`) via invoke. The CM6 binding is local, not `codemirror-languageserver`.
 - **Unified file watcher** (`src-tauri/src/watcher.rs` + `src/lib/watcher/client.ts`): `notify`-based, one watcher per project, typed events emitted on a single channel.
 - **Autosave + crash recovery**: debounced 500ms snapshots to `<project>/.typeward/snapshots/<rel>.snap`. On project open, the editor scans for orphans (snapshots newer than file mtime) and prompts via `RecoveryDialog`.
-- **Telemetry**: Rust panic hook + frontend `window.error` / `unhandledrejection` hook → structured JSONL log at `<app_data>/telemetry.log`. Compile failures forwarded automatically. No submission UI yet.
+- **Telemetry**: Rust panic hook + frontend `window.error` / `unhandledrejection` hook → structured JSONL log at `<app_data>/telemetry.log`. Compile failures forwarded automatically. No submission UI yet. *(removed 2026-08-13 — all telemetry and crash reporting were deleted; `recordError()` is a local console.error wrapper only.)*
 
 Iteration items intentionally deferred:
 - **Structured LSP token/semantic support** — the hand-rolled CM6 binding covers diagnostics/completion; richer semantic tokens are still deferred.
@@ -375,7 +380,7 @@ Original breakdown follows for reference:
    - PDF.js renders compiled output via `PreviewProvider`, **retains scroll position + zoom across recompile** (don't naively rebuild the viewer)
    - File tree from disk via `watcher.rs`; tabs from open files; status bar live (line/col/encoding)
 7. **Autosave + crash recovery** — debounced snapshots to `.typeward/snapshots/`; on launch, recovery prompt for any unflushed snapshots
-8. **Telemetry scaffolding** — Rust panic hook → `telemetry.rs`; structured compile/LSP failure capture; local-only for now, no submission UI yet
+8. **Telemetry scaffolding** — Rust panic hook → `telemetry.rs`; structured compile/LSP failure capture; local-only for now, no submission UI yet *(removed 2026-08-13 — all telemetry and crash reporting were deleted.)*
 
 ### Phase 2 — Multi-format & preview polish
 
@@ -571,7 +576,7 @@ Automated:
 |---|---|---|
 | **Autosave / crash recovery** | Debounced snapshots in `.typeward/snapshots/`; recovery prompt on launch | Phase 1 |
 | **Unified file watcher** | One Rust `notify` service → typed events → frontend stream; consumed by preview, file tree, buffers, build | Phase 1 |
-| **Telemetry / error reporting** | Structured local logs for crashes, compile failures, LSP failures; opt-in submission | Phase 1 (capture) → later (submission UI) |
+| **Telemetry / error reporting** | Structured local logs for crashes, compile failures, LSP failures; opt-in submission | Phase 1 (capture) → **removed 2026-08-13** (all telemetry/crash reporting deleted; no submission UI ever shipped) |
 | **Extension seams** | `EditorAdapter`, `CompileProvider`, `PreviewProvider`, `LspProvider`, `CommandRegistry` defined day one | Phase 1 (interfaces) → Phase 5+ (real plugin loader) |
 | **SyncTeX** | Forward + inverse search through PDF preview | Phase 2 |
 

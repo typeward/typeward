@@ -36,6 +36,18 @@ Audit started: 2026-07-25 · Branch: `fix/tectonic-win-arm64-sidecar` · Auditor
 > apply unchanged to WebDAV, and the `texlive-wasm` references below are to the engine
 > *identifier*, which did not change — only module specifiers did.
 
+> **Later structural changes (2026-08-13) — two findings become removal-resolved.** All
+> telemetry and crash reporting were removed: the `@sentry/browser` SDK + gate + vite
+> source-map upload, the Rust `sentry` crate and `diagnostics.rs` (crash submission +
+> `collect_system_info`), `telemetry.rs` (panic capture + the on-disk `telemetry.log`),
+> the Settings Diagnostics panel, the bug-report surfaces, and the
+> `privacy.shareCrashReports`/`installId` settings. `recordError()` survives as a local
+> console.error wrapper only, and the CSP `connect-src` has no external origins. This
+> moots the two sentry-related "non-negotiable constraints" in Phase 0 (annotated in
+> place) and makes **TW-S2-05** (unscrubbed frontend Sentry egress) and **TW-S3-14**
+> (stale sentry-pin rationale) removal-resolved — the code their fixes hardened no
+> longer exists.
+
 ---
 
 ## Phase 0 — Repo map & baseline
@@ -50,8 +62,8 @@ Audit started: 2026-07-25 · Branch: `fix/tectonic-win-arm64-sidecar` · Auditor
 
 ### Non-negotiable constraints (inferred — CONFIRM)
 - npm only (not pnpm/yarn). No emojis in code/commits. No `Co-Authored-By` trailers.
-- Keep the ~34 KB boot bundle budget (`check:bundle`); Sentry SDK must stay off boot path.
-- `sentry` crate pinned to 0.46.x (reqwest 0.12 tree); don't bump past without checking aws-lc-sys.
+- Keep the ~34 KB boot bundle budget (`check:bundle`); Sentry SDK must stay off boot path (removed 2026-08-13 — no Sentry SDK or crate exists).
+- `sentry` crate pinned to 0.46.x (reqwest 0.12 tree); don't bump past without checking aws-lc-sys (removed 2026-08-13 — no Sentry SDK or crate exists).
 - Mature codebase: 5+ prior security/architecture audits (2026-06-10 → 2026-07-13). Many
   intentional decisions & deferred gaps are documented in CLAUDE.md and must NOT be re-flagged.
 

@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::project::{Project, ProjectFormat};
 
 /// Cap captured stderr so a runaway pandoc log can't bloat the error string
-/// (which is also what lands in telemetry).
+/// surfaced to the frontend.
 const MAX_STDERR_BYTES: usize = 4096;
 
 /// A large book -> docx can take minutes, but an unbounded pandoc on adversarial

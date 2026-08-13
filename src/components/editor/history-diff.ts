@@ -2,7 +2,7 @@
  * Read-only unified diff of a recorded version against the current buffer,
  * rendered with `@codemirror/merge`. The merge package is dynamic-imported so
  * the diff stack stays off the boot path (`check:bundle` budget) — same
- * discipline as the Sentry/updater chunks. Rendering inside the editor stack
+ * discipline as the updater chunk. Rendering inside the editor stack
  * means the `--color-*` theme tokens apply for free.
  */
 export async function mountHistoryDiff(

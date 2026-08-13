@@ -35,6 +35,16 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
+// Same adapter shape as field.ts's docSource: updateDoc consumes the CM6 Text
+// directly, so only the rescanned region ever materializes as a string.
+function docOf(t: Text) {
+  return {
+    length: t.length,
+    sliceString: (from: number, to: number) => t.sliceString(from, to),
+    lineStartAt: (pos: number) => t.lineAt(pos).from,
+  };
+}
+
 // Vitest runs with cwd at the repo root; import.meta.url is http-scheme here.
 const resultsDir = join(process.cwd(), "bench", "results");
 
@@ -90,11 +100,12 @@ describe("visual mode at 30k lines", () => {
       const newText = changes.apply(cmText);
 
       // App path: exactly what visualField.update does per transaction —
-      // stringify, incremental update under the default budget, then either a
-      // full decoration rebuild or (stale) a RangeSet.map of the previous sets.
+      // incremental update consuming the CM6 Text under the default budget,
+      // then either a full decoration rebuild or (stale) a RangeSet.map of
+      // the previous sets. No per-keystroke stringify (the point of the
+      // Doc-source change).
       const tApp = performance.now();
-      const newStr = newText.toString();
-      const res = updateDoc(doc, changes, newStr);
+      const res = updateDoc(doc, changes, docOf(newText));
       let nextBuilt;
       if (res.stale) {
         nextBuilt = {
@@ -109,14 +120,15 @@ describe("visual mode at 30k lines", () => {
       if (res.stale) {
         stale++;
         // Off-clock: the idle full reparse the field schedules after a stale
-        // frame — the keystroke itself never waits for this.
-        doc = parseVisualDoc(newStr, { budgetMs: Infinity })!;
+        // frame — the keystroke itself never waits for this. parseVisualDoc
+        // still takes a string, so the stringify happens only here.
+        doc = parseVisualDoc(newText.toString(), { budgetMs: Infinity })!;
         built = buildDecorations(doc, newText, {});
       } else {
         // Unbudgeted incremental parse alone — isolates the splice cost from
-        // the stringify + decoration rebuild that dominate the app path.
+        // the decoration rebuild that dominates the app path.
         const tParse = performance.now();
-        updateDoc(doc, changes, newStr, { budgetMs: Infinity });
+        updateDoc(doc, changes, docOf(newText), { budgetMs: Infinity });
         totalMs.push(performance.now() - tParse);
         doc = res.doc;
         built = nextBuilt;

@@ -245,17 +245,6 @@ const CORE_COMMANDS: EditorCommand[] = [
     },
   },
   {
-    id: "core.reportBug",
-    title: "Report a bug",
-    subtitle: "Open a GitHub issue prefilled with your app and system info",
-    group: "Help",
-    scope: "global",
-    run: async () => {
-      const { openBugReport } = await import("~/lib/bug-report");
-      await openBugReport();
-    },
-  },
-  {
     id: "format.bold",
     title: "Bold",
     subtitle: "Wrap the selection in bold, or insert the empty construct",
@@ -324,31 +313,6 @@ for (const f of PALETTE_FORMAT_COMMANDS) {
     when: () => formatAvailable(f.kind),
     run: () => {
       applyFormat(f.kind);
-    },
-  });
-}
-
-// Dev builds only: exercises the full unhandled-error -> Sentry transport ->
-// CSP pipeline. Tree-shaken out of release bundles.
-if (import.meta.env.DEV) {
-  CORE_COMMANDS.push({
-    id: "dev.sentryTest",
-    title: "Send Sentry test error",
-    subtitle: "Throw an unhandled error to verify Sentry delivery (dev only)",
-    group: "Developer",
-    scope: "global",
-    run: async () => {
-      const { shareCrashReports } = await import("~/stores/settings-store");
-      if (!shareCrashReports()) {
-        const { notifyError } = await import("~/lib/toast");
-        notifyError(
-          "Crash reporting is off",
-          "Enable Settings > Security > Share crash reports first - the test would silently no-op.",
-        );
-        return;
-      }
-      const { sendTestError } = await import("~/lib/sentry");
-      sendTestError();
     },
   });
 }

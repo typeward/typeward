@@ -16,7 +16,6 @@ import type { Diagnostic, Project } from "~/adapters/types";
 export type IntegrationCategory =
   | "references"
   | "cloud"
-  | "vcs"
   | "ai"
   | "grammar"
   | "templates";

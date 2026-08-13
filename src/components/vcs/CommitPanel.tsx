@@ -27,7 +27,6 @@ import { Button } from "~/components/primitives/Button";
 import * as ipc from "~/ipc";
 import { project } from "~/stores/editor-store";
 import { bumpGitState } from "~/stores/git-store";
-import { integrationsSettings, profile } from "~/stores/settings-store";
 
 const POLL_INTERVAL_MS = 2_000;
 
@@ -35,7 +34,13 @@ export const CommitPanel: Component = () => {
   const [refreshTick, setRefreshTick] = createSignal(0);
   const [message, setMessage] = createSignal("");
   const [busy, setBusy] = createSignal<"" | "commit" | "push" | "pull" | "fetch" | "init">("");
-  const [error, setError] = createSignal<string | null>(null);
+  // Two owners, two signals: the 2s heartbeat may only retract errors IT
+  // raised — a commit/push failure (missing gitconfig identity, no credential
+  // helper) must stay visible until the next action, or the very next
+  // successful status poll wipes the message before the user can read it.
+  const [pollError, setPollError] = createSignal<string | null>(null);
+  const [actionError, setActionError] = createSignal<string | null>(null);
+  const error = () => actionError() ?? pollError();
 
   const [status, { refetch }] = createResource(
     () => [project()?.rootPath, refreshTick()] as const,
@@ -47,15 +52,18 @@ export const CommitPanel: Component = () => {
         // failure (an index.lock held by a concurrent git command, a brief
         // network hiccup) otherwise left a permanent error banner that no later
         // successful poll could ever retract.
-        setError(null);
+        setPollError(null);
         return result;
       } catch (err) {
         const msg = describeIpcError(err);
-        if (/could not be opened|repository|not.+repo|not\s+found/i.test(msg)) {
-          setError(null);
+        // Anchored to GitError::OpenFailed's exact wording — a broader match
+        // (any message mentioning "repository") reclassified real git errors
+        // as "not a repo" and offered git init over a live repo.
+        if (/could not be opened/i.test(msg)) {
+          setPollError(null);
           return { kind: "not-a-repo" };
         }
-        setError(msg);
+        setPollError(msg);
         return null;
       }
     },
@@ -88,24 +96,14 @@ export const CommitPanel: Component = () => {
     (summary()?.files ?? []).filter((f) => f.staged === "none" && (f.unstaged !== "none" || f.untracked)),
   );
 
-  // Per field, the explicit git identity wins and the local profile fills the
-  // blanks — so a user who only ever filled in Settings -> Profile can commit
-  // without configuring the same two values a second time.
-  const authorFromSettings = (): ipc.GitAuthor | undefined => {
-    const g = integrationsSettings().vcs.git;
-    const name = g.authorName?.trim() || profile().displayName.trim();
-    const email = g.authorEmail?.trim() || profile().email.trim();
-    return name && email ? { name, email } : undefined;
-  };
-
   const wrap = async (kind: typeof busy extends () => infer T ? T : never, fn: () => Promise<void>) => {
-    setError(null);
+    setActionError(null);
     setBusy(kind);
     try {
       await fn();
       await refetch();
     } catch (err) {
-      setError(describeIpcError(err));
+      setActionError(describeIpcError(err));
     } finally {
       setBusy("");
     }
@@ -132,7 +130,7 @@ export const CommitPanel: Component = () => {
       if (!message().trim()) {
         throw new Error("Commit message is required.");
       }
-      await ipc.gitCommit(proj.rootPath, message().trim(), authorFromSettings());
+      await ipc.gitCommit(proj.rootPath, message().trim());
       setMessage("");
     });
 
@@ -147,7 +145,7 @@ export const CommitPanel: Component = () => {
     wrap("pull", async () => {
       const proj = project();
       if (!proj) return;
-      await ipc.gitPull(proj.rootPath, undefined, authorFromSettings());
+      await ipc.gitPull(proj.rootPath);
     });
 
   const handleFetch = () =>

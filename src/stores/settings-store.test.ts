@@ -2,9 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSettings,
   hydrateSettings,
-  noteInstallId,
   setHistoryMaxVersions,
-  setShareCrashReports,
   setUiScale,
   setUpdatesCheckAutomatically,
   validEnum,
@@ -47,39 +45,6 @@ describe("settings-store validEnum", () => {
     expect(
       validEnum("nonsense", ["cards", "list"] as const, "cards"),
     ).toBe("cards");
-  });
-});
-
-// privacy.installId is Rust-owned (minted on first crash-report submission);
-// the TS serializer must carry it through buildSettings() or every settings
-// save after a submission would clobber the persisted id.
-describe("settings-store privacy roundtrip", () => {
-  it("omits installId until one exists, then preserves it across saves", () => {
-    // Order matters within this test: module state is shared, so assert the
-    // absent case before minting.
-    expect(buildSettings().privacy?.installId).toBeUndefined();
-    expect(buildSettings().privacy?.shareCrashReports).toBe(false);
-
-    noteInstallId("11111111-2222-4333-8444-555555555555");
-    setShareCrashReports(true);
-    const out = buildSettings();
-    expect(out.privacy?.installId).toBe("11111111-2222-4333-8444-555555555555");
-    expect(out.privacy?.shareCrashReports).toBe(true);
-
-    // A later toggle-only change keeps carrying the id.
-    setShareCrashReports(false);
-    expect(buildSettings().privacy?.installId).toBe(
-      "11111111-2222-4333-8444-555555555555",
-    );
-  });
-
-  it("ignores empty/null ids from failed scans", () => {
-    noteInstallId(null);
-    noteInstallId(undefined);
-    noteInstallId("");
-    expect(buildSettings().privacy?.installId).toBe(
-      "11111111-2222-4333-8444-555555555555",
-    );
   });
 });
 
@@ -163,6 +128,7 @@ describe("settings-store editor persisted shape", () => {
       "bracketMatching",
       "fontSize",
       "highlightActiveLine",
+      "keybindings",
       "lineHeight",
       "lineNumbers",
       "lineWrap",
@@ -170,9 +136,23 @@ describe("settings-store editor persisted shape", () => {
       "pdfInvertDark",
       "stopOnFirstError",
       "tabSize",
-      "vimMode",
       "visualModeLatex",
     ]);
+  });
+
+  it("clamps an unknown keybindings value to none at the load boundary", () => {
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, keybindings: "vim" }),
+    );
+    expect(buildSettings().editor.keybindings).toBe("vim");
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, keybindings: "hjkl" }),
+    );
+    expect(buildSettings().editor.keybindings).toBe("none");
+    hydrateSettings(
+      loadedWith("editor", { ...buildSettings().editor, keybindings: "emacs" }),
+    );
+    expect(buildSettings().editor.keybindings).toBe("emacs");
   });
 
   it("round-trips autosaveEnabled instead of snapping back to the default", () => {

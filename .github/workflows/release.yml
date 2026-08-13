@@ -245,15 +245,9 @@ jobs:
       - name: Build the app
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
-          # Source-map upload is opt-in (vite.config.ts) so ordinary builds stay
-          # hermetic; the release build is the one place that opts in. No token
-          # -> no maps, no upload, just a warning.
-          SENTRY_UPLOAD: 'true'
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           # Frontend secrets (empty is fine — the OAuth sign-in paths surface
           # an actionable "register your app" error instead).
           VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
-          VITE_GITHUB_CLIENT_ID: ${{ secrets.VITE_GITHUB_CLIENT_ID }}
           # Updater signing (absent -> no updater artifacts, no key needed).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

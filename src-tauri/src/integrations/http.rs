@@ -349,8 +349,6 @@ fn allowed_https_host(host: &str) -> bool {
             | "export.arxiv.org"
             | "api.mendeley.com"
             | "generativelanguage.googleapis.com"
-            | "github.com"
-            | "api.github.com"
             | "api.openai.com"
             | "api.anthropic.com"
     )
@@ -372,7 +370,6 @@ fn is_sensitive_header(name: &str) -> bool {
 pub fn validate_auth_ref_for_host(auth: &AuthRef, host: &str) -> Result<(), HttpError> {
     let allowed = match (auth.service.as_str(), host) {
         ("zotero-web", "api.zotero.org")
-        | ("git.github.com", "api.github.com")
         | ("openai", "api.openai.com")
         | ("anthropic", "api.anthropic.com")
         | ("gemini", "generativelanguage.googleapis.com") => true,
@@ -1003,7 +1000,7 @@ mod tests {
             client_id: None,
         };
         assert!(validate_outbound_url("https://api.openai.com/v1/models", Some(&auth)).is_ok());
-        let err = validate_outbound_url("https://api.github.com/user", Some(&auth)).unwrap_err();
+        let err = validate_outbound_url("https://api.zotero.org/users/1", Some(&auth)).unwrap_err();
         assert!(matches!(err, HttpError::BlockedAuthRef { .. }));
     }
 

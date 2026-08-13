@@ -493,7 +493,9 @@ export interface AppSettings {
   accent: string;
   editor: {
     autoCompile: boolean;
-    vimMode: boolean;
+    /** "none" | "vim" | "emacs" — typed wide like lineHeight (Rust `String`);
+     *  the store narrows it at the load boundary. */
+    keybindings: string;
     lineWrap: boolean;
     fontSize: number;
     stopOnFirstError: boolean;
@@ -518,8 +520,6 @@ export interface AppSettings {
   integrations: IntegrationsSettings;
   // Optional: settings.json files predating the profile section lack it.
   profile?: ProfileSettings;
-  // Optional: settings.json files predating the privacy section lack it.
-  privacy?: PrivacySettings;
   // Optional: settings.json files predating the updates section lack it.
   updates?: UpdatesSettings;
   // Optional: settings.json files predating the history section lack it.
@@ -546,14 +546,6 @@ export interface ProfileSettings {
    *  Backend-owned — `buildSettings()` omits it so a settings roundtrip
    *  can't clobber the real path. */
   avatarPath?: string;
-}
-
-/** Egress opt-ins — everything defaults to OFF (zero reporting unless enabled). */
-export interface PrivacySettings {
-  shareCrashReports: boolean;
-  /** Random UUIDv4 attached to crash reports. Rust mints it on the first
-   *  submission; the frontend only preserves it across settings roundtrips. */
-  installId?: string;
 }
 
 export interface UiSettings {
@@ -621,10 +613,6 @@ export interface IntegrationsSettings {
       username?: string;
       allowPrivateHost?: boolean;
     }>;
-  };
-  vcs: {
-    git: { authorName?: string; authorEmail?: string };
-    github: { accountId?: string };
   };
   ai: {
     /** Master switch — off hides every AI surface and deactivates providers. */
@@ -800,11 +788,6 @@ export interface GitBranch {
   behind: number;
 }
 
-export interface GitAuthor {
-  name: string;
-  email: string;
-}
-
 /** libgit2 (git2/OpenSSL) is desktop-only — the git commands are cfg-gated out
  * of mobile builds. `gitAvailable()` is the single lever every VCS surface
  * checks so mobile degrades to "no SCM" instead of throwing on an unknown IPC
@@ -831,13 +814,11 @@ export const gitUnstage = (repoPath: string, paths: string[]): Promise<void> => 
   return invoke("git_unstage", { repoPath, paths });
 };
 
-export const gitCommit = (
-  repoPath: string,
-  message: string,
-  author?: GitAuthor,
-): Promise<string> => {
+// Commit identity comes from the user's own gitconfig (user.name/user.email);
+// the app supplies none.
+export const gitCommit = (repoPath: string, message: string): Promise<string> => {
   assertDesktopCommand("git_commit");
-  return invoke("git_commit", { repoPath, message, author });
+  return invoke("git_commit", { repoPath, message });
 };
 
 export const gitLog = (repoPath: string, limit?: number): Promise<GitCommit[]> => {
@@ -869,13 +850,9 @@ export const gitFetch = (repoPath: string, remote?: string): Promise<void> => {
   return invoke("git_fetch", { repoPath, remote });
 };
 
-export const gitPull = (
-  repoPath: string,
-  remote?: string,
-  author?: GitAuthor,
-): Promise<void> => {
+export const gitPull = (repoPath: string, remote?: string): Promise<void> => {
   assertDesktopCommand("git_pull");
-  return invoke("git_pull", { repoPath, remote, author });
+  return invoke("git_pull", { repoPath, remote });
 };
 
 export const gitPush = (
@@ -1091,93 +1068,6 @@ export const historyRestore = (
 /** Delete one project's entire version history (blobs + index). */
 export const historyClear = (projectRoot: string): Promise<void> =>
   invoke("history_clear", { projectRoot });
-
-// ----- Telemetry -----------------------------------------------------------
-
-export interface TelemetryEvent {
-  at: string;
-  kind: string;
-  summary: string;
-  detail: string | null;
-}
-
-export const recordTelemetry = (
-  kind: string,
-  summary: string,
-  detail?: string,
-): Promise<void> => invoke("record_event", { kind, summary, detail });
-
-export const listRecentTelemetry = (limit?: number): Promise<TelemetryEvent[]> =>
-  invoke("list_recent_events", { limit });
-
-/** Raw telemetry.log contents (bounded file) for the Export-log save-as flow. */
-export const readTelemetryLog = (): Promise<string> =>
-  invoke("read_telemetry_log");
-
-// ----- Crash reports (Diagnostics) ------------------------------------------
-
-/**
- * The exact scrubbed payload `submitErrorReport` would send, plus attached
- * metadata. Computed WITHOUT sending — the confirm dialog renders it verbatim.
- */
-export interface ReportPreview {
-  kind: string;
-  at: string;
-  summary: string;
-  detail: string | null;
-  appVersion: string;
-  os: string;
-  osVersion: string;
-  arch: string;
-  /** Null until the first submission mints one. */
-  installId: string | null;
-}
-
-export const previewErrorReport = (
-  event: TelemetryEvent,
-): Promise<ReportPreview> => invoke("preview_error_report", { event });
-
-export interface SubmitReportResult {
-  installId: string;
-}
-
-/** Send ONE user-confirmed event to Sentry (scrubbed in Rust before egress). */
-export const submitErrorReport = (
-  event: TelemetryEvent,
-): Promise<SubmitReportResult> => invoke("submit_error_report", { event });
-
-export interface CrashScanResult {
-  submitted: number;
-  installId: string | null;
-}
-
-/**
- * Crash-on-previous-run scan: submits watermark-new `panic` events (max 5).
- * No-ops unless `privacy.shareCrashReports` is on (re-checked in Rust) and
- * runs at most once per process.
- */
-export const scanAndSubmitCrashes = (): Promise<CrashScanResult> =>
-  invoke("scan_and_submit_crashes");
-
-// ----- System info (Diagnostics header / bug reports) ------------------------
-
-export interface SystemToolProbe {
-  name: string;
-  /** PATH probe result only — never the resolved path. */
-  found: boolean;
-}
-
-export interface SystemInfo {
-  appVersion: string;
-  os: string;
-  osVersion: string;
-  arch: string;
-  compileEngine: string;
-  tools: SystemToolProbe[];
-}
-
-export const collectSystemInfo = (): Promise<SystemInfo> =>
-  invoke("collect_system_info");
 
 /**
  * Clear a stored shell-escape DENIAL so the trust prompt can run again — the

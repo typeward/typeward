@@ -386,9 +386,8 @@ const ProjectsScreen: Component = () => {
         />
 
         {/* The sidebar stays pinned to the left edge at every window width;
-            only the CONTENT column carries the ultrawide cap (left-anchored,
-            spare space to the right) — a centered wrapper made the whole
-            layout float with growing side margins. */}
+            the content column fills all remaining width (the card grid's
+            auto-fill columns absorb ultrawide windows). */}
         <div class="relative flex min-h-0 w-full flex-1 gap-2 p-2">
           <Show when={!isTabletViewport()}>
             <LibrarySidebar
@@ -401,7 +400,7 @@ const ProjectsScreen: Component = () => {
           </Show>
 
           <div
-            class="flex min-w-0 max-w-[1400px] flex-1 flex-col gap-2"
+            class="flex min-w-0 flex-1 flex-col gap-2"
             // Modal contract while the library drawer is up (mirrors the
             // editor shell's LogsSheet/FilesDrawer): the scrimmed content
             // must leave the tab order, or Tab walks into the grid behind

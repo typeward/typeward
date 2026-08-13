@@ -1,7 +1,8 @@
 /**
  * Settings -> Profile: who the user is on this machine. Everything here is
- * local — the fields feed git commit signatures and new-project authorship,
- * and the picture is a file Rust copied into app data.
+ * local — the fields feed new-project authorship (template variables), and
+ * the picture is a file Rust copied into app data. Git commit identity is
+ * NOT sourced from here — that comes from the user's own gitconfig.
  */
 
 import { User } from "lucide-solid";
@@ -215,8 +216,8 @@ export const ProfileSection: Component = () => {
             onInput={(e) => update({ affiliation: e.currentTarget.value })}
           />
           <p class="text-xs leading-relaxed text-fg-3">
-            The name and email sign your git commits and pre-fill the author of
-            new projects.
+            The name and email pre-fill the author of new projects. Git commits
+            use the identity from your git config.
           </p>
         </div>
       </Card>

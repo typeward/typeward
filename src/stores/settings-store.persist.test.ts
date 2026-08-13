@@ -22,7 +22,6 @@ vi.mock("~/ipc", async (importOriginal) => {
 });
 vi.mock("~/lib/telemetry", () => ({
   recordError: mocks.recordError,
-  installFrontendErrorHook: vi.fn(),
 }));
 vi.mock("~/lib/toast", () => ({
   pendingToasts: () => [],

@@ -4,11 +4,6 @@ import { dismissBootSplash } from "./lib/boot-splash";
 import { isPreviewWindow } from "./lib/window-role";
 import "./styles.css";
 
-// Sentry boots from App.tsx via installSentryGate() (src/lib/sentry-gate.ts):
-// it is an egress opt-in gated on the persisted privacy.shareCrashReports
-// setting, so nothing is fetched or initialized here. Errors thrown before
-// App mounts land in the local telemetry.log via installFrontendErrorHook.
-
 const root = document.getElementById("root");
 if (!root) throw new Error("Root element #root not found");
 

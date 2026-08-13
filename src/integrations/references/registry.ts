@@ -35,7 +35,3 @@ export function unregisterCitationProvider(id: string): void {
 
 /** Reactive read of all registered providers. */
 export const citationProviders = providers;
-
-export function getCitationProvider(id: string): CitationProvider | undefined {
-  return providers().find((p) => p.id === id);
-}

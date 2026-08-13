@@ -88,17 +88,3 @@ export const httpRequestBytes = async (
   }>(buf);
   return { status: meta.status, headers: meta.headers, body };
 };
-
-/**
- * Convenience for JSON endpoints. Parses the response body or throws.
- * Status codes outside 2xx still resolve — caller decides what to do
- * with them; we don't want to discard the error body that providers
- * typically return.
- */
-export async function httpJson<T>(req: HttpRequest): Promise<{ status: number; data: T }> {
-  const res = await httpRequest({
-    ...req,
-    headers: { Accept: "application/json", ...(req.headers ?? {}) },
-  });
-  return { status: res.status, data: JSON.parse(res.body) as T };
-}

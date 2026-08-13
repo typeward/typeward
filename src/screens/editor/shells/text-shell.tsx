@@ -1397,7 +1397,7 @@ const CenterPane: Component<{
                       bracketMatching={editorSettings().bracketMatching}
                       autoCloseBrackets={editorSettings().autoCloseBrackets}
                       tabSize={editorSettings().tabSize}
-                      vimMode={editorSettings().vimMode}
+                      keybindings={editorSettings().keybindings}
                       visualMode={visualOn()}
                       onVisualPause={() => markVisualPaused(entry.relPath)}
                       onVisualPopover={requestVisualPopover}

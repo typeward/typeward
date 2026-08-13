@@ -28,6 +28,5 @@ Desktop ships as direct-download installers plus a Tauri auto-updater feed. **Ev
 **Secrets / manual steps (runbook).** The signing secrets are REQUIRED for a release (see above) unless the unsigned escape hatch is set on purpose; the rest are optional:
 - **Create the PUBLIC `typeward/releases` repo** (manual prerequisite, doesn't exist yet) + a **`RELEASES_REPO_TOKEN`** PAT with write access to it. Missing → assets upload as a workflow artifact + a loud `::error` naming the manual attach step (the build jobs still succeed).
 - **`TAURI_SIGNING_PRIVATE_KEY`** / **`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`** — updater keypair (`npm run tauri signer generate`; custody per plan 40). Paste the matching pubkey into `tauri.conf.json`. **Missing → the release fails** unless `allow_unsigned` / `ALLOW_UNSIGNED_RELEASE` is set.
-- **`SENTRY_AUTH_TOKEN`** (optional) — source-map upload on release builds only (`SENTRY_UPLOAD=true` is set there). Absent → a warning, no maps, build proceeds.
 - macOS: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`.
 - Windows (future, once `bundle.windows.signCommand` is wired): `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` (passed through env already).

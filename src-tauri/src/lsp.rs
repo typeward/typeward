@@ -203,7 +203,8 @@ async fn start_lsp_impl(
         signal_server_closed(&reader_app, &reader_id);
     });
 
-    // Stderr drain — useful for surfacing engine warnings into telemetry later.
+    // Stderr drain — keeps the child's stderr pipe from filling and blocking
+    // the server; output is discarded.
     let stderr_id = server_id.clone();
     tokio::spawn(async move {
         let mut stderr = stderr;

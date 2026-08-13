@@ -101,9 +101,12 @@ function migrateCompileEngine(raw: string): CompileEngine {
 
 export type LineHeightMode = "compact" | "normal" | "relaxed";
 
+/** Source-pane keybinding engine; "none" = the standard CodeMirror bindings. */
+export type EditorKeybindings = "none" | "vim" | "emacs";
+
 export interface EditorSettings {
   autoCompile: boolean;
-  vimMode: boolean;
+  keybindings: EditorKeybindings;
   lineWrap: boolean;
   fontSize: number;
   /** Pass -halt-on-error to latexmk/pdflatex (Tectonic always halts). */
@@ -131,7 +134,7 @@ export interface EditorSettings {
 
 const DEFAULT_EDITOR: EditorSettings = {
   autoCompile: false,
-  vimMode: false,
+  keybindings: "none",
   lineWrap: true,
   fontSize: 13,
   stopOnFirstError: true,
@@ -177,7 +180,6 @@ const DEFAULT_INTEGRATIONS: ipc.IntegrationsSettings = {
     mendeley: {},
   },
   cloud: { accounts: [] },
-  vcs: { git: {}, github: {} },
   // Off until the user configures a provider — every AI surface stays hidden.
   ai: { enabled: false, perProviderModel: {} },
   grammar: { enabled: false },
@@ -212,9 +214,6 @@ const [profileAvatarPath, setProfileAvatarPath] =
 export function noteProfileAvatar(path: string | null | undefined): void {
   setProfileAvatarPath(path ?? undefined);
 }
-// Egress opt-in: OFF by default — the Sentry SDK is never even fetched unless
-// the user enables this (see src/lib/sentry-gate.ts).
-const [shareCrashReports, setShareCrashReports] = createSignal<boolean>(false);
 // Auto-update check on launch. ON by default — the check is a plain HTTPS GET
 // to GitHub with no identifiers (see src/lib/updater.ts). Dormant regardless
 // until an updater pubkey is configured.
@@ -224,14 +223,6 @@ const [updatesCheckAutomatically, setUpdatesCheckAutomatically] =
 // load boundary — mirrored by the Rust clamp in settings.rs, so the store and
 // the recorder always agree on the bound.
 const [historyMaxVersions, setHistoryMaxVersions] = createSignal<number>(50);
-// Read-only mirror of privacy.installId: Rust mints it on the first crash
-// report; the TS side only carries it through buildSettings() so a settings
-// save can't clobber it. `noteInstallId` records an id minted mid-session
-// (returned by the submit/scan IPCs after Rust persisted it).
-const [installId, setInstallId] = createSignal<string | undefined>(undefined);
-export function noteInstallId(id: string | null | undefined): void {
-  if (id) setInstallId(id);
-}
 // Interface scale in percent (100 = 1.0). density.css wraps its px tokens in
 // calc(<px> * var(--ui-scale, 1)); this store owns setting the variable on
 // <html> (see the effect below the FIELDS list).
@@ -314,6 +305,11 @@ const FIELDS: FieldSpec[] = [
       return {
         ...merged,
         tabSize: [2, 4, 8].includes(merged.tabSize) ? merged.tabSize : 2,
+        keybindings: validEnum<EditorKeybindings>(
+          merged.keybindings,
+          ["none", "vim", "emacs"],
+          "none",
+        ),
         lineHeight: validEnum<LineHeightMode>(
           merged.lineHeight,
           ["compact", "normal", "relaxed"],
@@ -632,23 +628,6 @@ const FIELDS: FieldSpec[] = [
       out.profile = { ...profile() };
     },
   },
-  // --- privacy ---
-  // Not the generic field() shape: privacy serializes as one object and must
-  // preserve the Rust-owned installId alongside the user-facing toggle.
-  {
-    key: "privacy",
-    hydrate: (s) => {
-      setShareCrashReports(s.privacy?.shareCrashReports ?? false);
-      setInstallId(s.privacy?.installId ?? undefined);
-    },
-    serialize: (out) => {
-      const id = installId();
-      out.privacy = {
-        shareCrashReports: shareCrashReports(),
-        ...(id ? { installId: id } : {}),
-      };
-    },
-  },
   // --- updates ---
   field<boolean>({
     key: "updates.checkAutomatically",
@@ -762,7 +741,6 @@ export function buildSettings(): ipc.AppSettings {
     workspace: {},
     integrations: undefined,
     profile: undefined,
-    privacy: undefined,
     updates: undefined,
     history: undefined,
   } as unknown as ipc.AppSettings;
@@ -819,7 +797,7 @@ createRoot(() => {
   // Slower than the debounce so a persistently failing write (disk full,
   // settings.json locked by another process) retries without hammering.
   // Doubles per consecutive failure up to the cap so a deterministic failure
-  // can't flood the capped telemetry log or retry-spin forever at 2s.
+  // can't spam the console or retry-spin forever at 2s.
   const SAVE_RETRY_MS = 2_000;
   const SAVE_RETRY_MAX_MS = 60_000;
   // Generous — a slow write that settles still counts as a success. Without
@@ -941,7 +919,6 @@ export {
   profileAvatarPath,
   projectsRoot,
   settingsLoaded,
-  shareCrashReports,
   uiScale,
   updatesCheckAutomatically,
   setCompileEngine,
@@ -951,7 +928,6 @@ export {
   setOnboarded,
   setProfile,
   setProjectsRoot,
-  setShareCrashReports,
   setUiScale,
   setUpdatesCheckAutomatically,
 };

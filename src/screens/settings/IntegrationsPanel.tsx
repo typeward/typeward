@@ -1,10 +1,8 @@
 /**
- * Integrations settings panel.
- *
- * Phase 1 ships the References card only — Cloud / Git / AI / Grammar /
- * Templates cards land alongside their respective phases. The shape of
- * this file is set up to host them all in one panel rather than
- * sub-routing, so users can scroll one page to see what's wired up.
+ * Integrations settings panel: References / Cloud / AI / Grammar cards.
+ * (Git has no card — it rides the user's own git setup and auto-enables on
+ * repo detection.) One scrollable panel rather than sub-routing, so users
+ * can see what's wired up in one place.
  */
 
 import { describeIpcError } from "~/lib/errors";
@@ -36,18 +34,13 @@ import {
   setMendeleyClientSecret,
 } from "~/integrations/references/mendeley";
 import { probeBetterBibTex, probeZoteroLocalApi } from "~/integrations/references/zotero";
-import {
-  connectGithub,
-  disconnectGithub,
-  hasGithubCredential,
-} from "~/integrations/vcs/github";
 import { connectWebdav, disconnectWebdav } from "~/integrations/cloud/webdav";
 import { integrationsSettings, setIntegrationsSettings } from "~/stores/settings-store";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { notifySuccess } from "~/lib/toast";
 import * as ipc from "~/ipc";
 
-export type IntegrationsSection = "references" | "cloud" | "vcs" | "ai" | "grammar";
+export type IntegrationsSection = "references" | "cloud" | "ai" | "grammar";
 
 /**
  * One card per integration category. The Settings nav exposes each as its
@@ -64,9 +57,6 @@ export const IntegrationsPanel: Component<{ section?: IntegrationsSection }> = (
       </Show>
       <Show when={!props.section || props.section === "cloud"}>
         <CloudStorageCard />
-      </Show>
-      <Show when={!props.section || props.section === "vcs"}>
-        <VcsCard />
       </Show>
       <Show when={!props.section || props.section === "ai"}>
         <AiCard />
@@ -640,161 +630,6 @@ const WebdavRow: Component = () => {
             </div>
           </Show>
         </div>
-      </Show>
-    </ProviderRow>
-  );
-};
-
-// =================================================================
-// Git & GitHub card
-// =================================================================
-
-const VcsCard: Component = () => {
-  return (
-    <Card
-      title="Git & GitHub"
-      subtitle="Commit / push / pull from inside the editor. Clone repos as new projects. Set your author identity here so commits go through with the right name and email."
-    >
-      <AuthorIdentityRow />
-      <GithubAccountRow />
-    </Card>
-  );
-};
-
-const AuthorIdentityRow: Component = () => {
-  const git = () => integrationsSettings().vcs.git;
-
-  const update = (patch: { authorName?: string; authorEmail?: string }) => {
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      vcs: {
-        ...integrationsSettings().vcs,
-        git: { ...git(), ...patch },
-      },
-    });
-  };
-
-  return (
-    <ProviderRow
-      name="Author identity"
-      hint="Falls back to your system gitconfig when blank. Required for commits — git will refuse to commit without a signature."
-      status={git().authorName && git().authorEmail ? "ready" : "unconfigured"}
-      controls={<span class="text-xs text-fg-3 italic">Saved in settings.json</span>}
-    >
-      <div class="mt-3 flex flex-col gap-2">
-        <div class="flex gap-2">
-          <div class="min-w-0 flex-1">
-            <TextField
-              label="Name"
-              size="sm"
-              type="text"
-              value={git().authorName ?? ""}
-              onInput={(e) => update({ authorName: e.currentTarget.value || undefined })}
-            />
-          </div>
-          <div class="min-w-0 flex-1">
-            <TextField
-              label="Email"
-              size="sm"
-              type="email"
-              placeholder="e.g. you@example.com"
-              value={git().authorEmail ?? ""}
-              onInput={(e) => update({ authorEmail: e.currentTarget.value || undefined })}
-            />
-          </div>
-        </div>
-      </div>
-    </ProviderRow>
-  );
-};
-
-const GithubAccountRow: Component = () => {
-  const accountId = () => integrationsSettings().vcs.github.accountId;
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<string | null>(null);
-  const [userCode, setUserCode] = createSignal<string | null>(null);
-
-  const [hasCred] = createResource(accountId, async (login) => {
-    if (!login) return false;
-    // Read unguarded in JSX below; an errored resource re-throws on read, so a
-    // keyring failure would blank the window rather than showing "not signed in".
-    return await hasGithubCredential().catch(() => false);
-  });
-
-  const handleConnect = async () => {
-    setError(null);
-    setUserCode(null);
-    setBusy(true);
-    try {
-      const account = await connectGithub((code) => setUserCode(code));
-      setIntegrationsSettings({
-        ...integrationsSettings(),
-        vcs: {
-          ...integrationsSettings().vcs,
-          github: { accountId: account.login },
-        },
-      });
-      setUserCode(null);
-    } catch (err) {
-      setError(describeIpcError(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDisconnect = async () => {
-    const login = accountId();
-    if (!login) return;
-    try {
-      await disconnectGithub(login);
-    } catch (e) {
-      notifyError("Couldn't disconnect GitHub", errorText(e));
-      return;
-    }
-    setIntegrationsSettings({
-      ...integrationsSettings(),
-      vcs: {
-        ...integrationsSettings().vcs,
-        github: {},
-      },
-    });
-  };
-
-  return (
-    <ProviderRow
-      name="GitHub"
-      hint={
-        accountId()
-          ? `Connected as ${accountId()}. The token is stored in the OS keyring under git.github.com so libgit2 picks it up on push / pull.`
-          : "Sign in via GitHub's device flow — works on desktop and tablet, no loopback callback needed."
-      }
-      status={accountId() && hasCred() ? "ready" : "unconfigured"}
-      controls={
-        <Show
-          when={accountId()}
-          fallback={
-            <Button variant="primary" size="sm" class="h-8" onClick={handleConnect} disabled={busy()}>
-              {busy() ? "Waiting…" : "Sign in"}
-            </Button>
-          }
-        >
-          <Button variant="ghost" size="sm" class="h-8" onClick={handleDisconnect}>
-            Disconnect
-          </Button>
-        </Show>
-      }
-    >
-      <Show when={userCode()}>
-        <div class="mt-3 flex items-center gap-3 rounded-md bg-[var(--color-control-fill)] px-3 py-2">
-          <span class="text-xs text-fg-3">User code:</span>
-          <span class="mono select-all text-lg font-semibold tracking-[0.25em] text-fg-1">
-            {userCode()}
-          </span>
-          <span class="text-xs text-fg-3">— your browser should open with this prefilled.</span>
-        </div>
-      </Show>
-      <Show when={error()}>
-        <div class="mt-3 select-text text-xs text-[var(--color-err)]">{error()}</div>
       </Show>
     </ProviderRow>
   );

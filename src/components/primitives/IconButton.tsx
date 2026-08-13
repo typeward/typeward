@@ -12,9 +12,13 @@ import { touchAffordances } from "~/stores/viewport-store";
 export type IconButtonSize = "sm" | "md" | "lg";
 export type IconButtonVariant = "ghost" | "control";
 
-interface IconButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement> {
+interface IconButtonProps
+  extends Omit<JSX.ButtonHTMLAttributes<HTMLButtonElement>, "type"> {
   /** Required accessible name — becomes aria-label AND the tooltip content. */
   label: string;
+  // Solid's union includes the obsolete "menu" value, which Kobalte's
+  // polymorphic trigger (rightly) rejects.
+  type?: "button" | "reset" | "submit";
   size?: IconButtonSize;
   variant?: IconButtonVariant;
   /**

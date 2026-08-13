@@ -1,7 +1,6 @@
 import { describeIpcError } from "~/lib/errors";
 import { useNavigate } from "@solidjs/router";
 import {
-  Activity,
   ArrowLeft,
   BookMarked,
   Check,
@@ -10,7 +9,6 @@ import {
   ChevronRight,
   Cloud,
   Folder,
-  GitBranch,
   Info,
   Keyboard,
   Palette,
@@ -37,11 +35,11 @@ import { commands } from "~/commands/registry";
 import * as ipc from "~/ipc";
 import { installDismiss } from "~/lib/dismiss";
 import { handleListboxKeydown, useListboxOpenFocus } from "~/lib/listbox-nav";
-import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { IntegrationsPanel } from "./IntegrationsPanel";
 import { ProfileSection } from "./ProfileSection";
 import {
   type CompileEngine,
+  type EditorKeybindings,
   type EditorSettings,
   type LineHeightMode,
   buildSettings,
@@ -56,10 +54,8 @@ import {
   setHistoryMaxVersions,
   setIntegrationsSettings,
   setProjectsRoot,
-  setShareCrashReports,
   setUiScale,
   setUpdatesCheckAutomatically,
-  shareCrashReports,
   uiScale,
   updatesCheckAutomatically,
 } from "~/stores/settings-store";
@@ -122,7 +118,6 @@ type SectionId =
   | "profile"
   | "notifications"
   | "security"
-  | "diagnostics"
   | "about"
   | "editor"
   | "appearance"
@@ -130,7 +125,6 @@ type SectionId =
   | "projects-files"
   | "int-references"
   | "int-cloud"
-  | "int-vcs"
   | "int-ai"
   | "int-grammar";
 
@@ -157,7 +151,6 @@ const NAV: NavGroup[] = [
       // the panel was a fully inert preview. NotificationsPanel stays in this
       // file so the row can return with the real feature.
       { id: "security", label: "Security", icon: Shield },
-      { id: "diagnostics", label: "Diagnostics", icon: Activity },
       { id: "about", label: "About", icon: Info },
     ],
   },
@@ -175,7 +168,6 @@ const NAV: NavGroup[] = [
     items: [
       { id: "int-references", label: "References", icon: BookMarked },
       { id: "int-cloud", label: "Cloud storage", icon: Cloud },
-      { id: "int-vcs", label: "Git & GitHub", icon: GitBranch },
       { id: "int-ai", label: "AI providers", icon: Sparkles },
       { id: "int-grammar", label: "Grammar", icon: SpellCheck },
     ],
@@ -192,13 +184,12 @@ const SECTION_IDS: ReadonlySet<string> = new Set(
 const SECTION_KEYWORDS: Record<SectionId, string[]> = {
   profile: ["name", "profile", "avatar", "author", "identity"],
   notifications: ["email", "push", "quiet hours"],
-  security: ["privacy", "crash reports", "telemetry", "sentry", "reset", "danger"],
-  diagnostics: ["telemetry", "log", "errors", "report", "bug", "crash", "feedback"],
+  security: ["reset", "danger"],
   about: ["version", "updates", "release", "check for updates"],
   editor: [
     "engine", "compile", "latexmk", "tectonic", "autosave", "history", "versions",
     "font", "wrap", "line height", "tab size", "line numbers", "autocomplete",
-    "brackets", "vim", "grammar", "spell", "pdf", "zoom", "invert",
+    "brackets", "keybindings", "vim", "emacs", "grammar", "spell", "pdf", "zoom", "invert",
   ],
   appearance: [
     "theme", "dark", "light", "system", "accent", "color", "gradient", "glow",
@@ -211,7 +202,6 @@ const SECTION_KEYWORDS: Record<SectionId, string[]> = {
   ],
   "int-references": ["zotero", "mendeley", "bibtex", "citations", "bibliography", "doi", "arxiv"],
   "int-cloud": ["webdav", "nextcloud", "owncloud", "sync", "cloud storage"],
-  "int-vcs": ["git", "github", "overleaf", "commit", "clone", "version control", "repository"],
   "int-ai": ["ai", "claude", "anthropic", "openai", "chatgpt", "gemini", "ollama", "chat", "models"],
   "int-grammar": ["harper", "grammar", "spelling", "spell check", "dictionary"],
 };
@@ -240,9 +230,6 @@ const SectionPanel: Component<{ id: SectionId }> = (props) => (
     <Show when={props.id === "security"}>
       <SecurityPanel />
     </Show>
-    <Show when={props.id === "diagnostics"}>
-      <DiagnosticsPanel />
-    </Show>
     <Show when={props.id === "about"}>
       <AboutPanel />
     </Show>
@@ -251,9 +238,6 @@ const SectionPanel: Component<{ id: SectionId }> = (props) => (
     </Show>
     <Show when={props.id === "int-cloud"}>
       <IntegrationsPanel section="cloud" />
-    </Show>
-    <Show when={props.id === "int-vcs"}>
-      <IntegrationsPanel section="vcs" />
     </Show>
     <Show when={props.id === "int-ai"}>
       <IntegrationsPanel section="ai" />
@@ -1649,12 +1633,26 @@ const EditorPanel: Component = () => {
           checked={editorSettings().autoCloseBrackets}
           onChange={(v) => update("autoCloseBrackets", v)}
         />
-        <ToggleRow
-          label="Vim mode"
-          hint="Modal editing bindings in the source pane."
-          checked={editorSettings().vimMode}
-          onChange={(v) => update("vimMode", v)}
-        />
+        <Row
+          label="Keybindings"
+          hint="Editing bindings in the source pane — None keeps the standard bindings."
+        >
+          <SelectStub
+            value={
+              editorSettings().keybindings === "none"
+                ? "None"
+                : editorSettings().keybindings === "vim"
+                  ? "Vim"
+                  : "Emacs"
+            }
+            options={[
+              { value: "none", label: "None" },
+              { value: "vim", label: "Vim" },
+              { value: "emacs", label: "Emacs" },
+            ]}
+            onChange={(v) => update("keybindings", v as EditorKeybindings)}
+          />
+        </Row>
         <ToggleRow
           label="Visual editing for LaTeX"
           hint="Edit .tex files as a formatted document — markup stays hidden (Mod+Shift+V)."
@@ -1902,18 +1900,6 @@ const resetAppData = async (): Promise<void> => {
 const SecurityPanel: Component = () => {
   return (
     <div class="space-y-3">
-      <Card
-        title="Privacy"
-        subtitle="What leaves this machine. Everything is off by default."
-      >
-        <ToggleRow
-          label="Share crash reports"
-          hint="Send crash and error reports to Sentry to help fix bugs: enables in-app error reporting and an automatic scan for crashes from previous runs at launch. Off keeps diagnostics in the local log only (browse and report individual events under Diagnostics). Takes effect immediately."
-          checked={shareCrashReports()}
-          onChange={setShareCrashReports}
-        />
-      </Card>
-
       <Card title="Danger zone">
         <div class="flex items-center gap-4 px-5 py-4">
           <div
@@ -1950,7 +1936,6 @@ const SecurityPanel: Component = () => {
 // =================================================================
 
 const AboutPanel: Component = () => {
-  const [info] = createResource(() => ipc.collectSystemInfo().catch(() => null));
   const [checking, setChecking] = createSignal(false);
 
   const check = async () => {
@@ -1971,7 +1956,7 @@ const AboutPanel: Component = () => {
       >
         <Row label="Version" hint="The version of Typeward you're running.">
           <span class="mono select-text text-sm text-fg-1">
-            {info()?.appVersion ?? "…"}
+            {__APP_VERSION__}
           </span>
         </Row>
         <Show when={!isTauriMobile()}>

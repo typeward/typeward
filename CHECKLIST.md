@@ -24,8 +24,10 @@ confirm. Items tagged **[audit]** verify a fix from this remediation pass.
       (esp. Linux/WebKitGTK).
 - [ ] **[audit TW-S3-29]** Trigger one export; only that row shows the spinner, not all five.
 - [ ] Grammar (Harper), references, cloud sync, git, AI streaming each smoke-tested if enabled.
-- [ ] **[audit TW-S2-05]** With "Share crash reports" ON, trigger `dev.sentryTest`; confirm in
-      Sentry the event carries no absolute home paths (username scrubbed to `~`).
+- ~~**[audit TW-S2-05]** Share crash reports / `dev.sentryTest` scrubbing check~~ — moot: all
+      telemetry/crash reporting (Sentry, `shareCrashReports`, `dev.sentryTest`) was removed
+      2026-08-13; instead verify no crash-report/diagnostics UI renders and the CSP
+      `connect-src` has no external origins.
 - [ ] Quit with unsaved changes → dirty-close confirm appears.
 
 ## Windows

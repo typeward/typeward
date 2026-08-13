@@ -29,7 +29,6 @@ pnpm-debug.log*
 .env
 .env.local
 .env.*.local
-.env.sentry-build-plugin
 
 # Typeward project sidecar (per-project; only ignored if it appears in dev workspace)
 # .typeward/

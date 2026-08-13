@@ -11,7 +11,6 @@ mod compile;
 // invariant), and `compile.rs` compiles on mobile. Its PATH-probe surface —
 // the part that actually backs an IPC — stays desktop-only inside the module.
 mod detect;
-mod diagnostics;
 mod drop_allow;
 #[cfg(desktop)]
 mod export_annotated;
@@ -30,7 +29,6 @@ mod rename;
 mod settings;
 #[cfg(desktop)]
 mod synctex;
-mod telemetry;
 mod themes;
 mod todo_scan;
 mod trust;
@@ -75,7 +73,7 @@ pub fn run() {
     // unrecoverable: the SPA and everything it held (unsaved buffers, in-flight
     // compiles, pending debounced writes) is gone, and an attacker page is a
     // credible pixel-copy phish of the very Settings panel that collects the
-    // user's Zotero / OpenAI / Anthropic / GitHub credentials. Malicious project
+    // user's Zotero / OpenAI / Anthropic credentials. Malicious project
     // content is an explicit adversary in the threat model, and a `.md` preview
     // renders links straight from it.
     //
@@ -147,7 +145,6 @@ pub fn run() {
 
     let builder = builder
         .setup(|app| {
-            telemetry::install(app.handle());
             #[cfg(target_os = "macos")]
             install_macos_menu(app)?;
             // Mobile has no Documents dir (dirs::document_dir() is None), so
@@ -185,6 +182,15 @@ pub fn run() {
                     .as_ref()
                     .and_then(|s| s.integrations.ai.ollama_base_url.as_deref()),
             );
+            // One-shot hygiene: pre-2026-08-13 builds parked a GitHub
+            // device-flow PAT in the keyring (git.github.com /
+            // x-access-token). The sign-in surface and every read path are
+            // gone, so delete the orphaned secret. Best-effort off the main
+            // thread — the Linux Secret Service backend can block on D-Bus.
+            #[cfg(desktop)]
+            tauri::async_runtime::spawn_blocking(|| {
+                let _ = integrations::credentials::delete_secret("git.github.com", "x-access-token");
+            });
             // tauri.conf.json's backgroundColor is a static compile-time value
             // (Daylight cream), but the theme is per-user runtime state — dark
             // theme users would get a light flash between window creation and
@@ -326,13 +332,6 @@ pub fn run() {
         history::history_read_version,
         history::history_restore,
         history::history_clear,
-        telemetry::record_event,
-        telemetry::list_recent_events,
-        telemetry::read_telemetry_log,
-        diagnostics::preview_error_report,
-        diagnostics::submit_error_report,
-        diagnostics::scan_and_submit_crashes,
-        diagnostics::collect_system_info,
         integrations::credentials::credential_set,
         integrations::credentials::credential_exists,
         integrations::credentials::credential_delete,

@@ -7,7 +7,8 @@
 //!
 //! Secrets are never readable from the webview: the IPC surface can write,
 //! probe, and delete, while every read happens in Rust (`authRef` resolution in
-//! `http.rs` / `oauth.rs` / `vcs/git.rs` / `webdav.rs`).
+//! `http.rs` / `oauth.rs` / `webdav.rs`; git credentials come from the user's
+//! own git credential helper, never the app keyring).
 //!
 //! The keyring crate's blocking API is fine to call from async handlers via
 //! `tokio::task::spawn_blocking`, which is what the IPC commands do — the

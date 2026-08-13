@@ -35,8 +35,6 @@ pub struct Settings {
     #[serde(default)]
     pub profile: ProfileSettings,
     #[serde(default)]
-    pub privacy: PrivacySettings,
-    #[serde(default)]
     pub updates: UpdatesSettings,
     #[serde(default)]
     pub history: HistorySettings,
@@ -105,22 +103,9 @@ impl Default for UpdatesSettings {
     }
 }
 
-/// Egress opt-ins. Everything here defaults to OFF — the app promises zero
-/// network reporting unless the user explicitly enables it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct PrivacySettings {
-    #[serde(rename = "shareCrashReports", default)]
-    pub share_crash_reports: bool,
-    /// Random UUIDv4 attached to crash reports so Sentry can group per-install
-    /// without identifying anyone. Minted by Rust on the FIRST submission only
-    /// (diagnostics.rs); absent until then.
-    #[serde(rename = "installId", default, skip_serializing_if = "Option::is_none")]
-    pub install_id: Option<String>,
-}
-
 /// Who the user is, as far as this machine is concerned. Purely local: it
-/// pre-fills the git commit author when the explicit `vcs.git` fields are blank
-/// and seeds a template's `author` variable. Nothing here is transmitted.
+/// seeds a template's `author` variable. Nothing here is transmitted. (Git
+/// commit identity comes from the user's own gitconfig, never from here.)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProfileSettings {
     #[serde(rename = "displayName", default)]
@@ -146,8 +131,15 @@ pub struct ProfileSettings {
 pub struct EditorSettings {
     #[serde(rename = "autoCompile")]
     pub auto_compile: bool,
-    #[serde(rename = "vimMode")]
-    pub vim_mode: bool,
+    /// "none" | "vim" | "emacs". The empty serde default is a sentinel for
+    /// "absent from the file" so `sanitize_loaded_settings` can migrate the
+    /// legacy boolean below without clobbering an explicit "none".
+    #[serde(default)]
+    pub keybindings: String,
+    /// Pre-2026-08-13 shape: `vimMode: bool`. Read-only migration input —
+    /// never serialized back, so the key disappears on the next save.
+    #[serde(rename = "vimMode", default, skip_serializing)]
+    pub legacy_vim_mode: bool,
     #[serde(rename = "lineWrap")]
     pub line_wrap: bool,
     #[serde(rename = "fontSize")]
@@ -245,8 +237,6 @@ pub struct IntegrationsSettings {
     #[serde(default)]
     pub cloud: CloudSettings,
     #[serde(default)]
-    pub vcs: VcsSettings,
-    #[serde(default)]
     pub ai: AiSettings,
     #[serde(default)]
     pub grammar: GrammarSettings,
@@ -334,28 +324,6 @@ pub struct CloudAccountRef {
         skip_serializing_if = "Option::is_none"
     )]
     pub allow_private_host: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct VcsSettings {
-    #[serde(default)]
-    pub git: GitSettings,
-    #[serde(default)]
-    pub github: GithubSettings,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GitSettings {
-    #[serde(rename = "authorName", default)]
-    pub author_name: Option<String>,
-    #[serde(rename = "authorEmail", default)]
-    pub author_email: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GithubSettings {
-    #[serde(rename = "accountId", default)]
-    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -484,7 +452,6 @@ impl Default for Settings {
             workspace: WorkspaceSettings::default(),
             integrations: IntegrationsSettings::default(),
             profile: ProfileSettings::default(),
-            privacy: PrivacySettings::default(),
             updates: UpdatesSettings::default(),
             history: HistorySettings::default(),
             compile: CompileSettings::default(),
@@ -496,7 +463,8 @@ impl Default for EditorSettings {
     fn default() -> Self {
         Self {
             auto_compile: false,
-            vim_mode: false,
+            keybindings: "none".into(),
+            legacy_vim_mode: false,
             line_wrap: true,
             font_size: 13,
             stop_on_first_error: true,
@@ -644,6 +612,13 @@ fn sanitize_loaded_settings(mut settings: Settings) -> Settings {
         .history
         .max_versions_per_file
         .clamp(HISTORY_MIN_VERSIONS_PER_FILE, HISTORY_MAX_VERSIONS_PER_FILE);
+    // Enum clamp + legacy migration: a file predating the `keybindings` enum
+    // carries only `vimMode`; anything unrecognized degrades to "none".
+    settings.editor.keybindings = match settings.editor.keybindings.as_str() {
+        "none" | "vim" | "emacs" => settings.editor.keybindings,
+        _ if settings.editor.legacy_vim_mode => "vim".into(),
+        _ => "none".into(),
+    };
     settings
 }
 
@@ -658,7 +633,7 @@ fn settings_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, SettingsError
 
 /// settings.json is read-modify-written from several independent places — the
 /// renderer's debounced `save_settings` (which merges backend-owned keys off
-/// disk first), the avatar IPC, the crash reporter's install-id mint — and each
+/// disk first) and the avatar IPC — and each
 /// of those runs on its own `spawn_blocking` thread. Without a lock the two
 /// halves of one sequence interleave with another's and whichever section the
 /// loser had just changed is silently dropped: a typed display name, or the
@@ -777,15 +752,6 @@ fn merge_backend_owned(incoming: &mut Settings, existing: &Settings) {
     if incoming.profile.avatar_path.is_none() {
         incoming.profile.avatar_path = existing.profile.avatar_path.clone();
     }
-    // Also backend-minted (diagnostics.rs, on the first crash submission). The
-    // renderer only learns it via `noteInstallId` after that IPC returns, so a
-    // settings save already in flight would otherwise clear the id that was just
-    // written — churning the Sentry install identity the field exists to keep
-    // stable. A Reset still clears it: that path writes `Settings::default()`
-    // through `save`, not this merge.
-    if incoming.privacy.install_id.is_none() {
-        incoming.privacy.install_id = existing.privacy.install_id.clone();
-    }
 }
 
 // Re-export for command handlers
@@ -794,6 +760,42 @@ pub use tauri::Manager;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_vim_mode_migrates_to_the_keybindings_enum() {
+        // Pre-enum file: only `vimMode: true` — becomes "vim".
+        let mut s = Settings::default();
+        s.editor.keybindings = String::new();
+        s.editor.legacy_vim_mode = true;
+        assert_eq!(sanitize_loaded_settings(s).editor.keybindings, "vim");
+
+        // An explicit enum value wins over a stale legacy boolean.
+        let mut s = Settings::default();
+        s.editor.keybindings = "emacs".into();
+        s.editor.legacy_vim_mode = true;
+        assert_eq!(sanitize_loaded_settings(s).editor.keybindings, "emacs");
+
+        // Garbage degrades to "none", not to the legacy boolean's absence.
+        let mut s = Settings::default();
+        s.editor.keybindings = "hjkl".into();
+        assert_eq!(sanitize_loaded_settings(s).editor.keybindings, "none");
+    }
+
+    #[test]
+    fn vim_mode_key_is_read_for_migration_but_never_written_back() {
+        let editor: EditorSettings = serde_json::from_value(serde_json::json!({
+            "autoCompile": false,
+            "vimMode": true,
+            "lineWrap": true,
+            "fontSize": 13
+        }))
+        .unwrap();
+        assert!(editor.legacy_vim_mode);
+        assert_eq!(editor.keybindings, "");
+        let out = serde_json::to_value(&editor).unwrap();
+        assert!(out.get("vimMode").is_none());
+        assert!(out.get("keybindings").is_some());
+    }
 
     #[test]
     fn backend_owned_keys_survive_a_frontend_settings_roundtrip() {
@@ -839,27 +841,6 @@ mod tests {
             Some("/data/profile/avatar.png")
         );
         assert_eq!(incoming.profile.display_name, "Ada");
-    }
-
-    #[test]
-    fn the_minted_install_id_survives_a_frontend_settings_roundtrip() {
-        // Rust mints it on the first crash submission; the renderer only learns
-        // it after that IPC returns. A save already in flight must not clear it,
-        // or the Sentry install identity churns on the next submission.
-        let mut existing = Settings::default();
-        existing.privacy.install_id = Some("6f1e2c1a-0000-4000-8000-abcdefabcdef".into());
-
-        let mut payload = serde_json::to_value(Settings::default()).unwrap();
-        payload["privacy"]["shareCrashReports"] = serde_json::json!(true);
-        let mut incoming: Settings = serde_json::from_value(payload).unwrap();
-        assert_eq!(incoming.privacy.install_id, None);
-
-        merge_backend_owned(&mut incoming, &existing);
-        assert_eq!(
-            incoming.privacy.install_id.as_deref(),
-            Some("6f1e2c1a-0000-4000-8000-abcdefabcdef")
-        );
-        assert!(incoming.privacy.share_crash_reports);
     }
 
     #[test]

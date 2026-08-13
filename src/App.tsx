@@ -4,7 +4,6 @@ import { Router, Route, useNavigate } from "@solidjs/router";
 import {
   onboarded,
   settingsLoaded,
-  shareCrashReports,
   updatesCheckAutomatically,
 } from "~/stores/settings-store";
 import { refresh as refreshProjects } from "~/stores/projects-store";
@@ -13,8 +12,7 @@ import { describeIpcError } from "~/lib/errors";
 // so their createRoot effects are mounted before any screen renders.
 import "~/stores/settings-store";
 import { setupAutosave } from "~/lib/autosave";
-import { installSentryGate } from "~/lib/sentry-gate";
-import { installFrontendErrorHook, recordError } from "~/lib/telemetry";
+import { recordError } from "~/lib/telemetry";
 import { bootCoreCommands } from "~/commands/boot";
 import { registerAiEditorActions } from "~/integrations/ai/editor-actions";
 import { initAiProviders } from "~/integrations/ai/init";
@@ -86,8 +84,6 @@ const AiActionDialog = lazy(() =>
 void ProjectsScreen.preload();
 
 setupAutosave();
-installFrontendErrorHook();
-installSentryGate();
 bootCoreCommands();
 initReferenceProviders();
 initCloudSync();
@@ -97,19 +93,12 @@ initCustomThemes();
 
 /**
  * Recoverable fallback for a render/effect throw anywhere under the app shell.
- * Without a boundary, one uncaught throw blanks the whole webview with nothing
- * but telemetry.log as evidence; here the error is logged and the user gets a
- * "Try again" that resets the boundary (re-rendering the subtree).
+ * Without a boundary, one uncaught throw blanks the whole webview; here the
+ * error is logged to the console and the user gets a "Try again" that resets
+ * the boundary (re-rendering the subtree).
  */
 const AppCrash: Component<{ err: unknown; reset: () => void }> = (props) => {
   recordError("ui-crash", "render error caught by app ErrorBoundary", props.err);
-  // Boundary-caught errors never reach window.onerror, so Sentry's global
-  // handlers can't see them — report explicitly, but only when the user has
-  // opted into crash reporting (otherwise this would fetch the SDK chunk for
-  // a no-op: reportCrash is a no-op on an uninitialized client anyway).
-  if (shareCrashReports()) {
-    void import("~/lib/sentry").then((m) => m.reportCrash(props.err)).catch(() => {});
-  }
   return (
     <div
       role="alert"

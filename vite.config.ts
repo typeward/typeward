@@ -2,7 +2,6 @@
 import { defaultClientConditions, defineConfig } from "vite";
 import solid from "vite-plugin-solid";
 import tailwindcss from "@tailwindcss/vite";
-import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 
@@ -41,32 +40,6 @@ function appVersion(): string {
   }
 }
 
-// Sentry source-map upload is OPT-IN, never implicit: an ordinary `npm run
-// build` must be hermetic (no network, no sentry.io contact) even on a machine
-// that has a token configured. Release builds set SENTRY_UPLOAD=true (see
-// .github/workflows/release.yml) to turn it on.
-//
-// Only then is the auth token read from .env.sentry-build-plugin (gitignored;
-// see .env.example) — Vite doesn't load env files into process.env at
-// config-eval time, so pull it in explicitly. No token still means no upload
-// and no sourcemap generation: maps must never reach dist/ un-deleted, because
-// `tauri build` ships dist/ verbatim (source leak).
-const sentryUploadRequested =
-  process.env.SENTRY_UPLOAD === "true" && !process.env.VITEST && !process.env.TAURI_ENV_DEBUG;
-if (sentryUploadRequested && !process.env.SENTRY_AUTH_TOKEN) {
-  try {
-    process.loadEnvFile(fileURLToPath(new URL("./.env.sentry-build-plugin", import.meta.url)));
-  } catch {
-    /* token file absent — upload stays disabled */
-  }
-}
-const sentryUpload = sentryUploadRequested && !!process.env.SENTRY_AUTH_TOKEN;
-if (sentryUploadRequested && !sentryUpload) {
-  console.warn(
-    "[sentry] SENTRY_UPLOAD=true but no SENTRY_AUTH_TOKEN — building without source maps.",
-  );
-}
-
 // KaTeX ships woff2 + woff + ttf for all 20 math faces; every Tauri webview
 // target (WebKitGTK / WKWebView / WebView2 / Android WebView) supports woff2,
 // so the woff/ttf fallbacks (~876 KB) are dead weight. Strip them from the
@@ -95,19 +68,6 @@ export default defineConfig({
     solid({ hot: !process.env.VITEST }),
     tailwindcss(),
     katexWoff2Only(),
-    // Must come last so it sees the final chunks. Symbolication matches via
-    // injected Debug IDs, not release names, so no release config is needed.
-    ...(sentryUpload
-      ? [
-          sentryVitePlugin({
-            org: "typeward",
-            project: "javascript-solid",
-            authToken: process.env.SENTRY_AUTH_TOKEN,
-            telemetry: false,
-            sourcemaps: { filesToDeleteAfterUpload: ["dist/**/*.map"] },
-          }),
-        ]
-      : []),
   ],
   resolve: {
     alias: {
@@ -164,9 +124,7 @@ export default defineConfig({
     // `true` uses Vite 8's default Oxc minifier. The old "esbuild" minifier is
     // deprecated under Rolldown-Vite and mishandled __VITE_PRELOAD__ markers.
     minify: !process.env.TAURI_ENV_DEBUG,
-    // "hidden" emits maps for the Sentry upload without sourceMappingURL
-    // comments in the chunks; the plugin deletes them from dist/ afterwards.
-    sourcemap: process.env.TAURI_ENV_DEBUG ? true : sentryUpload ? "hidden" : false,
+    sourcemap: !!process.env.TAURI_ENV_DEBUG,
     // The codemirror vendor chunk is a deliberately-split, long-cached vendor
     // bundle (~240 KB gzip); it legitimately exceeds the 500 KB raw default.
     chunkSizeWarningLimit: 800,

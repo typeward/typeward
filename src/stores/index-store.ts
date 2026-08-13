@@ -26,7 +26,6 @@ let queued = false;
 export const indexLabels = (): IndexEntry[] => projectIndex().labels;
 /** Citation keys for the active project. */
 export const indexCitations = (): IndexEntry[] => projectIndex().citations;
-export const indexTruncated = (): boolean => projectIndex().truncated;
 /** True once the first scan for the active project has completed — consumers
  *  that validate against the index (e.g. undefined-reference checks) must wait
  *  for this so they don't flag every reference while the index is still empty. */

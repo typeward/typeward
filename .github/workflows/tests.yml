@@ -50,8 +50,7 @@ jobs:
       # The Rust side has a RustSec gate (rust-audit below) but the npm tree had
       # none, so a frontend advisory could land unnoticed. `--omit=dev` scopes
       # the gate to what actually ships: a build-time-only advisory should not
-      # block a PR, and the one currently in the tree (brace-expansion, reached
-      # through @sentry/vite-plugin) is pinned via `overrides` in package.json.
+      # block a PR.
       - name: Audit shipped npm dependencies
         working-directory: app
         run: npm audit --omit=dev --audit-level=high

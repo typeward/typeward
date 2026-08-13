@@ -86,16 +86,6 @@ harper-typst = "2.7"
 quick-xml = "0.41"
 percent-encoding = "2"
 bytes = "1"
-# Sentry crash reporting (one-shot client in diagnostics.rs). Uses ONLY the
-# `reqwest` feature, deliberately NOT `rustls`: sentry's `rustls` feature selects
-# rustls with the aws-lc-rs provider, which drags in aws-lc-sys → cmake + NASM
-# (a real build hazard, worst on Windows CI). The `reqwest` feature alone gives
-# sentry its own reqwest 0.13 transport on ring-based rustls-tls (no aws-lc, no
-# native-tls) — matching the app's ring TLS stack. Do NOT add `rustls` back here
-# or the aws-lc build hazard returns. (Unpinned 0.46.2 → 0.48.5 on 2026-07-30.)
-sentry = { version = "0.48.5", default-features = false, features = ["reqwest"] }
-uuid = { version = "1.23.4", features = ["v4"] }
-os_info = { version = "3.15.0", default-features = false }
 
 # Desktop-only deps. `cfg(desktop)` isn't a cargo-known cfg, so gate by the
 # concrete mobile targets.
@@ -144,6 +134,6 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 # Strip debuginfo but KEEP the symbol table, so shipped-build panic backtraces
-# (and the Rust-side Sentry crash reports) carry function names instead of bare
-# addresses. `strip = true` would drop the symbols too.
+# carry function names instead of bare addresses. `strip = true` would drop the
+# symbols too.
 strip = "debuginfo"

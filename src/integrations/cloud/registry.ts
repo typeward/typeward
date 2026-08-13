@@ -18,7 +18,6 @@ import {
   createWebdavProvider,
   type WebdavAccount,
 } from "~/integrations/cloud/webdav";
-import { projectCacheRoot } from "~/integrations/cloud/core";
 import type { CloudFsProvider } from "~/integrations/types";
 
 export type CloudProviderId = "webdav";
@@ -62,14 +61,6 @@ export function cloudProviderForAccount(ref: CloudAccountRef): CloudFsProvider {
       throw new Error(`Unknown cloud provider id '${_exhaust as string}'`);
     }
   }
-}
-
-export function cacheRootForCloudProject(
-  projectsRoot: string,
-  ref: CloudAccountRef,
-  projectId: string,
-): string {
-  return projectCacheRoot(projectsRoot, ref.provider, projectId);
 }
 
 /**

@@ -90,8 +90,6 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://api.mendeley.com/oauth/authorize*" },
-        { "url": "https://github.com/login/device*" },
-        { "url": "https://github.com/typeward/app/issues/new*" },
         { "url": "https://tug.org/*" },
         { "url": "https://typst.app/download" },
         { "url": "https://www.zotero.org/*" },

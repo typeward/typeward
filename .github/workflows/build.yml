@@ -21,7 +21,6 @@
 #
 # Secrets used at build time (all optional — the app degrades gracefully):
 #   - VITE_MENDELEY_CLIENT_ID
-#   - VITE_GITHUB_CLIENT_ID
 # Set them under Settings → Secrets and variables → Actions when you
 # want sign-in / OAuth surfaces to work in the test build.
 
@@ -190,7 +189,6 @@ jobs:
           # are fine — the OAuth sign-in paths surface an actionable
           # "register your app" error instead of failing the build.
           VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
-          VITE_GITHUB_CLIENT_ID: ${{ secrets.VITE_GITHUB_CLIENT_ID }}
         run: npm run tauri build
 
       - name: Upload installers

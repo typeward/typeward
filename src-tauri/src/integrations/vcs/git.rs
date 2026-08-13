@@ -2,11 +2,12 @@
 //!
 //! libgit2 is fully synchronous; every operation here runs inside
 //! `tokio::task::spawn_blocking` so we don't park the tokio runtime
-//! during long fetches or pushes. HTTPS credentials are sourced from
-//! the OS keyring under the service name `git.<host>` (e.g.
-//! `git.github.com`), with the account being whatever username the
-//! remote expects — `x-access-token` for GitHub PATs, the user's email
-//! for Overleaf's git bridge, etc.
+//! during long fetches or pushes. HTTPS credentials come from the
+//! user's own git setup: the configured `credential.helper` (Git
+//! Credential Manager on Windows, osxkeychain on macOS, etc.) resolved
+//! via `Cred::credential_helper`. Commit identity likewise comes from
+//! `user.name`/`user.email` in the user's gitconfig — the app stores
+//! no git identity or credentials of its own.
 //!
 //! SSH transport is intentionally out of scope for Phase 3: keypair
 //! management is a separate surface (agent forwarding, host
@@ -16,14 +17,12 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    BranchType, Cred, CredentialType, ErrorCode, FetchOptions, IndexAddOption, PushOptions,
-    RemoteCallbacks, Repository, Signature, Sort, StatusOptions,
+    BranchType, Config, Cred, CredentialType, ErrorCode, FetchOptions, IndexAddOption,
+    PushOptions, RemoteCallbacks, Repository, Signature, Sort, StatusOptions,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use thiserror::Error;
 use url::Url;
-
-use crate::integrations::credentials;
 
 #[derive(Debug, Error)]
 pub enum GitError {
@@ -37,7 +36,7 @@ pub enum GitError {
     InvalidPath(String),
     #[error("background task failed: {0}")]
     Join(String),
-    #[error("no signature configured (set author name + email in settings or system gitconfig)")]
+    #[error("no git identity configured — set user.name and user.email in your git config")]
     NoSignature,
     #[error("working tree has uncommitted changes; commit or stash before pulling")]
     DirtyWorktree,
@@ -99,13 +98,6 @@ pub struct GitStatusSummary {
     pub ahead: usize,
     pub behind: usize,
     pub files: Vec<GitFileStatus>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitAuthor {
-    pub name: String,
-    pub email: String,
 }
 
 // ----- Helpers -----------------------------------------------------------
@@ -194,18 +186,10 @@ fn classify(status: git2::Status) -> (&'static str, &'static str, bool) {
     (staged, unstaged, untracked)
 }
 
-fn signature<'a>(
-    repo: &'a Repository,
-    author: Option<GitAuthor>,
-) -> Result<Signature<'a>, GitError> {
-    if let Some(a) = author {
-        return Ok(Signature::now(&a.name, &a.email)?);
-    }
-    // Fall back to the local repo / global gitconfig identity.
-    match repo.signature() {
-        Ok(sig) => Ok(sig),
-        Err(_) => Err(GitError::NoSignature),
-    }
+/// Commit identity comes from the repo / global gitconfig
+/// (`user.name` + `user.email`) — the app never supplies one.
+fn signature(repo: &Repository) -> Result<Signature<'_>, GitError> {
+    repo.signature().map_err(|_| GitError::NoSignature)
 }
 
 fn ensure_clean_worktree(repo: &Repository) -> Result<(), GitError> {
@@ -249,8 +233,15 @@ fn host_of(remote_url: &str) -> Option<String> {
 }
 
 fn validate_remote_url(remote_url: &str) -> Result<(), GitError> {
-    let parsed = Url::parse(remote_url)
-        .map_err(|_| GitError::InvalidPath(format!("invalid remote URL: {remote_url}")))?;
+    // Static message on purpose: the URL may embed a token (the documented
+    // credential fallback), and error strings reach toasts and the console.
+    let parsed = Url::parse(remote_url).map_err(|_| {
+        GitError::InvalidPath(
+            "remote URL could not be parsed — use an https:// URL (scp-style user@host:path \
+             remotes are not supported)"
+                .into(),
+        )
+    })?;
     if parsed.scheme() != "https" || parsed.host_str().is_none() {
         return Err(GitError::InvalidPath(
             "only HTTPS git remotes are supported".into(),
@@ -262,24 +253,24 @@ fn validate_remote_url(remote_url: &str) -> Result<(), GitError> {
 fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
     let mut cb = RemoteCallbacks::new();
     let host = host_of(&remote_url);
+    // libgit2 re-invokes the callback after a rejected attempt; the helper
+    // would hand back the same credentials forever, so cap the retries.
+    let mut attempts = 0u32;
     cb.credentials(move |url, username_from_url, allowed| {
-        // We only support HTTPS user/pass for Phase 3. SSH and other
-        // schemes return an error so libgit2 falls through to the next
-        // helper (typically the system's git-credential cache).
         if !allowed.intersects(CredentialType::USER_PASS_PLAINTEXT) {
             return Err(git2::Error::from_str(
-                "only HTTPS user/password credentials are supported in Phase 3",
+                "only HTTPS user/password credentials are supported",
             ));
         }
         let host = host
             .clone()
             .ok_or_else(|| git2::Error::from_str("could not parse host from remote URL"))?;
-        // Bind the secret to the host libgit2 is ACTUALLY authenticating
-        // against, not just the one we validated up front. A repository's
-        // `.git/config` is attacker-controlled content (cloned repo, imported
-        // Overleaf zip), and libgit2 connects to `pushurl` when one is set —
-        // so a config naming a benign `url` and a hostile `pushurl` would
-        // otherwise hand that host the PAT stored for the benign one.
+        // Only authenticate against the host we validated up front. A
+        // repository's `.git/config` is attacker-controlled content (cloned
+        // repo, imported Overleaf zip), and libgit2 connects to `pushurl`
+        // when one is set — so a config naming a benign `url` and a hostile
+        // `pushurl` would otherwise coax the user's credential helper into
+        // handing that host the credentials stored for the benign one.
         match host_of(url) {
             Some(actual) if actual == host => {}
             _ => {
@@ -288,15 +279,31 @@ fn build_callbacks(remote_url: String) -> RemoteCallbacks<'static> {
                 )));
             }
         }
-        let username = username_from_url.unwrap_or("x-access-token");
-        let secret = credentials::get_secret(&format!("git.{host}"), username)
-            .map_err(|e| git2::Error::from_str(&format!("keyring lookup: {e}")))?
-            .ok_or_else(|| {
-                git2::Error::from_str(&format!(
-                    "no credential stored for git.{host} / {username} — sign in to the remote first"
-                ))
-            })?;
-        Cred::userpass_plaintext(username, &secret)
+        attempts += 1;
+        if attempts > 3 {
+            return Err(git2::Error::from_str(&format!(
+                "authentication failed for {host} — check the credentials in your git credential helper"
+            )));
+        }
+        // The user's own git setup is the only credential source: whatever
+        // `credential.helper` their gitconfig names (Git Credential Manager,
+        // osxkeychain, store, …). GCM can even prompt interactively.
+        //
+        // open_default() reads ONLY the trusted global/XDG/system gitconfig —
+        // never the repo-local `.git/config`, which is attacker-controlled for
+        // cloned/imported projects (same threat as the pushurl check above).
+        // git2 EXECUTES `credential.helper` values (`!cmd` via `sh -c`,
+        // absolute paths spawned directly), so switching to `repo.config()`
+        // to honor repo-specific helpers would hand project content arbitrary
+        // code execution. Don't.
+        let config = Config::open_default()
+            .map_err(|e| git2::Error::from_str(&format!("could not open git config: {e}")))?;
+        Cred::credential_helper(&config, url, username_from_url).map_err(|_| {
+            git2::Error::from_str(&format!(
+                "no credentials for {host} — configure a git credential helper (e.g. Git \
+                 Credential Manager) or embed a token in the remote URL"
+            ))
+        })
     });
     cb
 }
@@ -442,15 +449,11 @@ pub async fn git_unstage(repo_path: String, paths: Vec<String>) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn git_commit(
-    repo_path: String,
-    message: String,
-    author: Option<GitAuthor>,
-) -> Result<String, String> {
+pub async fn git_commit(repo_path: String, message: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || -> Result<String, GitError> {
         let path = validate_repo_path(&repo_path)?;
         let repo = open_repo(&path)?;
-        let sig = signature(&repo, author)?;
+        let sig = signature(&repo)?;
         let mut index = repo.index()?;
         let tree_oid = index.write_tree()?;
         let tree = repo.find_tree(tree_oid)?;
@@ -601,7 +604,6 @@ pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), 
 pub async fn git_pull(
     repo_path: String,
     remote: Option<String>,
-    author: Option<GitAuthor>,
 ) -> Result<(), String> {
     let remote_name = remote.unwrap_or_else(|| "origin".to_string());
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
@@ -634,9 +636,6 @@ pub async fn git_pull(
             let mut checkout = git2::build::CheckoutBuilder::new();
             checkout.safe();
             repo.checkout_head(Some(&mut checkout))?;
-            // Author param is currently unused here — fast-forward needs no
-            // commit. Reserved for the merge-commit path in a follow-up.
-            drop(author);
             return Ok(());
         }
         Err(GitError::Git(

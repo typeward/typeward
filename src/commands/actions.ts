@@ -248,13 +248,11 @@ async function preserveConflictingDiskCopy(p: Project, file: OpenFile): Promise<
   }
 }
 
-// Contract signals for the compile-loop UI (PdfViewer cancel button, elapsed
+// Contract signal for the compile-loop UI (PdfViewer cancel button, elapsed
 // pill, stale-preview hint). `compileStartedAt` is epoch ms while a compile
-// runs and null once it settles; `lastSuccessAt` is the epoch ms of the last
-// successful compile of this session.
+// runs and null once it settles.
 const [compileStartedAt, setCompileStartedAtInternal] = createSignal<number | null>(null);
-const [lastSuccessAt, setLastSuccessAtInternal] = createSignal<number | null>(null);
-export { compileStartedAt, lastSuccessAt };
+export { compileStartedAt };
 
 /**
  * Kill the in-flight compile's process tree. Safe no-op when idle. The
@@ -411,7 +409,6 @@ export async function compileActiveProject(opts?: {
     if (!isCurrent()) return;
     setLastResult(result);
     setCompileState(result.ok ? "ok" : "error");
-    if (result.ok) setLastSuccessAtInternal(Date.now());
     if (result.ok && result.outputPath && !result.pdfUnchanged) {
       perfMark("pdf-reload");
       bumpPdfVersion();
