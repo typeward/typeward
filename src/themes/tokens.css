@@ -276,6 +276,16 @@ body {
 }
 
 /*
+ * macOS is the exception to the leave-it-alone rule above: WebKit's default
+ * smoothing dilates glyph stems, so the Windows-tuned type renders visibly
+ * heavier — worst as light-on-dark on the dark themes. Antialiased matches
+ * the design reference there. The stamp comes from public/boot-theme.js.
+ */
+html[data-platform="macos"] body {
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
  * Aurora is the implicit default (no data-theme on <html>), so unlike the other
  * three themes it has no [data-theme] block. This minimal block exists ONLY so
  * the Settings theme-preview probe can read Aurora's native accent off a

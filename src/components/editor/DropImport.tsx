@@ -77,7 +77,10 @@ export const DropImport: Component = () => {
         class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-scrim)]"
         aria-hidden="true"
       >
-        <div class="glass flex items-center gap-3 rounded-xl px-6 py-4">
+        <div
+          class="glass flex items-center gap-3 rounded-xl px-6 py-4"
+          style={{ background: "var(--color-popover-bg)" }}
+        >
           <FolderInput size={18} style={{ color: "var(--color-accent-1)" }} />
           <span class="text-base font-medium text-fg-1">
             Drop to add to {project()?.name}

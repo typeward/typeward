@@ -22,6 +22,103 @@ pub struct EngineProbe {
     pub any_latex_available: bool,
 }
 
+/// Merge the user's login-shell PATH into the process environment.
+///
+/// Finder-launched apps inherit launchd's minimal PATH (`/usr/bin:/bin:
+/// /usr/sbin:/sbin`), never the user's shell PATH — so `which` misses
+/// everything MacTeX, Homebrew, MacPorts, or rustup installed, engine
+/// detection reports nothing, and every compile / LSP / SyncTeX spawn fails
+/// unless the app happened to be started from a terminal. Ask the login shell
+/// for its PATH once at startup and fall back to the well-known install dirs
+/// when the capture yields nothing (e.g. an exotic shell).
+///
+/// Must run before the Tauri builder: children inherit the fixed PATH, and
+/// mutating the environment is only sound while the process is still
+/// single-threaded.
+#[cfg(target_os = "macos")]
+pub fn fix_gui_path() {
+    let captured = capture_login_shell_path();
+
+    let mut merged: Vec<String> = Vec::new();
+    let mut push = |dir: &str| {
+        if !dir.is_empty() && !merged.iter().any(|d| d == dir) {
+            merged.push(dir.to_string());
+        }
+    };
+    for dir in captured.as_deref().unwrap_or_default().split(':') {
+        push(dir);
+    }
+    for dir in std::env::var("PATH").unwrap_or_default().split(':') {
+        push(dir);
+    }
+    for dir in [
+        "/usr/local/bin",
+        "/opt/homebrew/bin",
+        "/opt/local/bin",
+        "/Library/TeX/texbin",
+    ] {
+        push(dir);
+    }
+    if let Some(home) = dirs::home_dir() {
+        push(&home.join(".cargo/bin").to_string_lossy());
+    }
+
+    // SAFETY: called from `run()` before the builder, plugins, or async
+    // runtime exist — no other thread can be reading the environment yet.
+    unsafe { std::env::set_var("PATH", merged.join(":")) };
+}
+
+/// Ask the user's login shell for its PATH, defensively: profile scripts are
+/// free to echo banners on stdout (only the text between the sentinels is
+/// trusted), fish joins `$PATH` with spaces unless told otherwise, and a hung
+/// profile (nvm network probe, mounted-volume wait) must not turn a Finder
+/// launch into a dead app with no window — hence the bounded wait + kill.
+#[cfg(target_os = "macos")]
+fn capture_login_shell_path() -> Option<String> {
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+
+    const START: &str = "__TYPEWARD_PATH_START__";
+    const END: &str = "__TYPEWARD_PATH_END__";
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    let script = if std::path::Path::new(&shell)
+        .file_name()
+        .is_some_and(|n| n == "fish")
+    {
+        format!("printf '{START}%s{END}' (string join : $PATH)")
+    } else {
+        format!("printf '{START}%s{END}' \"$PATH\"")
+    };
+    let mut child = std::process::Command::new(&shell)
+        .args(["-l", "-c", &script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    let start = out.find(START)? + START.len();
+    let end = out[start..].find(END)? + start;
+    let path = out[start..end].trim().to_string();
+    (!path.is_empty()).then_some(path)
+}
+
 /// Resolve a tool to its absolute path via `which`, so callers spawn the
 /// resolved path and never a bare name. On Windows `CreateProcess` searches the
 /// process CWD before PATH; a subprocess launched with `current_dir(project)`
@@ -83,9 +180,25 @@ pub fn probe() -> EngineProbe {
     }
 }
 
+/// The bundled Tectonic sidecar (tauri.conf.json `externalBin`) ships next to
+/// the app executable, deliberately not on PATH. Without this leg the
+/// onboarding card reports the engine Typeward itself ships as "not on PATH"
+/// on every machine that relies on it — exactly the machines without a TeX.
+#[cfg(desktop)]
+fn sidecar_tectonic() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe
+        .parent()?
+        .join(if cfg!(windows) { "tectonic.exe" } else { "tectonic" });
+    candidate.is_file().then_some(candidate)
+}
+
 #[cfg(desktop)]
 fn probe_one(name: &str) -> TexEngine {
-    let resolved = resolve_program(name).ok();
+    let mut resolved = resolve_program(name).ok();
+    if resolved.is_none() && name == "tectonic" {
+        resolved = sidecar_tectonic();
+    }
     let path = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
     let version = resolved.as_ref().and_then(|exe| run_version(name, exe));
     TexEngine {

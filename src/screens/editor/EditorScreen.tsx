@@ -1,9 +1,14 @@
 import { useNavigate, useSearchParams } from "@solidjs/router";
 import {
+  Bell,
   FileQuestion,
   Folder,
   Settings as SettingsIcon,
 } from "lucide-solid";
+import {
+  toggleNotifications,
+  unreadCount,
+} from "~/components/projects/NotificationsPanel";
 import { HistoryMenu } from "~/components/editor/HistoryMenu";
 import { LayoutMenu } from "~/components/editor/LayoutMenu";
 import { perfDiscard, perfMark } from "~/lib/perf-marks";
@@ -694,6 +699,26 @@ const EditorTopBar: Component<{
         <SyncStatusBadge />
         <HistoryMenu />
         <LayoutMenu />
+        <button
+          type="button"
+          title="Notifications"
+          data-notif-toggle
+          onClick={toggleNotifications}
+          class="lift relative flex h-9 w-9 items-center justify-center rounded-md hover:bg-[var(--color-control-fill)]"
+        >
+          <Bell class="ui-icon-chrome" style={{ opacity: 0.85 }} />
+          <Show when={unreadCount() > 0}>
+            <span
+              class="mono absolute -right-0.5 -top-0.5 rounded-full px-1 text-xs"
+              style={{
+                background: "color-mix(in srgb, var(--color-err) 18%, transparent)",
+                color: "var(--color-err)",
+              }}
+            >
+              {unreadCount()}
+            </span>
+          </Show>
+        </button>
         <button
           type="button"
           title="Settings"

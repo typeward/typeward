@@ -390,10 +390,12 @@ export const CommandPalette: Component = () => {
     <Show when={paletteOpen_()}>
       <div
         class="fixed inset-0 z-50 flex items-start justify-center pt-[120px]"
-        style={{
-          background: "var(--color-overlay-scrim)",
-          "backdrop-filter": "blur(2px) saturate(120%)",
-        }}
+        // Dim only, no blur: the palette card is this scrim's child, and a
+        // backdrop-filtered ancestor is a backdrop-root boundary Chromium and
+        // WebKit resolve differently (nested backdrop-filters are a WebKit
+        // flicker/no-op zone). The card's near-opaque popover-bg carries the
+        // legibility either way.
+        style={{ background: "var(--color-overlay-scrim)" }}
         onClick={() => closePalette()}
       >
         <div

@@ -26,7 +26,12 @@ import {
   requestReviewCompose,
   requestReviewPanelIntent,
 } from "~/stores/review-store";
-import { editorSettings, setEditorSettings } from "~/stores/settings-store";
+import {
+  editorSettings,
+  setEditorSettings,
+  setUiScale,
+  uiScale,
+} from "~/stores/settings-store";
 import { toggleFocusMode } from "~/stores/ui-store";
 import { isVisualEligibleFile } from "~/adapters/languages";
 
@@ -242,6 +247,44 @@ const CORE_COMMANDS: EditorCommand[] = [
         ...editorSettings(),
         visualModeLatex: !editorSettings().visualModeLatex,
       });
+    },
+  },
+  // Whole-window zoom, in-app: wry's zoomHotkeysEnabled is WebView2-only
+  // (wkwebview/WebKitGTK never read it), so Mod+=/Mod+- were dead outside
+  // Windows. Stepping the persisted interface scale gives every platform the
+  // same behavior — and one that survives restart. Bounds mirror the
+  // Settings → Appearance slider.
+  {
+    id: "core.zoomIn",
+    title: "Zoom In",
+    subtitle: "Increase the interface scale",
+    shortcut: "Mod+=",
+    group: "View",
+    scope: "global",
+    run: () => {
+      setUiScale(Math.min(150, uiScale() + 5));
+    },
+  },
+  {
+    id: "core.zoomOut",
+    title: "Zoom Out",
+    subtitle: "Decrease the interface scale",
+    shortcut: "Mod+-",
+    group: "View",
+    scope: "global",
+    run: () => {
+      setUiScale(Math.max(90, uiScale() - 5));
+    },
+  },
+  {
+    id: "core.zoomReset",
+    title: "Reset Zoom",
+    subtitle: "Reset the interface scale to 100%",
+    shortcut: "Mod+0",
+    group: "View",
+    scope: "global",
+    run: () => {
+      setUiScale(100);
     },
   },
   {

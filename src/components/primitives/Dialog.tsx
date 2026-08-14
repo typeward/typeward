@@ -33,6 +33,11 @@ export const Dialog: Component<DialogProps> = (props) => {
         <div class="fixed inset-0 z-50 flex items-center justify-center p-6">
           <KDialog.Content
             class={`glass rounded-xl ${props.widthClass ?? "w-[480px]"} max-h-[90vh] overflow-hidden flex flex-col`}
+            // Near-opaque like every other floating surface (palette, menus,
+            // tooltips): bare .glass fill is a ~4% film whose legibility
+            // hangs entirely on backdrop-filter compositing — the stacked
+            // blur-over-blur arrangement WebKit resolves unreliably.
+            style={{ background: "var(--color-popover-bg)" }}
             onInput={() => {
               dirty = true;
             }}

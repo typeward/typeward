@@ -23,6 +23,10 @@ import { Switch as KSwitch } from "@kobalte/core/switch";
 import type { Component, JSX } from "solid-js";
 import { For, Show, createResource, createSignal, onCleanup } from "solid-js";
 import { notifyError } from "~/components/feedback/Toaster";
+import {
+  toggleNotifications,
+  unreadCount,
+} from "~/components/projects/NotificationsPanel";
 import { AmbientBackdrop } from "~/components/layout/AmbientBackdrop";
 import { TopBar } from "~/components/layout/TopBar";
 import { Slider } from "~/components/forms/Slider";
@@ -181,6 +185,20 @@ const SECTION_IDS: ReadonlySet<string> = new Set(
 // Static search index for the sidebar filter: each section's nav label plus a
 // hand-maintained keyword list covering the settings that live inside it.
 // Substring match only — no content-level highlighting.
+// OS-level Reduce Motion forces data-motion="reduced" via motion.css
+// regardless of the in-app toggle — surface that so the Animations switch
+// doesn't read as broken. Guarded for jsdom.
+const prefersReducedMotionQuery =
+  typeof window !== "undefined" && "matchMedia" in window
+    ? window.matchMedia("(prefers-reduced-motion: reduce)")
+    : null;
+const [osPrefersReducedMotion, setOsPrefersReducedMotion] = createSignal(
+  prefersReducedMotionQuery?.matches ?? false,
+);
+prefersReducedMotionQuery?.addEventListener("change", (e) => {
+  setOsPrefersReducedMotion(e.matches);
+});
+
 const SECTION_KEYWORDS: Record<SectionId, string[]> = {
   profile: ["name", "profile", "avatar", "author", "identity"],
   notifications: ["email", "push", "quiet hours"],
@@ -332,7 +350,8 @@ const SettingsScreen: Component = () => {
 
       <div class="relative z-10 flex h-full flex-col">
         <TopBar
-          notifications={0}
+          notifications={unreadCount()}
+          onToggleNotifications={toggleNotifications}
           onOpenSettings={() => {
             /* already here */
           }}
@@ -936,22 +955,30 @@ const AppearancePanel: Component = () => {
             unit="%"
           />
           <div class="mt-1.5 text-xs leading-relaxed text-fg-3">
-            Scales text and controls together. Ctrl/Cmd +/- zooms the whole
-            window.
+            Scales text and controls together. Cmd/Ctrl + and − adjust it from
+            anywhere; Cmd/Ctrl 0 resets.
           </div>
         </div>
         <ToggleRow
           label="Animations"
-          hint="Toggles transitions, easings, and ambient motion across the app."
+          hint={
+            osPrefersReducedMotion()
+              ? "Your system's Reduce Motion setting is on, so animations stay off regardless of this toggle."
+              : "Toggles transitions, easings, and ambient motion across the app."
+          }
           checked={animations()}
           onChange={setAnimations}
         />
-        <ToggleRow
-          label="Ambient lights"
-          hint="Soft radial blobs behind the glass surfaces. Disable for a flat, distraction-free backdrop."
-          checked={ambientLights()}
-          onChange={setAmbientLights}
-        />
+        {/* The basic themes zero every blob opacity by design, so the toggle
+            would be a silent no-op there — same gating as Glow. */}
+        <Show when={THEME_ROSTER[theme()].category === "styled"}>
+          <ToggleRow
+            label="Ambient lights"
+            hint="Soft radial blobs behind the glass surfaces. Disable for a flat, distraction-free backdrop."
+            checked={ambientLights()}
+            onChange={setAmbientLights}
+          />
+        </Show>
       </Card>
 
     </div>
@@ -1144,7 +1171,11 @@ const CustomThemesCard: Component = () => {
                       }}
                     >
                       <div class="absolute inset-x-2 bottom-2 flex items-center gap-1.5 rounded-md px-2 py-1"
-                        style={{ background: "rgba(0,0,0,0.35)", "backdrop-filter": "blur(4px)" }}
+                        style={{
+                          background: "rgba(0,0,0,0.35)",
+                          "backdrop-filter": "blur(4px)",
+                          "-webkit-backdrop-filter": "blur(4px)",
+                        }}
                       >
                         <span class="h-2.5 w-2.5 flex-shrink-0 rounded-full" style={{ background: swatchAccent() }} />
                         <span class="truncate text-xs font-medium text-white">{t.name}</span>
@@ -1305,6 +1336,7 @@ const ThemeTile: Component<{
       style={{
         background: props.meta.dark ? "rgba(10,11,15,0.55)" : "rgba(255,255,255,0.92)",
         "backdrop-filter": "blur(6px)",
+        "-webkit-backdrop-filter": "blur(6px)",
       }}
     >
       <div

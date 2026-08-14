@@ -35,10 +35,22 @@ const [notifications, setNotifications] = createSignal<Notification[]>([
 export const unreadCount = (): number =>
   notifications().filter((n) => !n.read).length;
 
-export const NotificationsPanel: Component<{
-  open: boolean;
-  onClose: () => void;
-}> = (props) => {
+// Shared open-state, CommandPalette-style: the drawer mounts once at the App
+// root and every screen's bell drives the same signal, so notifications are
+// reachable from Projects, Settings, and the editor alike.
+const [notifOpen, setNotifOpen] = createSignal(false);
+export { notifOpen };
+export const toggleNotifications = (): void => {
+  setNotifOpen((v) => !v);
+};
+export const openNotifications = (): void => {
+  setNotifOpen(true);
+};
+export const closeNotifications = (): void => {
+  setNotifOpen(false);
+};
+
+export const NotificationsPanel: Component = () => {
   const dismiss = (id: string) =>
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   const markAllRead = () =>
@@ -47,28 +59,35 @@ export const NotificationsPanel: Component<{
   let panelRef: HTMLDivElement | undefined;
   // Close when clicking anywhere outside the drawer, except the bell toggle
   // (its own handler closes it — otherwise the two would fight and reopen).
-  installDismiss(() => panelRef, () => props.open, () => props.onClose(), {
+  installDismiss(() => panelRef, () => notifOpen(), () => closeNotifications(), {
     ignoreSelector: "[data-notif-toggle]",
   });
 
   return (
     <div
       ref={panelRef}
-      class="glass absolute right-2 top-2 bottom-2 z-30 flex flex-col overflow-hidden rounded-xl"
+      class="glass fixed right-2 top-[60px] bottom-2 z-40 flex flex-col overflow-hidden rounded-xl"
       style={{
         width: "320px",
+        // Near-opaque like the other floating surfaces: a floating bare-glass
+        // panel over live page content depends on backdrop-filter sampling
+        // WebKit does not do reliably under transformed/faded ancestors.
+        background: "var(--color-popover-bg)",
         transition:
           "transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 200ms ease",
-        transform: props.open ? "translateX(0)" : "translateX(calc(100% + 12px))",
-        opacity: props.open ? "1" : "0",
-        "pointer-events": props.open ? "auto" : "none",
+        // `none`, not the identity translateX(0): a lingering transform keeps
+        // a compositing layer alive, the case where WebKit samples a glass
+        // panel's backdrop from the wrong region at rest.
+        transform: notifOpen() ? "none" : "translateX(calc(100% + 12px))",
+        opacity: notifOpen() ? undefined : "0",
+        "pointer-events": notifOpen() ? "auto" : "none",
         "box-shadow":
           "var(--shadow-glass-drop), 0 0 0 1px var(--color-glass-stroke)",
       }}
-      aria-hidden={!props.open}
+      aria-hidden={!notifOpen()}
       // Hidden via transform/opacity, so its buttons would still be in the
       // tab order without inert (aria-hidden + focusable is a WCAG failure).
-      inert={!props.open}
+      inert={!notifOpen()}
     >
       <div class="flex h-[44px] flex-shrink-0 items-center gap-2 border-b border-glass-stroke px-3">
         <Bell size={14} style={{ color: "var(--color-accent-1)" }} />
@@ -88,7 +107,7 @@ export const NotificationsPanel: Component<{
         </button>
         <button
           type="button"
-          onClick={props.onClose}
+          onClick={closeNotifications}
           aria-label="Close notifications"
           class="lift flex h-6 w-6 items-center justify-center rounded hover:bg-[var(--color-control-fill-hover)]"
         >

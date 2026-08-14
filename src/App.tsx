@@ -35,6 +35,7 @@ import { installMenuBridge } from "~/lib/menu-bridge";
 import { installOpenWith } from "~/lib/open-with";
 import { scheduleBootUpdateCheck } from "~/lib/updater";
 import { CommandPalette } from "~/components/CommandPalette";
+import { NotificationsPanel } from "~/components/projects/NotificationsPanel";
 import { Toaster } from "~/components/feedback/Toaster";
 import "@fontsource-variable/inter/index.css";
 import "@fontsource-variable/inter/wght-italic.css";
@@ -113,7 +114,15 @@ const AppCrash: Component<{ err: unknown; reset: () => void }> = (props) => {
         "text-align": "center",
       }}
     >
-      <div class="glass" style={{ padding: "24px 28px", "border-radius": "14px", "max-width": "480px" }}>
+      <div
+        class="glass"
+        style={{
+          background: "var(--color-popover-bg)",
+          padding: "24px 28px",
+          "border-radius": "14px",
+          "max-width": "480px",
+        }}
+      >
         <div class="text-base font-medium text-fg-1">Something went wrong</div>
         <p class="mt-2 select-text break-words text-sm text-fg-3">
           {describeIpcError(props.err)}
@@ -283,6 +292,7 @@ const AppShell: Component<{ children?: any }> = (props) => {
         {props.children}
       </ErrorBoundary>
       <CommandPalette />
+      <NotificationsPanel />
       <Show when={saveTemplateTouched()}>
         <Suspense>
           <SaveTemplateDialog />

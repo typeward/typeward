@@ -1414,8 +1414,12 @@ async fn run_tectonic(
     sink: Option<Arc<LogSink>>,
 ) -> Result<(String, bool), String> {
     let tectonic_args = tectonic_args(root_file, synctex, shell_escape, strict_offline);
-    // Try the bundled sidecar first.
-    let sidecar_result = app.shell().sidecar("binaries/tectonic");
+    // Try the bundled sidecar first. The Rust-side plugin API wants the
+    // program NAME (it joins the whole string onto the exe dir — only the
+    // IPC/JS path strips "binaries/" prefixes), so "binaries/tectonic" here
+    // resolved to a nonexistent `<exe-dir>/binaries/tectonic` and the sidecar
+    // silently never ran on any machine without a PATH tectonic.
+    let sidecar_result = app.shell().sidecar("tectonic");
     if let Ok(cmd) = sidecar_result {
         // `sidecar()` builds the Command without stat-ing the file, so a declared-
         // but-missing externalBin only fails at spawn time (e.g. dev before
@@ -1492,7 +1496,11 @@ async fn run_tectonic(
                 }
                 return Ok((log, code == Some(0)));
             }
-            Err(_) => { /* sidecar binary not runnable — try PATH below */ }
+            Err(e) => {
+                // Not fatal (PATH fallback below), but never silent: a wrong
+                // sidecar path looks identical to "not fetched yet" otherwise.
+                eprintln!("[typeward] tectonic sidecar spawn failed, trying PATH: {e}");
+            }
         }
     }
     // Fall back to PATH — resolve the absolute path and spawn that, not the

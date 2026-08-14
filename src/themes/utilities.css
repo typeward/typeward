@@ -32,6 +32,42 @@ select:focus-visible {
 
 /* Glass surfaces -------------------------------------------------------- */
 
+/*
+ * macOS/WKWebView: CSS backdrop-filter COMPOSITES AS AN OPAQUE GRAY SLAB on
+ * screen — the web-process render (and WKWebView takeSnapshot) looks
+ * correct, but the window-server output does not, in any embedding (plain
+ * default-config WKWebView included; pixel-verified on macOS 15.1 via an
+ * own-window CGWindowListCreateImage harness, 2026-08-14). Every glass
+ * surface read as a flat washed-out gray rectangle. Kill the property
+ * wholesale there — !important so inline styles and Tailwind
+ * backdrop-blur-* utilities are covered too. Legibility survives by
+ * design: floating surfaces carry near-opaque --color-popover-bg fills,
+ * and in-flow glass shows the ambient through its translucent fill.
+ * The [data-platform] stamp comes from public/boot-theme.js.
+ */
+html[data-platform="macos"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/*
+ * Frost emulation, same platform scope: with backdrop-filter dead, bare
+ * .glass is a ~4% film and the ambient discs show through panels crisply —
+ * reading as shapes ABOVE the UI instead of glow behind it. A mostly-opaque
+ * bg-base underlay below the glass film reads like the blurred sampling the
+ * other platforms get: panel surfaces stay panels, ambience ghosts through
+ * at ~18%. Surfaces with an inline background (dialogs/popovers on
+ * --color-popover-bg) still win over this rule — deliberate. The topbars set
+ * their background inline via var(--color-topbar-bg), so that token is
+ * re-resolved here instead.
+ */
+html[data-platform="macos"] .glass {
+  background:
+    linear-gradient(var(--color-glass-fill), var(--color-glass-fill)),
+    color-mix(in srgb, var(--color-bg-base) 55%, transparent);
+  --color-topbar-bg: color-mix(in srgb, var(--color-bg-base) 60%, transparent);
+}
+
 .glass {
   background: var(--color-glass-fill);
   backdrop-filter: blur(24px) saturate(140%);
@@ -368,41 +404,105 @@ body {
   box-shadow: 0 0 0 2px var(--color-bg-base);
 }
 
+/*
+ * Blob footprints are ~30% larger than the design's originals: blur(120px)
+ * used to spill each blob's light well past its box, and the gradient bake
+ * ends at the element edge — without the upscale, edge-adjacent panels sit
+ * in much weaker wash than the design intends.
+ *
+ * No `filter: blur()` here, deliberately: the softness is baked into the
+ * gradient stops instead. WebKit degrades very large blur radii to the point
+ * of invisibility (blur(120px) on these blobs rendered near-black in
+ * WKWebView — the whole ambient layer vanished and every glass surface read
+ * as flat gray), and a multi-stop falloff renders identically on every
+ * engine for free. The stops approximate the old blur(120px) spread.
+ */
 .blob {
   position: absolute;
   border-radius: 50%;
-  filter: blur(120px);
 }
 .blob-1 {
-  width: 720px;
-  height: 720px;
-  left: -180px;
-  top: -240px;
-  background: radial-gradient(circle, var(--blob-1) 0%, transparent 65%);
+  width: 940px;
+  height: 940px;
+  left: -290px;
+  top: -350px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--blob-1) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-1) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-1) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-1) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-1) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-1) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-1) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-1) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-1) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-1) 1%, transparent) 90%,
+    transparent 100%
+  );
   opacity: var(--blob-1-op);
 }
 .blob-2 {
-  width: 760px;
-  height: 760px;
-  right: -220px;
-  top: -120px;
-  background: radial-gradient(circle, var(--blob-2) 0%, transparent 65%);
+  width: 990px;
+  height: 990px;
+  right: -335px;
+  top: -235px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--blob-2) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-2) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-2) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-2) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-2) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-2) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-2) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-2) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-2) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-2) 1%, transparent) 90%,
+    transparent 100%
+  );
   opacity: var(--blob-2-op);
 }
 .blob-3 {
-  width: 600px;
-  height: 600px;
-  left: 38%;
-  bottom: -260px;
-  background: radial-gradient(circle, var(--blob-3) 0%, transparent 65%);
+  width: 780px;
+  height: 780px;
+  left: calc(38% - 90px);
+  bottom: -350px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--blob-3) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-3) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-3) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-3) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-3) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-3) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-3) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-3) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-3) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-3) 1%, transparent) 90%,
+    transparent 100%
+  );
   opacity: var(--blob-3-op);
 }
 .blob-4 {
-  width: 420px;
-  height: 420px;
-  right: 22%;
-  top: 38%;
-  background: radial-gradient(circle, var(--blob-4) 0%, transparent 70%);
+  width: 550px;
+  height: 550px;
+  right: calc(22% - 65px);
+  top: calc(38% - 65px);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--blob-4) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-4) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-4) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-4) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-4) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-4) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-4) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-4) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-4) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-4) 1%, transparent) 90%,
+    transparent 100%
+  );
   opacity: var(--blob-4-op);
 }
 /* Film-grain overlay — retired from AmbientBackdrop 2026-05-15 because

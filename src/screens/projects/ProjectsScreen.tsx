@@ -49,7 +49,11 @@ import { Dialog } from "~/components/primitives/Dialog";
 import { Button } from "~/components/primitives/Button";
 import { IconButton } from "~/components/primitives/IconButton";
 import { KbdHint } from "~/components/primitives/KbdHint";
-import { NotificationsPanel, unreadCount } from "~/components/projects/NotificationsPanel";
+import {
+  openNotifications,
+  toggleNotifications,
+  unreadCount,
+} from "~/components/projects/NotificationsPanel";
 import { LibrarySidebar } from "~/components/projects/LibrarySidebar";
 import { LibraryViewControls } from "~/components/projects/LibraryViewControls";
 import { ProjectMenu } from "~/components/projects/ProjectMenu";
@@ -117,8 +121,10 @@ const FORMAT_ACCENT: Record<ProjectFormat, string> = {
 const ProjectsScreen: Component = () => {
   const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = createSignal(false);
-  const [notifOpen, setNotifOpen] = createSignal(notificationsPanelDefault());
   const [importError, setImportError] = createSignal<string | null>(null);
+  // The drawer itself lives at the App root now; entering the library with
+  // the persisted default-open preference still opens it.
+  if (notificationsPanelDefault()) openNotifications();
 
   // Session-scoped library filter + search (reset on revisit, matching the
   // palette / focus-mode precedent).
@@ -378,7 +384,7 @@ const ProjectsScreen: Component = () => {
           notifications={unreadCount()}
           search={{ value: search(), onInput: setSearch }}
           onOpenPalette={() => openPalette()}
-          onToggleNotifications={() => setNotifOpen((v) => !v)}
+          onToggleNotifications={toggleNotifications}
           onOpenSettings={() => {
             setPreviousRoute("/projects");
             navigate("/settings");
@@ -529,10 +535,14 @@ const ProjectsScreen: Component = () => {
                 width: "280px",
                 transition:
                   "transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 200ms ease",
+                // `none`, not the identity translateX(0): a lingering
+                // transform on the glass sidebar's ancestor keeps a
+                // compositing layer alive, the case where WebKit samples the
+                // backdrop-filter from the wrong region at rest.
                 transform: libraryOpen()
-                  ? "translateX(0)"
+                  ? "none"
                   : "translateX(calc(-100% - 12px))",
-                opacity: libraryOpen() ? "1" : "0",
+                opacity: libraryOpen() ? undefined : "0",
                 "pointer-events": libraryOpen() ? "auto" : "none",
                 "box-shadow":
                   "var(--shadow-glass-drop), 0 0 0 1px var(--color-glass-stroke)",
@@ -562,8 +572,6 @@ const ProjectsScreen: Component = () => {
               />
             </div>
           </Show>
-
-          <NotificationsPanel open={notifOpen()} onClose={() => setNotifOpen(false)} />
         </div>
       </div>
 

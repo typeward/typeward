@@ -6,6 +6,7 @@ import {
 } from "lucide-solid";
 import type { Component } from "solid-js";
 import { Show } from "solid-js";
+import { openPalette } from "~/commands/actions";
 import { IconButton } from "~/components/primitives/IconButton";
 import { KbdHint } from "~/components/primitives/KbdHint";
 import { SyncStatusBadge } from "~/components/sync/SyncStatusBadge";
@@ -51,7 +52,10 @@ export const TopBar: Component<TopBarProps> = (props) => {
           fallback={
             <button
               type="button"
-              onClick={() => props.onOpenPalette?.()}
+              // Falls back to the registry action so the button can never be
+              // a silent no-op on screens that don't wire the prop (Settings
+              // shipped exactly that dead control).
+              onClick={() => (props.onOpenPalette ?? openPalette)()}
               class="lift glass-soft flex h-9 w-full max-w-[640px] items-center gap-2.5 rounded-lg px-3 text-sm text-fg-3 hover:text-fg-2"
             >
               <Search class="ui-icon-chrome" style={{ opacity: 0.6 }} />
@@ -106,8 +110,11 @@ export const TopBar: Component<TopBarProps> = (props) => {
         </Show>
       </div>
 
-      {/* Right cluster — density-sized icons */}
-      <div class="absolute right-4 top-0 flex h-full items-center gap-2">
+      {/* Right cluster — density-sized icons. pointer-events-none on the
+          container: it's absolutely positioned over the bar's full height, so
+          its invisible box otherwise swallows clicks on the search field's
+          right end at narrower window widths; children re-enable. */}
+      <div class="pointer-events-none absolute right-4 top-0 flex h-full items-center gap-2 [&>*]:pointer-events-auto">
         <GitStatusBar />
         <SyncStatusBadge />
         {/* Inline fg-2 keeps the chrome tint the ghost variant's text

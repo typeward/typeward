@@ -179,8 +179,13 @@ export const MarkdownPreview: Component<Props> = (props) => {
     const dirty = md().render(source);
     host.innerHTML = DOMPurify.sanitize(dirty, {
       ADD_ATTR: ["target"],
+      // `asset:` because convertFileSrc yields `asset://localhost/...` on
+      // macOS/Linux (only Windows gets `http://asset.localhost/...`) — without
+      // it every project-relative image's rewritten src is stripped here.
+      // Rewritten srcs are funneled through safeRelativePath + fileUrlFromPath
+      // first, so allowing the scheme doesn't widen what a document can name.
       ALLOWED_URI_REGEXP:
-        /^(?:(?:https?|mailto|tel|file):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+        /^(?:(?:https?|mailto|tel|file|asset):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
     });
   };
 

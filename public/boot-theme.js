@@ -12,6 +12,16 @@
  */
 
 (function () {
+  // Platform stamp for platform-scoped CSS (tokens.css keys macOS font
+  // smoothing off it). Done here so it also covers the boot splash text.
+  try {
+    if (/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "")) {
+      document.documentElement.setAttribute("data-platform", "macos");
+    }
+  } catch (e) {
+    // Leave the attribute off — the default rendering applies.
+  }
+
   var SPLASH = {
     light: ["#ffffff", "#1a1d21", "#697077", "rgba(26, 29, 33, 0.12)"],
     dark: ["#1e1e1e", "#d4d4d4", "rgba(212, 212, 212, 0.5)", "rgba(255, 255, 255, 0.08)"],

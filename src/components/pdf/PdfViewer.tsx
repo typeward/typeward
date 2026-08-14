@@ -14,9 +14,12 @@ import {
   Terminal,
   ZoomIn,
 } from "lucide-solid";
-import * as pdfjs from "pdfjs-dist";
+// The legacy build, deliberately: the modern build references the `Iterator`
+// global at module eval, which WKWebView only gained in Safari 18.4 — on any
+// older macOS the import itself throws and the editor screen never mounts.
+import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 // Vite-resolves the worker file to a URL and serves it as a separate chunk.
-import workerSrc from "pdfjs-dist/build/pdf.worker.mjs?url";
+import workerSrc from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
 import "~/components/pdf/pdf-text-layer.css";
 import type { Component, JSX } from "solid-js";
 import {
@@ -652,6 +655,36 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     setZoomMode(next * 100);
   };
 
+  // WebKit (WKWebView/Safari) delivers trackpad pinch as proprietary gesture
+  // events carrying a cumulative `scale`, never as the ctrl+wheel Chromium
+  // synthesizes — without these listeners the PDF pane has no pinch zoom on
+  // macOS. `GestureEvent` doesn't exist in lib.dom or off WebKit, hence the
+  // local shape and the feature-gated registration.
+  let gestureBaseScale: number | null = null;
+  const onGestureStart = (e: Event) => {
+    e.preventDefault();
+    gestureBaseScale = untrack(scale);
+  };
+  const onGestureChange = (e: Event) => {
+    e.preventDefault();
+    if (gestureBaseScale === null || !scrollEl || pageSizes().length === 0) return;
+    const g = e as Event & { scale: number; clientX: number; clientY: number };
+    const cur = untrack(scale);
+    const next = Math.min(
+      WHEEL_ZOOM_MAX,
+      Math.max(WHEEL_ZOOM_MIN, gestureBaseScale * g.scale),
+    );
+    if (next === cur) return;
+    const rect = scrollEl.getBoundingClientRect();
+    wheelAnchor = { x: g.clientX - rect.left, y: g.clientY - rect.top };
+    setZoomMode(next * 100);
+  };
+  const onGestureEnd = (e: Event) => {
+    e.preventDefault();
+    gestureBaseScale = null;
+  };
+  const hasGestureEvents = typeof window !== "undefined" && "GestureEvent" in window;
+
   // Ref on the scroll container. It's the IntersectionObserver root and mounts
   // exactly once (the AI/console panes overlay it rather than unmounting it),
   // so the observer + slots stay stable across preview-mode switches.
@@ -660,10 +693,20 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
   const setScrollEl = (el: HTMLDivElement) => {
     scrollEl?.removeEventListener("scroll", trackScrollPage);
     scrollEl?.removeEventListener("wheel", onWheelZoom);
+    if (hasGestureEvents) {
+      scrollEl?.removeEventListener("gesturestart", onGestureStart);
+      scrollEl?.removeEventListener("gesturechange", onGestureChange);
+      scrollEl?.removeEventListener("gestureend", onGestureEnd);
+    }
     scrollEl = el;
     el.addEventListener("scroll", trackScrollPage, { passive: true });
     // Non-passive on purpose: the handler preventDefault()s modifier-wheel.
     el.addEventListener("wheel", onWheelZoom, { passive: false });
+    if (hasGestureEvents) {
+      el.addEventListener("gesturestart", onGestureStart);
+      el.addEventListener("gesturechange", onGestureChange);
+      el.addEventListener("gestureend", onGestureEnd);
+    }
     observer?.disconnect();
     observer = new IntersectionObserver(onIntersect, {
       root: el,
@@ -1207,6 +1250,11 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
     window.clearTimeout(holdTimer);
     scrollEl?.removeEventListener("scroll", trackScrollPage);
     scrollEl?.removeEventListener("wheel", onWheelZoom);
+    if (hasGestureEvents) {
+      scrollEl?.removeEventListener("gesturestart", onGestureStart);
+      scrollEl?.removeEventListener("gesturechange", onGestureChange);
+      scrollEl?.removeEventListener("gestureend", onGestureEnd);
+    }
     if (openThreadTimer) window.clearTimeout(openThreadTimer);
     for (const slot of slots.values()) {
       slot.task?.cancel();
@@ -1255,8 +1303,15 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           Logs/Console icon only renders when console position is "in PDF
           panel". The Recompile button keeps its label because it's the
           primary action. */}
+      {/* relative z-10, deliberately: @container's layout containment makes
+          this toolbar an ATOMIC stacking context with z-index auto, so the
+          later-in-tree content area painted over the whole toolbar — the
+          compile/export/zoom dropdowns (z-40/50 INSIDE the atom) rendered
+          under the PDF. A positive z-index lifts the atom above the pane;
+          the PDF-internal z chain (canvas < rects 1 < text 2 < synctex 4)
+          is untouched. */}
       <div
-        class="@container flex flex-shrink-0 items-center gap-1 border-b border-glass-stroke px-2.5"
+        class="@container relative z-10 flex flex-shrink-0 items-center gap-1 border-b border-glass-stroke px-2.5"
         classList={{
           "h-14": touchAffordances(),
           "h-[44px]": !touchAffordances(),
@@ -1549,10 +1604,12 @@ export const PdfViewer: Component<PdfViewerProps> = (props) => {
           </div>
         </Show>
         {/* `scrollbar-gutter: stable` reserves the scrollbar's width so
-            toggling PDF / Logs / AI never reflows the pane. */}
+            toggling PDF / Logs / AI never reflows the pane. WebKit < 18.2
+            drops the property, so overflow-y-scroll keeps the (transparent-
+            track) scrollbar area permanently reserved there instead. */}
         <div
           ref={setScrollEl}
-          class="scroll absolute inset-0 overflow-auto"
+          class="scroll absolute inset-0 overflow-x-auto overflow-y-scroll"
           style={{
             background: "var(--color-overlay-dim)",
             "scrollbar-gutter": "stable",

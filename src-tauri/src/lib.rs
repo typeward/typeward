@@ -36,6 +36,11 @@ mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before the builder: children inherit this PATH, and the env mutation is
+    // only sound while the process is still single-threaded (see detect.rs).
+    #[cfg(target_os = "macos")]
+    detect::fix_gui_path();
+
     let builder = tauri::Builder::default();
 
     // Single-instance must be the first plugin registered. A second desktop
@@ -169,7 +174,17 @@ pub fn run() {
                 .as_ref()
                 .map(|s| std::path::PathBuf::from(&s.projects_root))
                 .unwrap_or_else(settings::default_projects_root);
-            let _ = std::fs::create_dir_all(&projects_root);
+            // Not silently: on macOS a denied TCC Documents prompt lands here
+            // as PermissionDenied, and every later project operation fails
+            // with an unexplained per-IPC error. The log line is the only
+            // breadcrumb pointing at Privacy & Security → Files and Folders.
+            if let Err(e) = std::fs::create_dir_all(&projects_root) {
+                eprintln!(
+                    "[typeward] cannot create projects root {}: {e} \
+                     (macOS: check System Settings → Privacy & Security → Files and Folders)",
+                    projects_root.display()
+                );
+            }
             project::set_projects_root(&projects_root);
             // The capabilities grant plugin-fs only the DEFAULT projects root
             // statically; a user-moved root is added here at runtime. Nothing
