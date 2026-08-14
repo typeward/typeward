@@ -1414,8 +1414,15 @@ async fn run_tectonic(
     sink: Option<Arc<LogSink>>,
 ) -> Result<(String, bool), String> {
     let tectonic_args = tectonic_args(root_file, synctex, shell_escape, strict_offline);
-    // Try the bundled sidecar first.
-    let sidecar_result = app.shell().sidecar("binaries/tectonic");
+    // Try the bundled sidecar first. The name must be the bare runtime name,
+    // NOT the externalBin-configured "binaries/tectonic": the Rust-side
+    // `Shell::sidecar()` joins its argument onto the exe directory verbatim
+    // (`relative_command_path`), while the build installs the sidecar flat next
+    // to the exe with the triple stripped (`<exe_dir>/tectonic`) — so the
+    // configured path resolves to a `binaries/` subdir that never exists and
+    // silently fell through to PATH. (Only the plugin's JS-API handler strips
+    // the basename.)
+    let sidecar_result = app.shell().sidecar("tectonic");
     if let Ok(cmd) = sidecar_result {
         // `sidecar()` builds the Command without stat-ing the file, so a declared-
         // but-missing externalBin only fails at spawn time (e.g. dev before

@@ -36,6 +36,18 @@ mod watcher;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // WebKitGTK's DMA-BUF renderer produces black/corrupted frames, flickering
+    // hover states, and stuck highlights under virtualized GPUs (VirtualBox,
+    // VMware, QEMU without 3D passthrough). Opt out before the first webview
+    // initializes — but only in a VM, and never overriding an explicit user
+    // setting, since disabling it costs hardware acceleration on real GPUs.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() && running_in_vm() {
+        // SAFETY: called at the very top of run(), before Tauri spawns any
+        // thread that could read the environment concurrently.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
+
     let builder = tauri::Builder::default();
 
     // Single-instance must be the first plugin registered. A second desktop
@@ -442,6 +454,18 @@ pub fn run() {
 /// frontend CommandRegistry ids (dotted) are forwarded over the
 /// "menu:command" event and dispatched by src/lib/menu-bridge.ts, so menu,
 /// palette, and shortcuts share one command definition.
+/// The `hypervisor` CPU flag is set by every mainstream hypervisor (KVM/QEMU,
+/// VirtualBox, VMware, Hyper-V) and absent on bare metal — cheap to read and
+/// dependency-free, unlike shelling out to `systemd-detect-virt`.
+#[cfg(target_os = "linux")]
+fn running_in_vm() -> bool {
+    std::fs::read_to_string("/proc/cpuinfo").is_ok_and(|s| {
+        s.lines().any(|l| {
+            l.starts_with("flags") && l.split_whitespace().any(|f| f == "hypervisor")
+        })
+    })
+}
+
 #[cfg(target_os = "macos")]
 fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{

@@ -85,7 +85,15 @@ pub fn probe() -> EngineProbe {
 
 #[cfg(desktop)]
 fn probe_one(name: &str) -> TexEngine {
-    let resolved = resolve_program(name).ok();
+    // Tectonic ships as a Tauri sidecar next to the app executable; the compile
+    // path tries it before PATH (`run_tectonic`), so detection must mirror that
+    // order or onboarding reports the bundled engine as missing on machines
+    // without a system tectonic — and Re-scan can never fix it.
+    let resolved = if name == "tectonic" {
+        bundled_sidecar(name).or_else(|| resolve_program(name).ok())
+    } else {
+        resolve_program(name).ok()
+    };
     let path = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
     let version = resolved.as_ref().and_then(|exe| run_version(name, exe));
     TexEngine {
@@ -94,6 +102,18 @@ fn probe_one(name: &str) -> TexEngine {
         path,
         version,
     }
+}
+
+/// Locate a bundled sidecar binary. Tauri installs `externalBin` entries next
+/// to the app executable with the target triple stripped, so the runtime name
+/// is just `<name>` (plus `.exe` on Windows) in the exe's directory.
+#[cfg(desktop)]
+fn bundled_sidecar(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe
+        .parent()?
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    candidate.is_file().then_some(candidate)
 }
 
 #[cfg(desktop)]
