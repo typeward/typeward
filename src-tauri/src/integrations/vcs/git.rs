@@ -220,8 +220,8 @@ fn branch_ahead_behind(
     };
     let upstream_name = upstream.name().ok().flatten().map(|s| s.to_string());
 
-    let local_oid = local.get().target().unwrap_or_else(git2::Oid::zero);
-    let upstream_oid = upstream.get().target().unwrap_or_else(git2::Oid::zero);
+    let local_oid = local.get().target().unwrap_or(git2::Oid::ZERO_SHA1);
+    let upstream_oid = upstream.get().target().unwrap_or(git2::Oid::ZERO_SHA1);
     let (ahead, behind) = repo.graph_ahead_behind(local_oid, upstream_oid)?;
     Ok((upstream_name, ahead, behind))
 }
@@ -357,10 +357,10 @@ pub async fn git_status(repo_path: String) -> Result<GitStatusSummary, String> {
         let head = repo.head().ok();
         let branch = head
             .as_ref()
-            .and_then(|h| h.shorthand().map(|s| s.to_string()));
+            .and_then(|h| h.shorthand().ok().map(|s| s.to_string()));
 
         let (upstream, ahead, behind) = if let Some(h) = head.as_ref() {
-            if let Some(name) = h.shorthand() {
+            if let Ok(name) = h.shorthand() {
                 match repo.find_branch(name, BranchType::Local) {
                     Ok(b) => branch_ahead_behind(&repo, &b)?,
                     Err(_) => (None, 0, 0),
@@ -489,7 +489,7 @@ pub async fn git_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitC
             out.push(GitCommit {
                 oid: oid.to_string(),
                 short_oid: oid.to_string().chars().take(7).collect(),
-                message: commit.summary().unwrap_or("").to_string(),
+                message: commit.summary().ok().flatten().unwrap_or("").to_string(),
                 author_name: author.name().unwrap_or("").to_string(),
                 author_email: author.email().unwrap_or("").to_string(),
                 timestamp: commit.time().seconds(),
@@ -511,7 +511,7 @@ pub async fn git_branch_list(repo_path: String) -> Result<Vec<GitBranch>, String
         let head_name = repo
             .head()
             .ok()
-            .and_then(|h| h.shorthand().map(|s| s.to_string()));
+            .and_then(|h| h.shorthand().ok().map(|s| s.to_string()));
 
         let mut out = Vec::new();
         for entry in repo.branches(Some(BranchType::Local))? {
@@ -663,18 +663,17 @@ pub async fn git_push(
             None => repo
                 .head()?
                 .shorthand()
-                .ok_or_else(|| GitError::Git("HEAD has no shorthand".into()))?
+                .map_err(|_| GitError::Git("HEAD has no shorthand".into()))?
                 .to_string(),
         };
         let mut remote = repo.find_remote(&remote_name)?;
         // The PUSH url, not the fetch url: libgit2 pushes to `pushurl` when
         // `.git/config` sets one, so validating (and binding credentials to)
         // `remote.url()` would check a destination this push never contacts.
-        let url = remote
-            .pushurl()
-            .or_else(|| remote.url())
-            .unwrap_or("")
-            .to_string();
+        let url = match remote.pushurl() {
+            Ok(Some(push)) => push.to_string(),
+            _ => remote.url().unwrap_or("").to_string(),
+        };
         validate_remote_url(&url)?;
         let refspec = format!("refs/heads/{branch_name}:refs/heads/{branch_name}");
         let mut push_opts = PushOptions::new();

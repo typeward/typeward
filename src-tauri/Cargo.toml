@@ -67,7 +67,7 @@ flate2 = "1"
 # objects to a page's `/Annots`); `pdf-writer` is create-only and can't reopen a
 # compiled PDF. Trimmed to just the parser — the date/rayon default features
 # aren't used for load → append-annotation → save.
-lopdf = { version = "0.43", default-features = false }
+lopdf = { version = "0.44", default-features = false }
 
 # Grammar — Phase 5 (upgraded to Harper 2.x for E6). Rust-native, runs
 # in-process, zero network. `harper-tex` / `harper-typst` are Harper's
@@ -103,7 +103,7 @@ tauri-plugin-window-state = "2"
 # openssl-sys has no NDK-buildable source and kills the whole Android build.
 # Git is a desktop feature, so the dependency (and `integrations::vcs`, and the
 # git IPC commands in lib.rs) is gated off mobile entirely.
-git2 = { version = "0.20", default-features = false, features = ["https"] }
+git2 = { version = "0.21", default-features = false, features = ["https"] }
 # Move-to-trash for project delete (Recycle Bin / Trash / freedesktop). Desktop
 # only — mobile has no trash concept, so project.rs falls back to a hard delete.
 trash = "5"
