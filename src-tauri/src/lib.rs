@@ -438,6 +438,17 @@ pub fn run() {
         });
 }
 
+/// The `hypervisor` CPU flag is set by every mainstream hypervisor (KVM/QEMU,
+/// VirtualBox, VMware, Hyper-V) and absent on bare metal — cheap to read and
+/// dependency-free, unlike shelling out to `systemd-detect-virt`.
+#[cfg(target_os = "linux")]
+fn running_in_vm() -> bool {
+    std::fs::read_to_string("/proc/cpuinfo").is_ok_and(|s| {
+        s.lines()
+            .any(|l| l.starts_with("flags") && l.split_whitespace().any(|f| f == "hypervisor"))
+    })
+}
+
 /// macOS: swap the stock menu's Quit for one that respects the dirty guard.
 ///
 /// The default menu's Quit item sends `NSApplication terminate:` directly
@@ -454,18 +465,6 @@ pub fn run() {
 /// frontend CommandRegistry ids (dotted) are forwarded over the
 /// "menu:command" event and dispatched by src/lib/menu-bridge.ts, so menu,
 /// palette, and shortcuts share one command definition.
-/// The `hypervisor` CPU flag is set by every mainstream hypervisor (KVM/QEMU,
-/// VirtualBox, VMware, Hyper-V) and absent on bare metal — cheap to read and
-/// dependency-free, unlike shelling out to `systemd-detect-virt`.
-#[cfg(target_os = "linux")]
-fn running_in_vm() -> bool {
-    std::fs::read_to_string("/proc/cpuinfo").is_ok_and(|s| {
-        s.lines().any(|l| {
-            l.starts_with("flags") && l.split_whitespace().any(|f| f == "hypervisor")
-        })
-    })
-}
-
 #[cfg(target_os = "macos")]
 fn install_macos_menu(app: &tauri::App) -> tauri::Result<()> {
     use tauri::menu::{
