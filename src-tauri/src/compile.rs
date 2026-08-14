@@ -464,7 +464,9 @@ pub async fn probe_last_build_output(project: Project) -> CmdResult<Option<Strin
         let mut candidates = vec![
             root.join(latex_output_rel(&root_file, LatexEngine::Pdflatex)),
             root.join(replace_ext(&root_file, "pdf")),
-            root.join(".typeward").join("build").join(format!("{stem}.pdf")),
+            root.join(".typeward")
+                .join("build")
+                .join(format!("{stem}.pdf")),
         ];
         candidates.dedup();
         let newest = candidates
@@ -615,22 +617,46 @@ pub async fn compile_latex(
                 }
                 BuildRecipe::EngineOnly => {
                     run_engine_recipe(
-                        &root_file, &root, engine, opts.halt_on_error, opts.synctex,
-                        shell_escape, None, &cancel, sink, &None,
+                        &root_file,
+                        &root,
+                        engine,
+                        opts.halt_on_error,
+                        opts.synctex,
+                        shell_escape,
+                        None,
+                        &cancel,
+                        sink,
+                        &None,
                     )
                     .await?
                 }
                 BuildRecipe::EngineBibtex => {
                     run_engine_recipe(
-                        &root_file, &root, engine, opts.halt_on_error, opts.synctex,
-                        shell_escape, Some(BibTool::Bibtex), &cancel, sink, &None,
+                        &root_file,
+                        &root,
+                        engine,
+                        opts.halt_on_error,
+                        opts.synctex,
+                        shell_escape,
+                        Some(BibTool::Bibtex),
+                        &cancel,
+                        sink,
+                        &None,
                     )
                     .await?
                 }
                 BuildRecipe::EngineBiber => {
                     run_engine_recipe(
-                        &root_file, &root, engine, opts.halt_on_error, opts.synctex,
-                        shell_escape, Some(BibTool::Biber), &cancel, sink, &None,
+                        &root_file,
+                        &root,
+                        engine,
+                        opts.halt_on_error,
+                        opts.synctex,
+                        shell_escape,
+                        Some(BibTool::Biber),
+                        &cancel,
+                        sink,
+                        &None,
                     )
                     .await?
                 }
@@ -644,7 +670,8 @@ pub async fn compile_latex(
     // A successful build whose PDF is byte-for-byte the one already on disk
     // (latexmk decided nothing changed) needs no viewer reload — the frontend
     // skips bumping pdfVersion, which is most of a no-op recompile's cost.
-    let pdf_unchanged = ok && pdf_signature(&pdf_path) == pdf_sig_before && pdf_sig_before.is_some();
+    let pdf_unchanged =
+        ok && pdf_signature(&pdf_path) == pdf_sig_before && pdf_sig_before.is_some();
 
     Ok(CompileResult {
         ok,
@@ -985,12 +1012,14 @@ pub(crate) async fn run_bounded(
     let tail_cap = cap.min(COMPILE_TAIL_CAP);
     let stdout_buf = Arc::new(Mutex::new(CappedBuffer::new(cap, tail_cap)));
     let stderr_buf = Arc::new(Mutex::new(CappedBuffer::new(cap, tail_cap)));
-    let stdout_task = child.stdout.take().map(|pipe| {
-        tokio::spawn(read_capped(pipe, Arc::clone(&stdout_buf), sink.clone()))
-    });
-    let stderr_task = child.stderr.take().map(|pipe| {
-        tokio::spawn(read_capped(pipe, Arc::clone(&stderr_buf), sink.clone()))
-    });
+    let stdout_task = child
+        .stdout
+        .take()
+        .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stdout_buf), sink.clone())));
+    let stderr_task = child
+        .stderr
+        .take()
+        .map(|pipe| tokio::spawn(read_capped(pipe, Arc::clone(&stderr_buf), sink.clone())));
 
     // The select handlers only classify the outcome — `child.wait()` holds a
     // mutable borrow of `child` for as long as the select's futures live, so
@@ -1738,8 +1767,7 @@ fn scan_parens_into_stack(line: &str, stack: &mut Vec<Option<String>>) {
                     &line[start..end.min(bytes.len())]
                 } else {
                     let start = i;
-                    while i < bytes.len()
-                        && !matches!(bytes[i], b'(' | b')' | b' ' | b'\t' | b'"')
+                    while i < bytes.len() && !matches!(bytes[i], b'(' | b')' | b' ' | b'\t' | b'"')
                     {
                         i += 1;
                     }
@@ -2435,10 +2463,16 @@ warning: this is deprecated
     #[test]
     fn engine_input_args_injects_includeonly_code_with_a_fixed_shape() {
         // Normal build: just the positional file.
-        assert_eq!(engine_input_args("main.tex", &None), vec!["main.tex".to_string()]);
+        assert_eq!(
+            engine_input_args("main.tex", &None),
+            vec!["main.tex".to_string()]
+        );
         // Chapter draft: jobname + includeonly-then-input code, jobname is the
         // root stem so the .aux/.pdf keep their names.
-        let names = Some(vec!["chapters/ch010".to_string(), "chapters/ch011".to_string()]);
+        let names = Some(vec![
+            "chapters/ch010".to_string(),
+            "chapters/ch011".to_string(),
+        ]);
         let args = engine_input_args("main.tex", &names);
         assert_eq!(args[0], "-jobname=main");
         assert_eq!(
@@ -2456,7 +2490,7 @@ warning: this is deprecated
             true,
             true,
             false,
-            &None
+            &None,
         );
         assert_eq!(passes.len(), 2);
         assert!(
@@ -2481,7 +2515,7 @@ warning: this is deprecated
             true,
             true,
             false,
-            &None
+            &None,
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes.iter().filter(|p| p.is_engine).count(), 3);
@@ -2506,7 +2540,7 @@ warning: this is deprecated
             false,
             false,
             true,
-            &None
+            &None,
         );
         assert_eq!(passes.len(), 4);
         assert_eq!(passes[1].program, "biber");
@@ -2531,7 +2565,7 @@ warning: this is deprecated
             true,
             true,
             false,
-            &None
+            &None,
         );
         assert!(passes.is_empty());
     }
