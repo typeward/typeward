@@ -95,9 +95,7 @@ pub async fn index_project(
     tokio::task::spawn_blocking(move || -> Result<ProjectIndex, String> {
         let root = Path::new(&project_root);
         project::require_registered_root(root).map_err(|e| e.to_string())?;
-        if !refresh
-            && let Some(cached) = manager.get(root)
-        {
+        if !refresh && let Some(cached) = manager.get(root) {
             return Ok(cached);
         }
         let index = scan(root);
@@ -126,9 +124,7 @@ fn scan(root: &Path) -> ProjectIndex {
     let mut index = ProjectIndex::default();
     let mut scanned = 0usize;
     for path in files {
-        if scanned >= MAX_FILES
-            || index.labels.len() + index.citations.len() >= MAX_ENTRIES
-        {
+        if scanned >= MAX_FILES || index.labels.len() + index.citations.len() >= MAX_ENTRIES {
             index.truncated = true;
             break;
         }
@@ -269,8 +265,13 @@ fn strip_comment(line: &str) -> &str {
 /// The title argument of a sectioning command on this line, if any.
 fn section_title(line: &str) -> Option<&str> {
     const CMDS: &[&str] = &[
-        "\\chapter", "\\section", "\\subsection", "\\subsubsection", "\\part",
-        "\\paragraph", "\\subparagraph",
+        "\\chapter",
+        "\\section",
+        "\\subsection",
+        "\\subsubsection",
+        "\\part",
+        "\\paragraph",
+        "\\subparagraph",
     ];
     for cmd in CMDS {
         if let Some(pos) = line.find(cmd) {
@@ -279,7 +280,9 @@ fn section_title(line: &str) -> Option<&str> {
             // and friends don't match.
             let brace = after.find('{')?;
             let between = &after[..brace];
-            if between.chars().all(|c| c == '*' || c.is_whitespace() || c == '[' || c == ']')
+            if between
+                .chars()
+                .all(|c| c == '*' || c.is_whitespace() || c == '[' || c == ']')
                 || between.starts_with('[')
                 || between.is_empty()
                 || between == "*"

@@ -17,8 +17,8 @@
 use std::path::{Path, PathBuf};
 
 use git2::{
-    BranchType, Config, Cred, CredentialType, ErrorCode, FetchOptions, IndexAddOption,
-    PushOptions, RemoteCallbacks, Repository, Signature, Sort, StatusOptions,
+    BranchType, Config, Cred, CredentialType, ErrorCode, FetchOptions, IndexAddOption, PushOptions,
+    RemoteCallbacks, Repository, Signature, Sort, StatusOptions,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -601,10 +601,7 @@ pub async fn git_fetch(repo_path: String, remote: Option<String>) -> Result<(), 
 }
 
 #[tauri::command]
-pub async fn git_pull(
-    repo_path: String,
-    remote: Option<String>,
-) -> Result<(), String> {
+pub async fn git_pull(repo_path: String, remote: Option<String>) -> Result<(), String> {
     let remote_name = remote.unwrap_or_else(|| "origin".to_string());
     tokio::task::spawn_blocking(move || -> Result<(), GitError> {
         let path = validate_repo_path(&repo_path)?;
