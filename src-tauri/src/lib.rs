@@ -201,7 +201,8 @@ pub fn run() {
             // thread — the Linux Secret Service backend can block on D-Bus.
             #[cfg(desktop)]
             tauri::async_runtime::spawn_blocking(|| {
-                let _ = integrations::credentials::delete_secret("git.github.com", "x-access-token");
+                let _ =
+                    integrations::credentials::delete_secret("git.github.com", "x-access-token");
             });
             // tauri.conf.json's backgroundColor is a static compile-time value
             // (Daylight cream), but the theme is per-user runtime state — dark
@@ -423,17 +424,16 @@ pub fn run() {
             // there without this handler. Windows/Linux opens arrive through
             // argv (first launch + the single-instance plugin) instead.
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls } = &_event {
-                if let Some(path) = urls
+            if let tauri::RunEvent::Opened { urls } = &_event
+                && let Some(path) = urls
                     .iter()
                     .filter_map(|u| u.to_file_path().ok())
                     .find(|p| p.is_file())
-                {
-                    // Cold launch delivers this within the first event-loop
-                    // iterations, well before the webview has loaded the JS
-                    // bundle — so it parks rather than emitting into the void.
-                    open_with::deliver(_app_handle, path.to_string_lossy().into_owned());
-                }
+            {
+                // Cold launch delivers this within the first event-loop
+                // iterations, well before the webview has loaded the JS
+                // bundle — so it parks rather than emitting into the void.
+                open_with::deliver(_app_handle, path.to_string_lossy().into_owned());
             }
         });
 }

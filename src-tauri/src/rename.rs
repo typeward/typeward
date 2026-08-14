@@ -41,19 +41,16 @@ fn single_re() -> &'static Regex {
 fn range_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
-            r"(\\(?:crefrange|Crefrange)\*?(?:\[[^\]]*\])?)(\{[^{}]*\})(\{[^{}]*\})",
-        )
-        .expect("range label command regex")
+        Regex::new(r"(\\(?:crefrange|Crefrange)\*?(?:\[[^\]]*\])?)(\{[^{}]*\})(\{[^{}]*\})")
+            .expect("range label command regex")
     })
 }
 
 /// Whether the captured opening is the label DEFINITION command `\label`
 /// (not `\labelcref`, which references one).
 fn is_label_def(open: &str) -> bool {
-    open.strip_prefix("\\label").is_some_and(|rest| {
-        rest.starts_with('{') || rest.starts_with('*') || rest.starts_with('[')
-    })
+    open.strip_prefix("\\label")
+        .is_some_and(|rest| rest.starts_with('{') || rest.starts_with('*') || rest.starts_with('['))
 }
 
 /// The single key `key` occupies its own comma segment in `arg`.
@@ -128,13 +125,24 @@ pub struct Reference {
 const MAX_CONTEXT: usize = 160;
 
 fn line_and_context(content: &str, byte_offset: usize) -> (u32, String) {
-    let start = content[..byte_offset].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let start = content[..byte_offset]
+        .rfind('\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
     let end = content[byte_offset..]
         .find('\n')
         .map(|i| byte_offset + i)
         .unwrap_or(content.len());
-    let line = content[..byte_offset].bytes().filter(|&b| b == b'\n').count() as u32 + 1;
-    let mut ctx: String = content[start..end].trim().chars().take(MAX_CONTEXT).collect();
+    let line = content[..byte_offset]
+        .bytes()
+        .filter(|&b| b == b'\n')
+        .count() as u32
+        + 1;
+    let mut ctx: String = content[start..end]
+        .trim()
+        .chars()
+        .take(MAX_CONTEXT)
+        .collect();
     if ctx.len() > MAX_CONTEXT {
         ctx.truncate(MAX_CONTEXT);
     }
@@ -152,15 +160,19 @@ pub fn find_uses_in_content(content: &str, key: &str, rel: &str, out: &mut Vec<R
         out.push(Reference {
             file: rel.to_string(),
             line,
-            kind: if is_label_def(&caps[1]) { "label" } else { "ref" }.to_string(),
+            kind: if is_label_def(&caps[1]) {
+                "label"
+            } else {
+                "ref"
+            }
+            .to_string(),
             context,
         });
     }
     for caps in range_re().captures_iter(content) {
         let a = &caps[2];
         let b = &caps[3];
-        if !arg_contains_key(&a[1..a.len() - 1], key)
-            && !arg_contains_key(&b[1..b.len() - 1], key)
+        if !arg_contains_key(&a[1..a.len() - 1], key) && !arg_contains_key(&b[1..b.len() - 1], key)
         {
             continue;
         }
@@ -180,8 +192,10 @@ pub fn find_uses_in_content(content: &str, key: &str, rel: &str, out: &mut Vec<R
 fn valid_key(key: &str) -> bool {
     !key.is_empty()
         && !key.bytes().any(|b| {
-            matches!(b, b'{' | b'}' | b',' | b'\\' | b'%' | b'#' | b'~' | b'^' | b'$' | b'&')
-                || b.is_ascii_whitespace()
+            matches!(
+                b,
+                b'{' | b'}' | b',' | b'\\' | b'%' | b'#' | b'~' | b'^' | b'$' | b'&'
+            ) || b.is_ascii_whitespace()
         })
 }
 
@@ -221,7 +235,10 @@ pub async fn rename_project_label(
             return Err("invalid label key".into());
         }
         if old_key == new_key {
-            return Ok(RenameResult { files_changed: vec![], total_occurrences: 0 });
+            return Ok(RenameResult {
+                files_changed: vec![],
+                total_occurrences: 0,
+            });
         }
         let files = crate::integrations::templates::collect_project_files(root)
             .map_err(|e| e.to_string())?;
@@ -246,14 +263,16 @@ pub async fn rename_project_label(
             if count == 0 {
                 continue;
             }
-            crate::fs_ops::atomic_write(&path, rewritten.as_bytes())
-                .map_err(|e| e.to_string())?;
+            crate::fs_ops::atomic_write(&path, rewritten.as_bytes()).map_err(|e| e.to_string())?;
             if let Ok(rel) = path.strip_prefix(root) {
                 changed.push(rel.to_string_lossy().replace('\\', "/"));
             }
             total += count;
         }
-        Ok(RenameResult { files_changed: changed, total_occurrences: total })
+        Ok(RenameResult {
+            files_changed: changed,
+            total_occurrences: total,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
