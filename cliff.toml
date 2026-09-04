@@ -9,7 +9,7 @@ header = ""
 # tera template. One section per release, commits grouped and sorted.
 body = """
 {% if version %}\
-## {{ version | trim_start_matches(pat="v") }}{% if timestamp %} — {{ timestamp | date(format="%Y-%m-%d") }}{% endif %}
+## {{ version | trim_start_matches(pat="v") }}{% if timestamp %} ({{ timestamp | date(format="%Y-%m-%d") }}){% endif %}
 {% else %}\
 ## Unreleased
 {% endif %}\
