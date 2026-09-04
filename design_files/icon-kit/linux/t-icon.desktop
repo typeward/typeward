@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=T
+Comment=T application
+Exec=t-app %U
+Icon=t-icon
+Terminal=false
+Categories=Utility;
+StartupWMClass=t-app

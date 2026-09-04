@@ -1,0 +1,103 @@
+/**
+ * Per-project sync status — feeds the TopBar badge and the
+ * SyncDetailDrawer. One status per (provider, project) pair so multiple
+ * cloud-backed projects can show concurrent state.
+ */
+
+import { createSignal } from "solid-js";
+
+import type { SyncPhase, SyncStatus } from "~/integrations/types";
+
+const DEFAULT_STATUS: SyncStatus = {
+  phase: "idle",
+  conflicts: [],
+};
+
+const [statuses, setStatuses] = createSignal<ReadonlyMap<string, SyncStatus>>(new Map());
+
+function key(providerId: string, projectId: string): string {
+  return `${providerId}::${projectId}`;
+}
+
+export function getSyncStatus(providerId: string, projectId: string): SyncStatus {
+  return statuses().get(key(providerId, projectId)) ?? DEFAULT_STATUS;
+}
+
+export function setSyncPhase(
+  providerId: string,
+  projectId: string,
+  phase: SyncPhase,
+  message?: string,
+): void {
+  setStatuses((m) => {
+    const next = new Map(m);
+    const prev = next.get(key(providerId, projectId)) ?? DEFAULT_STATUS;
+    next.set(key(providerId, projectId), {
+      ...prev,
+      phase,
+      message,
+      lastSyncAt: phase === "idle" ? Date.now() : prev.lastSyncAt,
+    });
+    return next;
+  });
+}
+
+/**
+ * Merge newly-detected conflicts into the tracked set, deduped by path.
+ * Merge — never replace: conflicts minted by a pull pass whose page cursor
+ * already advanced never replay, so a later clean pass reporting zero
+ * conflicts must not erase them. Removal happens only through resolution
+ * (`clearConflict`), keeping the resolver reachable from the badge while the
+ * `.conflict-*` sidecar still exists.
+ */
+export function recordConflicts(
+  providerId: string,
+  projectId: string,
+  conflicts: string[],
+): void {
+  if (conflicts.length === 0) return;
+  setStatuses((m) => {
+    const next = new Map(m);
+    const prev = next.get(key(providerId, projectId)) ?? DEFAULT_STATUS;
+    const merged = [
+      ...prev.conflicts,
+      ...conflicts.filter((c) => !prev.conflicts.includes(c)),
+    ];
+    next.set(key(providerId, projectId), {
+      ...prev,
+      phase: "conflict",
+      conflicts: merged,
+    });
+    return next;
+  });
+}
+
+export function clearConflict(
+  providerId: string,
+  projectId: string,
+  relPath: string,
+): void {
+  setStatuses((m) => {
+    const next = new Map(m);
+    const prev = next.get(key(providerId, projectId));
+    if (!prev) return m;
+    const conflicts = prev.conflicts.filter((p) => p !== relPath);
+    next.set(key(providerId, projectId), {
+      ...prev,
+      conflicts,
+      phase: conflicts.length === 0 && prev.phase === "conflict" ? "idle" : prev.phase,
+    });
+    return next;
+  });
+}
+
+export function clearSyncStatus(providerId: string, projectId: string): void {
+  setStatuses((m) => {
+    const next = new Map(m);
+    next.delete(key(providerId, projectId));
+    return next;
+  });
+}
+
+/** Reactive accessor for surfaces that need to react to any project's status. */
+export const allSyncStatuses = statuses;

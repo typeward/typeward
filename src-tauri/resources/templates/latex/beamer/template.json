@@ -1,0 +1,14 @@
+{
+  "id": "beamer",
+  "name": "Beamer slides",
+  "description": "Beamer presentation with title slide and a few example frames.",
+  "format": "latex",
+  "tags": ["presentation", "slides", "beamer"],
+  "rootFile": "main.tex",
+  "variables": [
+    { "key": "title", "label": "Title", "default": "Untitled" },
+    { "key": "author", "label": "Author", "default": "" },
+    { "key": "institute", "label": "Institute", "default": "" }
+  ],
+  "files": [{ "path": "main.tex", "template": true }]
+}

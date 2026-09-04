@@ -1,0 +1,4 @@
+# Normalize line endings in the index so core.autocrlf differences across
+# dev machines stop flagging untouched files (the Cargo.toml "phantom
+# modification" class of churn).
+* text=auto

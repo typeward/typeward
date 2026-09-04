@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Typeward</title>
+    <!-- From design_files/icon-kit/web. The adaptive SVG carries both themes
+         and switches on prefers-color-scheme, matching the app's own theming;
+         the .ico is the fallback for anything that won't take an SVG. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/favicon-adaptive.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <style>
+      /* Painted before any external CSS loads — avoids a flash while the
+       * bundle is being fetched/parsed. Defaults mirror the Daylight tokens
+       * (the app default); public/boot-theme.js re-tints the vars from the
+       * persisted theme for everyone else. */
+      html, body, #root {
+        margin: 0;
+        height: 100%;
+        background: var(--boot-bg, #f8f4ea);
+        color: var(--boot-fg, #22211e);
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483646;
+        background: var(--boot-bg, #f8f4ea);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 500 14px/1 -apple-system, "Segoe UI", Roboto, sans-serif;
+        letter-spacing: 0.04em;
+        color: var(--boot-dim, #756e62);
+        pointer-events: none;
+      }
+      #boot-splash::after {
+        content: "";
+        width: 16px;
+        height: 16px;
+        margin-left: 10px;
+        border: 2px solid var(--boot-ring, rgba(34, 33, 30, 0.12));
+        border-top-color: var(--boot-dim, #756e62);
+        border-radius: 50%;
+        animation: boot-spin 0.9s linear infinite;
+      }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+      /* Honor the OS reduced-motion preference during the boot window too — the
+       * app's own motion.css only applies once the bundle has loaded. */
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash::after { animation: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div id="boot-splash">Typeward</div>
+    </div>
+    <!-- Classic script from public/ so Vite can't fold it into the app
+         entry — as a bundled module the splash re-tint only ran after the
+         whole boot graph parsed, defeating its purpose in release builds. -->
+    <script src="/boot-theme.js"></script>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>

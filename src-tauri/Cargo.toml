@@ -1,0 +1,127 @@
+[package]
+name = "typeward"
+version = "0.0.1"
+description = "Typeward — multiplatform editor for LaTeX and Typst"
+authors = ["Typeward"]
+edition = "2024"
+# Commons Clause has no SPDX identifier, so point at the file instead.
+license-file = "../LICENSE"
+
+# crate-type required for both desktop static linking and future mobile (cdylib)
+[lib]
+name = "typeward_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# protocol-asset backs app.security.assetProtocol (convertFileSrc) — the only
+# cross-platform way to load local figures as webview subresources.
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+# Auto-updater. Dormant until an updater keypair exists: the pubkey in
+# tauri.conf.json is a "" placeholder and `bundle.createUpdaterArtifacts`
+# stays false in the checked-in config, so a keyless `tauri build` never signs
+# anything and the runtime check is a no-op (see src/lib/updater.ts). The
+# plugin only reads/parses the pubkey at check time, not at init, so an empty
+# pubkey doesn't break app startup or a local build. tauri-plugin-process backs
+# the post-install relaunch.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "8"
+which = "8"
+thiserror = "2"
+# Cross-file \label rename + find-references match the ref/label command
+# families precisely (already resolved transitively via other deps).
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+dirs = "6"
+
+# Integrations foundation (Phase 0): outbound HTTP, OS keyring, OAuth PKCE,
+# loopback redirect server. Kept behind project-scoped IPC commands so the
+# capability surface stays minimal.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form", "stream", "gzip", "brotli"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
+base64 = "0.22"
+rand = "0.10"
+url = "2"
+sha2 = "0.11"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+# Project history (history.rs): gzip for the content-addressed version blobs.
+# Already compiled transitively through zip's `deflate` feature, so promoting
+# it to a direct dep adds zero compile weight.
+flate2 = "1"
+
+# PDF annotation export (E7). `lopdf` edits existing PDFs (appends `/Annot`
+# objects to a page's `/Annots`); `pdf-writer` is create-only and can't reopen a
+# compiled PDF. Trimmed to just the parser — the date/rayon default features
+# aren't used for load → append-annotation → save.
+lopdf = { version = "0.44", default-features = false }
+
+# Grammar — Phase 5 (upgraded to Harper 2.x for E6). Rust-native, runs
+# in-process, zero network. `harper-tex` / `harper-typst` are Harper's
+# first-party format parsers so LaTeX/Typst markup is skipped, not linted.
+# 2.8.0 compiles clean on the pinned toolchain, so the vendored [patch] copy
+# that 2.5 and 2.7 needed for the rustc E0308 fn-item-array break is gone.
+harper-core = "2.8"
+harper-tex = "2.8"
+harper-typst = "2.8"
+
+# WebDAV cloud provider. quick-xml is non-validating (immune to XXE /
+# entity-expansion by construction) so it can parse attacker-controlled
+# PROPFIND multistatus bodies safely; percent-encoding builds WebDAV hrefs.
+# bytes is already in reqwest's tree; promoting it lets the WebDAV PUT retry
+# clone its upload buffer by refcount instead of deep copy.
+quick-xml = "0.41"
+percent-encoding = "2"
+bytes = "1"
+
+# Desktop-only deps. `cfg(desktop)` isn't a cargo-known cfg, so gate by the
+# concrete mobile targets.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+# Single-instance guard: a second launch focuses the running window rather than
+# starting a rival process over the same project data.
+tauri-plugin-single-instance = "2"
+# Window geometry persistence across launches. Restore/save are automatic
+# Rust-side hooks — no JS API is used, so no capability entry exists for it.
+# Mobile windows are OS-managed fullscreen surfaces with nothing to persist.
+tauri-plugin-window-state = "2"
+# VCS — Phase 3. libgit2 bindings; the "https" feature uses the OS-native TLS
+# stack (WinHTTP/SChannel) on Windows and Security.framework on macOS, but
+# OpenSSL on every other unix — including aarch64-linux-android, where
+# openssl-sys has no NDK-buildable source and kills the whole Android build.
+# Git is a desktop feature, so the dependency (and `integrations::vcs`, and the
+# git IPC commands in lib.rs) is gated off mobile entirely.
+git2 = { version = "0.21", default-features = false, features = ["https"] }
+# Move-to-trash for project delete (Recycle Bin / Trash / freedesktop). Desktop
+# only — mobile has no trash concept, so project.rs falls back to a hard delete.
+trash = "5"
+
+# Compile-timeout tree kill (compile.rs): each compiler child is setsid'd into
+# its own process group so the deadline can SIGKILL latexmk together with the
+# engine grandchild it spawned — Windows uses `taskkill /T` instead. Already
+# in the transitive graph, so this adds no new compile weight.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+# Strip debuginfo but KEEP the symbol table, so shipped-build panic backtraces
+# carry function names instead of bare addresses. `strip = true` would drop the
+# symbols too.
+strip = "debuginfo"

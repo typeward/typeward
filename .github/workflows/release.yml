@@ -1,0 +1,620 @@
+# Release pipeline. Builds signed installers for every desktop OS and publishes
+# a DRAFT GitHub Release on THIS repo. The updater endpoint and every download
+# link resolve through `releases/latest/download/...` here, so the repo must be
+# PUBLIC for either to work: GitHub does not serve release assets of a private
+# repo anonymously, and the updater sends no credentials.
+#
+# Flow: `npm run release -- x.y.z` bumps + tags -> push the tag -> this runs ->
+# a human smoke-tests one installer per OS on the draft -> Publish. Publishing
+# the draft materializes the tag, so `releases/latest/download/latest.json`
+# (the updater feed, whose name IS stable) starts resolving at that moment.
+# Installers are published under their versioned bundler names only, so a
+# download link has to name a tag; there is no `latest` alias for them.
+# A draft is invisible to `latest`, which is what keeps half-published releases
+# from ever reaching an installed app.
+#
+# SIGNING IS ENFORCED. A release build FAILS when a signing input its OS needs is
+# absent. Shipping deliberately-unsigned builds (the beta) requires an explicit
+# opt-in, so unsigned is never the accidental default:
+#   - workflow_dispatch input `allow_unsigned: true`, or
+#   - repository variable ALLOW_UNSIGNED_RELEASE = 'true' (covers tag pushes).
+# Either one turns the hard failure into a loud ::warning and stamps the release
+# notes as unsigned. Required inputs per leg:
+#   - all:     TAURI_SIGNING_PRIVATE_KEY (updater signature + .sig artifacts).
+#   - macOS:   APPLE_* (codesign + notarization).
+#   - Windows: AZURE_* AND a `bundle.windows.signCommand` in tauri.conf.json —
+#              the env passthrough alone signs nothing.
+#   - Linux:   no OS signing story; integrity rides on SHA256SUMS + attestation.
+# Every published artifact is hashed into SHA256SUMS and attested with build
+# provenance, signed or not — that is what the download/docs pages tell users to
+# verify.
+# Persisting an attestation requires a PUBLIC repo (GitHub refuses it for a
+# private repo on a free plan), so provenance is SKIPPED with a warning while
+# this repo is private, and the notes drop the verify line to match.
+#
+# See the `release` skill for the runbook.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build (e.g. v0.2.0)'
+        required: true
+        type: string
+      allow_unsigned:
+        description: 'Publish an UNSIGNED build (deliberate beta escape hatch)'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  # Set on purpose, never by default. Empty string = enforce signing.
+  ALLOW_UNSIGNED: ${{ (github.event.inputs.allow_unsigned == 'true' || vars.ALLOW_UNSIGNED_RELEASE == 'true') && 'true' || '' }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    # Scopes the signing secrets to this job. The updater private key is
+    # root-credential class: whoever holds it can sign an update that every
+    # installed copy of Typeward will accept and run. Repo-level secrets are
+    # readable by ANY workflow in the repo, so keep TAURI_SIGNING_PRIVATE_KEY,
+    # TAURI_SIGNING_PRIVATE_KEY_PASSWORD and the APPLE_*/AZURE_* certs as
+    # ENVIRONMENT secrets on `release`, not repo secrets, and set that
+    # environment's "deployment branches and tags" rule to `v*` only. Then a
+    # workflow pushed to a branch cannot read them, because it cannot claim
+    # this environment. Declaring the environment here is harmless before it
+    # is configured: GitHub creates it unprotected on first use.
+    environment: release
+    # A wedged signing/notarization or bundling step would otherwise hold a
+    # runner for GitHub's 6h default on every leg of a release.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            runner: macos-latest
+            os: macos
+            target: aarch64-apple-darwin
+            tectonic: true
+          - label: macOS (Intel)
+            # macos-15-intel, not macos-13: the macOS 13 image was retired on
+            # 2025-12-04, so that leg fails at queue time — and because `publish`
+            # declares `needs: build` with no `if: always()`, one dead leg
+            # discards the artifacts of every other platform too.
+            runner: macos-15-intel
+            os: macos
+            target: x86_64-apple-darwin
+            tectonic: true
+          - label: Windows x86_64
+            runner: windows-latest
+            os: windows
+            target: x86_64-pc-windows-msvc
+            tectonic: true
+          # The Linux runner is the BUILD BASE, not the support list: glibc is
+          # forward-compatible only, so a binary built here runs on that glibc
+          # and anything newer. Building on the OLDEST viable base is what makes
+          # the artifacts run on the WIDEST range of distros (glibc 2.35+, so
+          # Ubuntu 22.04+, Debian 12+, Fedora 36+, openSUSE, Arch, and the rest,
+          # via deb / rpm / AppImage). ubuntu-22.04 is also the Tauri v2 floor,
+          # the oldest image carrying libwebkit2gtk-4.1. Never "upgrade" these to
+          # a newer image for tidiness: that RAISES the floor and drops older
+          # distros. The runner is removed 2027-04-17; move to a pinned
+          # ubuntu:22.04 container then to keep the same floor.
+          - label: Linux x86_64 (glibc 2.35+)
+            runner: ubuntu-22.04
+            os: linux
+            target: x86_64-unknown-linux-gnu
+            tectonic: true
+          # ARM64 legs ship WITHOUT the Tectonic sidecar, by decision: upstream
+          # publishes no aarch64 Windows binary, and the ARM builds simply do
+          # not carry Tectonic (users bring their own TeX or install the
+          # tectonic CLI). tauri.no-tectonic.conf.json zeroes bundle.externalBin
+          # via the same merge-patch mechanism as the mobile overlays; the
+          # tectonic:false flag skips the fetch steps and adds that overlay to
+          # the tauri-action args below. detect.rs reports tectonicBundled=false
+          # so onboarding/Settings copy stops promising a bundled engine.
+          - label: Windows aarch64
+            runner: windows-11-arm
+            os: windows
+            target: aarch64-pc-windows-msvc
+            tectonic: false
+          - label: Linux aarch64 (glibc 2.35+)
+            # Same floor and the same reasoning as the x64 leg, on GitHub's ARM
+            # runner.
+            runner: ubuntu-22.04-arm
+            os: linux
+            target: aarch64-unknown-linux-gnu
+            tectonic: false
+
+    steps:
+      - name: Checkout app (at the release tag)
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ env.TAG }}
+          path: app
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned (matches rust-toolchain.toml) so rebuilding a tag
+          # later uses the same compiler instead of the moving stable channel.
+          toolchain: '1.96.0'
+          targets: ${{ matrix.target }}
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install Linux system deps
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            xdg-utils
+
+      # Install the app's deps explicitly (mirrors build.yml). tauri-action's
+      # implicit install is not relied on — beforeBuildCommand (`npm run build`
+      # = tsc + vite) needs node_modules already present.
+      - name: Install npm deps
+        working-directory: app
+        run: npm ci
+
+      - name: Verify tag matches every version source
+        shell: bash
+        working-directory: app
+        run: |
+          set -euo pipefail
+          tag_version="${TAG#v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          conf_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          # First top-level `version = "..."` is [package] (deps are name = { version = ... }).
+          cargo_version="$(grep -m1 '^version = "' src-tauri/Cargo.toml | sed -E 's/^version = "(.*)"/\1/')"
+          fail=0
+          for src in "package.json:${pkg_version}" "tauri.conf.json:${conf_version}" "Cargo.toml:${cargo_version}"; do
+            name="${src%%:*}"; ver="${src#*:}"
+            if [ "$ver" != "$tag_version" ]; then
+              echo "::error::Tag ${TAG} does not match ${name} version ${ver}. Run 'npm run release -- ${tag_version}' to bump every source in lockstep, then push the matching tag."
+              fail=1
+            fi
+          done
+          [ "$fail" = 0 ] || exit 1
+          echo "Tag ${TAG} matches package.json, tauri.conf.json, and Cargo.toml (${tag_version})."
+
+      - name: Fetch Tectonic sidecar
+        if: matrix.tectonic == true
+        shell: bash
+        working-directory: app
+        run: node scripts/fetch-tectonic.mjs
+
+      - name: Symlink Tectonic for the gnu triple (Linux)
+        if: matrix.os == 'linux' && matrix.tectonic == true
+        run: |
+          cd app/src-tauri/binaries
+          ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
+      # Signing gate. Collect every signing input this leg needs; a missing one
+      # FAILS the release unless the unsigned escape hatch was set on purpose.
+      # Secrets can't be read in `if:` so route them through env here and expose
+      # plain outputs.
+      - name: Signing gate
+        id: sign
+        shell: bash
+        working-directory: app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          # No `set -u`: the macOS runner's bash 3.2 errors on an empty array
+          # expansion under it.
+          set -eo pipefail
+          missing=()
+
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            missing+=("TAURI_SIGNING_PRIVATE_KEY (updater signature; no key -> no .sig, no latest.json, and installed apps get no update for this version)")
+            echo "updater=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "updater=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "${{ matrix.os }}" = "macos" ] && [ -z "$APPLE_CERTIFICATE" ]; then
+            missing+=("APPLE_* (macOS codesign + notarization; Gatekeeper will refuse/warn)")
+          fi
+
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            # The AZURE_* passthrough signs nothing on its own: Tauri only signs
+            # when tauri.conf.json declares bundle.windows.signCommand.
+            has_sign_command="$(node -p "Boolean(require('./src-tauri/tauri.conf.json').bundle?.windows?.signCommand)")"
+            if [ -z "$AZURE_CLIENT_ID" ] || [ "$has_sign_command" != "true" ]; then
+              missing+=("Windows Authenticode (needs AZURE_* secrets AND bundle.windows.signCommand in tauri.conf.json; SmartScreen will warn)")
+            fi
+          fi
+
+          if [ ${#missing[@]} -eq 0 ]; then
+            echo "All signing inputs present for ${{ matrix.os }}."
+            exit 0
+          fi
+
+          printf 'Missing signing inputs for %s:\n' "${{ matrix.os }}"
+          printf '  - %s\n' "${missing[@]}"
+          if [ -n "${ALLOW_UNSIGNED:-}" ]; then
+            echo "::warning::UNSIGNED RELEASE (${{ matrix.os }}) — allowed only because the unsigned escape hatch is set. Users get no OS-level authenticity guarantee; SHA256SUMS + build provenance are the only integrity checks."
+            exit 0
+          fi
+          echo "::error::Refusing to build an unsigned release (${{ matrix.os }}). Add the missing signing inputs above, or set the escape hatch on purpose: re-run with the workflow_dispatch input allow_unsigned=true, or set the repository variable ALLOW_UNSIGNED_RELEASE=true."
+          exit 1
+
+      # Overlay JSON deep-merged over tauri.conf via `--config`, flipping ONLY
+      # createUpdaterArtifacts on — the checked-in config stays dormant so a
+      # keyless local `npm run tauri build` never touches the signing path.
+      - name: Write updater overlay (signed builds only)
+        if: steps.sign.outputs.updater == 'true'
+        shell: bash
+        run: echo '{"bundle":{"createUpdaterArtifacts":true}}' > "${{ runner.temp }}/updater.overlay.json"
+
+      # tauri-bundler probes the APPLE_* variables with `std::env::var_os`, which
+      # returns Some("") for a variable that is SET BUT EMPTY. A secrets.X for a
+      # secret that does not exist renders as the empty string, so passing the
+      # block through unconditionally still sent the macOS legs down the codesign
+      # path, where `security import` died on the empty certificate:
+      #   security: SecKeychainItemImport: One or more parameters ... not valid
+      #   failed to bundle project: failed codesign application
+      # That made the unsigned escape hatch a no-op on macOS, the one platform
+      # where signing is not wired up yet. The hatch has to mean these are
+      # ABSENT, not empty, so export them only when they carry a real value.
+      - name: Export Apple signing env (only when non-empty)
+        if: matrix.os == 'macos'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eo pipefail
+          exported=0
+          names="APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY"
+          names="$names APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID"
+          for name in $names; do
+            # Indirect expansion; bash 3.2 on the macOS runners supports it.
+            value="${!name}"
+            [ -n "$value" ] || continue
+            # Heredoc form: a base64 certificate can contain newlines.
+            {
+              echo "$name<<__TYPEWARD_ENV_EOF__"
+              echo "$value"
+              echo "__TYPEWARD_ENV_EOF__"
+            } >> "$GITHUB_ENV"
+            exported=$((exported + 1))
+          done
+          echo "Exported $exported APPLE_* variable(s) to the build environment."
+
+      # tauri-action shells out to cargo WITHOUT --locked, so a stale Cargo.lock
+      # would be silently "repaired" and a RELEASE could ship dependency
+      # versions the lockfile never pinned. Assert it up front — forwarding the
+      # flag through the action is brittle, this gives the same guarantee.
+      - name: Verify Cargo.lock is current
+        working-directory: app/src-tauri
+        shell: bash
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Build the app
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          # Frontend secrets (empty is fine — the OAuth sign-in paths surface
+          # an actionable "register your app" error instead).
+          VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
+          # Updater signing (absent -> no updater artifacts, no key needed).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS signing + notarization is deliberately NOT passed here; see
+          # the "Export Apple signing env" step above. An empty value is still
+          # a SET variable, and the bundler reads that as "sign me".
+          # Windows signing (future — signCommand not wired yet; passed through
+          # so it activates the moment tauri.conf gains a signCommand).
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        with:
+          # No tagName: tauri-action only BUILDS. Cross-repo publishing to
+          # this repo happens in the publish job via action-gh-release.
+          projectPath: app
+          # Overlays merge in order: the ARM legs drop the sidecar first, then
+          # signed builds flip createUpdaterArtifacts on. Relative --config
+          # paths resolve against projectPath.
+          args: >-
+            ${{ matrix.tectonic == false && '--config src-tauri/tauri.no-tectonic.conf.json' || '' }}
+            ${{ steps.sign.outputs.updater == 'true' && format('--config {0}/updater.overlay.json', runner.temp) || '' }}
+
+      # Both macOS legs emit bundle/macos/Typeward.app.tar.gz (Tauri names the
+      # updater bundle after productName only — no arch, unlike the dmg). Without
+      # this, the publish job's flatten (cp into one dir) would collapse the two
+      # into one file and build-latest-json would map the survivor to
+      # darwin-aarch64, so Apple-Silicon users would auto-update to the Intel
+      # bundle and Intel users would get no entry. Tag each with the target so
+      # both survive and platformKey classifies them (it matches x86_64/aarch64).
+      # No-op when the updater is dormant (no .app.tar.gz produced).
+      - name: Disambiguate macOS updater bundle by arch
+        if: matrix.os == 'macos'
+        shell: bash
+        working-directory: app/src-tauri/target/release/bundle/macos
+        run: |
+          shopt -s nullglob
+          for f in *.app.tar.gz; do
+            base="${f%.app.tar.gz}"
+            mv "$f" "${base}_${{ matrix.target }}.app.tar.gz"
+            [ -f "$f.sig" ] && mv "$f.sig" "${base}_${{ matrix.target }}.app.tar.gz.sig"
+          done
+
+      # Installers + updater bundles + their .sig signatures. Per-OS globs that
+      # don't match (a leg only builds its own OS's targets) are ignored. The
+      # raw .app directory is intentionally excluded — only the .app.tar.gz
+      # updater bundle is needed.
+      - name: Collect artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Per-TARGET name: the two macOS legs share matrix.os == 'macos', so a
+          # matrix.os name would collide the arm64 and Intel uploads.
+          name: release-bundle-${{ matrix.target }}
+          # Each leg builds only its own OS's targets, so at least one glob
+          # always matches; zero files means this platform's build silently
+          # produced nothing — fail loudly rather than drop it from the release.
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            app/src-tauri/target/release/bundle/nsis/*.exe
+            app/src-tauri/target/release/bundle/nsis/*.sig
+            app/src-tauri/target/release/bundle/dmg/*.dmg
+            app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            app/src-tauri/target/release/bundle/macos/*.sig
+            app/src-tauri/target/release/bundle/deb/*.deb
+            app/src-tauri/target/release/bundle/deb/*.sig
+            app/src-tauri/target/release/bundle/appimage/*.AppImage
+            app/src-tauri/target/release/bundle/appimage/*.sig
+            app/src-tauri/target/release/bundle/rpm/*.rpm
+            app/src-tauri/target/release/bundle/rpm/*.sig
+
+  publish:
+    name: Assemble + draft release
+    needs: build
+    runs-on: ubuntu-24.04
+    # Same environment as `build`, because this job reads the presence of the
+    # signing secrets to decide whether the notes carry an "Unsigned build"
+    # section. Without it, environment-scoped secrets read as absent here and
+    # every release would be stamped unsigned regardless of how it was built.
+    environment: release
+    timeout-minutes: 30
+    permissions:
+      # Creating the draft release on this repo.
+      contents: write
+      # Build provenance attestations for the published artifacts.
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout (full history for the changelog)
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-bundle-*
+          path: collected
+
+      - name: Changelog (git-cliff)
+        id: cliff
+        continue-on-error: true
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+
+      # One copy per installer, under the bundler's own versioned name. A second
+      # stable-named copy of each used to be published so a download page could
+      # link `releases/latest/download/Typeward-windows-x64-setup.exe`, but no
+      # such page exists and the duplication listed every installer twice on the
+      # release and doubled the upload. If a permanent download link is ever
+      # wanted, reintroduce the copies here rather than renaming these, because
+      # latest.json resolves the versioned names.
+      - name: Flatten assets
+        id: assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob globstar
+          mkdir -p dist
+          # Flatten the per-OS artifact trees into one dir.
+          for f in collected/**/*; do
+            [ -f "$f" ] && cp -f "$f" dist/
+          done
+          echo "Assets:"; ls -1 dist
+
+      # `--expect` is the guard against a silently missing platform: the build
+      # job succeeded, so every leg produced a bundle, and a leg whose .sig
+      # never reached the collector would otherwise publish a manifest that
+      # simply omits that platform. Those users would then see "you're up to
+      # date" forever with no error anywhere. Linux deb/rpm keys are NOT
+      # expected: whether the bundler signs those packages is what the produced
+      # key list below reports, and their absence is handled at runtime rather
+      # than by routing those users to an AppImage they cannot install.
+      - name: Assemble latest.json (only when signed artifacts exist)
+        shell: bash
+        run: |
+          node scripts/build-latest-json.mjs \
+            --dir dist \
+            --version "${{ steps.ver.outputs.version }}" \
+            --base-url "https://github.com/${{ github.repository }}/releases/download/${TAG}" \
+            --notes-file RELEASE_NOTES.md \
+            --expect windows-x86_64-nsis,windows-aarch64-nsis,darwin-aarch64-app,darwin-x86_64-app,linux-x86_64-appimage,linux-aarch64-appimage \
+            --out dist/latest.json
+
+      - name: Report updater platform coverage
+        if: hashFiles('dist/latest.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          keys="$(node -p "Object.keys(require('./dist/latest.json').platforms).sort().join('\n')")"
+          echo "Updater manifest covers:"
+          echo "$keys" | sed 's/^/  /'
+          for pkg in deb rpm; do
+            if ! echo "$keys" | grep -q -- "-${pkg}\$"; then
+              echo "::warning::latest.json has no ${pkg} entries, so users who installed the .${pkg} cannot auto-update. The app tells them to update through their package manager instead."
+            fi
+          done
+
+      # The .sig files are CONSUMED here, not published. build-latest-json reads
+      # each signature's CONTENT into the matching latest.json entry, and the
+      # updater verifies a download against that field; it never fetches a .sig
+      # URL. Publishing them therefore added ten assets to the release page that
+      # nobody has any use for, burying the installers people actually came for.
+      # Set them aside AFTER the manifest is built and BEFORE the checksum,
+      # attestation and upload steps, since all three glob dist/*.
+      - name: Withhold the consumed .sig files from the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sigs=( dist/*.sig )
+          if [ ${#sigs[@]} -eq 0 ]; then
+            echo "No .sig files present (unsigned build)."
+            exit 0
+          fi
+          mkdir -p consumed-sigs
+          mv "${sigs[@]}" consumed-sigs/
+          echo "Withheld ${#sigs[@]} .sig file(s); their signatures travel inside latest.json."
+
+      # Every asset gets a checksum line. The download page and docs tell users
+      # to verify against this file, so it must exist for EVERY release, signed
+      # or not — it is the only integrity check an unsigned build has.
+      - name: SHA256SUMS
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=( * )
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::No release assets were produced — nothing to checksum."
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Cryptographic provenance for each asset (which workflow, which commit,
+      # which runner built it) — verifiable with `gh attestation verify`.
+      # Independent of code signing; it is what an unsigned beta can still offer.
+      # Skipped on a private repo: the API refuses to persist the attestation
+      # ("Feature not available for the organization"), which failed the whole
+      # publish job and discarded a set of otherwise-good bundles. Public
+      # releases, the ones users actually download, still get full provenance.
+      - name: Attest build provenance
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: 'dist/*'
+
+      - name: Note that provenance was skipped
+        if: ${{ github.event.repository.private }}
+        shell: bash
+        run: echo "::warning::Build provenance SKIPPED because ${{ github.repository }} is private. Assets carry SHA256SUMS only. Make the repo public to get attestations on a real release."
+
+      - name: Append verification + signing status to the notes
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          touch RELEASE_NOTES.md
+          # Same inputs the per-OS signing gate checks; if any is absent this
+          # release only got through because the unsigned escape hatch was set,
+          # and the notes must say so rather than let users assume otherwise.
+          has_sign_command="$(node -p "Boolean(require('./src-tauri/tauri.conf.json').bundle?.windows?.signCommand)")"
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$APPLE_CERTIFICATE" ] \
+            || [ -z "$AZURE_CLIENT_ID" ] || [ "$has_sign_command" != "true" ]; then
+            {
+              echo
+              echo "### Unsigned build"
+              echo
+              echo "These installers are **not fully code-signed** and may carry no updater"
+              echo "signature. Windows SmartScreen and macOS Gatekeeper will warn. Verify the"
+              echo "download against \`SHA256SUMS\` below before running it."
+            } >> RELEASE_NOTES.md
+          fi
+          {
+            echo
+            echo "### Verify your download"
+            echo
+            echo '```'
+            echo "sha256sum -c SHA256SUMS --ignore-missing"
+            echo '```'
+            if [ "${{ github.event.repository.private }}" != "true" ]; then
+              echo
+              echo "Build provenance: \`gh attestation verify <file> --repo ${{ github.repository }}\`"
+            fi
+          } >> RELEASE_NOTES.md
+
+      # Draft on purpose: a draft carries no tag and is excluded from
+      # `releases/latest`, so the updater cannot see a release until a human has
+      # smoke-tested one installer per OS and pressed Publish. Publishing is the
+      # single moment the feed and the download links both go live.
+      - name: Publish draft release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Typeward ${{ env.TAG }}
+          draft: true
+          body_path: RELEASE_NOTES.md
+          fail_on_unmatched_files: false
+          files: dist/*
+
+      # A private repo serves no release asset anonymously, and the updater
+      # sends no credentials, so every check would fail with a fetch error that
+      # looks exactly like an outage. Warn at release time rather than let it
+      # surface as mystery breakage in installed apps.
+      - name: Warn if this repo is private
+        if: github.event.repository.private
+        shell: bash
+        run: |
+          echo "::warning::${{ github.repository }} is PRIVATE. Release assets are not anonymously downloadable, so the updater feed (releases/latest/download/latest.json) and every download link will fail for users. Make the repo public before announcing this release."

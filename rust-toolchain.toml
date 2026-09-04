@@ -1,0 +1,15 @@
+# Pin the Rust toolchain so a release rebuilt from the same tag uses the same
+# compiler (CI previously floated on the moving `stable` channel). Keep this in
+# lockstep with the `toolchain:` pins in .github/workflows/{build,tests,release}.yml:
+# this file overrides the CI action's toolchain for every `cargo` invocation.
+# It lives at the repo root, not next to the crate in src-tauri/, because rustup
+# only searches the working directory and its parents. Parked in src-tauri/ it
+# was silently skipped by the documented `cargo ... --manifest-path
+# src-tauri/Cargo.toml` commands, which run from the root, so those picked up
+# whatever `stable` happened to be instead of the pin.
+# Bumping the channel is a deliberate, separate step: re-run clippy + tests on
+# the new compiler first, and re-check that harper-core still builds, since it
+# is the dependency that has historically broken on a new rustc.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

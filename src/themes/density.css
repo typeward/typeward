@@ -1,0 +1,104 @@
+/*
+ * UI density tokens — Compact / Cozy (default) / Comfortable.
+ *
+ * Anchored on a 12 / 14 / 16 px body. The scale follows a roughly 1.14
+ * modular ratio between steps, mirroring the Material 3 and Apple HIG
+ * conventions. Body sizes are above the 12px accessibility floor in every
+ * mode. Line-height and letter-spacing tokens follow WCAG recommendations
+ * (1.5 for body, 1.2 for display; slightly negative tracking on larger
+ * sizes for visual tightness).
+ *
+ * Cozy lives in the base :root block; the other two override only what
+ * differs. All density-aware vars are namespaced `--ui-*` to keep them
+ * distinct from theme/color tokens.
+ *
+ * Every px token is multiplied by --ui-scale, the interface-scale multiplier
+ * (Settings → Appearance), 1 = 100%. Values go fractional at non-100 scales —
+ * same tradeoff as webview zoom, accepted 2026-07-16.
+ *
+ * Spec: design/density.md.
+ */
+
+:root {
+  /* Type scale (Cozy default) */
+  --ui-font-xs: calc(11px * var(--ui-scale, 1));       /* mono captions, label-xs hints */
+  --ui-font-sm: calc(12px * var(--ui-scale, 1));       /* helper text, status hints */
+  --ui-font-base: calc(14px * var(--ui-scale, 1));     /* body, menu items, buttons, default chrome */
+  --ui-font-lg: calc(16px * var(--ui-scale, 1));       /* card titles, section h2 */
+  --ui-font-xl: calc(22px * var(--ui-scale, 1));       /* page heading, screen h1 */
+
+  /* Vertical rhythm */
+  --ui-line-tight: 1.2;     /* headings, display sizes */
+  --ui-line-snug: 1.35;     /* dense UI rows */
+  --ui-line-base: 1.5;      /* body text */
+
+  /* Letter spacing */
+  --ui-track-tight: -0.012em;  /* large/display sizes */
+  --ui-track-base: 0;
+  --ui-track-loose: 0.04em;    /* uppercase labels */
+
+  /* Row heights */
+  --ui-row: calc(32px * var(--ui-scale, 1));
+  --ui-row-sm: calc(28px * var(--ui-scale, 1));        /* tabs, inline pills */
+  --ui-row-lg: calc(40px * var(--ui-scale, 1));        /* top bars, prominent rows */
+
+  /* Padding */
+  --ui-pad-card: calc(16px * var(--ui-scale, 1));
+  --ui-pad-section: calc(12px * var(--ui-scale, 1));
+  --ui-pad-inline: calc(10px * var(--ui-scale, 1));    /* horizontal padding on buttons / inputs */
+
+  /* Gaps */
+  --ui-gap-section: calc(12px * var(--ui-scale, 1));
+  --ui-gap-inline: calc(8px * var(--ui-scale, 1));
+
+  /* Icon sizes */
+  --ui-icon-chrome: calc(20px * var(--ui-scale, 1));   /* top-bar chrome icons */
+  --ui-icon-menu: calc(14px * var(--ui-scale, 1));     /* inline icons next to menu/list items */
+  --ui-icon-sm: calc(12px * var(--ui-scale, 1));       /* tight inline icons (close, more, chevron) */
+}
+
+:root[data-density="compact"] {
+  --ui-font-xs: calc(10px * var(--ui-scale, 1));
+  --ui-font-sm: calc(11px * var(--ui-scale, 1));
+  --ui-font-base: calc(12px * var(--ui-scale, 1));
+  --ui-font-lg: calc(14px * var(--ui-scale, 1));
+  --ui-font-xl: calc(18px * var(--ui-scale, 1));
+
+  --ui-row: calc(28px * var(--ui-scale, 1));
+  --ui-row-sm: calc(24px * var(--ui-scale, 1));
+  --ui-row-lg: calc(36px * var(--ui-scale, 1));
+
+  --ui-pad-card: calc(12px * var(--ui-scale, 1));
+  --ui-pad-section: calc(8px * var(--ui-scale, 1));
+  --ui-pad-inline: calc(8px * var(--ui-scale, 1));
+
+  --ui-gap-section: calc(8px * var(--ui-scale, 1));
+  --ui-gap-inline: calc(6px * var(--ui-scale, 1));
+
+  --ui-icon-chrome: calc(18px * var(--ui-scale, 1));
+  --ui-icon-menu: calc(12px * var(--ui-scale, 1));
+  --ui-icon-sm: calc(10px * var(--ui-scale, 1));
+}
+
+:root[data-density="comfortable"] {
+  --ui-font-xs: calc(12px * var(--ui-scale, 1));
+  --ui-font-sm: calc(14px * var(--ui-scale, 1));
+  --ui-font-base: calc(16px * var(--ui-scale, 1));
+  --ui-font-lg: calc(18px * var(--ui-scale, 1));
+  --ui-font-xl: calc(26px * var(--ui-scale, 1));
+
+  --ui-row: calc(40px * var(--ui-scale, 1));
+  --ui-row-sm: calc(36px * var(--ui-scale, 1));
+  --ui-row-lg: calc(48px * var(--ui-scale, 1));
+
+  --ui-pad-card: calc(20px * var(--ui-scale, 1));
+  --ui-pad-section: calc(16px * var(--ui-scale, 1));
+  --ui-pad-inline: calc(14px * var(--ui-scale, 1));
+
+  --ui-gap-section: calc(16px * var(--ui-scale, 1));
+  --ui-gap-inline: calc(12px * var(--ui-scale, 1));
+
+  --ui-icon-chrome: calc(24px * var(--ui-scale, 1));
+  --ui-icon-menu: calc(16px * var(--ui-scale, 1));
+  --ui-icon-sm: calc(14px * var(--ui-scale, 1));
+}

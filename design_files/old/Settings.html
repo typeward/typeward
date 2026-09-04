@@ -1,0 +1,1075 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Typeward — Settings</title>
+<meta name="viewport" content="width=1440, initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg-base: #0A0B0F;
+    --fg-1: #E6E8EC;
+    --fg-2: #9CA3AF;
+    --fg-3: #6B7280;
+    --fg-4: #4B5563;
+    --glass-stroke: rgba(255,255,255,0.07);
+    --glass-fill: rgba(255,255,255,0.035);
+    --accent-violet: #8B5CF6;
+    --accent-cyan: #22D3EE;
+  }
+  html, body, #root {
+    background: var(--bg-base);
+    color: var(--fg-1);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    margin: 0;
+    height: 100%;
+  }
+  body { font-feature-settings: 'cv02','cv03','cv04','ss01'; letter-spacing: -0.005em; overflow: hidden; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-feature-settings: 'calt','liga'; }
+  .glass {
+    background: var(--glass-fill);
+    backdrop-filter: blur(24px) saturate(140%);
+    -webkit-backdrop-filter: blur(24px) saturate(140%);
+    border: 1px solid var(--glass-stroke);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.05), 0 8px 32px rgba(0,0,0,0.32);
+  }
+  .glass-soft { background: rgba(255,255,255,0.02); border: 1px solid var(--glass-stroke); }
+  .glass-inset { background: rgba(0,0,0,0.20); border: 1px solid rgba(255,255,255,0.04); box-shadow: inset 0 1px 2px rgba(0,0,0,0.25); }
+  .accent-grad { background: linear-gradient(135deg, #8B5CF6 0%, #22D3EE 100%); }
+  .accent-text { background: linear-gradient(135deg, #A78BFA 0%, #67E8F9 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ambient { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+  .blob { position: absolute; border-radius: 50%; filter: blur(120px); opacity: 0.55; }
+  .blob-1 { width: 720px; height: 720px; left: -180px; top: -240px; background: radial-gradient(circle, #4C1D95 0%, transparent 65%); }
+  .blob-2 { width: 760px; height: 760px; right: -220px; top: -120px; background: radial-gradient(circle, #155E75 0%, transparent 65%); opacity: 0.42; }
+  .blob-3 { width: 600px; height: 600px; left: 38%; bottom: -260px; background: radial-gradient(circle, #1E3A8A 0%, transparent 65%); opacity: 0.40; }
+  .grain::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.5; mix-blend-mode: overlay;
+  }
+  .label-xs { font-size: 10.5px; letter-spacing: 0.10em; text-transform: uppercase; font-weight: 500; }
+  .scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  .scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  .scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+  .lift { transition: filter 150ms, background 150ms, border-color 150ms, transform 150ms; }
+  .lift:hover { filter: brightness(1.18); }
+  .glow-violet { box-shadow: 0 0 0 1px rgba(139,92,246,0.4), 0 8px 28px rgba(139,92,246,0.28), 0 0 60px rgba(34,211,238,0.18); }
+  .avatar-ring { box-shadow: 0 0 0 2px var(--bg-base), 0 0 0 3.5px rgba(34,211,238,0.5); }
+  .side-active::before { content:''; position:absolute; left:0; top:8px; bottom:8px; width:2px; border-radius: 2px; background: linear-gradient(180deg,#8B5CF6,#22D3EE); }
+  .no-emoji { font-variant-emoji: text; }
+
+  /* Toggle */
+  .toggle { width:32px; height:18px; border-radius:999px; position:relative; transition: background 180ms; flex-shrink:0; }
+  .toggle.on { background: linear-gradient(135deg,#8B5CF6,#22D3EE); }
+  .toggle.off { background: rgba(255,255,255,0.08); }
+  .toggle-knob { position:absolute; top:2px; width:14px; height:14px; border-radius:50%; background:white; box-shadow: 0 1px 3px rgba(0,0,0,0.4); transition: left 180ms; }
+  .toggle.on .toggle-knob { left:16px; }
+  .toggle.off .toggle-knob { left:2px; }
+
+  /* Radio dot */
+  .radio { width:14px; height:14px; border-radius:50%; border:1.5px solid rgba(255,255,255,0.25); flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+  .radio.on { border-color:#A78BFA; }
+  .radio.on::after { content:''; width:7px; height:7px; border-radius:50%; background: linear-gradient(135deg,#8B5CF6,#22D3EE); }
+
+  /* Section divider */
+  .row-div { border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .row-div:last-child { border-bottom: none; }
+
+  /* Plan card glow */
+  .plan-active { box-shadow: inset 0 0 0 1px rgba(139,92,246,0.55), 0 12px 40px rgba(139,92,246,0.20), 0 0 80px rgba(34,211,238,0.10); }
+
+  /* Bar chart */
+  .bar { background: rgba(255,255,255,0.05); border-radius: 2px; }
+  .bar-fill { background: linear-gradient(90deg,#8B5CF6,#22D3EE); border-radius: 2px; }
+
+  /* Card brand stripe */
+  .visa-stripe { background: linear-gradient(135deg, #1A1F71 0%, #0E1248 100%); }
+  .mc-stripe { background: linear-gradient(135deg, #EB001B 0%, #F79E1B 100%); }
+
+  /* Theme swatch grid */
+  .theme-tile { aspect-ratio: 1.6/1; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
+const ICONS = {
+  "search": "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M21 21l-5-5",
+  "user": "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  "credit-card": "M3 5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M3 10h18 M7 15h2 M13 15h4",
+  "shield": "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  "bell": "M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9 M10 21a2 2 0 0 0 4 0",
+  "palette": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 8 14.5C19 19 16 19 14 18c-1-.5-1.5-2 0-3l1.5-1.5c1-1 1-3-1-3h-2 M7 14a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M9 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z M15 8a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z",
+  "type": "M4 7V4h16v3 M9 20h6 M12 4v16",
+  "key": "M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8z M15 7l4 4 M18 5l4 4",
+  "users": "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M22 21v-2a4 4 0 0 0-3-3.9 M16 3.1a4 4 0 0 1 0 7.8",
+  "plug": "M12 22v-5 M9 8V2 M15 8V2 M18 8a3 3 0 0 1 0 6h-1v4H7v-4H6a3 3 0 0 1 0-6z",
+  "globe": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z M2 12h20 M12 2a15 15 0 0 1 4 10 15 15 0 0 1-4 10 15 15 0 0 1-4-10 15 15 0 0 1 4-10z",
+  "keyboard": "M2 6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z M6 8h.01 M10 8h.01 M14 8h.01 M18 8h.01 M6 12h.01 M10 12h.01 M14 12h.01 M18 12h.01 M7 16h10",
+  "log-out": "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4 M16 17l5-5-5-5 M21 12H9",
+  "chevron-down": "M6 9l6 6 6-6",
+  "chevron-right": "M9 18l6-6-6-6",
+  "chevron-left": "M15 18l-6-6 6-6",
+  "check": "M20 6L9 17l-5-5",
+  "check-circle": "M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0z M9 12l2 2 4-4",
+  "plus": "M12 5v14 M5 12h14",
+  "x": "M18 6L6 18 M6 6l12 12",
+  "external-link": "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6 M15 3h6v6 M10 14L21 3",
+  "download": "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3",
+  "trash": "M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6",
+  "alert-triangle": "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z M12 9v4 M12 17h.01",
+  "sparkles": "M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z M19 14l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z M5 17l.5 1.5 1.5.5-1.5.5L5 21l-.5-1.5L3 19l1.5-.5z",
+  "info": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z M12 16v-4 M12 8h.01",
+  "edit": "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7 M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z",
+  "github": "M9 19c-5 1.5-5-2.5-7-3 m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22",
+  "book-marked": "M19 21V4a1 1 0 0 0-1-1H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h13 M19 21H6a2 2 0 0 1 0-4h13 M10 4v8l2-2 2 2V4",
+  "git-branch": "M6 3v12 M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6z M18 9a9 9 0 0 1-9 9",
+  "arrow-left": "M19 12H5 M12 19l-7-7 7-7",
+  "circle": "M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20z",
+};
+const Icon = ({ name, size = 14, stroke = 1.6, className = "", style, fill='none' }) => {
+  const d = ICONS[name] || ICONS["circle"];
+  const paths = d.split(/\s(?=M)/);
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" className={className} style={{display:'inline-block', flexShrink:0, ...(style||{})}} aria-hidden="true">
+      {paths.map((p,i)=>(<path key={i} d={p} />))}
+    </svg>
+  );
+};
+
+// ----------- Top Bar -----------
+function TopBar() {
+  return (
+    <div className="relative h-[52px] flex items-center px-4 border-b border-white/[0.05] glass" style={{background:'rgba(10,11,15,0.55)'}}>
+      <div className="flex items-center gap-2 pl-1.5 pr-5">
+        <span className="w-3 h-3 rounded-full" style={{background:'#FF5F57'}} />
+        <span className="w-3 h-3 rounded-full" style={{background:'#FEBC2E'}} />
+        <span className="w-3 h-3 rounded-full" style={{background:'#28C840'}} />
+      </div>
+      <div className="flex items-center gap-2.5">
+        <div className="w-7 h-7 rounded-lg accent-grad flex items-center justify-center" style={{boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 14px rgba(139,92,246,0.35)'}}>
+          <span className="text-[14px] font-bold text-white" style={{fontFamily:'Cambria, serif', fontStyle:'italic'}}>τ</span>
+        </div>
+        <div className="leading-none">
+          <div className="text-[13px] font-semibold tracking-tight">Typeward</div>
+          <div className="text-[10px] text-[#6B7280] mono mt-0.5">v0.9.4</div>
+        </div>
+      </div>
+
+      {/* Breadcrumb */}
+      <div className="flex items-center gap-2 ml-5">
+        <a href="Projects.html" className="lift flex items-center gap-1.5 px-2 h-7 rounded-md hover:bg-white/[0.05] text-[12px] text-[#9CA3AF]">
+          <Icon name="arrow-left" size={11} style={{opacity:0.6}} />
+          <span>Projects</span>
+        </a>
+        <span className="text-[#374151]">/</span>
+        <span className="text-[12px] text-[#E6E8EC] font-medium">Settings</span>
+      </div>
+
+      <div className="flex-1" />
+
+      <div className="flex items-center gap-2">
+        <button className="lift glass-soft rounded-md h-8 px-2.5 flex items-center gap-1.5 text-[11px] text-[#9CA3AF] hover:bg-white/[0.04]">
+          <Icon name="external-link" size={11} style={{opacity:0.7}} />
+          <span>Docs</span>
+        </button>
+        <div className="w-7 h-7 rounded-full flex items-center justify-center text-[10.5px] font-semibold avatar-ring" style={{background:'linear-gradient(135deg,#0EA5E9,#0369A1)'}}>MS</div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Sidebar -----------
+const NAV = [
+  { group:'Account', items:[
+    { id:'profile', label:'Profile', icon:'user' },
+    { id:'account', label:'Account & login', icon:'key' },
+    { id:'notifications', label:'Notifications', icon:'bell' },
+    { id:'security', label:'Security', icon:'shield' },
+  ]},
+  { group:'Workspace', items:[
+    { id:'editor', label:'Editor', icon:'type' },
+    { id:'appearance', label:'Appearance', icon:'palette' },
+    { id:'shortcuts', label:'Keyboard', icon:'keyboard' },
+    { id:'language', label:'Language & region', icon:'globe' },
+  ]},
+  { group:'Collaboration', items:[
+    { id:'team', label:'Team & spaces', icon:'users' },
+    { id:'integrations', label:'Integrations', icon:'plug' },
+  ]},
+  { group:'Plan', items:[
+    { id:'billing', label:'Billing & plan', icon:'credit-card', badge:'Pro' },
+    { id:'usage', label:'Usage', icon:'sparkles' },
+  ]},
+];
+
+function SettingsSidebar({ active, setActive }) {
+  return (
+    <div className="glass rounded-xl flex flex-col overflow-hidden h-full" style={{width:236}}>
+      <div className="p-3 border-b border-white/[0.05]">
+        <div className="glass-inset rounded-lg h-8 px-2.5 flex items-center gap-2 text-[12px] text-[#6B7280]">
+          <Icon name="search" size={11} style={{opacity:0.6}} />
+          <span>Search settings…</span>
+        </div>
+      </div>
+      <div className="flex-1 overflow-auto scroll p-2 space-y-3.5">
+        {NAV.map(g=>(
+          <div key={g.group}>
+            <div className="label-xs text-[#6B7280] px-2 mb-1.5">{g.group}</div>
+            {g.items.map(item=>(
+              <button key={item.id} onClick={()=>setActive(item.id)} className={`w-full relative flex items-center gap-2 h-8 px-2 rounded-md text-[12px] lift ${active===item.id ? 'bg-white/[0.05] text-white side-active' : 'text-[#9CA3AF] hover:bg-white/[0.03]'}`}>
+                <Icon name={item.icon} size={12} style={{opacity: active===item.id?0.95:0.7}} />
+                <span className={active===item.id ? 'font-medium':''}>{item.label}</span>
+                {item.badge && <span className="ml-auto text-[9.5px] mono px-1.5 py-0.5 rounded-full accent-grad text-white font-semibold">{item.badge}</span>}
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-white/[0.05] p-3">
+        <button className="lift w-full glass-soft rounded-md h-8 flex items-center justify-center gap-1.5 text-[11px] text-[#FCA5A5] hover:bg-white/[0.06]">
+          <Icon name="log-out" size={11} style={{opacity:0.8}} />
+          <span>Sign out</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Reusable bits -----------
+function Card({ title, subtitle, children, action }) {
+  return (
+    <div className="glass rounded-xl overflow-hidden" style={{background:'rgba(13,15,20,0.45)'}}>
+      <div className="px-5 py-4 flex items-start justify-between border-b border-white/[0.04]">
+        <div>
+          <div className="text-[14px] font-semibold tracking-tight">{title}</div>
+          {subtitle && <div className="text-[11.5px] text-[#9CA3AF] mt-0.5 leading-relaxed">{subtitle}</div>}
+        </div>
+        {action}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function Row({ label, hint, children }) {
+  return (
+    <div className="row-div px-5 py-3.5 flex items-center gap-4">
+      <div className="flex-1 min-w-0">
+        <div className="text-[12.5px] text-[#E6E8EC] font-medium">{label}</div>
+        {hint && <div className="text-[11px] text-[#6B7280] mt-0.5 leading-relaxed">{hint}</div>}
+      </div>
+      <div className="flex-shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function Toggle({ on, onChange }) {
+  return <button onClick={()=>onChange&&onChange(!on)} className={`toggle ${on?'on':'off'}`}><span className="toggle-knob" /></button>;
+}
+
+function Input({ value, hint, mono=false, suffix, w }) {
+  return (
+    <div className="glass-inset rounded-md h-8 px-2.5 flex items-center gap-2" style={{width:w||220}}>
+      <span className={`flex-1 text-[12px] ${mono?'mono':''} text-[#E6E8EC] truncate`}>{value}</span>
+      {suffix}
+    </div>
+  );
+}
+
+function Select({ value, w }) {
+  return (
+    <button className="glass-inset rounded-md h-8 px-2.5 flex items-center gap-2 text-[12px] text-[#E6E8EC] hover:bg-white/[0.04]" style={{width:w||180}}>
+      <span className="flex-1 text-left">{value}</span>
+      <Icon name="chevron-down" size={10} style={{opacity:0.5}} />
+    </button>
+  );
+}
+
+// ----------- Profile section -----------
+function ProfilePanel() {
+  return (
+    <div className="space-y-3">
+      {/* Hero */}
+      <div className="glass rounded-xl overflow-hidden relative" style={{background:'rgba(13,15,20,0.45)'}}>
+        <div className="h-[88px] relative" style={{background:'linear-gradient(135deg, rgba(76,29,149,0.55) 0%, rgba(21,94,117,0.45) 100%)'}}>
+          <div className="absolute inset-0" style={{background:'radial-gradient(circle at 30% 50%, rgba(167,139,250,0.4), transparent 60%), radial-gradient(circle at 80% 30%, rgba(103,232,249,0.3), transparent 60%)'}} />
+          <button className="absolute top-3 right-3 lift h-7 px-2.5 rounded-md flex items-center gap-1.5 text-[11px]" style={{background:'rgba(10,11,15,0.55)', border:'1px solid rgba(255,255,255,0.1)', backdropFilter:'blur(8px)'}}>
+            <Icon name="edit" size={11} style={{opacity:0.7}} />
+            <span>Change cover</span>
+          </button>
+        </div>
+        <div className="px-5 pb-5 pt-0 -mt-9 flex items-end gap-4">
+          <div className="w-[72px] h-[72px] rounded-2xl flex items-center justify-center text-[24px] font-semibold flex-shrink-0" style={{background:'linear-gradient(135deg,#0EA5E9,#0369A1)', boxShadow:'0 0 0 4px #0A0B0F, 0 12px 30px rgba(0,0,0,0.5)'}}>MS</div>
+          <div className="flex-1 min-w-0 pb-1">
+            <div className="flex items-center gap-2">
+              <div className="text-[18px] font-semibold tracking-tight">Marek Sokol</div>
+              <span className="text-[10px] mono px-1.5 py-0.5 rounded-full accent-grad text-white font-semibold">Pro</span>
+            </div>
+            <div className="text-[12px] text-[#9CA3AF] mt-0.5 mono">marek@sokol.dev · @msokol</div>
+          </div>
+          <button className="lift glass-soft rounded-md h-8 px-3 text-[11.5px] font-medium hover:bg-white/[0.06]">View public page</button>
+        </div>
+      </div>
+
+      <Card title="Public profile" subtitle="Visible on shared projects, comments, and the reading group directory.">
+        <Row label="Display name" hint="The name shown to collaborators and on rendered title pages.">
+          <Input value="Marek Sokol" />
+        </Row>
+        <Row label="Username" hint="@-handle for mentions and your public profile URL.">
+          <Input value="msokol" mono />
+        </Row>
+        <Row label="Title" hint="Affiliation appears next to your name on shared work.">
+          <Input value="PhD candidate · ETH Zürich" w={300} />
+        </Row>
+        <Row label="ORCID" hint="Linked for citation export and publisher submissions.">
+          <Input value="0000-0002-1825-0097" mono w={240} suffix={<Icon name="check-circle" size={12} style={{color:'#34D399'}} />} />
+        </Row>
+        <Row label="Bio" hint="Short blurb shown on your public profile.">
+          <Input value="Stochastic analysis · sampling · Wasserstein geometry." w={360} />
+        </Row>
+      </Card>
+
+      <Card title="Authoring defaults" subtitle="Used when you create a new project or insert your authorship metadata.">
+        <Row label="Default LaTeX author string" hint="Inserted by \\author{…} in the Compose template.">
+          <Input value="Marek Sokol" mono w={260} />
+        </Row>
+        <Row label="Affiliation" hint="Department · Institution · Country">
+          <Input value="Dept. of Mathematics, ETH Zürich" w={300} />
+        </Row>
+        <Row label="Email shown on title page">
+          <Input value="marek@sokol.dev" mono />
+        </Row>
+        <Row label="Citation key style" hint="Generated when you import from Zotero.">
+          <Select value="lastname-year-firstword" w={220} />
+        </Row>
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Editor preferences -----------
+function EditorPanel() {
+  const [autoCompile, setAutoCompile] = useState(true);
+  const [vimMode, setVimMode] = useState(false);
+  const [bracket, setBracket] = useState(true);
+  const [spell, setSpell] = useState(true);
+  const [wrap, setWrap] = useState(false);
+  return (
+    <div className="space-y-3">
+      <Card title="Compilation" subtitle="How your project compiles to PDF when you write.">
+        <Row label="Default engine" hint="Switch per-project from the editor status bar.">
+          <Select value="pdfLaTeX" w={160} />
+        </Row>
+        <Row label="Auto-compile on save" hint="Recompile within 200ms of typing pause.">
+          <Toggle on={autoCompile} onChange={setAutoCompile} />
+        </Row>
+        <Row label="Stop on first error" hint="Halt the build at the first \\error rather than continuing.">
+          <Toggle on={false} onChange={()=>{}} />
+        </Row>
+        <Row label="Bibliography backend">
+          <Select value="biber" w={160} />
+        </Row>
+        <Row label="Build cache" hint="Stored per-project in .typeward/cache · 184 MB used.">
+          <button className="glass-soft rounded-md h-8 px-3 text-[11.5px] text-[#FCA5A5] hover:bg-white/[0.06] flex items-center gap-1.5">
+            <Icon name="trash" size={11} style={{opacity:0.8}} />
+            <span>Clear cache</span>
+          </button>
+        </Row>
+      </Card>
+
+      <Card title="Editing" subtitle="Behaviour of the source pane.">
+        <Row label="Font family">
+          <Select value="JetBrains Mono" w={200} />
+        </Row>
+        <Row label="Font size">
+          <Select value="13 px" w={120} />
+        </Row>
+        <Row label="Line height">
+          <Select value="1.65" w={120} />
+        </Row>
+        <Row label="Tab width" hint="Used for indentation when you press Tab.">
+          <Select value="2 spaces" w={140} />
+        </Row>
+        <Row label="Soft wrap long lines">
+          <Toggle on={wrap} onChange={setWrap} />
+        </Row>
+        <Row label="Auto-close brackets and environments">
+          <Toggle on={bracket} onChange={setBracket} />
+        </Row>
+        <Row label="Vim mode">
+          <Toggle on={vimMode} onChange={setVimMode} />
+        </Row>
+        <Row label="Spell-check" hint="Grammar &amp; LaTeX-aware. Uses your interface language.">
+          <Toggle on={spell} onChange={setSpell} />
+        </Row>
+      </Card>
+
+      <Card title="Snippets &amp; AI" subtitle="Inline assistance while writing math and prose.">
+        <Row label="Inline math suggestions" hint="Type the start of a symbol; press Tab to accept.">
+          <Toggle on={true} onChange={()=>{}} />
+        </Row>
+        <Row label="Citation autocomplete" hint="Suggests \\cite keys from your project bibliography.">
+          <Toggle on={true} onChange={()=>{}} />
+        </Row>
+        <Row label="Compose model" hint="Used for the Composer prompt and inline rewrites.">
+          <Select value="Typeward Compose · v3" w={220} />
+        </Row>
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Appearance -----------
+function ThemeTile({ name, vibe, active, dark=true }) {
+  return (
+    <button className={`relative theme-tile rounded-xl overflow-hidden lift ${active?'plan-active':''}`} style={{border: active?'none':'1px solid rgba(255,255,255,0.08)'}}>
+      <div className="absolute inset-0" style={{background: vibe}} />
+      <div className="absolute inset-2 rounded-md flex flex-col p-2 gap-1" style={{background: dark?'rgba(10,11,15,0.55)':'rgba(255,255,255,0.92)', backdropFilter:'blur(6px)'}}>
+        <div className="h-1 w-1/3 rounded-full" style={{background: dark?'rgba(255,255,255,0.5)':'rgba(0,0,0,0.4)'}} />
+        <div className="h-1 w-2/3 rounded-full" style={{background: dark?'rgba(255,255,255,0.25)':'rgba(0,0,0,0.2)'}} />
+        <div className="h-1 w-1/2 rounded-full" style={{background: dark?'rgba(255,255,255,0.25)':'rgba(0,0,0,0.2)'}} />
+      </div>
+      <div className="absolute bottom-1.5 left-2 right-2 flex items-center justify-between">
+        <span className="text-[10.5px] font-semibold" style={{color: dark?'#E6E8EC':'#1F2937', textShadow: dark?'0 1px 2px rgba(0,0,0,0.6)':'none'}}>{name}</span>
+        {active && <div className="w-4 h-4 rounded-full accent-grad flex items-center justify-center"><Icon name="check" size={9} stroke={3} /></div>}
+      </div>
+    </button>
+  );
+}
+
+function AppearancePanel() {
+  return (
+    <div className="space-y-3">
+      <Card title="Theme" subtitle="Frosted glass, solid dark, or paper-light. The accent gradient adapts to each.">
+        <div className="p-5 grid grid-cols-4 gap-3">
+          <ThemeTile name="Aurora" vibe="radial-gradient(circle at 20% 30%, #4C1D95, transparent 60%), radial-gradient(circle at 80% 70%, #155E75, transparent 60%), #0A0B0F" active />
+          <ThemeTile name="Obsidian" vibe="#0A0B0F" />
+          <ThemeTile name="Graphite" vibe="#1F2937" />
+          <ThemeTile name="Paper" vibe="#FBFAF6" dark={false} />
+        </div>
+      </Card>
+
+      <Card title="Accent" subtitle="The signature gradient on buttons, active items, and highlights.">
+        <div className="p-5 flex items-center gap-2">
+          {[
+            { id:'violet-cyan', a:'#8B5CF6', b:'#22D3EE', label:'Aurora', active:true },
+            { id:'rose-amber', a:'#F43F5E', b:'#F59E0B', label:'Ember' },
+            { id:'emerald-cyan', a:'#10B981', b:'#22D3EE', label:'Tide' },
+            { id:'fuchsia-violet', a:'#E879F9', b:'#8B5CF6', label:'Orchid' },
+            { id:'amber-rose', a:'#FBBF24', b:'#F472B6', label:'Sunset' },
+            { id:'mono', a:'#9CA3AF', b:'#4B5563', label:'Mono' },
+          ].map(c=>(
+            <button key={c.id} className="relative rounded-lg lift" style={{padding:2, background: c.active?'linear-gradient(135deg,#A78BFA,#67E8F9)':'transparent'}}>
+              <div className="rounded-md px-3 py-2 flex items-center gap-2.5" style={{background:'rgba(13,15,20,0.7)', border: c.active?'none':'1px solid rgba(255,255,255,0.06)'}}>
+                <div className="w-6 h-6 rounded-full" style={{background:`linear-gradient(135deg, ${c.a}, ${c.b})`, boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2)'}} />
+                <span className="text-[11.5px] font-medium">{c.label}</span>
+                {c.active && <Icon name="check" size={10} stroke={3} style={{color:'#A78BFA'}} />}
+              </div>
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      <Card title="Density &amp; motion">
+        <Row label="UI density" hint="Affects padding and row heights across the app.">
+          <div className="flex items-center gap-1 glass-inset rounded-md p-0.5">
+            {['Compact','Cozy','Comfortable'].map((d,i)=>(
+              <button key={d} className={`h-7 px-3 rounded text-[11px] ${i===1?'accent-grad text-white font-semibold':'text-[#9CA3AF] hover:bg-white/[0.04]'}`}>{d}</button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Reduce motion" hint="Disables ambient blob drift, shimmer, and easings.">
+          <Toggle on={false} onChange={()=>{}} />
+        </Row>
+        <Row label="Show grain texture">
+          <Toggle on={true} onChange={()=>{}} />
+        </Row>
+        <Row label="PDF page background">
+          <Select value="Cream (warm white)" w={220} />
+        </Row>
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Notifications -----------
+function NotificationsPanel() {
+  const Pref = ({label, hint, email=true, push=true, inApp=true}) => (
+    <div className="row-div px-5 py-3 grid items-center gap-4" style={{gridTemplateColumns:'1fr 64px 64px 64px'}}>
+      <div>
+        <div className="text-[12.5px] text-[#E6E8EC] font-medium">{label}</div>
+        {hint && <div className="text-[11px] text-[#6B7280] mt-0.5">{hint}</div>}
+      </div>
+      <div className="flex justify-center"><Toggle on={inApp} /></div>
+      <div className="flex justify-center"><Toggle on={email} /></div>
+      <div className="flex justify-center"><Toggle on={push} /></div>
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      <Card title="Notifications" subtitle="Pick where each event reaches you. Quiet hours pause email and push.">
+        <div className="px-5 pt-3 pb-2 grid items-center gap-4 text-[10.5px] mono text-[#6B7280] uppercase tracking-wider" style={{gridTemplateColumns:'1fr 64px 64px 64px'}}>
+          <div></div>
+          <div className="text-center">In-app</div>
+          <div className="text-center">Email</div>
+          <div className="text-center">Push</div>
+        </div>
+        <Pref label="@ mentions" hint="Someone names you in a comment or review." inApp email push />
+        <Pref label="Comment replies" hint="Replies to threads you participate in." inApp email push={false} />
+        <Pref label="Review requested" hint="A collaborator asks you to read a draft." inApp email push />
+        <Pref label="Compile failures" hint="Background compile fails on a project you own." inApp email={false} push={false} />
+        <Pref label="Project shared with you" inApp email push={false} />
+        <Pref label="Weekly writing summary" hint="Sent every Sunday with stats and goals." inApp={false} email push={false} />
+      </Card>
+
+      <Card title="Quiet hours" subtitle="Pause email and push outside writing time. In-app stays on.">
+        <Row label="Quiet hours">
+          <Toggle on={true} />
+        </Row>
+        <Row label="From">
+          <Select value="22:00" w={120} />
+        </Row>
+        <Row label="To">
+          <Select value="08:30" w={120} />
+        </Row>
+        <Row label="Time zone">
+          <Select value="Europe/Zurich · UTC+02:00" w={260} />
+        </Row>
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Security -----------
+function SecurityPanel() {
+  return (
+    <div className="space-y-3">
+      <Card title="Password" subtitle="Last changed 142 days ago.">
+        <Row label="Current password">
+          <Input value="••••••••••••" mono />
+        </Row>
+        <Row label="New password">
+          <Input value="" mono />
+        </Row>
+        <div className="px-5 py-3 flex justify-end">
+          <button className="lift h-8 px-4 rounded-md accent-grad text-white text-[11.5px] font-semibold">Update password</button>
+        </div>
+      </Card>
+
+      <Card title="Two-factor authentication" subtitle="Add a second factor to protect your account."
+        action={<span className="flex items-center gap-1.5 text-[11px] mono px-2 py-1 rounded-full" style={{background:'rgba(16,185,129,0.10)', color:'#A7F3D0'}}><Icon name="check-circle" size={11} />Enabled</span>}>
+        <Row label="Authenticator app" hint="1Password · added Mar 2026">
+          <button className="glass-soft rounded-md h-8 px-3 text-[11.5px] text-[#9CA3AF] hover:bg-white/[0.06]">Reconfigure</button>
+        </Row>
+        <Row label="Recovery codes" hint="6 of 10 codes remaining.">
+          <button className="glass-soft rounded-md h-8 px-3 text-[11.5px] text-[#9CA3AF] hover:bg-white/[0.06] flex items-center gap-1.5">
+            <Icon name="download" size={11} style={{opacity:0.7}} /><span>View codes</span>
+          </button>
+        </Row>
+        <Row label="Hardware keys" hint="No keys registered.">
+          <button className="glass-soft rounded-md h-8 px-3 text-[11.5px] text-[#E6E8EC] hover:bg-white/[0.06] flex items-center gap-1.5">
+            <Icon name="plus" size={11} style={{opacity:0.7}} /><span>Add YubiKey</span>
+          </button>
+        </Row>
+      </Card>
+
+      <Card title="Active sessions" subtitle="Devices currently signed in to your account.">
+        {[
+          { device:'MacBook Pro · macOS 15', loc:'Zürich, CH · 84.227.12.4', ip:'this device', current:true, ago:'now' },
+          { device:'iPhone 15 · Typeward iOS', loc:'Zürich, CH', ip:'mobile', ago:'2h ago' },
+          { device:'Chrome · Windows 11', loc:'Berlin, DE · 91.4.21.88', ip:'browser', ago:'3d ago' },
+        ].map((s,i)=>(
+          <div key={i} className="row-div px-5 py-3 flex items-center gap-4">
+            <div className="w-9 h-9 rounded-md glass-soft flex items-center justify-center flex-shrink-0">
+              <Icon name="shield" size={13} style={{opacity:0.65}} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[12.5px] text-[#E6E8EC] font-medium">{s.device}</span>
+                {s.current && <span className="text-[10px] mono px-1.5 py-0.5 rounded-full" style={{background:'rgba(34,211,238,0.10)', color:'#67E8F9'}}>this device</span>}
+              </div>
+              <div className="text-[11px] mono text-[#6B7280] mt-0.5">{s.loc} · {s.ago}</div>
+            </div>
+            {!s.current && <button className="text-[11px] text-[#FCA5A5] hover:text-rose-300 mono">Revoke</button>}
+          </div>
+        ))}
+      </Card>
+
+      <Card title="Danger zone">
+        <div className="px-5 py-4 flex items-center gap-4">
+          <div className="w-9 h-9 rounded-md flex items-center justify-center" style={{background:'rgba(244,63,94,0.10)'}}>
+            <Icon name="alert-triangle" size={14} style={{color:'#FCA5A5'}} />
+          </div>
+          <div className="flex-1">
+            <div className="text-[12.5px] text-[#FECACA] font-medium">Delete account</div>
+            <div className="text-[11px] text-[#9CA3AF] mt-0.5">Permanently removes projects, comments, and uploaded bibliographies. Cannot be undone.</div>
+          </div>
+          <button className="lift h-8 px-3 rounded-md text-[11.5px] font-medium" style={{background:'rgba(244,63,94,0.12)', color:'#FCA5A5', border:'1px solid rgba(244,63,94,0.25)'}}>Delete account</button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Billing & Plan -----------
+function PlanCard({ name, price, period, blurb, features, active, accent }) {
+  return (
+    <div className={`rounded-xl p-5 relative overflow-hidden ${active?'plan-active':'glass-soft'}`} style={{background: active?'linear-gradient(180deg, rgba(76,29,149,0.18) 0%, rgba(13,15,20,0.6) 100%)':'rgba(13,15,20,0.4)'}}>
+      {active && (
+        <div className="absolute top-3 right-3 text-[10px] mono font-semibold px-2 py-1 rounded-full accent-grad text-white">CURRENT</div>
+      )}
+      <div className="flex items-center gap-2 mb-2">
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{background: accent}}>
+          <Icon name="sparkles" size={12} stroke={2.2} />
+        </div>
+        <span className="text-[14px] font-semibold tracking-tight">{name}</span>
+      </div>
+      <div className="flex items-baseline gap-1 mt-3">
+        <span className="text-[28px] font-semibold tracking-tight">{price}</span>
+        <span className="text-[12px] text-[#9CA3AF] mono">/{period}</span>
+      </div>
+      <div className="text-[11.5px] text-[#9CA3AF] mt-1 leading-relaxed" style={{textWrap:'pretty'}}>{blurb}</div>
+      <div className="my-4 h-px" style={{background:'rgba(255,255,255,0.06)'}} />
+      <div className="space-y-2">
+        {features.map((f,i)=>(
+          <div key={i} className="flex items-start gap-2 text-[11.5px] text-[#D1D5DB]">
+            <Icon name="check" size={11} stroke={2.4} style={{color:'#34D399', marginTop:3, flexShrink:0}} />
+            <span>{f}</span>
+          </div>
+        ))}
+      </div>
+      <button className={`mt-5 w-full h-9 rounded-md text-[12px] font-semibold lift ${active?'glass-soft text-[#9CA3AF]':'accent-grad text-white glow-violet'}`}>
+        {active?'Manage plan':'Upgrade'}
+      </button>
+    </div>
+  );
+}
+
+function UsageBar({ label, used, total, unit, accent }) {
+  const pct = Math.min(100, (used/total)*100);
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[11.5px] text-[#9CA3AF] font-medium">{label}</span>
+        <span className="text-[11px] mono text-[#E6E8EC]"><span className="text-[#E6E8EC] font-semibold">{used.toLocaleString()}</span><span className="text-[#6B7280]"> / {total.toLocaleString()} {unit}</span></span>
+      </div>
+      <div className="h-1.5 bar overflow-hidden">
+        <div className="h-full" style={{width:`${pct}%`, background: accent || 'linear-gradient(90deg,#8B5CF6,#22D3EE)'}} />
+      </div>
+    </div>
+  );
+}
+
+function BillingPanel() {
+  return (
+    <div className="space-y-3">
+      {/* Current plan banner */}
+      <div className="glass rounded-xl overflow-hidden relative" style={{background:'linear-gradient(135deg, rgba(76,29,149,0.30) 0%, rgba(21,94,117,0.20) 100%)'}}>
+        <div className="absolute inset-0 pointer-events-none" style={{background:'radial-gradient(circle at 90% 0%, rgba(34,211,238,0.18), transparent 60%)'}} />
+        <div className="relative p-5 flex items-center gap-5">
+          <div className="w-12 h-12 rounded-xl accent-grad flex items-center justify-center flex-shrink-0 glow-violet">
+            <Icon name="sparkles" size={20} stroke={2.2} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[16px] font-semibold tracking-tight">Pro · annual</span>
+              <span className="text-[10.5px] mono px-1.5 py-0.5 rounded-full" style={{background:'rgba(16,185,129,0.10)', color:'#A7F3D0'}}>active</span>
+            </div>
+            <div className="text-[12px] text-[#9CA3AF] mt-0.5">$144/year · renews <span className="text-[#E6E8EC] mono">Mar 12, 2027</span> · saved $48 vs monthly</div>
+          </div>
+          <button className="lift glass-soft rounded-md h-9 px-3 text-[11.5px] font-medium">Manage plan</button>
+          <button className="lift h-9 px-3 rounded-md accent-grad text-white text-[11.5px] font-semibold flex items-center gap-1.5">
+            <Icon name="sparkles" size={11} stroke={2.2} />
+            <span>Upgrade to Team</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Plans */}
+      <Card title="Plans" subtitle="Switch any time. Upgrades are prorated; downgrades take effect at the next renewal."
+        action={
+          <div className="flex items-center gap-1 glass-inset rounded-md p-0.5">
+            <button className="h-7 px-3 rounded text-[11px] text-[#9CA3AF]">Monthly</button>
+            <button className="h-7 px-3 rounded text-[11px] accent-grad text-white font-semibold">Annual <span className="text-[9.5px] mono ml-1 opacity-90">-20%</span></button>
+          </div>
+        }>
+        <div className="p-5 grid grid-cols-3 gap-3">
+          <PlanCard name="Free" price="$0" period="mo" blurb="For occasional drafts and reading notes."
+            accent="rgba(255,255,255,0.08)"
+            features={[
+              '3 active projects',
+              '50 MB storage',
+              'Single-user · no collaborators',
+              'Compose · 20 prompts / month',
+              'Community support',
+            ]} />
+          <PlanCard name="Pro" price="$12" period="mo" blurb="Researchers shipping conferences and a thesis."
+            accent="linear-gradient(135deg,#8B5CF6,#22D3EE)"
+            active
+            features={[
+              'Unlimited projects',
+              '10 GB storage',
+              'Up to 5 collaborators per project',
+              'Compose · 1,000 prompts / month',
+              'Priority compile queue',
+              'Version history · 90 days',
+              'Zotero & Overleaf import',
+            ]} />
+          <PlanCard name="Team" price="$28" period="seat / mo" blurb="Labs, reading groups, multi-author papers."
+            accent="linear-gradient(135deg,#22D3EE,#10B981)"
+            features={[
+              'Everything in Pro',
+              'Shared spaces with roles',
+              'SSO (Google · SAML · Okta)',
+              'Compose · 5,000 prompts / seat',
+              'Audit log & SCIM',
+              'Version history · 1 year',
+              'Dedicated support · 4h SLA',
+            ]} />
+        </div>
+      </Card>
+
+      {/* Payment method */}
+      <Card title="Payment method" subtitle="Used for renewals and upgrades. Switch any time."
+        action={<button className="lift glass-soft rounded-md h-8 px-3 text-[11.5px] font-medium flex items-center gap-1.5"><Icon name="plus" size={11} /><span>Add method</span></button>}>
+        <div className="p-5 flex items-center gap-3">
+          {/* Card */}
+          <div className="relative w-[280px] h-[160px] rounded-xl p-4 flex flex-col justify-between flex-shrink-0 overflow-hidden" style={{background:'linear-gradient(135deg, #1F2937 0%, #0F172A 100%)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'0 12px 40px rgba(0,0,0,0.5)'}}>
+            <div className="absolute -right-12 -top-12 w-40 h-40 rounded-full" style={{background:'radial-gradient(circle, rgba(139,92,246,0.35), transparent 70%)'}} />
+            <div className="absolute -left-8 -bottom-12 w-32 h-32 rounded-full" style={{background:'radial-gradient(circle, rgba(34,211,238,0.25), transparent 70%)'}} />
+            <div className="relative flex items-start justify-between">
+              <div className="text-[10px] mono uppercase tracking-widest text-[#9CA3AF]">Default</div>
+              <div className="w-9 h-6 visa-stripe rounded text-white flex items-center justify-center text-[10.5px] font-bold tracking-wide">VISA</div>
+            </div>
+            <div className="relative">
+              <div className="text-[15px] mono tracking-[0.18em] text-[#E6E8EC]">•••• •••• •••• 4242</div>
+              <div className="flex items-end justify-between mt-2">
+                <div>
+                  <div className="text-[8.5px] mono uppercase tracking-widest text-[#6B7280]">Cardholder</div>
+                  <div className="text-[11px] mono text-[#D1D5DB]">MAREK SOKOL</div>
+                </div>
+                <div>
+                  <div className="text-[8.5px] mono uppercase tracking-widest text-[#6B7280]">Expires</div>
+                  <div className="text-[11px] mono text-[#D1D5DB]">12 / 28</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-2">
+            <div className="glass-soft rounded-lg p-3 flex items-center gap-3">
+              <div className="w-9 h-6 mc-stripe rounded flex items-center justify-center text-white text-[10px] font-bold">MC</div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] text-[#E6E8EC] font-medium">Mastercard •• 8801</div>
+                <div className="text-[11px] mono text-[#6B7280]">Backup · expires 04 / 27</div>
+              </div>
+              <button className="text-[11px] text-[#9CA3AF] hover:text-white">Make default</button>
+              <button className="w-7 h-7 rounded hover:bg-white/[0.04] flex items-center justify-center"><Icon name="trash" size={11} style={{opacity:0.6}} /></button>
+            </div>
+            <div className="glass-soft rounded-lg p-3 flex items-center gap-3">
+              <div className="w-9 h-6 rounded flex items-center justify-center text-[10px] font-bold" style={{background:'#000', color:'#fff'}}>GH</div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] text-[#E6E8EC] font-medium">GitHub Education credit</div>
+                <div className="text-[11px] mono text-[#6B7280]">$24 remaining · expires Aug 2026</div>
+              </div>
+              <span className="text-[10px] mono px-1.5 py-0.5 rounded-full" style={{background:'rgba(16,185,129,0.10)', color:'#A7F3D0'}}>credit</span>
+            </div>
+          </div>
+        </div>
+
+        <Row label="Billing email" hint="Receipts and renewal reminders go here.">
+          <Input value="marek@sokol.dev" mono />
+        </Row>
+        <Row label="Tax ID / VAT" hint="Optional. Required for invoicing in EU.">
+          <Input value="CHE-271.991.832 MWST" mono w={240} />
+        </Row>
+        <Row label="Billing address">
+          <Input value="Rämistrasse 101, 8092 Zürich, CH" w={300} />
+        </Row>
+      </Card>
+
+      {/* Usage */}
+      <Card title="Usage this period" subtitle="Mar 12 → Apr 26 · resets in 14 days.">
+        <div className="p-5 grid grid-cols-2 gap-x-8 gap-y-4">
+          <UsageBar label="Storage" used={3.2} total={10} unit="GB" />
+          <UsageBar label="Compose prompts" used={284} total={1000} unit="prompts" />
+          <UsageBar label="Compile minutes" used={142} total={400} unit="min" />
+          <UsageBar label="Active collaborators" used={4} total={5} unit="seats" accent="linear-gradient(90deg,#22D3EE,#10B981)" />
+          <UsageBar label="Bibliography entries" used={612} total={5000} unit="refs" />
+          <UsageBar label="Version history" used={48} total={90} unit="days kept" accent="linear-gradient(90deg,#F59E0B,#F472B6)" />
+        </div>
+      </Card>
+
+      {/* Invoices */}
+      <Card title="Invoices" subtitle="Past 12 months. Receipts are PDFs you can hand to your finance office."
+        action={<button className="lift glass-soft rounded-md h-8 px-3 text-[11.5px] font-medium flex items-center gap-1.5"><Icon name="download" size={11} /><span>Export all</span></button>}>
+        <div className="px-5 py-2 grid items-center gap-4 text-[10.5px] mono uppercase tracking-wider text-[#6B7280] row-div" style={{gridTemplateColumns:'120px 1fr 110px 100px 60px 60px'}}>
+          <div>Date</div>
+          <div>Description</div>
+          <div>Method</div>
+          <div className="text-right">Amount</div>
+          <div className="text-center">Status</div>
+          <div></div>
+        </div>
+        {[
+          { d:'Mar 12, 2026', desc:'Pro · annual renewal', method:'Visa •• 4242', amt:'$144.00', s:'paid' },
+          { d:'Feb 02, 2026', desc:'Compose top-up · 500 prompts', method:'Visa •• 4242', amt:'$8.00', s:'paid' },
+          { d:'Jan 14, 2026', desc:'Reading-group seat · 1 month', method:'Mastercard •• 8801', amt:'$28.00', s:'paid' },
+          { d:'Dec 12, 2025', desc:'Pro · annual', method:'Visa •• 4242', amt:'$144.00', s:'paid' },
+          { d:'Nov 03, 2025', desc:'Compose top-up · 500 prompts', method:'Visa •• 4242', amt:'$8.00', s:'refunded' },
+          { d:'Oct 12, 2025', desc:'Pro · monthly', method:'Visa •• 4242', amt:'$15.00', s:'paid' },
+        ].map((inv,i)=>(
+          <div key={i} className="px-5 py-3 grid items-center gap-4 text-[12px] row-div hover:bg-white/[0.02]" style={{gridTemplateColumns:'120px 1fr 110px 100px 60px 60px'}}>
+            <div className="mono text-[#9CA3AF]">{inv.d}</div>
+            <div className="text-[#E6E8EC]">{inv.desc}</div>
+            <div className="mono text-[11px] text-[#9CA3AF]">{inv.method}</div>
+            <div className="mono text-[#E6E8EC] text-right font-medium">{inv.amt}</div>
+            <div className="flex justify-center">
+              {inv.s==='paid' ? (
+                <span className="text-[10px] mono px-1.5 py-0.5 rounded-full" style={{background:'rgba(16,185,129,0.10)', color:'#A7F3D0'}}>paid</span>
+              ) : (
+                <span className="text-[10px] mono px-1.5 py-0.5 rounded-full" style={{background:'rgba(245,158,11,0.10)', color:'#FDE68A'}}>refunded</span>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-1">
+              <button className="w-7 h-7 rounded hover:bg-white/[0.04] flex items-center justify-center" title="Download PDF"><Icon name="download" size={11} style={{opacity:0.6}} /></button>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Integrations -----------
+function IntegrationsPanel() {
+  const Item = ({icon, name, desc, connected, accent, hand}) => (
+    <div className="row-div px-5 py-3.5 flex items-center gap-4">
+      <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{background: accent || 'rgba(255,255,255,0.04)'}}>
+        <Icon name={icon} size={16} style={{opacity:0.85, color:'#fff'}} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-[12.5px] text-[#E6E8EC] font-medium">{name}</span>
+          {connected && <span className="text-[10px] mono px-1.5 py-0.5 rounded-full" style={{background:'rgba(16,185,129,0.10)', color:'#A7F3D0'}}>connected</span>}
+        </div>
+        <div className="text-[11px] text-[#6B7280] mt-0.5">{desc}{connected && hand ? <span className="mono"> · {hand}</span> : ''}</div>
+      </div>
+      <button className={`h-8 px-3 rounded-md text-[11.5px] font-medium ${connected?'glass-soft text-[#9CA3AF] hover:bg-white/[0.06]':'accent-grad text-white'}`}>
+        {connected?'Disconnect':'Connect'}
+      </button>
+    </div>
+  );
+  return (
+    <div className="space-y-3">
+      <Card title="Integrations" subtitle="Hook Typeward into the tools you already use.">
+        <Item icon="github" name="GitHub" desc="Push compiled PDFs and sync source repos." connected hand="@msokol · 4 repos" accent="#000" />
+        <Item icon="book-marked" name="Zotero" desc="Pull bibliography directly from your library." connected hand="612 entries · auto-sync hourly" accent="#9C2222" />
+        <Item icon="git-branch" name="Overleaf import" desc="One-time bring-over of an existing Overleaf project." connected={false} accent="rgba(15,166,86,0.7)" />
+        <Item icon="external-link" name="Slack" desc="Post compile failures and review requests to a channel." connected={false} accent="#4A154B" />
+        <Item icon="globe" name="arXiv" desc="Pre-fill ID, title and abstract on submission day." connected={false} accent="#B31B1B" />
+        <Item icon="external-link" name="Zoom" desc="Open project review calls with one click." connected={false} accent="#2D8CFF" />
+      </Card>
+      <Card title="API & webhooks" subtitle="Build your own automations against the Typeward API.">
+        <Row label="Personal access token" hint="Created Jan 14 · used 11 hours ago.">
+          <Input value="tw_pa_••••••••••••••••2c1f" mono w={260} suffix={<button className="text-[10.5px] mono text-[#A78BFA]">copy</button>} />
+        </Row>
+        <Row label="Webhook URL" hint="POST'd on compile success / failure and review events.">
+          <Input value="https://hooks.sokol.dev/typeward" mono w={300} />
+        </Row>
+      </Card>
+    </div>
+  );
+}
+
+// ----------- Right rail (contextual) -----------
+function RightRail({ active }) {
+  if (active === 'billing') {
+    return (
+      <div className="glass rounded-xl flex flex-col overflow-hidden h-full p-4 gap-3" style={{width:280}}>
+        <div className="label-xs text-[#A78BFA]">Plan summary</div>
+        <div className="glass-soft rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-5 h-5 rounded-md accent-grad flex items-center justify-center"><Icon name="sparkles" size={10} stroke={2.2} /></div>
+            <span className="text-[12px] font-semibold">Pro · annual</span>
+          </div>
+          <div className="text-[10.5px] mono text-[#6B7280]">Renews Mar 12, 2027</div>
+          <div className="mt-3 pt-3 border-t border-white/[0.05] grid grid-cols-2 gap-2">
+            <div>
+              <div className="label-xs text-[#6B7280]">Next invoice</div>
+              <div className="text-[14px] mono font-semibold mt-0.5">$144.00</div>
+            </div>
+            <div>
+              <div className="label-xs text-[#6B7280]">Period left</div>
+              <div className="text-[14px] mono font-semibold mt-0.5">320d</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="glass-soft rounded-lg p-3">
+          <div className="label-xs text-[#6B7280] mb-2">Compose budget</div>
+          <div className="flex items-baseline justify-between">
+            <span className="text-[20px] font-semibold tracking-tight mono">284<span className="text-[12px] text-[#6B7280]"> / 1,000</span></span>
+            <span className="text-[10.5px] mono text-emerald-400">28%</span>
+          </div>
+          <div className="h-1.5 bar overflow-hidden mt-2">
+            <div className="h-full bar-fill" style={{width:'28%'}} />
+          </div>
+          <div className="text-[10.5px] mono text-[#6B7280] mt-2">resets in 14 days</div>
+        </div>
+
+        <div className="glass-soft rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <Icon name="info" size={11} style={{color:'#A78BFA'}} />
+            <span className="text-[11.5px] font-medium">Did you know?</span>
+          </div>
+          <div className="text-[11px] text-[#9CA3AF] leading-relaxed">Switch to <span className="accent-text font-medium">Team</span> when you have more than two recurring co-authors. Seats prorate from your renewal date.</div>
+          <button className="lift mt-3 w-full h-7 rounded-md accent-grad text-white text-[11px] font-semibold">Compare plans</button>
+        </div>
+
+        <div className="mt-auto text-[10.5px] mono text-[#6B7280] text-center">
+          Billing questions? <a className="accent-text hover:underline" href="#">contact support</a>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="glass rounded-xl flex flex-col overflow-hidden h-full p-4 gap-3" style={{width:280}}>
+      <div className="label-xs text-[#A78BFA]">Tips</div>
+      <div className="glass-soft rounded-lg p-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Icon name="keyboard" size={12} style={{color:'#67E8F9'}} />
+          <span className="text-[12px] font-medium">Jump anywhere</span>
+        </div>
+        <div className="text-[11px] text-[#9CA3AF] leading-relaxed">Press <kbd className="px-1 py-0.5 rounded mono text-[9.5px]" style={{background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.06)'}}>⌘</kbd>+<kbd className="px-1 py-0.5 rounded mono text-[9.5px]" style={{background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.06)'}}>K</kbd> to leap between settings, projects and people without losing your place.</div>
+      </div>
+      <div className="glass-soft rounded-lg p-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Icon name="sparkles" size={12} style={{color:'#A78BFA'}} />
+          <span className="text-[12px] font-medium">Customise the accent</span>
+        </div>
+        <div className="text-[11px] text-[#9CA3AF] leading-relaxed">Pick a gradient that matches your project — it ripples across compile pills, the active editor line and the recompile glow.</div>
+      </div>
+      <div className="glass-soft rounded-lg p-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Icon name="shield" size={12} style={{color:'#34D399'}} />
+          <span className="text-[12px] font-medium">Keep 2FA on</span>
+        </div>
+        <div className="text-[11px] text-[#9CA3AF] leading-relaxed">Required for Team plans. We never deactivate hardware keys without an out-of-band confirmation.</div>
+      </div>
+
+      <div className="mt-auto glass-soft rounded-lg p-3 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-md flex items-center justify-center" style={{background:'rgba(139,92,246,0.14)'}}>
+          <Icon name="external-link" size={12} style={{color:'#C4B5FD'}} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[11.5px] text-[#E6E8EC] font-medium">Full settings reference</div>
+          <div className="text-[10px] mono text-[#6B7280] mt-0.5">docs.typeward.dev/settings</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- App -----------
+const TITLES = {
+  profile: { title:'Profile', sub:'How you appear across Typeward.', icon:'user' },
+  account: { title:'Account & login', sub:'Email, password, sign-in methods.', icon:'key' },
+  notifications: { title:'Notifications', sub:'Choose where each event reaches you.', icon:'bell' },
+  security: { title:'Security', sub:'Two-factor, sessions, account safety.', icon:'shield' },
+  editor: { title:'Editor', sub:'Compilation engine, autocomplete, indentation.', icon:'type' },
+  appearance: { title:'Appearance', sub:'Theme, accent and density.', icon:'palette' },
+  shortcuts: { title:'Keyboard', sub:'Bindings and chords.', icon:'keyboard' },
+  language: { title:'Language & region', sub:'Interface language and time zone.', icon:'globe' },
+  team: { title:'Team & spaces', sub:'Roles, invites, shared workspaces.', icon:'users' },
+  integrations: { title:'Integrations', sub:'GitHub, Zotero, Slack and the API.', icon:'plug' },
+  billing: { title:'Billing & plan', sub:'Current plan, payment, invoices.', icon:'credit-card' },
+  usage: { title:'Usage', sub:'Storage, compile minutes, Compose prompts.', icon:'sparkles' },
+};
+
+function App() {
+  const [active, setActive] = useState('billing');
+
+  const Panel = () => {
+    switch(active){
+      case 'profile': return <ProfilePanel />;
+      case 'editor': return <EditorPanel />;
+      case 'appearance': return <AppearancePanel />;
+      case 'notifications': return <NotificationsPanel />;
+      case 'security': return <SecurityPanel />;
+      case 'integrations': return <IntegrationsPanel />;
+      case 'billing': return <BillingPanel />;
+      default: return <ProfilePanel />;
+    }
+  };
+
+  const t = TITLES[active] || TITLES.profile;
+
+  return (
+    <div className="relative w-screen h-screen overflow-hidden no-emoji" style={{background:'#0A0B0F'}}>
+      <div className="ambient">
+        <div className="blob blob-1" />
+        <div className="blob blob-2" />
+        <div className="blob blob-3" />
+      </div>
+      <div className="absolute inset-0 grain pointer-events-none" />
+
+      <div className="relative z-10 flex flex-col h-full">
+        <TopBar />
+        <div className="flex-1 flex gap-2 p-2 min-h-0">
+          <SettingsSidebar active={active} setActive={setActive} />
+
+          {/* Main */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {/* Header */}
+            <div className="flex items-end justify-between px-1 pt-1 pb-3">
+              <div>
+                <div className="flex items-center gap-2 text-[11px] mono text-[#6B7280]">
+                  <Icon name={t.icon} size={11} style={{opacity:0.6}} />
+                  <span>Settings</span>
+                  <span>/</span>
+                  <span className="text-[#9CA3AF]">{t.title}</span>
+                </div>
+                <h1 className="text-[24px] font-semibold tracking-tight mt-1">{t.title}</h1>
+                <div className="text-[12px] text-[#9CA3AF] mt-0.5">{t.sub}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5 text-[11px] mono text-[#9CA3AF]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                  All changes saved
+                </span>
+                <button className="lift glass-soft rounded-md h-8 px-3 text-[11.5px] font-medium">Reset</button>
+              </div>
+            </div>
+
+            {/* Scrollable content */}
+            <div className="flex-1 overflow-auto scroll px-1 pb-3" style={{scrollbarGutter:'stable'}}>
+              <Panel />
+              <div className="text-center text-[10.5px] mono text-[#4B5563] py-6">— end of {t.title.toLowerCase()} —</div>
+            </div>
+          </div>
+
+          <RightRail active={active} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

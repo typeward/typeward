@@ -1,0 +1,106 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default permissions for the main window. The plugin-fs path scope is NOT $DOCUMENT-wide: the static entries cover the default projects root and the bundled resources, and lib.rs seeds the fs plugin's runtime scope with the configured projects root at startup (and again when the user moves it). Dialog-picked files are added to the same runtime scope by tauri-plugin-dialog, so save/open destinations outside the projects root keep working.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-destroy",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-title",
+    "core:window:allow-unminimize",
+    "core:webview:allow-create-webview-window",
+    "fs:default",
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-file",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-rename",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-stat",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-mkdir",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "$DOCUMENT/Typeward/**" },
+        { "path": "$RESOURCE/texlive-wasm/**" },
+        { "path": "$RESOURCE/resources/texlive-wasm/**" }
+      ]
+    },
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "dialog:allow-confirm",
+    "dialog:allow-ask",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://api.mendeley.com/oauth/authorize*" },
+        { "url": "https://tug.org/*" },
+        { "url": "https://typst.app/download" },
+        { "url": "https://www.zotero.org/*" },
+        { "url": "https://console.anthropic.com/*" },
+        { "url": "https://platform.openai.com/*" },
+        { "url": "https://aistudio.google.com/*" }
+      ]
+    },
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "updater:default",
+    "process:allow-restart"
+  ]
+}

@@ -1,0 +1,102 @@
+import { createSignal } from "solid-js";
+import { notifyInfo } from "~/lib/toast";
+import { watchProject, type WatchHandle } from "~/lib/watcher/client";
+import { noteProjectFilesChanged } from "~/stores/index-store";
+import { noteReviewShardsChanged } from "~/stores/review-store";
+
+/**
+ * `fsVersion` bumps every time the unified file watcher emits an event we
+ * care about. UI surfaces (FileTree, anything else that lists files) depend
+ * on it so they re-fetch when files appear / disappear / change on disk.
+ *
+ * Events under `.typeward/` (snapshots, build cache) are filtered out so
+ * autosave doesn't trigger a refresh loop.
+ */
+const [fsVersion, setFsVersion] = createSignal(0);
+
+let currentHandle: WatchHandle | null = null;
+let currentUnsubscribe: (() => void) | null = null;
+
+/**
+ * Watcher id, unique per start.
+ *
+ * The id was derived from the root alone, which made two starts for the SAME
+ * project collide: Rust keys its watcher map on the id and `insert` replaces,
+ * so navigating away and straight back (while the first `watch_project` was
+ * still walking the tree) had the second start replace the first's watcher —
+ * and the first's late `stop()` then removed the map entry belonging to the
+ * second. The result was a live `currentHandle` with no watcher behind it:
+ * external edits stopped refreshing the tree for the rest of the session, with
+ * no error anywhere. A per-start counter makes a stale stop remove only its own.
+ */
+let watcherSeq = 0;
+function nextWatcherId(root: string): string {
+  return `${root.replace(/[^A-Za-z0-9]/g, "_")}_${++watcherSeq}`;
+}
+
+const TYPEWARD_DIR_PATTERN = /[\\/]\.typeward[\\/]/;
+
+// Once per session — a persistently failing watcher would otherwise re-toast
+// on every project open.
+let notifiedWatcherFailure = false;
+
+async function startWatching(
+  root: string,
+  isCurrent: () => boolean = () => true,
+): Promise<void> {
+  await stopWatching();
+  if (!isCurrent()) return;
+  try {
+    const handle = await watchProject(nextWatcherId(root), root);
+    if (!isCurrent()) {
+      await handle.stop().catch(() => {
+        /* stale startup; watcher may already be gone */
+      });
+      return;
+    }
+    currentHandle = handle;
+    currentUnsubscribe = handle.onEvent((ev) => {
+      // Review shards live under `.typeward/`, which never reaches `paths` —
+      // Rust flags it separately. Re-merging is how a comment written by
+      // someone else in a folder-synced project shows up here.
+      if (ev.reviewsChanged) noteReviewShardsChanged();
+      // Bump if the batch touches any real project file. The Rust watcher
+      // already strips `.typeward/` paths and coalesces bursts; this is the
+      // defensive second layer. (Filtering per-path, not dropping the whole
+      // batch when one path happens to be a snapshot — a coalesced event can
+      // legitimately carry both.)
+      const touchesRealFile = ev.paths.some((p) => !TYPEWARD_DIR_PATTERN.test(p));
+      if (!touchesRealFile) return;
+      setFsVersion((n) => n + 1);
+      // Same "project files changed" signal drives a label/citation reindex
+      // (no-ops when no project index is loaded; debounced internally).
+      noteProjectFilesChanged();
+    });
+  } catch (e) {
+    // Watcher is best-effort; an unsupported filesystem or permission error
+    // shouldn't break the editor.
+    console.warn("file watcher failed to start:", e);
+    if (!notifiedWatcherFailure) {
+      notifiedWatcherFailure = true;
+      notifyInfo(
+        "File watching unavailable",
+        "External changes won't refresh the file tree automatically.",
+      );
+    }
+  }
+}
+
+async function stopWatching(): Promise<void> {
+  if (currentUnsubscribe) {
+    currentUnsubscribe();
+    currentUnsubscribe = null;
+  }
+  if (currentHandle) {
+    await currentHandle.stop().catch(() => {
+      /* already torn down */
+    });
+    currentHandle = null;
+  }
+}
+
+export { fsVersion, startWatching, stopWatching };

@@ -1,0 +1,18 @@
+{
+  "id": "ieee-conference",
+  "name": "IEEE conference paper",
+  "description": "IEEE conference template (IEEEtran class, two-column). Requires the IEEEtran class in your TeX distribution.",
+  "format": "latex",
+  "tags": ["academic", "ieee", "conference"],
+  "rootFile": "main.tex",
+  "variables": [
+    { "key": "title", "label": "Paper title", "default": "Untitled" },
+    { "key": "authors", "label": "Authors (comma-separated)", "default": "" },
+    { "key": "abstract", "label": "Abstract", "default": "", "multiline": true },
+    { "key": "keywords", "label": "Index terms", "default": "" }
+  ],
+  "files": [
+    { "path": "main.tex", "template": true },
+    { "path": "references.bib", "template": false }
+  ]
+}

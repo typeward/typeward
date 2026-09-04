@@ -1,0 +1,78 @@
+/* Light — a plain, neutral light theme (the "Basic" category). Deliberately
+ * un-stylized: white surfaces, gray-scale chrome, a near-flat blue accent, and
+ * no ambient glow (blob opacities 0). Overrides the Aurora :root baseline. */
+
+[data-theme="light"] {
+  --color-bg-base: #ffffff;
+
+  --color-fg-1: #1a1d21;
+  --color-fg-2: #4b5158;
+  --color-fg-3: #697077;
+  --color-fg-4: #8a9095;
+
+  /* Glass — near-opaque white with hairline gray strokes. */
+  --color-glass-fill: rgb(255 255 255 / 0.9);
+  --color-glass-stroke: rgb(0 0 0 / 0.08);
+  --color-glass-stroke-strong: rgb(0 0 0 / 0.13);
+  --color-glass-inset-fill: rgb(0 0 0 / 0.03);
+  --color-glass-inset-stroke: rgb(0 0 0 / 0.08);
+  --color-glass-soft-fill: rgb(0 0 0 / 0.025);
+
+  /* Inverted control tokens — dark tint on white bg. */
+  --color-control-fill: rgb(0 0 0 / 0.04);
+  --color-control-fill-hover: rgb(0 0 0 / 0.08);
+  --color-control-stroke: rgb(0 0 0 / 0.1);
+  --color-overlay-dim: rgb(0 0 0 / 0.025);
+  --color-overlay-scrim: rgb(0 0 0 / 0.35);
+  --color-popover-bg: rgb(255 255 255 / 0.98);
+  --color-topbar-bg: rgb(255 255 255 / 0.85);
+  --color-selection-bg: rgb(37 99 235 / 0.1);
+  --color-text-selection: rgb(37 99 235 / 0.28);
+  --color-card-bg: rgb(255 255 255 / 0.95);
+  --color-doc-surface: rgb(255 255 255);
+  --color-card-bg-soft: rgb(255 255 255 / 0.75);
+
+  --color-control-track-off: rgb(0 0 0 / 0.14);
+  --color-control-thumb: #ffffff;
+  --color-control-thumb-stroke: rgb(0 0 0 / 0.14);
+
+  --format-latex: #5b47c2;
+  --format-typst: #0e7490;
+
+  /* Near-flat blue accent. */
+  --color-accent-1: #2563eb;
+  --color-accent-2: #1d4ed8;
+  --color-accent-fg: #ffffff;
+  --accent-text-1: #1d4ed8;
+  --accent-text-2: #2563eb;
+
+  /* Editor syntax — GitHub-light palette, all AA on white. */
+  --syntax-cmd: #0550ae;
+  --syntax-env: #116329;
+  --syntax-math: #953800;
+  --syntax-comment: #6e7781;
+  --syntax-bracket: var(--color-fg-3);
+  --syntax-attr: #0e7490;
+
+  --color-ok: #1a7f37;
+  --color-warn: #9a6700;
+  --color-err: #cf222e;
+  --color-info: #0969da;
+  --color-danger-fill: var(--color-err);
+
+  /* Flat basic theme — drop/raised/accent shadows zeroed to the no-op shadow
+   * (never `none`: these tokens join comma-separated box-shadow lists). Switch/
+   * Slider thumbs read via their hairline stroke instead of --shadow-raised.
+   * --shadow-glass-inset-inner stays (the sunken-input affordance). */
+  --shadow-glass-inset: 0 0 0 rgb(0 0 0 / 0);
+  --shadow-glass-drop: 0 0 0 rgb(0 0 0 / 0);
+  --shadow-glass-inset-inner: inset 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-raised: 0 0 0 rgb(0 0 0 / 0);
+  --shadow-accent-btn: 0 0 0 rgb(0 0 0 / 0);
+
+  /* Flat — no ambient glow even when ambient lights are on. */
+  --blob-1-op: 0;
+  --blob-2-op: 0;
+  --blob-3-op: 0;
+  --blob-4-op: 0;
+}

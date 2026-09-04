@@ -1,0 +1,91 @@
+/* Paper — light theme. Surface treatment ports from
+ * design_files/themes/Typeward Light.html line ~8259+: opaque-leaning
+ * white cards (78%) on a cream bg, slate borders, two-layer drops,
+ * white inset highlight. */
+
+[data-theme="paper"] {
+  --color-bg-base: #faf9f6;
+
+  --color-fg-1: #0b0e14;
+  --color-fg-2: #475569;
+  --color-fg-3: #64748b;
+  --color-fg-4: #828fa2; /* was #94a3b8 — darkened to 3.1:1 on bg (AA UI floor) */
+
+  /* Glass — solid-leaning white over cream bg for visible separation. */
+  --color-glass-fill: rgb(255 255 255 / 0.78);
+  --color-glass-stroke: rgb(15 23 42 / 0.07);
+  --color-glass-stroke-strong: rgb(15 23 42 / 0.12);
+  --color-glass-inset-fill: rgb(15 23 42 / 0.035);
+  --color-glass-inset-stroke: rgb(15 23 42 / 0.07);
+
+  /* Inverted control tokens — dark tint on light bg. */
+  --color-control-fill: rgb(15 23 42 / 0.05);
+  --color-control-fill-hover: rgb(15 23 42 / 0.10);
+  --color-control-stroke: rgb(15 23 42 / 0.10);
+  --color-overlay-dim: rgb(15 23 42 / 0.025);
+  --color-overlay-scrim: rgb(15 23 42 / 0.35);
+  --color-popover-bg: rgb(255 255 255 / 0.98);
+  --color-topbar-bg: rgb(255 255 255 / 0.78);
+  --color-selection-bg: rgb(124 58 237 / 0.12);
+  /* Pinned, not inherited: without this Paper falls through to the Aurora
+     accent-following color-mix default and the editor selection re-tints
+     when the user switches data-accent — unlike every other fixed theme.
+     28% matches Light's weight; ink stays ~11.7:1 over the composite. */
+  --color-text-selection: rgb(124 58 237 / 0.28);
+  --color-card-bg: rgb(255 255 255 / 0.88);
+  --color-doc-surface: rgb(255 255 255);
+  --color-card-bg-soft: rgb(255 255 255 / 0.65);
+
+  --color-control-track-off: rgb(15 23 42 / 0.14);
+  --color-control-thumb: #ffffff;
+  --color-control-thumb-stroke: rgb(15 23 42 / 0.14);
+
+  /* Deeper format accents readable on the cream bg. */
+  --format-latex: #7c3aed;
+  --format-typst: #0e7490; /* was #0891b2 — 4.5:1+ for the 10px chip label on white cards */
+
+  --color-accent-1: #7c3aed;
+  --color-accent-2: #07809d; /* teal — deepened (was #0891b2) so white label clears 4.6:1 */
+  --color-accent-fg: #ffffff; /* violet/teal accents are light enough; keep white (default token is now dark ink) */
+
+  /* Aurora's --accent-text-* lighten-toward-white formula only works on dark
+   * bgs (computes 2.9:1 / 2.6:1 here) — deep violet/teal, both >=4.5:1 on #faf9f6. */
+  --accent-text-1: #6d28d9;
+  --accent-text-2: #0e7490;
+
+  --color-glass-soft-fill: rgb(15 23 42 / 0.025);
+
+  /* Editor syntax — deep violet/teal variants readable on white cards. */
+  --syntax-cmd: #7c3aed;
+  --syntax-env: #047857;
+  --syntax-math: #0e7490; /* was #0891b2 — 4.5:1+ for body-size code text */
+  --syntax-comment: #687281; /* was #94a3b8 — darkened to 4.6:1 on bg (AA) */
+  --syntax-attr: #0f766e;
+
+  --color-warn: #b45309;
+  --color-err: #be123c;
+  --color-ok: #047857;
+  --color-info: #2a5a8f; /* muted steel-blue, AA on paper */
+  --color-danger-fill: var(--color-err); /* #be123c crimson is dark enough for white labels */
+
+  /* Two-layer drop + crisp white inset highlight per design HTML. */
+  --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.6);
+  --shadow-glass-drop:
+    0 10px 30px rgb(15 23 42 / 0.06),
+    0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-glass-inset-inner: inset 0 1px 2px rgb(15 23 42 / 0.04);
+  --shadow-raised: 0 1px 3px rgb(15 23 42 / 0.18);
+  --shadow-accent-btn:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 1px 3px rgb(15 23 42 / 0.18);
+
+  /* Ambient: cool pastels per design_files/themes/Typeward Light.html. */
+  --blob-1: #ddd6fe;
+  --blob-2: #cffafe;
+  --blob-3: #dbeafe;
+  --blob-4: #ede9fe;
+  --blob-1-op: 0.55;
+  --blob-2-op: 0.45;
+  --blob-3-op: 0.40;
+  --blob-4-op: 0.25;
+}

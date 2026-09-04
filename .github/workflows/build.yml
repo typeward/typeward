@@ -1,0 +1,242 @@
+# Manual cross-platform build of the Typeward app.
+#
+# Trigger only via the "Run workflow" button in the GitHub Actions tab
+# (workflow_dispatch). No pushes, no PRs — CI minutes only burn when
+# you explicitly ask for a build.
+#
+# Layout note: this repo is checked out into `app/` — every step's
+# working-directory and artifact glob below is written against that path.
+#
+# Per platform we install the right dev deps, fetch the Tectonic
+# sidecar binary (gitignored; `npm run fetch:tectonic` resolves it for
+# the host triple), build a release bundle via `npm run tauri build`,
+# and upload the resulting installer(s) as a workflow artifact. Pick up
+# the artifacts from the workflow run's "Summary" page once the job
+# finishes.
+#
+# Notarization / code signing are intentionally skipped — these are
+# test builds. On macOS, right-click → Open the first time to bypass
+# Gatekeeper. On Windows, SmartScreen will warn; click "More info →
+# Run anyway."
+#
+# Secrets used at build time (all optional — the app degrades gracefully):
+#   - VITE_MENDELEY_CLIENT_ID
+# Set them under Settings → Secrets and variables → Actions when you
+# want sign-in / OAuth surfaces to work in the test build.
+
+name: Build app
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Comma-separated list (macos,windows,linux) or "all"'
+        required: false
+        default: 'all'
+        type: string
+
+# A second click of "Run workflow" while one is in-flight cancels the
+# older run so we don't queue up redundant 30-minute builds.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+# Reads this repo; the installers leave as a workflow artifact (the artifact
+# API runs off the runtime token, not this scope). Nothing is written back to
+# the repo.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    # A wedged bundling step would otherwise run to GitHub's 6h default on
+    # every matrix leg. Release-profile Tauri builds take ~5-15 min warm.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS (Apple Silicon)
+            runner: macos-latest
+            os: macos
+            target: aarch64-apple-darwin
+            tectonic: true
+            artifact: typeward-macos-arm64
+            paths: |
+              app/src-tauri/target/release/bundle/dmg/*.dmg
+              app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+          - label: macOS (Intel)
+            # The macOS 13 image was retired 2025-12-04; macos-15-intel is the
+            # current free x86_64 image (mirrors release.yml).
+            runner: macos-15-intel
+            os: macos
+            target: x86_64-apple-darwin
+            tectonic: true
+            artifact: typeward-macos-x64
+            paths: |
+              app/src-tauri/target/release/bundle/dmg/*.dmg
+              app/src-tauri/target/release/bundle/macos/*.app.tar.gz
+          - label: Windows x86_64
+            runner: windows-latest
+            os: windows
+            target: x86_64-pc-windows-msvc
+            tectonic: true
+            artifact: typeward-windows-x64
+            paths: |
+              app/src-tauri/target/release/bundle/nsis/*.exe
+          # ARM64 legs build WITHOUT the Tectonic sidecar, by decision: upstream
+          # ships no aarch64 Windows binary at all, and rather than bundling an
+          # emulated x64 binary (or a native one on Linux) the ARM builds simply
+          # don't carry Tectonic — users bring their own TeX (or install the
+          # tectonic CLI themselves). tauri.no-tectonic.conf.json zeroes
+          # bundle.externalBin via the same RFC 7386 merge-patch mechanism the
+          # mobile overlays use, so the build neither validates nor packages the
+          # sidecar. The tectonic:false flag skips the fetch steps.
+          - label: Windows aarch64
+            runner: windows-11-arm
+            os: windows
+            target: aarch64-pc-windows-msvc
+            tectonic: false
+            buildArgs: '-- --config src-tauri/tauri.no-tectonic.conf.json'
+            artifact: typeward-windows-arm64
+            paths: |
+              app/src-tauri/target/release/bundle/nsis/*.exe
+          # The Linux runner is the BUILD BASE, not the support list: glibc is
+          # forward-compatible only, so building on the oldest viable image is
+          # what makes the artifacts run on the WIDEST range of distros (glibc
+          # 2.35+: Ubuntu 22.04+, Debian 12+, Fedora 36+, openSUSE, Arch, ...).
+          # Matches release.yml so a test build exercises the shipped base.
+          - label: Linux x86_64 (glibc 2.35+)
+            runner: ubuntu-22.04
+            os: linux
+            target: x86_64-unknown-linux-gnu
+            tectonic: true
+            artifact: typeward-linux-x64
+            paths: |
+              app/src-tauri/target/release/bundle/deb/*.deb
+              app/src-tauri/target/release/bundle/appimage/*.AppImage
+              app/src-tauri/target/release/bundle/rpm/*.rpm
+          - label: Linux aarch64 (glibc 2.35+)
+            # Same floor and reasoning as the x64 leg, on GitHub's ARM runner.
+            runner: ubuntu-22.04-arm
+            os: linux
+            target: aarch64-unknown-linux-gnu
+            tectonic: false
+            buildArgs: '-- --config src-tauri/tauri.no-tectonic.conf.json'
+            artifact: typeward-linux-arm64
+            paths: |
+              app/src-tauri/target/release/bundle/deb/*.deb
+              app/src-tauri/target/release/bundle/appimage/*.AppImage
+              app/src-tauri/target/release/bundle/rpm/*.rpm
+
+    steps:
+      - name: Skip if not in requested platform list
+        id: gate
+        shell: bash
+        run: |
+          requested='${{ inputs.platforms }}'
+          if [ "$requested" = "all" ] || echo ",$requested," | grep -q ",${{ matrix.os }},"; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping ${{ matrix.label }} — not in requested list ($requested)."
+          fi
+
+      - name: Checkout app
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          path: app
+
+      - name: Set up Node
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust
+        if: steps.gate.outputs.build == 'true'
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned to match rust-toolchain.toml (reproducible builds);
+          # bump both together, deliberately.
+          toolchain: '1.96.0'
+          targets: ${{ matrix.target }}
+
+      - name: Cargo cache
+        if: steps.gate.outputs.build == 'true'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: app/src-tauri -> target
+          # The Tectonic sidecar binary lives under src-tauri/binaries/
+          # and isn't part of the cargo target dir, so the default
+          # cache key still works.
+
+      - name: Install Linux system deps
+        if: steps.gate.outputs.build == 'true' && matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            xdg-utils
+
+      - name: Install npm deps
+        if: steps.gate.outputs.build == 'true'
+        working-directory: app
+        run: npm ci
+
+      - name: Fetch Tectonic sidecar
+        if: steps.gate.outputs.build == 'true' && matrix.tectonic == true
+        shell: bash
+        working-directory: app
+        run: npm run fetch:tectonic
+
+      - name: Symlink Tectonic for the gnu triple (Linux)
+        if: steps.gate.outputs.build == 'true' && matrix.os == 'linux' && matrix.tectonic == true
+        run: |
+          cd app/src-tauri/binaries
+          ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
+      # `tauri build` shells out to cargo WITHOUT --locked, so a stale Cargo.lock
+      # is silently "repaired" mid-build and CI can ship dependency versions the
+      # lockfile never pinned and no reviewer saw. Forwarding the flag through
+      # npm -> tauri -> cargo is brittle; asserting the lock is current up front
+      # gives the same guarantee and fails with a clear message.
+      - name: Verify Cargo.lock is current
+        if: steps.gate.outputs.build == 'true'
+        working-directory: app/src-tauri
+        run: cargo metadata --locked --format-version 1 > /dev/null
+        shell: bash
+
+      - name: Build release bundle
+        if: steps.gate.outputs.build == 'true'
+        working-directory: app
+        env:
+          # Secrets propagate to the Vite build at compile time. Empty values
+          # are fine — the OAuth sign-in paths surface an actionable
+          # "register your app" error instead of failing the build.
+          VITE_MENDELEY_CLIENT_ID: ${{ secrets.VITE_MENDELEY_CLIENT_ID }}
+        # buildArgs is set only on the ARM64 legs: it merges the no-tectonic
+        # overlay so the build neither validates nor bundles the sidecar.
+        run: npm run tauri build ${{ matrix.buildArgs }}
+
+      - name: Upload installers
+        if: steps.gate.outputs.build == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
+          # 14-day retention is enough for "build and try it" loops; we
+          # don't want artifacts compounding storage costs forever.
+          retention-days: 14

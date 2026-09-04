@@ -1,0 +1,344 @@
+import { describeIpcError } from "~/lib/errors";
+import {
+  FileCode,
+  FileDown,
+  FileType2,
+  Loader2,
+  MessageSquare,
+  Package,
+} from "lucide-solid";
+import type { Component, JSX } from "solid-js";
+import { Show, createSignal } from "solid-js";
+import { IconButton } from "~/components/primitives/IconButton";
+import type { PtRect } from "~/components/pdf/annotation-rects";
+import * as ipc from "~/ipc";
+import { installDismiss } from "~/lib/dismiss";
+import { handleMenuKeydown, useMenuOpenFocus } from "~/lib/menu-nav";
+import { offsetToLine } from "~/lib/reviews/lines";
+import { notifyInfo, notifySuccess } from "~/lib/toast";
+import { recordError } from "~/lib/telemetry";
+import { isTauriMobile } from "~/lib/platform";
+import { openFiles, project } from "~/stores/editor-store";
+import { allThreads } from "~/stores/review-store";
+
+/**
+ * Export dropdown — replaces the old Download icon. All five options are real:
+ * the compiled PDF and source zip copy existing artifacts; Word/HTML shell out
+ * to pandoc; "PDF + annotations" flattens open review comments into highlights
+ * over the text they anchor to, carrying the comment as the note body (LaTeX
+ * only).
+ */
+
+/** Opacity of the on-screen thread band, reproduced in the exported PDF by
+ *  washing the tint toward white: a Multiply blend of `1 - a(1 - c)` over a
+ *  white page is the same pixel a 30%-alpha overlay paints. */
+const BAND_ALPHA = 0.3;
+
+/**
+ * Resolve a theme color token to the 0-1 RGB the PDF highlight should carry, so
+ * an exported comment keeps the accent the user reviews in. Reads the computed
+ * color rather than the raw custom property, which lets custom themes express
+ * the token in any CSS color syntax.
+ */
+function washedTint(token: string): [number, number, number] | undefined {
+  const probe = document.createElement("span");
+  probe.style.display = "none";
+  probe.style.color = `var(${token})`;
+  document.body.appendChild(probe);
+  const computed = getComputedStyle(probe).color;
+  probe.remove();
+  const m = /^rgba?\(([^)]+)\)$/.exec(computed.trim());
+  if (!m) return undefined;
+  const parts = m[1].split(/[,\s/]+/).map(Number);
+  if (parts.length < 3 || parts.slice(0, 3).some((n) => !Number.isFinite(n))) {
+    return undefined;
+  }
+  return parts.slice(0, 3).map((c) => {
+    const v = c / 255;
+    return Math.min(1, Math.max(0, 1 - BAND_ALPHA * (1 - v)));
+  }) as [number, number, number];
+}
+
+export const ExportMenu: Component<{
+  pdfPath: string | null;
+  /** The viewer's resolved highlight geometry for a thread, top-origin pt.
+   *  Absent (or null per thread) leaves placement to SyncTeX in Rust. */
+  highlightGeometry?: (threadId: string) => { page: number; rects: PtRect[] } | null;
+}> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  // One export runs at a time; the key names WHICH row is running so only that
+  // row shows the spinner (busy() still disables all rows).
+  const [busyKey, setBusyKey] = createSignal<string | null>(null);
+  const busy = () => busyKey() !== null;
+  const [error, setError] = createSignal<string | null>(null);
+  let rootRef: HTMLDivElement | undefined;
+  installDismiss(() => rootRef, open, () => setOpen(false));
+  useMenuOpenFocus(open, () => rootRef);
+  const onTrigger = () => {
+    setError(null);
+    setOpen((v) => !v);
+  };
+
+  // Shared save-dialog + byte-copy tail for the real exports. The dialog
+  // plugin extends the fs scope with the picked path, so the write is
+  // allowed even outside $DOCUMENT.
+  const copyToChosenDest = async (
+    source: string,
+    suggested: string,
+    filter: { name: string; extensions: string[] },
+  ): Promise<void> => {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { readFile, writeFile } = await import("@tauri-apps/plugin-fs");
+    const dest = await save({ defaultPath: suggested, filters: [filter] });
+    if (!dest) return; // user cancelled
+    const bytes = await readFile(source);
+    await writeFile(dest, bytes);
+    setOpen(false);
+  };
+
+  const exportPdf = async () => {
+    const source = props.pdfPath;
+    if (!source || busy()) return;
+    setError(null);
+    setBusyKey("pdf");
+    try {
+      const suggested = source.split(/[\\/]/).pop() ?? "document.pdf";
+      await copyToChosenDest(source, suggested, { name: "PDF", extensions: ["pdf"] });
+    } catch (e) {
+      setError(describeIpcError(e));
+      recordError("export-pdf", "PDF export failed", e);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const exportZip = async () => {
+    const p = project();
+    if (!p || busy()) return;
+    setError(null);
+    setBusyKey("zip");
+    try {
+      const bundle = await ipc.exportProjectZip(p);
+      await copyToChosenDest(bundle, `${p.name}-source.zip`, {
+        name: "Zip archive",
+        extensions: ["zip"],
+      });
+    } catch (e) {
+      setError(describeIpcError(e));
+      recordError("export-zip", "source bundle export failed", e);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const exportViaPandoc = async (format: "docx" | "html") => {
+    const p = project();
+    if (!p || busy()) return;
+    setError(null);
+    setBusyKey(format);
+    try {
+      const artifact = await ipc.exportPandoc(p, format);
+      await copyToChosenDest(artifact, `${p.name}.${format}`, {
+        name: format === "docx" ? "Word document" : "HTML page",
+        extensions: [format],
+      });
+    } catch (e) {
+      setError(describeIpcError(e));
+      recordError(`export-${format}`, `${format} export failed`, e);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const openThreads = () => allThreads().filter((t) => t.status === "open");
+
+  const annEnabled = () =>
+    !!props.pdfPath &&
+    !busy() &&
+    project()?.format === "latex" &&
+    openThreads().length > 0;
+
+  const annHint = (): string => {
+    const p = project();
+    if (p && p.format !== "latex") return "Needs SyncTeX (LaTeX only)";
+    if (!props.pdfPath) return "Compile first";
+    const n = openThreads().length;
+    if (n === 0) return "No open comments to place";
+    return `Highlight ${n} open comment${n === 1 ? "" : "s"} in the PDF`;
+  };
+
+  const exportAnnotated = async () => {
+    const p = project();
+    if (!p || busy() || !props.pdfPath || p.format !== "latex") return;
+    const threads = openThreads();
+    if (threads.length === 0) return;
+    setError(null);
+    setBusyKey("annotated");
+    try {
+      // Read each thread's file once; prefer the live buffer (may hold unsaved
+      // edits that shifted offsets) and fall back to disk for unopened files.
+      const contentCache = new Map<string, string>();
+      // Resolved once, not per thread: each read forces a style recalc.
+      const tint = {
+        comment: washedTint("--color-accent-1"),
+        todo: washedTint("--color-warn"),
+      };
+      const annotations: ipc.AnnotationInput[] = [];
+      for (const t of threads) {
+        let content = contentCache.get(t.fileRelPath);
+        if (content === undefined) {
+          const buf = openFiles().find((f) => f.relPath === t.fileRelPath);
+          content = buf
+            ? buf.content
+            : await ipc.readProjectTextFile(p.rootPath, t.fileRelPath);
+          contentCache.set(t.fileRelPath, content);
+        }
+        const geo = props.highlightGeometry?.(t.id) ?? null;
+        annotations.push({
+          file: t.fileRelPath,
+          line: offsetToLine(content, t.fromOffset),
+          title: t.comments[0]?.author ?? "Reviewer",
+          body: t.comments.map((c) => `${c.author}: ${c.body}`).join("\n"),
+          page: geo?.page,
+          quads: geo?.rects,
+          color: t.kind === "todo" ? tint.todo : tint.comment,
+        });
+      }
+      const result = await ipc.exportPdfAnnotated(p, props.pdfPath, annotations);
+      await copyToChosenDest(result.path, `${p.name}-annotated.pdf`, {
+        name: "PDF",
+        extensions: ["pdf"],
+      });
+      notifySuccess(
+        `${result.annotated} comment${result.annotated === 1 ? "" : "s"} placed`,
+      );
+      if (result.skipped.length > 0) {
+        notifyInfo(
+          `${result.skipped.length} comment${
+            result.skipped.length === 1 ? "" : "s"
+          } couldn't be placed`,
+          result.skipped
+            .slice(0, 5)
+            .map((s) => `${s.file}:${s.line}: ${s.reason}`)
+            .join("\n"),
+        );
+      }
+    } catch (e) {
+      setError(describeIpcError(e));
+      recordError("export-annotated", "annotated PDF export failed", e);
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const OptionRow: Component<{
+    label: string;
+    hint: string;
+    icon: JSX.Element;
+    disabled: boolean;
+    spinning: boolean;
+    onSelect: () => void;
+  }> = (o) => (
+    <button
+      type="button"
+      role="menuitem"
+      tabindex={-1}
+      disabled={o.disabled}
+      onClick={o.onSelect}
+      class="flex w-full items-center gap-2.5 rounded-md p-2 text-left enabled:hover:bg-[var(--color-control-fill)] disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      <span
+        class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-fg-2"
+        style={{ background: "var(--color-control-fill)" }}
+      >
+        <Show when={o.spinning} fallback={o.icon}>
+          <Loader2 size={13} class="animate-spin" />
+        </Show>
+      </span>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-medium text-fg-1">{o.label}</div>
+        <div class="mono mt-0.5 text-[10px] text-fg-3">{o.hint}</div>
+      </div>
+    </button>
+  );
+
+  return (
+    <div ref={rootRef} class="relative">
+      {/* Inline fg-2 keeps the toolbar tint the ghost variant's text
+          utilities would otherwise override. */}
+      <IconButton
+        label="Export"
+        size="lg"
+        onClick={onTrigger}
+        aria-haspopup="menu"
+        aria-expanded={open()}
+        class="glass-soft enabled:hover:bg-[var(--color-control-fill-hover)]"
+        style={{ color: "var(--color-fg-2)" }}
+      >
+        <FileDown size={16} class="opacity-80" />
+      </IconButton>
+      <Show when={open()}>
+        <div
+          role="menu"
+          aria-label="Export as"
+          tabindex={-1}
+          onKeyDown={(e) => handleMenuKeydown(e, rootRef, () => setOpen(false))}
+          class="glass absolute left-0 top-full z-50 mt-1 w-[260px] rounded-xl"
+          style={{ padding: "var(--ui-pad-section)", background: "var(--color-popover-bg)" }}
+        >
+          <span class="label-xs mb-1 block px-1 text-fg-3">Export as</span>
+          <OptionRow
+            label="Export PDF"
+            hint={props.pdfPath ? "Save the compiled PDF as…" : "Compile first"}
+            icon={<FileDown size={13} />}
+            disabled={!props.pdfPath || busy()}
+            spinning={busyKey() === "pdf"}
+            onSelect={() => void exportPdf()}
+          />
+          <OptionRow
+            label="Source bundle (.zip)"
+            hint="Sources only; excludes build junk, .git and .typeward"
+            icon={<Package size={13} />}
+            disabled={!project() || busy()}
+            spinning={busyKey() === "zip"}
+            onSelect={() => void exportZip()}
+          />
+          {/* Pandoc + SyncTeX-annotated exports are desktop-only Rust commands
+              (#[cfg(desktop)]); on mobile they don't exist, so hide the rows
+              rather than surface calls that always error. */}
+          <Show when={!isTauriMobile()}>
+            <OptionRow
+              label="PDF + annotations"
+              hint={annHint()}
+              icon={<MessageSquare size={13} />}
+              disabled={!annEnabled()}
+              spinning={busyKey() === "annotated"}
+              onSelect={() => void exportAnnotated()}
+            />
+            <OptionRow
+              label="Word (.docx)"
+              hint="Pandoc → Word; complex macros may not convert"
+              icon={<FileType2 size={13} />}
+              disabled={!project() || busy()}
+              spinning={busyKey() === "docx"}
+              onSelect={() => void exportViaPandoc("docx")}
+            />
+            <OptionRow
+              label="HTML"
+              hint="Pandoc → standalone HTML; complex macros may not convert"
+              icon={<FileCode size={13} />}
+              disabled={!project() || busy()}
+              spinning={busyKey() === "html"}
+              onSelect={() => void exportViaPandoc("html")}
+            />
+          </Show>
+          <Show when={error()}>
+            <div class="select-text px-2 pt-1 text-xs" style={{ color: "var(--color-err)" }}>
+              {error()}
+            </div>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  );
+};

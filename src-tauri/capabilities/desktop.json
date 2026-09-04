@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop",
+  "description": "Desktop-only grants. Deliberately empty of shell permissions: the Tectonic sidecar is spawned from Rust (compile.rs, ShellExt::sidecar), which does not consult the capability scope, so the old shell:allow-execute entry granted plugin:shell|execute to the RENDERER without any code needing it — a sidecar-spawn primitive handed to the webview for nothing.",
+  "platforms": ["macOS", "windows", "linux"],
+  "windows": ["main"],
+  "permissions": []
+}

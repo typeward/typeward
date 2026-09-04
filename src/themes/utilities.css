@@ -1,0 +1,927 @@
+/*
+ * Theme-aware utility classes ported from design_files/Editor.html (lines
+ * 39-78). Colors and shadows resolve through the token layer in tokens.css /
+ * themes/*.css, so every theme + accent combination renders correctly.
+ */
+
+/*
+ * Force vector-aware geometry on all inline SVGs (Lucide icons + sparkline
+ * paths). The default is browser-dependent and small icons can render
+ * fuzzily under WebView2.
+ */
+svg {
+  shape-rendering: geometricPrecision;
+}
+
+::selection {
+  background: var(--color-text-selection);
+}
+
+/* Keyboard focus ring — scoped to click-targets (not text inputs, which
+ * match :focus-visible on every focus and carry their own ring styles). */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="option"]:focus-visible,
+[role="separator"]:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Glass surfaces -------------------------------------------------------- */
+
+/*
+ * macOS/WKWebView: CSS backdrop-filter COMPOSITES AS AN OPAQUE GRAY SLAB on
+ * screen — the web-process render (and WKWebView takeSnapshot) looks
+ * correct, but the window-server output does not, in any embedding (plain
+ * default-config WKWebView included; pixel-verified on macOS 15.1 via an
+ * own-window CGWindowListCreateImage harness, 2026-08-14). Every glass
+ * surface read as a flat washed-out gray rectangle. Kill the property
+ * wholesale there — !important so inline styles and Tailwind
+ * backdrop-blur-* utilities are covered too. Legibility survives by
+ * design: floating surfaces carry near-opaque --color-popover-bg fills,
+ * and in-flow glass shows the ambient through its translucent fill.
+ * The [data-platform] stamp comes from public/boot-theme.js.
+ */
+html[data-platform="macos"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/*
+ * Frost emulation, same platform scope: with backdrop-filter dead, bare
+ * .glass is a ~4% film and the ambient discs show through panels crisply —
+ * reading as shapes ABOVE the UI instead of glow behind it. A mostly-opaque
+ * bg-base underlay below the glass film reads like the blurred sampling the
+ * other platforms get: panel surfaces stay panels, ambience ghosts through
+ * at ~18%. Surfaces with an inline background (dialogs/popovers on
+ * --color-popover-bg) still win over this rule — deliberate. The topbars set
+ * their background inline via var(--color-topbar-bg), so that token is
+ * re-resolved here instead.
+ */
+html[data-platform="macos"] .glass {
+  background:
+    linear-gradient(var(--color-glass-fill), var(--color-glass-fill)),
+    color-mix(in srgb, var(--color-bg-base) 55%, transparent);
+  --color-topbar-bg: color-mix(in srgb, var(--color-bg-base) 60%, transparent);
+}
+
+.glass {
+  background: var(--color-glass-fill);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--color-glass-stroke);
+  box-shadow: var(--shadow-glass-inset), var(--shadow-glass-drop);
+  /*
+   * Isolate each glass surface into its own stacking context so the
+   * backdrop-filter doesn't bleed into adjacent icon/text rendering.
+   * `isolation: isolate` gives the same containment as the previous
+   * `will-change: transform` without permanently pinning a compositor
+   * layer per surface (a real cost on WebKitGTK).
+   */
+  isolation: isolate;
+}
+
+.glass-soft {
+  background: var(--color-glass-soft-fill);
+  border: 1px solid var(--color-glass-stroke);
+}
+
+.glass-inset {
+  background: var(--color-glass-inset-fill);
+  border: 1px solid var(--color-glass-inset-stroke);
+  box-shadow: var(--shadow-glass-inset-inner);
+}
+
+/* Accent gradients ----------------------------------------------------- */
+
+.accent-grad {
+  background: linear-gradient(
+    135deg,
+    var(--color-accent-1) 0%,
+    var(--color-accent-2) 100%
+  );
+  /* Label color must track the accent: amber accents (Daylight/Lamplight)
+   * need ink text where violet/cyan took white. Unlayered, so this wins
+   * over Tailwind's layered text-* utilities on the same element. */
+  color: var(--color-accent-fg);
+}
+
+.accent-text {
+  background: linear-gradient(
+    135deg,
+    var(--accent-text-1) 0%,
+    var(--accent-text-2) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Same gradient as .accent-grad — used as a 1px border via background +
+ * border-image trick or as a wrapping decorative element. */
+.accent-border {
+  background: linear-gradient(
+    135deg,
+    var(--color-accent-1) 0%,
+    var(--color-accent-2) 100%
+  );
+}
+
+/* Hover lift / interaction --------------------------------------------- */
+
+.lift {
+  transition:
+    filter 150ms ease-out,
+    background 150ms ease-out,
+    border-color 150ms ease-out,
+    transform 150ms ease-out,
+    box-shadow 200ms ease-out;
+}
+
+.lift:hover:not(:disabled) {
+  filter: brightness(1.18);
+}
+
+/* Pressed feedback — after the hover rule so the active dim wins mid-press. */
+.lift:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+/* Brightness alone is imperceptible on Daylight's near-black accent fill —
+ * layer an accent-fg wash over the gradient so primaries always respond. */
+.lift.accent-grad:hover:not(:disabled) {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
+      color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+    ),
+    linear-gradient(135deg, var(--color-accent-1) 0%, var(--color-accent-2) 100%);
+}
+
+/* Pressed needs the same wash treatment, stronger, after hover so it wins
+ * mid-press — brightness(0.94) alone is invisible on the near-black fill. */
+.lift.accent-grad:active:not(:disabled) {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-accent-fg) 18%, transparent),
+      color-mix(in srgb, var(--color-accent-fg) 18%, transparent)
+    ),
+    linear-gradient(135deg, var(--color-accent-1) 0%, var(--color-accent-2) 100%);
+}
+
+/* Typography utilities -------------------------------------------------- */
+
+.label-xs {
+  font-size: var(--ui-font-xs);
+  letter-spacing: var(--ui-track-loose);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* Density-aware icon sizing. CSS width/height beats SVG width/height attrs
+ * in modern browsers, so these classes work on lucide-solid icons regardless
+ * of the `size` prop.
+ *
+ *   .ui-icon-chrome — top-bar chrome (bell, settings, layout, history, share)
+ *   .ui-icon-menu   — inline icons next to menu / list items
+ *   .ui-icon-sm     — tight inline icons (close, more, chevron)
+ */
+.ui-icon-chrome {
+  width: var(--ui-icon-chrome);
+  height: var(--ui-icon-chrome);
+}
+.ui-icon-menu {
+  width: var(--ui-icon-menu);
+  height: var(--ui-icon-menu);
+}
+.ui-icon-sm {
+  width: var(--ui-icon-sm);
+  height: var(--ui-icon-sm);
+}
+
+/* Body typography defaults — density-aware. The :root body rule in tokens.css
+ * sets the font family + features; this layer adds the size + rhythm. */
+body {
+  font-size: var(--ui-font-base);
+  line-height: var(--ui-line-base);
+  letter-spacing: var(--ui-track-tight);
+}
+
+/* Tabular-aligned numerals — apply on rows of stats / status bars where
+ * digits should line up vertically. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings:
+    "calt",
+    "liga";
+}
+
+/* Scrollbar (WebKit only — Chromium-based webview on Tauri) ------------ */
+
+.scroll {
+  /* A scroller that hits its end must not chain into the app shell
+   * (rubber-banding the window on macOS). */
+  overscroll-behavior: contain;
+}
+
+.scroll::-webkit-scrollbar,
+.md-preview pre::-webkit-scrollbar,
+.md-preview .katex-display::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll::-webkit-scrollbar-track,
+.md-preview pre::-webkit-scrollbar-track,
+.md-preview .katex-display::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll::-webkit-scrollbar-thumb,
+.md-preview pre::-webkit-scrollbar-thumb,
+.md-preview .katex-display::-webkit-scrollbar-thumb {
+  background: var(--color-control-fill);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scroll::-webkit-scrollbar-thumb:hover,
+.md-preview pre::-webkit-scrollbar-thumb:hover,
+.md-preview .katex-display::-webkit-scrollbar-thumb:hover {
+  background: var(--color-control-fill-hover);
+}
+
+/* Animations ----------------------------------------------------------- */
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+}
+.pulse {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+.blink {
+  animation: blink 1.05s steps(1) infinite;
+}
+
+/* SyncTeX forward-search highlight: gradient ribbon that pulses on, then
+ * fades to 0 opacity. Triggered by PdfViewer when scrollTarget changes. */
+@keyframes synctex-pulse {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.3);
+  }
+  20% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scaleY(1);
+  }
+}
+
+/* Caret used in the Composer prompt — gradient bar that blinks. */
+.caret {
+  display: inline-block;
+  width: 9px;
+  height: 19px;
+  background: linear-gradient(
+    180deg,
+    var(--color-accent-1),
+    var(--color-accent-2)
+  );
+  margin-left: 2px;
+  vertical-align: text-top;
+  animation: blink 1.05s steps(1) infinite;
+  border-radius: 1.5px;
+}
+
+/* Strong accent glow — used on the primary "New project" button and the
+ * focused command palette card. Re-tints with the active accent. */
+.glow-accent {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--color-accent-1) 40%, transparent),
+    0 8px 28px color-mix(in srgb, var(--color-accent-1) 28%, transparent),
+    0 0 60px color-mix(in srgb, var(--color-accent-2) 18%, transparent);
+}
+
+/* Avatar rings — small accent-coloured halo around 28px avatars. */
+.avatar-ring {
+  box-shadow:
+    0 0 0 2px var(--color-bg-base),
+    0 0 0 3.5px color-mix(in srgb, var(--color-accent-2) 50%, transparent);
+}
+.avatar-ring-2 {
+  box-shadow:
+    0 0 0 2px var(--color-bg-base),
+    0 0 0 3.5px color-mix(in srgb, var(--color-accent-1) 50%, transparent);
+}
+
+/* Ambient background — radial blob blurs + film grain overlay. Mounted
+ * once at the app root and visible behind every screen. */
+.ambient {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Per-user toggle (Settings → Appearance → Density & motion). When ambient
+ * lights are disabled, the blob layer is fully removed from the paint tree. */
+:root[data-ambient="off"] .ambient {
+  display: none;
+}
+
+/* Per-user toggle (Settings → Appearance → Accent). When the accent gradient
+ * is off, every gradient surface collapses to the solid accent-1. `.accent-grad`
+ * keeps its `color: var(--color-accent-fg)` from the base rule. `.glow-accent`
+ * is left alone — it's a glow, not a gradient fill. */
+:root[data-accent-gradient="off"] {
+  --accent-text-1: var(--color-accent-1);
+  --accent-text-2: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .accent-grad,
+:root[data-accent-gradient="off"] .accent-border,
+:root[data-accent-gradient="off"] .caret,
+:root[data-accent-gradient="off"] .side-active::before {
+  background: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .lift.accent-grad:hover:not(:disabled) {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-accent-fg) 10%, transparent),
+    color-mix(in srgb, var(--color-accent-fg) 10%, transparent)
+  );
+  background-color: var(--color-accent-1);
+}
+:root[data-accent-gradient="off"] .lift.accent-grad:active:not(:disabled) {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--color-accent-fg) 18%, transparent),
+    color-mix(in srgb, var(--color-accent-fg) 18%, transparent)
+  );
+  background-color: var(--color-accent-1);
+}
+
+/* Glow off — basic themes force this via data-glow, styled themes toggle it in
+ * Appearance. An off-override block rather than :not() wrapping the base rules,
+ * so the glow surfaces keep a designed flat fallback instead of dead hovers. */
+:root[data-glow="off"] .glow-accent {
+  box-shadow: none;
+}
+:root[data-glow="off"] .card-shell:hover {
+  box-shadow: var(--shadow-glass-inset), var(--shadow-glass-drop);
+}
+:root[data-glow="off"] .card-glow:hover {
+  border-color: var(--color-glass-stroke-strong);
+  box-shadow: none;
+}
+:root[data-glow="off"] .avatar-ring,
+:root[data-glow="off"] .avatar-ring-2 {
+  box-shadow: 0 0 0 2px var(--color-bg-base);
+}
+
+/*
+ * Blob footprints are ~30% larger than the design's originals: blur(120px)
+ * used to spill each blob's light well past its box, and the gradient bake
+ * ends at the element edge — without the upscale, edge-adjacent panels sit
+ * in much weaker wash than the design intends.
+ *
+ * No `filter: blur()` here, deliberately: the softness is baked into the
+ * gradient stops instead. WebKit degrades very large blur radii to the point
+ * of invisibility (blur(120px) on these blobs rendered near-black in
+ * WKWebView — the whole ambient layer vanished and every glass surface read
+ * as flat gray), and a multi-stop falloff renders identically on every
+ * engine for free. The stops approximate the old blur(120px) spread.
+ *
+ * `closest-side` is load-bearing, and so is the absence of a border-radius.
+ * A radial-gradient sizes to `farthest-corner` by default, so on a square box
+ * the ramp only reaches `transparent` out at the corner, 1.41x the half-width.
+ * A `border-radius: 50%` circle ends at the half-width, where that ramp is
+ * still ~5% opaque, so every blob got its falloff clipped into a hard rim
+ * (conspicuous on WebView2, which does not dither alphas that low). Sizing the
+ * ramp to the closest side puts the transparent stop exactly on the circle's
+ * edge, and the gradient then draws its own round shape with nothing to clip.
+ * The boxes are 1.41x their previous dimensions and recentred so every stop
+ * keeps the absolute radius it had before: same wash, minus the rim.
+ */
+.blob {
+  position: absolute;
+}
+.blob-1 {
+  width: 1330px;
+  height: 1330px;
+  left: -485px;
+  top: -545px;
+  background: radial-gradient(
+    circle closest-side,
+    color-mix(in srgb, var(--blob-1) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-1) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-1) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-1) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-1) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-1) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-1) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-1) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-1) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-1) 1%, transparent) 90%,
+    transparent 100%
+  );
+  opacity: var(--blob-1-op);
+}
+.blob-2 {
+  width: 1400px;
+  height: 1400px;
+  right: -540px;
+  top: -440px;
+  background: radial-gradient(
+    circle closest-side,
+    color-mix(in srgb, var(--blob-2) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-2) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-2) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-2) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-2) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-2) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-2) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-2) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-2) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-2) 1%, transparent) 90%,
+    transparent 100%
+  );
+  opacity: var(--blob-2-op);
+}
+.blob-3 {
+  width: 1104px;
+  height: 1104px;
+  left: calc(38% - 252px);
+  bottom: -512px;
+  background: radial-gradient(
+    circle closest-side,
+    color-mix(in srgb, var(--blob-3) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-3) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-3) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-3) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-3) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-3) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-3) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-3) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-3) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-3) 1%, transparent) 90%,
+    transparent 100%
+  );
+  opacity: var(--blob-3-op);
+}
+.blob-4 {
+  width: 778px;
+  height: 778px;
+  right: calc(22% - 179px);
+  top: calc(38% - 179px);
+  background: radial-gradient(
+    circle closest-side,
+    color-mix(in srgb, var(--blob-4) 85%, transparent) 0%,
+    color-mix(in srgb, var(--blob-4) 80%, transparent) 10%,
+    color-mix(in srgb, var(--blob-4) 68%, transparent) 20%,
+    color-mix(in srgb, var(--blob-4) 51%, transparent) 30%,
+    color-mix(in srgb, var(--blob-4) 34%, transparent) 40%,
+    color-mix(in srgb, var(--blob-4) 21%, transparent) 50%,
+    color-mix(in srgb, var(--blob-4) 11%, transparent) 60%,
+    color-mix(in srgb, var(--blob-4) 5%, transparent) 70%,
+    color-mix(in srgb, var(--blob-4) 2%, transparent) 80%,
+    color-mix(in srgb, var(--blob-4) 1%, transparent) 90%,
+    transparent 100%
+  );
+  opacity: var(--blob-4-op);
+}
+/* Film-grain overlay — retired from AmbientBackdrop 2026-05-15 because
+ * mix-blend-mode: overlay produces horizontal banding artifacts on
+ * Windows WebView2 where it intersects glass surfaces' backdrop-filter
+ * regions. Kept dormant so a future rebuild with a different blend mode
+ * (soft-light, screen, or no blend) can opt back in. */
+.grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.06 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.5;
+  mix-blend-mode: overlay;
+}
+
+/* Card with hover lift + gradient outline — used for project tiles. */
+.card-shell {
+  position: relative;
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 200ms;
+}
+.card-shell:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    var(--shadow-glass-inset),
+    var(--shadow-glass-drop),
+    0 0 0 1px color-mix(in srgb, var(--color-accent-1) 18%, transparent);
+}
+
+/* Project card hover — gradient border + glow on the leaner Phase C card.
+ * `.card-glow` itself is static; `.card-glow:hover` reveals the gradient
+ * outline + soft accent glow.
+ *
+ * The visible ring uses `inset` so it renders inside the card's box and
+ * survives the scroll container's `overflow: auto` clip on all edges. The
+ * outer glow (positive spread) can still soft-fade past the clip boundary,
+ * but because it's blurred it never looks abruptly cut off. No transform
+ * on hover — the card stays put. */
+.card-glow {
+  position: relative;
+  transition:
+    border-color 200ms ease,
+    box-shadow 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  border: 1px solid var(--color-glass-stroke);
+}
+.card-glow:hover {
+  border-color: transparent;
+  box-shadow:
+    /* gradient ring — always visible, lives inside the card box */
+    inset 0 0 0 1.5px var(--color-accent-1),
+    /* inner halo — soft glow fading inward from each edge */
+    inset 0 0 24px -8px color-mix(in srgb, var(--color-accent-1) 45%, transparent),
+    /* downward-only drop shadow for depth — zero top extent so it can
+       never clip against the upper section, and the lateral spread fits
+       cleanly within the inter-card gap */
+    0 6px 18px -6px color-mix(in srgb, var(--color-accent-1) 22%, transparent);
+}
+
+/* Active sidebar item — 2px accent gradient bar on the left edge. */
+.side-active {
+  position: relative;
+}
+.side-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(
+    180deg,
+    var(--color-accent-1),
+    var(--color-accent-2)
+  );
+}
+
+.no-emoji {
+  font-variant-emoji: text;
+}
+
+/* Markdown preview prose — MarkdownPreview.tsx renders sanitized HTML into
+ * .md-preview; Tailwind preflight strips every element default, so the
+ * prose scale lives here. Token-driven, so the light/dark variant classes
+ * the component sets need no per-theme rules of their own. */
+.md-preview {
+  font-size: var(--ui-font-base);
+  line-height: 1.7;
+}
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4,
+.md-preview h5,
+.md-preview h6 {
+  margin: 1.4em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-fg-1);
+}
+.md-preview h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--color-glass-stroke);
+}
+.md-preview h2 {
+  font-size: 1.4em;
+}
+.md-preview h3 {
+  font-size: 1.15em;
+}
+.md-preview h1:first-child,
+.md-preview h2:first-child,
+.md-preview h3:first-child {
+  margin-top: 0;
+}
+.md-preview p {
+  margin: 0 0 0.9em;
+}
+.md-preview a {
+  color: var(--color-accent-1);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md-preview ul,
+.md-preview ol {
+  margin: 0 0 0.9em;
+  padding-left: 1.5em;
+}
+.md-preview ul {
+  list-style: disc;
+}
+.md-preview ol {
+  list-style: decimal;
+}
+.md-preview li {
+  margin: 0.25em 0;
+}
+.md-preview li > ul,
+.md-preview li > ol {
+  margin-bottom: 0;
+}
+.md-preview blockquote {
+  margin: 0 0 0.9em;
+  padding: 0.1em 0 0.1em 1em;
+  border-left: 3px solid var(--color-glass-stroke-strong);
+  color: var(--color-fg-2);
+}
+.md-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--color-control-fill);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.md-preview pre {
+  margin: 0 0 1em;
+  padding: 12px 14px;
+  overflow-x: auto;
+  background: var(--color-glass-inset-fill);
+  border: 1px solid var(--color-glass-inset-stroke);
+  border-radius: 8px;
+}
+.md-preview pre code {
+  background: transparent;
+  padding: 0;
+}
+.md-preview table {
+  margin: 0 0 1em;
+  border-collapse: collapse;
+}
+.md-preview th,
+.md-preview td {
+  padding: 6px 10px;
+  text-align: left;
+  border: 1px solid var(--color-glass-stroke);
+}
+.md-preview th {
+  font-weight: 600;
+  background: var(--color-control-fill);
+}
+.md-preview hr {
+  margin: 1.5em 0;
+  border: none;
+  height: 1px;
+  background: var(--color-glass-stroke-strong);
+}
+.md-preview img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.md-preview .katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+}
+/* AI chat bubbles reuse the .md-preview prose scale; .ai-md tightens it for
+ * bubble density (font follows the bubble's own size) and hosts the per-fence
+ * copy affordance added post-sanitization by ai-markdown.ts. */
+.ai-md {
+  font-size: inherit;
+  line-height: 1.6;
+}
+.ai-md p:last-child,
+.ai-md pre:last-child,
+.ai-md ul:last-child,
+.ai-md ol:last-child,
+.ai-md blockquote:last-child {
+  margin-bottom: 0;
+}
+.ai-md pre {
+  position: relative;
+}
+.ai-md .ai-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  font-size: 0.75em;
+  color: var(--color-fg-3);
+  background: var(--color-control-fill);
+  border: 1px solid var(--color-glass-stroke);
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ai-md pre:hover .ai-code-copy,
+.ai-md .ai-code-copy:focus-visible {
+  opacity: 1;
+}
+.ai-md .ai-code-copy:hover {
+  color: var(--color-fg-1);
+  background: var(--color-control-fill-hover);
+}
+
+/* Placeholder emitted when the sandboxed renderer refuses an image
+ * (traversal, absolute path, unknown scheme) — the author must see that
+ * something was blocked rather than nothing at all. */
+.md-img-blocked {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  color: var(--color-fg-3);
+  border: 1px dashed var(--color-glass-stroke-strong);
+  border-radius: 4px;
+  padding: 0.1em 0.4em;
+}
+
+/* --- Review comment anchors --- */
+.cm-review-anchor-open {
+  background: color-mix(in srgb, var(--color-accent-1) 10%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-accent-1) 30%, transparent);
+}
+.cm-review-anchor-resolved {
+  background: color-mix(in srgb, var(--color-accent-1) 4%, transparent);
+}
+/* TODO threads carry an extra modifier class over the base open/resolved
+ * anchor — warm-tinted to match the PDF annotation bands. Placed after the
+ * base rules so the single-class background override wins for open todos. */
+.cm-review-anchor--todo {
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--color-warn) 35%, transparent);
+}
+.cm-review-anchor-resolved.cm-review-anchor--todo {
+  background: color-mix(in srgb, var(--color-warn) 4%, transparent);
+}
+.cm-review-gutter { width: 20px; }
+.cm-review-gutter-marker {
+  color: var(--color-accent-1);
+  opacity: 0.7;
+  font-size: 10px;
+  line-height: 1;
+}
+.cm-review-gutter-marker--todo { color: var(--color-warn); }
+.cm-review-gutter-marker:hover { opacity: 1; }
+
+/* --- Grammar (Harper) lint underlines, styled per LintKind ---
+ * The linter tags each range with a `cm-lint-<kind>` mark class. We replace
+ * the default wavy background with a per-kind text-decoration underline so
+ * spelling / grammar / style read distinctly. Only our grammar ranges are
+ * retargeted (the attribute-substring guard) — LSP and compile lint underlines
+ * keep the default. Colors come from theme tokens so all four themes hold up. */
+.cm-lintRange[class*="cm-lint-"] {
+  background-image: none;
+  text-decoration-skip-ink: none;
+}
+
+/* Four families (see src/lib/grammar/kinds.ts — the single source): each gets
+ * a colored underline plus a faint same-hue wash, Grammarly-style. Line style
+ * doubles as a hue-independent cue (WCAG 1.4.1): firm tier = spelling wavy vs
+ * grammar double; advisory tier = style dashed vs misc dotted. Family classes
+ * track kinds.ts's KIND_TO_FAMILY map. */
+
+/* Spelling family (red): misspellings, typos. */
+.cm-lintRange.cm-lint-spelling,
+.cm-lintRange.cm-lint-typo,
+.cm-lintRange.cm-lint-malapropism,
+.cm-lintRange.cm-lint-eggcorn {
+  text-decoration: underline wavy var(--color-err);
+  background: color-mix(in srgb, var(--color-err) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Grammar family (amber): agreement, punctuation, capitalization. */
+.cm-lintRange.cm-lint-grammar,
+.cm-lintRange.cm-lint-agreement,
+.cm-lintRange.cm-lint-boundaryerror,
+.cm-lintRange.cm-lint-capitalization,
+.cm-lintRange.cm-lint-punctuation {
+  text-decoration: underline double var(--color-warn);
+  background: color-mix(in srgb, var(--color-warn) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Style family (green, advisory): prose polish. */
+.cm-lintRange.cm-lint-style,
+.cm-lintRange.cm-lint-enhancement,
+.cm-lintRange.cm-lint-readability,
+.cm-lintRange.cm-lint-redundancy,
+.cm-lintRange.cm-lint-repetition,
+.cm-lintRange.cm-lint-formatting {
+  text-decoration: underline dashed var(--color-ok);
+  background: color-mix(in srgb, var(--color-ok) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Misc family (blue, advisory): word choice, usage, regionalisms. */
+.cm-lintRange.cm-lint-wordchoice,
+.cm-lintRange.cm-lint-miscellaneous,
+.cm-lintRange.cm-lint-nonstandard,
+.cm-lintRange.cm-lint-regionalism,
+.cm-lintRange.cm-lint-usage {
+  text-decoration: underline dotted var(--color-info);
+  background: color-mix(in srgb, var(--color-info) 12%, transparent);
+  border-radius: 2px;
+}
+
+/* Kind chip prepended to the lint tooltip message: a family-colored dot + the
+ * humanized kind. `--dot` is set inline by renderMessage from the family var. */
+.cm-lint-message { display: block; line-height: 1.5; }
+.cm-lint-kind-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  margin-right: 0.5em;
+  font-size: 0.82em;
+  font-weight: 600;
+  color: var(--color-fg-1);
+  vertical-align: baseline;
+}
+.cm-lint-kind-chip::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 999px;
+  background: var(--dot, var(--color-info));
+}
+
+/* --- Grammar lint tooltip: restyle the built-in @codemirror/lint tooltip into
+ * a popover card (matches the app's glass popovers), dropping the default
+ * severity border-left and the redundant source line. */
+.cm-tooltip.cm-tooltip-lint {
+  background: var(--color-popover-bg);
+  border: 1px solid var(--color-glass-stroke-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-glass-drop);
+  padding: 0;
+  max-width: 340px;
+}
+.cm-tooltip-lint .cm-diagnostic {
+  border-left: none;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.8rem;
+  color: var(--color-fg-2);
+}
+.cm-tooltip-lint .cm-diagnosticSource { display: none; }
+.cm-tooltip-lint .cm-diagnosticAction {
+  display: inline-block;
+  margin: 0.5em 0.35em 0 0;
+  padding: 0.2em 0.6em;
+  border-radius: 6px;
+  border: 1px solid var(--color-control-stroke);
+  background: var(--color-control-fill);
+  color: var(--color-fg-1);
+  font-size: 0.78em;
+  cursor: pointer;
+}
+.cm-tooltip-lint .cm-diagnosticAction:hover {
+  background: var(--color-control-fill-hover);
+}
+
+/* --- Windows High Contrast (forced-colors) safety net ---
+ * WHCM strips backgrounds, so states that read via background wash alone
+ * disappear. Give selection/current a non-color cue that survives. This is a
+ * safety net, not a theme — do NOT set forced-color-adjust globally, and
+ * ::selection keeps its forced default. */
+@media (forced-colors: active) {
+  [aria-selected="true"],
+  [aria-current="page"],
+  [aria-current="true"] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+  /* The 2px accent bar is a background gradient — repaint it in a system
+   * color and exempt it so WHCM doesn't strip it entirely. */
+  .side-active::before {
+    background: SelectedItem;
+    forced-color-adjust: none;
+  }
+}

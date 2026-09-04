@@ -1,0 +1,206 @@
+# Frontend + Rust test suite. Runs on every push/PR to main so regressions
+# surface before a manual build is ever dispatched.
+#
+# Same layout as build.yml: the app checks out into `app/`, which every step's
+# working-directory and manifest path below is written against.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# Every job only reads this repo. Nothing here writes to the repo, publishes,
+# or needs an OIDC token.
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Typecheck + Vitest
+    runs-on: ubuntu-24.04
+    # Without an explicit timeout a wedged step (a registry stall, a hung test)
+    # runs until GitHub's 6h default and burns the minutes with it. These caps
+    # are generous multiples of the observed runtimes, so they fire only on a
+    # genuine hang.
+    timeout-minutes: 20
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          path: app
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install npm deps
+        working-directory: app
+        run: npm ci
+
+      # The Rust side has a RustSec gate (rust-audit below) but the npm tree had
+      # none, so a frontend advisory could land unnoticed. `--omit=dev` scopes
+      # the gate to what actually ships: a build-time-only advisory should not
+      # block a PR.
+      - name: Audit shipped npm dependencies
+        working-directory: app
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Typecheck
+        working-directory: app
+        run: npm run typecheck
+
+      - name: Vitest
+        working-directory: app
+        run: npm test
+
+      # Benchmark substrate (bench/, long-document plan Phase 0): the perf
+      # regression backstops in bench/perf/ already ran inside `npm test`;
+      # this step additionally proves the corpus generator is deterministic
+      # and structurally intact (double-build hash compare, entry counts).
+      - name: Bench corpus self-check
+        working-directory: app
+        run: node bench/generate.mjs --check
+
+      # Guards the load-bearing editor code-split (vite.config.ts advancedChunks):
+      # a bundler bump that breaks the runtime-helpers group id match would fold
+      # the helpers into a vendor chunk and drag pdfjs/codemirror/markdown into the
+      # boot path silently. check:bundle inspects dist/index.html and fails if that
+      # regresses. Runs after a real production build.
+      - name: Build frontend bundle
+        working-directory: app
+        run: npm run build
+
+      - name: Check bundle shape
+        working-directory: app
+        run: npm run check:bundle
+
+  rust-audit:
+    name: RustSec advisories
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          path: app
+
+      # SHA of the `stable` branch head. That branch's action.yml defaults the
+      # toolchain to stable, but a frozen SHA shouldn't rely on a default that
+      # is invisible at the call site — so the toolchain is named explicitly.
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned to an explicit version for reproducible CI — bump deliberately.
+          toolchain: "1.96.0"
+
+      # Was `install-action@cargo-audit`, a per-tool alias tag that MOVES with
+      # every release of the action. The versioned action + explicit `tool` is
+      # the same thing, pinnable to a real tag.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-audit
+
+      # There are no advisory exceptions right now: the quick-xml 0.39 residue
+      # that wayland-scanner used to pin (RUSTSEC-2026-0194/0195) is gone, so
+      # the whole tree is on quick-xml 0.41+. Any future `--ignore` needs an
+      # owner, a review-by date and a stated exit condition in a comment here.
+      - name: Cargo audit
+        working-directory: app/src-tauri
+        run: cargo audit
+
+  rust:
+    # Test on Linux AND Windows: cfg(windows)-gated paths (the compile
+    # tree-kill via taskkill, credential blob chunking, path handling) never
+    # even compiled in per-PR CI before, so a Windows-only break surfaced only
+    # at release time.
+    name: Cargo tests (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-24.04
+          - os: windows
+            runner: windows-latest
+          # macOS-only Rust (install_macos_menu, RunEvent::Opened / open_with)
+          # never compiled in per-PR CI before, so a macOS break surfaced only at
+          # release time. This leg compiles + tests it on every PR.
+          - os: macos
+            runner: macos-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          path: app
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          # Pinned to match rust-toolchain.toml; rustfmt + clippy for
+          # the static-analysis gates below.
+          toolchain: '1.96.0'
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: app/src-tauri -> target
+          key: ${{ matrix.os }}
+
+      - name: Install Linux system deps
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libdbus-1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      # The Tauri build script validates `bundle.externalBin` resource paths,
+      # so even `cargo test` needs the (gitignored) Tectonic sidecar present —
+      # same fetch + Linux gnu-triple symlink as build.yml.
+      - name: Set up Node (for the Tectonic fetch script)
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+
+      - name: Fetch Tectonic sidecar
+        shell: bash
+        working-directory: app
+        run: npm run fetch:tectonic
+
+      - name: Symlink Tectonic for the gnu triple
+        if: matrix.os == 'linux'
+        run: |
+          cd app/src-tauri/binaries
+          ln -sf tectonic-x86_64-unknown-linux-musl tectonic-x86_64-unknown-linux-gnu
+
+      # Formatting is platform-independent, so the fmt gate runs on Linux only;
+      # clippy runs on every matrix leg to cover the cfg(windows) subprocess /
+      # keyring code paths.
+      - name: Rustfmt
+        if: matrix.os == 'linux'
+        run: cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+
+      - name: Clippy (lints gate)
+        run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+
+      - name: Cargo test
+        run: cargo test --manifest-path app/src-tauri/Cargo.toml --locked

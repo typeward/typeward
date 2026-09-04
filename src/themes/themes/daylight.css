@@ -1,0 +1,92 @@
+/* Daylight — the app's default theme. The Desk Lamp daylight study
+ * (design_files/t1/Typeward.html) tuned to the brand identity in
+ * design_files/sample_identity.txt + sample.png: warm ivory paper, charcoal
+ * ink, near-black primary actions ("no loud gradients"), aged-brass
+ * selection warmth, muted seal-red errors. Saturated tech colors stay out
+ * of the chrome — blue lives only in code syntax. */
+
+[data-theme="daylight"] {
+  --color-bg-base: #f8f4ea;
+
+  --color-fg-1: #22211e;
+  --color-fg-2: #5b564d; /* was #6e685f — deepened to ~6.3:1 so it separates from fg-3 (4.6:1) */
+  --color-fg-3: #756e62; /* was #8e8678 — darkened to 4.6:1 on ivory (AA body) */
+  --color-fg-4: #938a7e; /* was #aba193 — darkened to 3.1:1 on ivory (AA UI floor) */
+
+  /* Cards are paper-white sheets with soft paper-gray hairlines (#D8D0C2). */
+  --color-glass-fill: rgb(251 248 239 / 0.78);
+  --color-glass-stroke: #ddd5c5;
+  --color-glass-stroke-strong: #c9bfac;
+  --color-glass-inset-fill: rgb(34 33 30 / 0.04);
+  --color-glass-inset-stroke: #d8d0c2;
+  --color-glass-soft-fill: rgb(34 33 30 / 0.03);
+
+  /* Inverted control tokens — ink tint on ivory. */
+  --color-control-fill: rgb(34 33 30 / 0.05);
+  --color-control-fill-hover: rgb(34 33 30 / 0.09);
+  --color-control-stroke: #d8d0c2;
+  --color-overlay-dim: rgb(34 33 30 / 0.03);
+  --color-overlay-scrim: rgb(34 33 30 / 0.40);
+  --color-popover-bg: rgb(253 251 244 / 0.98);
+  --color-topbar-bg: rgb(248 244 234 / 0.85);
+  --color-selection-bg: rgb(183 154 92 / 0.16);
+  --color-text-selection: rgb(183 154 92 / 0.45);
+  --color-card-bg: rgb(253 251 244 / 0.94);
+  --color-doc-surface: rgb(253 251 244);
+  --color-card-bg-soft: rgb(251 248 239 / 0.72);
+
+  --color-control-track-off: rgb(34 33 30 / 0.13);
+  --color-control-thumb: #fdfbf4;
+  --color-control-thumb-stroke: rgb(34 33 30 / 0.16);
+
+  /* Quiet paper-toned format tints — no saturated tech colors in chrome. */
+  --format-latex: #7d6335; /* was #8a6d3b — 4.5:1+ for the 10px chip label on card surfaces */
+  --format-typst: #5c7361;
+
+  /* Primary action is the identity's deep-ink button; the gradient end is a
+   * warm charcoal so .accent-grad reads as a near-flat tactile fill. Brass
+   * (#B79A5C) and the seal red carry warmth through selection/warn/err. */
+  --color-accent-1: #101210;
+  --color-accent-2: #3a352b;
+  --color-accent-fg: #f8f4ea;
+
+  /* Emphasized words go brass, not lightened ink (which would read fainter
+   * than the surrounding body text). */
+  --accent-text-1: #8a6d3b;
+  --accent-text-2: #9a7b3f; /* was #b79a5c — 3:1+ large-text floor on ivory for the gradient's light stop */
+
+  --color-ok: #3d7a4a;
+  --color-warn: #866b37; /* was #9a7b3f — darkened to 4.6:1 on ivory (AA text) */
+  --color-err: #a84935;
+  --color-info: #3a5c9a; /* ink-blue, ~5:1 on ivory paper */
+  --color-danger-fill: var(--color-err); /* #a84935 seal-red is dark enough for white labels */
+
+  /* Soft paper drops + crisp white inset highlight. */
+  --shadow-glass-inset: inset 0 1px 0 rgb(255 255 255 / 0.6);
+  --shadow-glass-drop:
+    0 10px 30px rgb(34 33 30 / 0.07),
+    0 1px 2px rgb(34 33 30 / 0.05);
+  --shadow-glass-inset-inner: inset 0 1px 2px rgb(34 33 30 / 0.05);
+  --shadow-raised: 0 1px 3px rgb(34 33 30 / 0.20);
+  --shadow-accent-btn:
+    inset 0 1px 0 rgb(255 255 255 / 0.25),
+    0 1px 3px rgb(34 33 30 / 0.20);
+
+  /* Editor syntax — subtle, not neon; blue is allowed here per identity. */
+  --syntax-cmd: #2456a6;
+  --syntax-env: #3d7a4a;
+  --syntax-math: #a84935;
+  --syntax-comment: rgb(34 33 30 / 0.63); /* was 0.40 — 4.6:1 on ivory (AA) */
+  --syntax-bracket: var(--color-fg-3); /* was ink/0.45 (2.7:1) — brackets are body-size code text */
+  --syntax-attr: #2f7d62;
+
+  /* Ambient: faint parchment pools — daylight has no lamp glow. */
+  --blob-1: #ecdfc2;
+  --blob-2: #f6eed8;
+  --blob-3: #e7dcc0;
+  --blob-4: #f0e7cf;
+  --blob-1-op: 0.50;
+  --blob-2-op: 0.45;
+  --blob-3-op: 0.40;
+  --blob-4-op: 0.30;
+}

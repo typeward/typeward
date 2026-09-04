@@ -1,0 +1,283 @@
+//! Overleaf import — zip + git-bridge.
+//!
+//! Two paths:
+//!   1. **Zip**: free-tier Overleaf users export their project as `.zip`.
+//!      We unzip into the projects root and create a Typeward project
+//!      shell pointing at the discovered root file. This is the only
+//!      path that needs a dedicated IPC here.
+//!   2. **Git bridge** (premium): users clone
+//!      `https://git.overleaf.com/<projectId>` via the existing
+//!      `git_clone` command, supplying their Overleaf email + a
+//!      project-specific token via the standard keyring slot
+//!      `git.git.overleaf.com`. No extra Rust code needed.
+//!
+//! The unzipper rejects entries whose normalized path escapes the
+//! destination (zip-slip guard) so a malicious zip can't write outside
+//! its target folder.
+
+use std::fs;
+use std::io;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+
+use serde::Serialize;
+use thiserror::Error;
+use zip::ZipArchive;
+
+use crate::project::{self, Project, ProjectFormat};
+
+#[derive(Debug, Error, Serialize)]
+pub enum OverleafError {
+    #[error("io error: {0}")]
+    Io(String),
+    #[error("zip error: {0}")]
+    Zip(String),
+    #[error("destination already exists: {0}")]
+    AlreadyExists(String),
+    #[error("invalid project name: {0}")]
+    InvalidName(String),
+    #[error("zip entry path is unsafe (escapes dest): {0}")]
+    UnsafeEntry(String),
+    #[error("no .tex or .typ file found in the zip (is this an Overleaf export?)")]
+    NoRootFile,
+    #[error("zip archive exceeds the import limit (decompression bomb guard)")]
+    TooLarge,
+    #[error("project metadata write failed: {0}")]
+    ProjectError(String),
+}
+
+impl From<io::Error> for OverleafError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value.to_string())
+    }
+}
+
+impl From<zip::result::ZipError> for OverleafError {
+    fn from(value: zip::result::ZipError) -> Self {
+        Self::Zip(value.to_string())
+    }
+}
+
+impl From<project::ProjectError> for OverleafError {
+    fn from(value: project::ProjectError) -> Self {
+        Self::ProjectError(value.to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn overleaf_import_zip(
+    app: tauri::AppHandle,
+    zip_path: String,
+    parent_dir: String,
+    name: String,
+) -> Result<Project, String> {
+    tokio::task::spawn_blocking(move || -> Result<Project, OverleafError> {
+        // The zip is picked in a file dialog, which adds that exact path to
+        // plugin-fs's runtime scope. Requiring it here stops a compromised
+        // webview from naming any other zip-shaped file on disk and having its
+        // contents extracted into a project it can then read back.
+        if !fs_scope_allows(&app, Path::new(&zip_path)) {
+            return Err(OverleafError::UnsafeEntry(
+                "zip path was not picked in a file dialog".into(),
+            ));
+        }
+        let parent = PathBuf::from(&parent_dir);
+        let safe_name = sanitize(&name);
+        if safe_name.is_empty() {
+            return Err(OverleafError::InvalidName(name));
+        }
+        let dest = parent.join(&safe_name);
+        // Gate the renderer-supplied destination to the configured projects
+        // root, mirroring git_clone/create_project. Zip contents are untrusted,
+        // so without this an XSS-driven call could extract a file tree anywhere
+        // the OS user can write.
+        if !project::is_new_path_under_projects_root(&dest) {
+            return Err(OverleafError::UnsafeEntry(format!(
+                "destination is outside the configured projects root: {}",
+                dest.display()
+            )));
+        }
+        if dest.exists() {
+            return Err(OverleafError::AlreadyExists(dest.to_string_lossy().into()));
+        }
+        fs::create_dir_all(&dest)?;
+
+        extract_zip(Path::new(&zip_path), &dest)?;
+
+        let (root_file, format) = discover_root_file(&dest)?;
+
+        let project = Project {
+            root_path: dest.to_string_lossy().to_string(),
+            root_file,
+            format,
+            name,
+            ..Default::default()
+        };
+        project::write_project(&project)?;
+        Ok(project)
+    })
+    .await
+    // Commands reject with a plain Display string (the IPC error contract); a
+    // serialized enum would surface as a variant name or raw JSON in the UI.
+    .map_err(|e| format!("background task failed: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// True when plugin-fs's runtime scope covers `path` — the dialog plugin adds
+/// every user-picked path to it, so this is proof of a real pick.
+fn fs_scope_allows(app: &tauri::AppHandle, path: &Path) -> bool {
+    use tauri_plugin_fs::FsExt;
+    app.try_fs_scope()
+        .map(|scope| scope.is_allowed(path))
+        .unwrap_or(false)
+}
+
+// Decompression-bomb guards: a malicious Overleaf export can claim a small
+// compressed size while expanding to gigabytes. Cap total entries and total
+// uncompressed bytes written.
+const MAX_ZIP_ENTRIES: usize = 5_000;
+const MAX_ZIP_TOTAL_BYTES: u64 = 500 * 1024 * 1024;
+
+fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), OverleafError> {
+    let file = fs::File::open(zip_path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    if archive.len() > MAX_ZIP_ENTRIES {
+        return Err(OverleafError::TooLarge);
+    }
+
+    let mut total_written: u64 = 0;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        if is_zip_symlink(&entry) {
+            return Err(OverleafError::UnsafeEntry(entry.name().to_string()));
+        }
+        let raw_name = entry
+            .enclosed_name()
+            .map(|p| p.to_path_buf())
+            .ok_or_else(|| OverleafError::UnsafeEntry(entry.name().to_string()))?;
+        let safe = sanitize_relative(&raw_name)
+            .ok_or_else(|| OverleafError::UnsafeEntry(entry.name().to_string()))?;
+        let out_path = dest.join(&safe);
+
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path)?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        // Bound the copy by the remaining byte budget so `io::copy` can't be
+        // tricked into writing the whole bomb before we notice.
+        let remaining = MAX_ZIP_TOTAL_BYTES.saturating_sub(total_written);
+        let mut out_file = fs::File::create(&out_path)?;
+        let written = io::copy(&mut entry.by_ref().take(remaining + 1), &mut out_file)?;
+        total_written = total_written.saturating_add(written);
+        if total_written > MAX_ZIP_TOTAL_BYTES {
+            return Err(OverleafError::TooLarge);
+        }
+    }
+    Ok(())
+}
+
+/// Reject `..`, absolute paths, drive prefixes, and root components.
+/// Returns the normalized relative path on success.
+fn sanitize_relative(input: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in input.components() {
+        match component {
+            Component::Normal(part) => {
+                let value = part.to_string_lossy();
+                if value.starts_with('-')
+                    || value.eq_ignore_ascii_case(".typeward")
+                    || value.eq_ignore_ascii_case(".git")
+                {
+                    return None;
+                }
+                out.push(part);
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return None;
+            }
+        }
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn is_zip_symlink<R: std::io::Read>(entry: &zip::read::ZipFile<'_, R>) -> bool {
+    const S_IFMT: u32 = 0o170000;
+    const S_IFLNK: u32 = 0o120000;
+    entry
+        .unix_mode()
+        .map(|mode| mode & S_IFMT == S_IFLNK)
+        .unwrap_or(false)
+}
+
+fn sanitize(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+fn discover_root_file(dest: &Path) -> Result<(String, ProjectFormat), OverleafError> {
+    // Prefer `main.tex` at the project root; then any `.tex`; then
+    // any `.typ`. Overleaf projects are almost always LaTeX so the
+    // search is heavily TeX-biased.
+    if dest.join("main.tex").exists() {
+        return Ok(("main.tex".into(), ProjectFormat::Latex));
+    }
+    if let Some(found) = find_by_ext(dest, "tex")? {
+        return Ok((found, ProjectFormat::Latex));
+    }
+    if let Some(found) = find_by_ext(dest, "typ")? {
+        return Ok((found, ProjectFormat::Typst));
+    }
+    Err(OverleafError::NoRootFile)
+}
+
+fn find_by_ext(dir: &Path, ext: &str) -> Result<Option<String>, OverleafError> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) == Some(ext)
+            && let Some(name) = path.file_name().and_then(|s| s.to_str())
+        {
+            return Ok(Some(name.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_relative_rejects_internal_and_cli_flag_entries() {
+        assert!(sanitize_relative(Path::new(".typeward/project.json")).is_none());
+        assert!(sanitize_relative(Path::new(".git/config")).is_none());
+        assert!(sanitize_relative(Path::new("-shell-escape.tex")).is_none());
+        assert!(sanitize_relative(Path::new("sections/intro.tex")).is_some());
+    }
+
+    #[test]
+    fn sanitize_project_name_can_be_empty_for_punctuation_only() {
+        assert!(sanitize(" !!! ").is_empty());
+    }
+}
