@@ -33,7 +33,7 @@ use your own credentials.
 
 ## Install
 
-Version 0.1.0 is the first public alpha. Grab the installer for your system, or
+Version 0.1.0 is the first public beta. Grab the installer for your system, or
 browse [all releases](https://github.com/typeward/typeward/releases).
 
 | System | Architecture | Installer |
